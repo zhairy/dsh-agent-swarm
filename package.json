@@ -1,0 +1,54 @@
+{
+  "name": "dsh-agent-swarm",
+  "version": "2.0.0",
+  "description": "DSH 中文多智能体插件：13 个中文角色、衡鉴分流、统一委派、证据门禁与模型回退",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./tools": "./lib/tools.js",
+    "./runtime": "./lib/runtime.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "presets",
+    "locale",
+    "config",
+    "docs",
+    "scripts/doctor.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "gen:presets": "node scripts/gen-presets.mjs",
+    "sandbox": "node scripts/sandbox.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "sync-dsh": "node scripts/sync-dsh.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.4"
+  },
+  "dsh": {
+    "minVersion": "0.1.7-alpha.2",
+    "testedVersions": [
+      "0.1.7-alpha.2"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@vitest/coverage-v8": "^5.0.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1",
+    "yaml": "^2.9.1"
+  }
+}
