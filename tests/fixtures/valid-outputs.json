@@ -1,0 +1,45 @@
+{
+  "mou_ding": {
+    "summary": "拆成两步", "unresolved": [], "constraints": ["保持 API 兼容"],
+    "options": [{ "name": "方案A", "summary": "增量改造", "pros": ["风险低"], "cons": ["耗时"] }],
+    "decisions": [{ "point": "是否重写", "recommendation": "不重写", "reason": "收益不足" }], "dependencies": []
+  },
+  "shu_ji": {
+    "summary": "边界清晰", "unresolved": [], "boundaries": ["ws 层"],
+    "interfaces": [{ "name": "publish", "contract": "幂等" }],
+    "failureScenarios": [{ "scenario": "断线", "impact": "丢消息", "mitigation": "重放" }], "migration": "无", "rollback": "回滚到上一版本"
+  },
+  "suan_heng": {
+    "summary": "增量与全量等价", "unresolved": [], "mode": "research", "premises": ["K 线按时间有序"], "definitions": ["分型"],
+    "invariants": ["已确认笔不回改"], "claims": [{ "statement": "增量=全量", "status": "proved", "proofOrCounterexample": "归纳" }],
+    "complexity": "O(n)", "numericError": "无浮点累积", "reproducible": [{ "description": "差分脚本", "program": "python diff.py" }]
+  },
+  "tan_wei": {
+    "summary": "找到入口", "unresolved": [],
+    "findings": [{ "path": "src/a.ts", "symbol": "run", "callChain": ["main", "run"], "evidence": "L10 调用" }]
+  },
+  "bo_wen": {
+    "summary": "RFC 支持", "unresolved": [],
+    "sources": [{ "url": "https://example.com/rfc", "title": "RFC", "date": "2026-01-01", "version": "v2", "points": ["要点"] }]
+  },
+  "guan_xiang": {
+    "summary": "按钮偏移", "unresolved": [], "observations": [{ "region": "右上角", "element": "保存按钮", "evidence": "与网格错位 4px" }],
+    "inferences": ["可能是 padding"], "uncertainties": []
+  },
+  "zhu_jian": { "summary": "实现完成", "unresolved": [], "changedFiles": ["src/a.ts"], "assumptions": [], "toVerify": ["单测"] },
+  "xing_zhou": { "summary": "构建成功", "unresolved": [], "steps": [{ "command": "npm run build", "cwd": ".", "exitCode": 0, "artifacts": ["lib/"] }] },
+  "ji_feng": { "summary": "改好了", "unresolved": [], "changedFiles": ["hello.txt"], "localChecks": [{ "command": "node -e 1", "exitCode": 0 }] },
+  "yu_shi": {
+    "summary": "一处中危", "unresolved": [],
+    "findings": [{ "severity": "medium", "location": "src/a.ts:10", "issue": "缺少超时", "repro": "断网", "suggestion": "加超时" }]
+  },
+  "fu_he": {
+    "summary": "测试通过", "unresolved": [], "plan": ["跑单测"],
+    "commands": [{ "command": "npm test", "exitCode": 0, "kind": "unit", "summary": "12 passed" }], "coverage": "单元测试", "failures": [], "verdict": "pass"
+  },
+  "miao_bi": {
+    "summary": "两个候选", "unresolved": [],
+    "candidates": [{ "text": "保存", "scenario": "表单" }, { "text": "存储", "scenario": "设置页" }],
+    "recommendation": "保存", "rationale": "最短"
+  }
+}
