@@ -42,7 +42,25 @@
     "minVersion": "0.1.7-alpha.2",
     "testedVersions": [
       "0.1.7-alpha.2"
-    ]
+    ],
+    "bundle": {
+      "patch": [
+        "./cordis.patch.yml",
+        "./presets/tian-shu.patch.yml",
+        "./presets/mou-ding.patch.yml",
+        "./presets/shu-ji.patch.yml",
+        "./presets/suan-heng.patch.yml",
+        "./presets/tan-wei.patch.yml",
+        "./presets/bo-wen.patch.yml",
+        "./presets/guan-xiang.patch.yml",
+        "./presets/zhu-jian.patch.yml",
+        "./presets/xing-zhou.patch.yml",
+        "./presets/ji-feng.patch.yml",
+        "./presets/yu-shi.patch.yml",
+        "./presets/fu-he.patch.yml",
+        "./presets/miao-bi.patch.yml"
+      ]
+    }
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

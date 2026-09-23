@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Agent Swarm (Chinese multi-agent)",
+    "description": "Tian Shu orchestrates 13 Chinese-named roles with rule + Jev triage, unified delegation, evidence gates and qwen-first model routing with fallback."
+  }
+}
