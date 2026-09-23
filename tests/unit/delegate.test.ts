@@ -53,7 +53,8 @@ const makeHarness = (overrides: Partial<DelegateDepsInfo> & { config?: SwarmConf
       const id = `child-${++seq}`
       // 模拟宿主：子智能体的首个请求发生在 start() resolve 之后
       setTimeout(() => plan.onStarted?.(id), 0)
-      return { id, result: new Promise<SubagentResultLike>((r) => setTimeout(() => r(plan.result), 5)), dispose: vi.fn(async () => undefined) }
+      // 模拟宿主：dispose 触发 agent/disposed，运行时行随即清理该子智能体的路由状态
+      return { id, result: new Promise<SubagentResultLike>((r) => setTimeout(() => r(plan.result), 5)), dispose: vi.fn(async () => { routeState.DelAgent(id) }) }
     })
   }
   const probe: RouteProbe = async () => ({ ok: true, vision: true })
@@ -320,7 +321,7 @@ describe('intDelegator.delegate', () => {
     h.subagents.start.mockImplementation(async (_name, request) => ({
       id: 'slow',
       result: new Promise<SubagentResultLike>((r) => request.signal.addEventListener('abort', () => r({ output: [], stopReason: 'aborted' }))),
-      dispose: async () => undefined
+      dispose: vi.fn(async () => undefined)
     }))
     const record = await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'x' }, exec(), h.session)
     expect(record).toMatchObject({ status: 'failed', error: 'aborted' })

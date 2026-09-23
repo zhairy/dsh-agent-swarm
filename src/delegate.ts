@@ -289,20 +289,29 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     return next
   }
 
-  /** 带超时与调用方取消的运行：超时或取消都会中止子智能体 */
-  const runWithSignal = async (exec: DelegateExecInfo, config: SwarmConfigInfo, start: (signal: AbortSignal) => Promise<SubagentRunLike>, onRun?: (run: SubagentRunLike) => void) => {
+  /**
+   * 带超时与调用方取消的运行：超时或取消都会中止子智能体
+   * beforeDispose 在释放子智能体之前调用：宿主在释放时触发 agent/disposed，运行时行会随即清理该子智能体的路由状态
+   */
+  const runWithSignal = async (
+    exec: DelegateExecInfo,
+    config: SwarmConfigInfo,
+    start: (signal: AbortSignal) => Promise<SubagentRunLike>,
+    hooks: { onRun?: (run: SubagentRunLike) => void; beforeDispose?: (run: SubagentRunLike) => void } = {}
+  ) => {
     const controller = new AbortController()
     const onAbort = (): void => controller.abort()
     exec.signal.addEventListener('abort', onAbort, { once: true })
     const timer = setTimeout(() => controller.abort(), config.budgets.delegationTimeoutMs)
     try {
       const run = await start(controller.signal)
-      onRun?.(run)
+      hooks.onRun?.(run)
       try {
         return { run, result: await run.result }
       } catch (error) {
         return { run, result: { output: [], stopReason: 'error', diagnostic: getErrorText(error) } as SubagentResultLike }
       } finally {
+        hooks.beforeDispose?.(run)
         await run.dispose().catch(() => undefined)
       }
     } finally {
@@ -443,13 +452,17 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     let finalRoute: RouteInfo | undefined
     let outcome: { run: SubagentRunLike; result: SubagentResultLike }
     try {
-      outcome = await runWithSignal(exec, config, startSpawn, (run) =>
-        deps.routeState.AddChild(run.id, { chain: selection.usable.slice(usedIndex), role: input.role, onFallback }))
+      outcome = await runWithSignal(exec, config, startSpawn, {
+        onRun: (run) => deps.routeState.AddChild(run.id, { chain: selection.usable.slice(usedIndex), role: input.role, onFallback }),
+        beforeDispose: (run) => {
+          finalRoute = deps.routeState.getChild(run.id)?.route
+          deps.routeState.DelAgent(run.id)
+        }
+      })
     } catch (error) {
       return finish(session, running, { status: 'failed', summary: getErrorText(error), error: getErrorText(error), attempts })
     }
-    finalRoute = deps.routeState.getChild(outcome.run.id)?.route ?? selection.usable[usedIndex]
-    deps.routeState.DelAgent(outcome.run.id)
+    finalRoute = finalRoute ?? selection.usable[usedIndex]
     const evaluation = getEvaluation(input.role, input.mode, outcome.result, outcome.result.structured)
     const change = getChangeInfo(input.role, before, await deps.gitStatus(cwd))
     const used: RouteAttempt[] = finalRoute === undefined ? [] : [{ route: getRouteLabel(finalRoute), backend: 'spawn', outcome: 'used' }]
