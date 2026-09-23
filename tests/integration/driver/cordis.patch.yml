@@ -1,0 +1,46 @@
+# 集成测试驱动 bundle（只用于 .sandbox）：
+# 1. 插入预设注册表（web-app 才有，这里模拟；dsh-agent-swarm 的补丁随后把默认值改为 tian-shu）
+# 2. 插入驱动行：注册 mock LLM 并按 SWARM_SCENARIO 驱动一个预设会话
+# 3. 禁用宿主工具行，模拟 web 组合下工具全部由预设作用域注册
+- insert:
+    - id: agent-preset-registry
+      name: '@deepseek-ai/dsh-agent-preset-registry'
+      config:
+        default: standard
+    - id: swarm-test-driver
+      name: swarm-test-driver
+
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: skill-filesystem
+  disabled: true
+- id: tool-skill
+  disabled: true
+- id: command-goal
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: workflow-ptc
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: tool-todo
+  disabled: true
+- id: tool-web
+  disabled: true
