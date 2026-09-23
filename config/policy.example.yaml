@@ -1,0 +1,28 @@
+# 策略与预算覆盖示例：复制到 profile 的 cordis.patch.yml 末尾，然后重启 dsh。
+# 注意：与路由覆盖写在同一个 swarm-core 条目里，因为覆盖会整体替换 config。
+- id: swarm-core
+  config:
+    # 主会话模型遇到致命失败（额度耗尽、模型不可用、认证失败）时，按天枢链回退
+    rootFallback: true
+    # manual：只在 swarm_delegate 显式传 backend: codex/claude 时使用原生后端
+    # auto：任务带 G_MATH_VERIFY / G_REVIEW / G_DIFF_TEST 或涉及安全时，按角色的升级通道自动使用
+    nativeEscalation: manual
+    native:
+      maxCallsPerSession: 5        # 每个会话最多调用原生 Codex/Claude 的次数（消耗 Plus/Pro 额度）
+    jev:
+      enabled: true
+      apiKeyEnv: TYPESAFE_API_KEY  # 凭据引用名：环境变量或 DSH 凭据库
+      timeoutMs: 10000
+      maxRetries: 2                # 429/529/5xx/超时的重试次数
+      maxCallsPerSession: 20
+      mathConfidence: 0.7          # math_task 置信度低于此值时走严格路径（算法任务强制验算与审查）
+      benchmarkNoul: 0.5           # need_benchmark 概率达到此值时追加 G_BENCH
+      noveltyScore: 1              # novelty（0–2）达到此值且置信度达标时追加 G_REVIEW
+      noveltyConfidence: 0.5
+    budgets:
+      maxDelegationsPerTask: 20
+      maxCallsPerRole: 4
+      maxCallsZhuJian: 6
+      maxAutoFixRounds: 1          # swarm_accept 的 reject 轮次上限
+      delegationTimeoutMs: 1800000 # 单次委派超时（毫秒）
+    ledgerDir: ''                  # 留空：<DSH_HOME>/share/dsh-agent-swarm/ledger

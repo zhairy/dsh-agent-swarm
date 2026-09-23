@@ -1,0 +1,21 @@
+# 路由覆盖示例：复制到 profile 的 cordis.patch.yml 末尾，然后重启 dsh
+# （例如 %USERPROFILE%\.dsh\profiles\swarm\cordis.patch.yml）。
+# 注意：覆盖会整体替换 swarm-core 的 config，未写的字段恢复默认值。
+# 路由键：tian_shu mou_ding shu_ji suan_heng:research suan_heng:verify tan_wei bo_wen
+#         guan_xiang zhu_jian xing_zhou ji_feng yu_shi fu_he miao_bi
+# 只需要写想改的路由键；其余路由键继续使用 src/routes.ts 中的默认链。
+- id: swarm-core
+  config:
+    routes:
+      zhu_jian:
+        chain:
+          - { provider: qwen-token-plan-cn, model: kimi-k2.7-code }
+          - { provider: opencode-go, model: kimi-k2.7-code }
+        escalation: claude
+      yu_shi:
+        chain:
+          - { provider: opencode-go, model: glm-5.3 }
+      suan_heng:verify:
+        chain:
+          - { provider: qwen-token-plan-cn, model: qwen3.8-max, reasoningEffort: xhigh }
+    nativeEscalation: manual

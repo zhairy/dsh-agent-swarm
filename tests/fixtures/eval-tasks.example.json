@@ -1,0 +1,70 @@
+[
+  {
+    "id": "command-exec",
+    "category": "command",
+    "mandatory": true,
+    "prompt": "把 FastAPI WebSocket 服务跑起来并记录失败，不要修改业务代码。",
+    "expectedGates": [],
+    "expectedRoles": ["xing_zhou", "fu_he"],
+    "acceptance": "行舟给出命令、退出码与日志产物；失败时写明原因；没有业务文件改动"
+  },
+  {
+    "id": "ui-copy",
+    "category": "copy",
+    "mandatory": true,
+    "prompt": "为量化看板的「一键平仓」按钮写中文按钮文案、二次确认提示和失败提示，不改代码。",
+    "expectedGates": [],
+    "expectedRoles": ["miao_bi"],
+    "acceptance": "妙笔给出 2–3 个受约束候选与推荐理由；交易术语准确"
+  },
+  {
+    "id": "screenshot",
+    "category": "vision",
+    "mandatory": true,
+    "prompt": "按照 shots/target.png 修改量化看板布局，并把操作说明写成中文；截图已放在工作区。",
+    "expectedGates": ["G_VISION", "G_VERIFY"],
+    "expectedRoles": ["guan_xiang", "miao_bi", "zhu_jian", "fu_he"],
+    "acceptance": "观象的观察可在原图核对；实现后观象对照新截图；复核通过"
+  },
+  {
+    "id": "fu-he-finds-failure",
+    "category": "verification",
+    "mandatory": true,
+    "prompt": "修复 utils/price.ts 的四舍五入函数（仓库中已故意保留一个会失败的测试），修完运行测试。",
+    "expectedGates": ["G_VERIFY"],
+    "expectedRoles": ["ji_feng", "fu_he"],
+    "acceptance": "复核先报告 verdict=fail 并阻止验收；修复后复核 pass 才被 accepted"
+  },
+  {
+    "id": "chan-incremental-bi",
+    "category": "timeseries",
+    "prompt": "修复缠论笔的增量更新，使其与离线全量算法逐根等价，并满足 p95 更新延迟 50ms。",
+    "expectedGates": ["G_VERIFY", "G_REVIEW", "G_MATH_RESEARCH", "G_MATH_VERIFY", "G_DIFF_TEST", "G_BENCH"],
+    "expectedRoles": ["tan_wei", "suan_heng", "zhu_jian", "fu_he", "yu_shi"],
+    "acceptance": "差分测试覆盖重复时间戳、缺口、乱序、最后未收盘 K、同价极值；无未来数据泄漏；基准可复现"
+  },
+  {
+    "id": "backtest-lookahead",
+    "category": "timeseries",
+    "prompt": "检查回测模块是否存在未来数据泄漏，若有请修复并补测试。",
+    "expectedGates": ["G_VERIFY", "G_REVIEW", "G_MATH_VERIFY"],
+    "expectedRoles": ["tan_wei", "suan_heng", "zhu_jian", "fu_he", "yu_shi"],
+    "acceptance": "算衡验算给出反例或证明；复核新增测试能在修复前失败、修复后通过"
+  },
+  {
+    "id": "ws-concurrency",
+    "category": "general",
+    "prompt": "检查 FastAPI WebSocket 模块是否有并发问题，尽量保持现有结构。修复后运行现有测试并说明剩余风险。",
+    "expectedGates": ["G_VERIFY", "G_REVIEW", "G_MATH_VERIFY"],
+    "expectedRoles": ["shu_ji", "zhu_jian", "fu_he", "yu_shi"],
+    "acceptance": "御史的 critical/high 发现均有处理说明；复核通过"
+  },
+  {
+    "id": "rfc-lookup",
+    "category": "general",
+    "prompt": "查一下 WebSocket permessage-deflate 的最新 RFC 要求，判断我们的实现是否合规，不改代码。",
+    "expectedGates": [],
+    "expectedRoles": ["bo_wen", "tan_wei"],
+    "acceptance": "博闻给出 RFC 链接、日期与要点；探微给出代码位置证据"
+  }
+]

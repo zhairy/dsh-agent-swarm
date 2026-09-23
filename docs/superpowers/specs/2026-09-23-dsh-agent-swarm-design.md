@@ -23,7 +23,7 @@
 - 不重写联网搜索：`web_search`/`web_fetch` 由 DSH `tool-web` 提供，后端由用户已有或另装的 `dsh-web-search-free` 接管。
 - 不把 ChatGPT Plus / Claude Pro 当 API key 使用：只通过官方原生后端 `@deepseek-ai/dsh-subagent-codex` / `@deepseek-ai/dsh-subagent-claude-code` 调用。不使用第三方 OAuth 桥接（如 `dsh-plugin-subscriptions`）作为默认路由。
 - 不替用户升级本机 DSH、不读取用户凭据库中的密钥值。
-- 不做 Web UI 自定义面板（首版用 DSH 设置页的 volatile Config 表单）。
+- 不做 Web UI 自定义面板。实测更正：DSH 0.1.7-alpha.2 的 Web 端不会为插件自动生成配置表单（配置页需插件自带客户端组件），首版通过 profile 补丁覆盖 `swarm-core` 的 config；字段仍标为 volatile，以便配置编辑接口在线修改。
 
 ---
 
@@ -126,7 +126,7 @@ dsh-agent-swarm/
 - insert:
     - id: swarm-core
       name: dsh-agent-swarm
-      config: {}                 # 全部取默认值；用户在设置页修改后写入 profile 补丁
+      config: {}                 # 全部取默认值；用户通过 profile 补丁覆盖
     - id: swarm-codex            # 仅当 @deepseek-ai/dsh-subagent-codex 可解析时启用
       name: '@deepseek-ai/dsh-subagent-codex'
       disabled: !!js <包不可解析>
@@ -172,7 +172,7 @@ dsh-agent-swarm/
 
 「web 按需」指：枢机、算衡、妙笔默认不带 web 工具，只有 `swarm_delegate` 传入 `allow_web: true` 时才开放；博闻始终带 web；其他角色传入 `allow_web` 会被拒绝。
 
-能力到工具名的映射在 `role-registry.ts` 中按候选名列出（例如 `edit → [str_replace_editor, edit_file, write_file, apply_patch]`，`shell → [pwsh, bash]`，`web → [web_search, web_fetch]`）。调用时与父会话实际可见的工具集求交集，得到 `toolFilter.allow`。所有子智能体额外排除 `swarm_*`、`subagent*`、`send_message`、`interrupt_agent`、`list_agents`、`workflow`、`ralph`、目标工具、`todo_write`、`ask_user_question`、`exit_plan_mode`。
+能力到工具名的映射在 `host-contract.ts` 中列出（0.1.7-alpha.2 实测）：`read → [read, read_image]`、`search → [glob, grep]`、`edit → [write, edit]`、`shell → [pwsh, bash]`、`web → [web_search, web_fetch]`。调用时与父会话实际可见的工具集求交集，得到 `toolFilter.allow`；白名单之外的工具（`swarm_*`、委派、目标、`todo_write`、`ask_user_question`、`exit_plan_mode` 等）对子智能体一律不可见。
 
 persona 由注册表生成，内容包括：中文职责、边界（例如「行舟不改写业务逻辑」「观象只陈述可见事实」）、交付契约、「只通过结构化结果交付」，并带机器可读标签 `[[swarm:role=<id>]]`。
 
@@ -200,6 +200,8 @@ persona 由注册表生成，内容包括：中文职责、边界（例如「行
 | 御史 | qwen/glm-5.2 → go/glm-5.2 → go/glm-5.3 | swarm-codex |
 | 复核 | qwen/qwen3.8-flash → go/qwen3.8-flash → qwen/deepseek-v4-flash | — |
 | 妙笔 | qwen/qwen3.8-max → go/qwen3.8-max → qwen/kimi-k2.6 | — |
+
+实现时的调整：多数链的末尾追加了 DeepSeek 官方路由作为最终兜底（`ds/deepseek-v4-pro` 或 `ds/deepseek-flash`；观象用支持图片的 `ds/deepseek-flash`）。**权威定义以 `src/routes.ts` 与 `docs/角色.md` 为准**，单元测试会检查两者一致，并检查「qwen 优先」规则。
 
 ### 7.2 路由规则
 
@@ -316,14 +318,16 @@ ledger: { dir: '' }           # 空 = <dshHome>/share/dsh-agent-swarm/ledger
 
 ## 13. 实施中需在沙箱验证的点（带退化方案）
 
-| # | 待验证 | 退化方案 |
-|---|---|---|
-| V1 | bundle 行 `disabled: !!js` 能否判断可选包可解析 | 原生实例改由文档片段 + doctor 提供 |
-| V2 | 预设作用域行注册的 `agent/request(-error)` 能收到子智能体事件 | 改为宿主行监听，并用自有 childId 集合过滤 |
-| V3 | 附件服务在插件内把工作区图片入库的 API | 观象的委派只接受会话内已有附件；工作区图片由天枢提示用户在观象预设会话中上传 |
-| V4 | 作用域内 `ctx.tools.restrict` / 工具守卫对角色预设可用 | 角色预设只通过去掉插件行来裁剪工具，persona 声明边界，文档标注「非硬隔离」 |
-| V5 | 第三方包能否 import `@deepseek-ai/schemastery` | 在本包声明 dependency；仍不行则 Config 用 JSON Schema 手写 |
-| V6 | 子智能体能否加入父会话预设组合 | 在委派时把运行时行为（守卫/回退）挂到宿主行 |
+| # | 待验证 | 退化方案 | 实测结果（2026-09-23，沙箱 DSH 0.1.7-alpha.2） |
+|---|---|---|---|
+| V1 | bundle 行 `disabled: !!js` 能否判断可选包可解析 | 原生实例改由文档片段 + doctor 提供 | 用 `ctx.get('profileContext')?.startedBundles?.includes(...)` 判断，已采用；未安装时行保持禁用、宿主正常启动 |
+| V2 | 预设作用域行注册的 `agent/request(-error)` 能收到子智能体事件 | 改为宿主行监听，并用自有 childId 集合过滤 | 能收到（子会话 `header.parentSession` 指向父会话、`agentPreset` 与父相同），已采用；返回 `{kind:'retry'}` 后下一次请求可改写路由 |
+| V3 | 附件服务在插件内把工作区图片入库的 API | 观象的委派只接受会话内已有附件 | `ctx.attachments.saveImages([{ data, mediaType, name }])` 返回引用，已采用 |
+| V4 | 作用域内 `ctx.tools.restrict` / 工具守卫对角色预设可用 | 角色预设只通过去掉插件行来裁剪工具 | 作用域内注册的工具不能 restrict；改为子智能体 `toolFilter.allow`（对预设作用域工具同样生效）+ 宿主全局 `tools.guard` 拒绝只读类角色的写操作，已采用 |
+| V5 | 第三方包能否 import `@deepseek-ai/schemastery` | Config 用 JSON Schema 手写 | 从 link 安装的包无法解析宿主内部包；在本包 `dependencies` 声明后可用，已采用 |
+| V6 | 子智能体能否加入父会话预设组合 | 把运行时行为挂到宿主行 | 能加入，已采用 |
+
+其他实测更正：子智能体 dispose 时宿主触发 `agent/disposed`，运行时行会清理路由状态，因此最终路由必须在 dispose 之前读取（已修复并有回归测试）；DeepSeek 官方 provider 的模型为 `deepseek-v4-pro` 与 `deepseek-flash`（后者支持图片），§7.1 的链尾按此配置。
 
 每一项在实施计划里都有对应的验证任务。验证结果写回本节。
 

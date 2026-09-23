@@ -15,7 +15,7 @@ const RoleRouteSchema = Schema.object({
   escalation: Schema.union(['codex', 'claude']).description('升级通道（可选）')
 })
 
-/** swarm-core 行的 Config；DSH 0.1.7 设置页从 volatile 字段生成表单并写回 profile 补丁 */
+/** swarm-core 行的 Config；字段标记为 volatile，可被 DSH 配置编辑接口在线修改，读取时每次取最新值 */
 export const Config = Schema.object({
   routes: Schema.dict(RoleRouteSchema).default({})
     .description('按角色覆盖路由链；键为角色 ID（算衡用 suan_heng:research / suan_heng:verify）；留空使用内置默认').volatile(),
