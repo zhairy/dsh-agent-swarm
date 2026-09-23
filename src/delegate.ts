@@ -302,6 +302,8 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const controller = new AbortController()
     const onAbort = (): void => controller.abort()
     exec.signal.addEventListener('abort', onAbort, { once: true })
+    // 已经取消的信号不会再触发 abort 事件，必须主动检查
+    if (exec.signal.aborted) controller.abort()
     const timer = setTimeout(() => controller.abort(), config.budgets.delegationTimeoutMs)
     try {
       const run = await start(controller.signal)
@@ -364,8 +366,17 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const cwd = getWorkspaceRoot(exec.agent)
     const before = await deps.gitStatus(cwd)
     const text = getNativePromptText(task, input, record.delegationId, input.mode)
-    const { run, result } = await runWithSignal(exec, config, (signal) =>
-      subagents.start(provider, { label: `${getRoleInfo(input.role).name}·${task.taskId}`, prompt: [{ type: 'text', text }], parent: exec.agent, signal }))
+    let outcome: { run: SubagentRunLike; result: SubagentResultLike }
+    try {
+      outcome = await runWithSignal(exec, config, (signal) =>
+        subagents.start(provider, { label: `${getRoleInfo(input.role).name}·${task.taskId}`, prompt: [{ type: 'text', text }], parent: exec.agent, signal }))
+    } catch (error) {
+      // 启动失败（例如原生客户端未登录）没有消耗订阅额度：归还次数，记录失败并退回 spawn
+      session.counters.native -= 1
+      attempts.push({ route: provider, backend: kind, outcome: 'failed', reason: `start: ${getErrorText(error)}` })
+      return undefined
+    }
+    const { run, result } = outcome
     const evaluation = getEvaluation(input.role, input.mode, result, ParseNativeOutput(getOutputText(result)))
     const change = getChangeInfo(input.role, before, await deps.gitStatus(cwd))
     const route: RouteInfo = { provider, model: kind.startsWith('codex') ? 'codex-native' : 'claude-native' }
@@ -480,7 +491,10 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     })
   }
 
-  const execute = async (input: DelegateInput, task: TaskRecord, record: DelegationRecord, exec: DelegateExecInfo, session: DelegateSessionInfo, existing: DelegationRecord[]): Promise<DelegationRecord> => {
+  const execute = async (input: DelegateInput, task: TaskRecord, record: DelegationRecord, exec: DelegateExecInfo, session: DelegateSessionInfo): Promise<DelegationRecord> => {
+    // 可能刚等完编辑锁：调用方已取消就不再启动；委派列表也在等待期间变化过，重新读取
+    if (exec.signal.aborted) return finish(session, record, { status: 'failed', summary: '调用方已取消委派', error: 'aborted' })
+    const existing = session.store.getTaskDelegations(task.taskId).filter((d) => d.delegationId !== record.delegationId)
     const config = deps.getConfig()
     const subagents = deps.getSubagents()
     if (subagents === undefined) return block(session, record, '子智能体服务不可用')
@@ -511,7 +525,16 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     session.ledger.AddLedgerEvent({ type: 'delegation/queued', taskId: task.taskId, delegationId: record.delegationId, data: { role: input.role, roleName: role.name, mode, gate: input.gate, backend: input.backend ?? 'auto' } })
     const budgetReason = ValidateDelegationBudget(existing, input.role, deps.getConfig().budgets)
     if (budgetReason !== undefined) return block(session, record, budgetReason)
-    const run = (): Promise<DelegationRecord> => execute(normalized, task, record, exec, session, existing)
+    // 兜底：任何意外异常都把仍在 queued/running 的记录收尾为 failed，避免任务永远无法验收
+    const run = async (): Promise<DelegationRecord> => {
+      try {
+        return await execute(normalized, task, record, exec, session)
+      } catch (error) {
+        const current = session.store.getDelegation(record.delegationId) ?? record
+        if (current.status !== 'queued' && current.status !== 'running') throw error
+        return finish(session, current, { status: 'failed', summary: `委派异常中止：${getErrorText(error)}`, error: getErrorText(error) })
+      }
+    }
     return role.concurrencySafe ? run() : session.editLock.run(run)
   }
 

@@ -110,7 +110,13 @@ export const ValidateAcceptInput = (raw: unknown): { input?: AcceptInputInfo; er
 
 interface SessionStateInfo extends DelegateSessionInfo {
   counters: { native: number; jev: number }
+  /** 天枢根会话最近一次调用 write/edit 的时刻；0 表示没有 */
+  rootEditAt: number
 }
+
+/** 只有任务创建之后的天枢编辑才会让该任务已有的验证失效 */
+const getExternalEditAt = (task: TaskRecord, session: SessionStateInfo): number =>
+  session.rootEditAt >= task.createdAt ? session.rootEditAt : 0
 
 /** 天枢工具与运行时行共用的服务 */
 export interface SwarmService {
@@ -173,9 +179,9 @@ const getDelegationView = (d: DelegationRecord, verbose: boolean) => ({
   ...(verbose ? { structured: d.structured, evidence: d.evidence, attempts: d.attempts } : {})
 })
 
-const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean) => {
-  const gates = getEffectiveGates(task.gates, delegations)
-  const check = getAcceptanceCheck(gates, delegations, task.acceptance?.resolutions ?? [])
+const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean, externalEditAt: number) => {
+  const gates = getEffectiveGates(task.gates, delegations, externalEditAt)
+  const check = getAcceptanceCheck(gates, delegations, task.acceptance?.resolutions ?? [], externalEditAt)
   return {
     task_id: task.taskId,
     title: task.card.title,
@@ -217,7 +223,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       store: intTaskStore(),
       ledger: intLedger(getLedgerDir(), sessionId, (error) => deps.logger?.warn(`账本写入失败：${String(error)}`)),
       editLock: intMutex(),
-      counters: { native: 0, jev: 0 }
+      counters: { native: 0, jev: 0 },
+      rootEditAt: 0
     }
     sessions.set(sessionId, created)
     return created
@@ -313,7 +320,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const session = getSession(exec.agent.id)
     const config = deps.getConfig()
     const tasks = typeof input.task_id === 'string' ? [getTaskOrThrow(session, input.task_id)] : session.store.getTasks()
-    const views = tasks.map((task) => getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true))
+    const views = tasks.map((task) =>
+      getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session)))
     return getStatusResult(views, session, getDiagnostics())
   }
 
@@ -325,7 +333,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const config = deps.getConfig()
     const delegations = session.store.getTaskDelegations(task.taskId)
     const resolutions = [...(task.acceptance?.resolutions ?? []), ...input.findingResolutions]
-    const check = getAcceptanceCheck(getEffectiveGates(task.gates, delegations), delegations, resolutions)
+    const externalEditAt = getExternalEditAt(task, session)
+    const check = getAcceptanceCheck(getEffectiveGates(task.gates, delegations, externalEditAt), delegations, resolutions, externalEditAt)
     let rounds = task.rounds
     let status: AcceptanceRecord['status'] = 'recorded'
     let missing: string[] = []
@@ -354,9 +363,16 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     return routeState.getChildRole(agent.id) ?? FindRoleByPresetId(getAgentHeader(agent).agentPreset)?.id
   }
 
+  /** 天枢根会话自己的写操作：记下时刻，使之前的验证与审查失效（shell 写文件无法识别，属已知限制） */
+  const AddRootEdit = (agent: AgentLike | undefined, role: RoleId | undefined): void => {
+    if (agent === undefined || role !== 'tian_shu' || getAgentHeader(agent).parentSession !== undefined) return
+    getSession(agent.id).rootEditAt = now()
+  }
+
   const getGuardReason = (execution: ToolExecutionLike): string | undefined => {
     if (!WRITE_TOOL_NAMES.includes(execution.name)) return undefined
     const role = getRoleForAgent(execution.agent)
+    AddRootEdit(execution.agent, role)
     if (role === undefined || isWriteAllowed(role)) return undefined
     return `dsh-agent-swarm 守卫：「${getRoleInfo(role).name}」是${getPermissionLabel(role)}角色，不能调用 ${execution.name} 修改文件。请在结果中写明需要的改动，由天枢交给铸剑或疾风处理。`
   }

@@ -71,7 +71,7 @@ export const getJevState = (card: TaskCard) => ({
   task: getRedactedText(card.title),
   goal: getRedactedText(card.goal),
   flags: card.flags,
-  profile: card.perf ?? {},
+  profile: Object.fromEntries(Object.entries(card.perf ?? {}).map(([key, value]) => [key, typeof value === 'string' ? getRedactedText(value) : value])),
   acceptance_count: card.acceptance.length,
   scope_count: card.scope.length
 })
@@ -111,7 +111,7 @@ export interface JevDepsInfo {
   sleep?: (ms: number) => Promise<void>
 }
 
-type PostResult = { kind: 'ok'; body: unknown } | { kind: 'http'; status: number } | { kind: 'timeout' } | { kind: 'network' }
+type PostResult = { kind: 'ok'; body: unknown } | { kind: 'http'; status: number } | { kind: 'timeout' } | { kind: 'network' } | { kind: 'aborted' }
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504, 529])
 
@@ -141,6 +141,8 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
       if (!response.ok) return { kind: 'http', status: response.status }
       return { kind: 'ok', body: await response.json() }
     } catch {
+      // 调用方取消优先于超时判断：取消后不应再重试
+      if (signal?.aborted === true) return { kind: 'aborted' }
       return controller.signal.aborted ? { kind: 'timeout' } : { kind: 'network' }
     } finally {
       clearTimeout(timer)
@@ -154,13 +156,14 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
     if (key === undefined || key === '') return { ok: false, reason: 'missing-api-key', attempts: 0 }
     const body = JSON.stringify({ model: config.model, state: getJevState(card), questions: JEV_QUESTIONS })
     for (let attempt = 1; ; attempt++) {
+      if (signal?.aborted === true) return { ok: false, reason: 'aborted', attempts: attempt - 1 }
       const result = await postOnce(body, key, signal)
       if (result.kind === 'ok') {
         const answers = ParseJevAnswers(result.body)
         if (Object.keys(answers).length === 0) return { ok: false, reason: 'malformed-response', attempts: attempt }
         return { ok: true, answers, attempts: attempt }
       }
-      const retryable = result.kind !== 'http' || RETRYABLE_STATUS.has(result.status)
+      const retryable = result.kind === 'http' ? RETRYABLE_STATUS.has(result.status) : result.kind !== 'aborted'
       const reason = result.kind === 'http' ? `http-${result.status}` : result.kind
       if (!retryable || attempt > config.maxRetries) return { ok: false, reason, attempts: attempt }
       await sleep(500 * 2 ** (attempt - 1))

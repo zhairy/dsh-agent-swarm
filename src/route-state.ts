@@ -8,7 +8,7 @@ import {
   type RequestErrorPayloadLike
 } from './host-contract.js'
 import type { RoleId } from './role-registry.js'
-import { getFailureClass, getRouteKey, getRouteLabel, isSwitchWorthy, type FailureClass, type RouteInfo } from './routes.js'
+import { getFailureClass, getRouteKey, getRouteLabel, isSameRoute, isSwitchWorthy, type FailureClass, type RouteInfo } from './routes.js'
 
 /** 一次路由回退 */
 export interface FallbackEventInfo {
@@ -29,6 +29,8 @@ interface ChildStateInfo {
 
 interface RootStateInfo {
   override?: RouteInfo
+  /** 发生回退时选择器上的路由；宿主给出的路由与之不同，说明用户换了模型，覆盖作废 */
+  picker?: RouteInfo
   tried: ReadonlySet<string>
 }
 
@@ -78,6 +80,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
   const children = new Map<string, ChildStateInfo>()
   const roots = new Map<string, RootStateInfo>()
   const lastRoutes = new Map<string, RouteInfo>()
+  /** 宿主给出的（改写前的）路由，用于判断用户是否换了模型 */
+  const lastResolved = new Map<string, RouteInfo>()
 
   const getChildFallback = (agentId: string, state: ChildStateInfo, failure: LlmFailureLike, failureClass: FailureClass, action: RequestErrorActionLike): RequestErrorActionLike => {
     const current = state.chain[state.index] as RouteInfo
@@ -97,15 +101,16 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     const agentId = payload.agent.id
     const failed = lastRoutes.get(agentId) ?? { provider: payload.provider, model: '' }
     const previous = roots.get(agentId)
+    const picker = previous?.picker ?? lastResolved.get(agentId) ?? failed
     const tried = new Set([...(previous?.tried ?? []), getRouteLabel(failed)])
     const chain = getRoleRoute(config, getRouteKey(presetRole)).chain
     const next = FindNextIndex(chain, 0, tried, failed, failureClass)
     if (next === undefined) {
-      roots.set(agentId, { ...previous, tried })
+      roots.set(agentId, { ...previous, picker, tried })
       return action
     }
     const to = chain[next] as RouteInfo
-    roots.set(agentId, { override: to, tried })
+    roots.set(agentId, { override: to, picker, tried })
     onRootFallback?.({ agentId, from: failed, to, failure: payload.failure, scope: 'root' })
     return { kind: 'retry' }
   }
@@ -123,9 +128,14 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       children.delete(agentId)
       roots.delete(agentId)
       lastRoutes.delete(agentId)
+      lastResolved.delete(agentId)
     },
     getRequestOverride: (agent, resolved) => {
       const child = children.get(agent.id)
+      const root = roots.get(agent.id)
+      // 宿主给出的路由与回退时的选择器路由不同：用户换了模型，覆盖与已试记录一并作废
+      if (child === undefined && root?.picker !== undefined && !isSameRoute(resolved, root.picker)) roots.delete(agent.id)
+      lastResolved.set(agent.id, { provider: resolved.provider, model: resolved.model })
       const route = child === undefined ? roots.get(agent.id)?.override : child.chain[child.index]
       const next = route === undefined ? resolved : getRoutedConfig(resolved, route)
       lastRoutes.set(agent.id, { provider: next.provider, model: next.model })

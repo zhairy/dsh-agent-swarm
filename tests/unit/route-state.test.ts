@@ -59,7 +59,20 @@ describe('根会话回退', () => {
     registry.getRequestOverride(root, { provider: first.provider, model: first.model }, 'tian_shu')
     expect(registry.getErrorAction({ agent: root, provider: first.provider, failure: { code: 'QUOTA' } }, undefined, 'tian_shu', config)).toEqual({ kind: 'retry' })
     expect(events[0]?.to).toEqual(DEFAULT_ROUTE_CHAINS.tian_shu[1])
-    expect(registry.getRequestOverride(root, { provider: 'p', model: 'q' }, 'tian_shu')).toMatchObject({ model: DEFAULT_ROUTE_CHAINS.tian_shu[1].model })
+    expect(registry.getRequestOverride(root, { provider: first.provider, model: first.model }, 'tian_shu'))
+      .toMatchObject({ provider: DEFAULT_ROUTE_CHAINS.tian_shu[1].provider, model: DEFAULT_ROUTE_CHAINS.tian_shu[1].model })
+  })
+
+  it('回退后用户在选择器里换了模型：清除覆盖与已试记录，尊重新选择', () => {
+    const registry = intRouteStateRegistry()
+    const picked = { provider: 'p', model: 'picked' }
+    registry.getRequestOverride(root, picked, 'tian_shu')
+    registry.getErrorAction({ agent: root, provider: 'p', failure: { code: 'QUOTA' } }, undefined, 'tian_shu', config)
+    expect(registry.getRequestOverride(root, picked, 'tian_shu').model).toBe(DEFAULT_ROUTE_CHAINS.tian_shu[0].model)
+    const changed = { provider: 'q', model: 'new-choice' }
+    expect(registry.getRequestOverride(root, changed, 'tian_shu')).toEqual(changed)
+    expect(registry.getErrorAction({ agent: root, provider: 'q', failure: { code: 'QUOTA' } }, undefined, 'tian_shu', config)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(root, changed, 'tian_shu').model).toBe(DEFAULT_ROUTE_CHAINS.tian_shu[0].model)
   })
 
   it('关闭 rootFallback、非 swarm 预设、未跟踪的子会话都不干预', () => {

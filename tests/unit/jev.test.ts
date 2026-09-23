@@ -93,6 +93,33 @@ describe('intJevClient', () => {
     expect(await bad.triage(card)).toEqual({ ok: false, reason: 'malformed-response', attempts: 1 })
   })
 
+  it('调用方取消后不再请求、不再重试', async () => {
+    const fetchMock = vi.fn()
+    const client = intJevClient(DEFAULT_JEV_CONFIG, { fetch: fetchMock as unknown as typeof fetch, getApiKey: async () => 'k', sleep })
+    const pre = new AbortController()
+    pre.abort()
+    expect(await client.triage(card, pre.signal)).toEqual({ ok: false, reason: 'aborted', attempts: 0 })
+    expect(fetchMock).not.toHaveBeenCalled()
+    const during = new AbortController()
+    const hanging = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      setTimeout(() => during.abort(), 1)
+    }))
+    const cancelled = intJevClient(DEFAULT_JEV_CONFIG, { fetch: hanging as unknown as typeof fetch, getApiKey: async () => 'k', sleep })
+    expect(await cancelled.triage(card, during.signal)).toEqual({ ok: false, reason: 'aborted', attempts: 1 })
+  })
+
+  it('性能预算中的自由文本同样脱敏并截断', () => {
+    const withText = ValidateTaskCard({
+      title: 't', goal: 'g', acceptance: ['a'], flags: {},
+      perf: { p95Ms: 50, throughput: 'token=abcdef 1k/s', dataScale: 'x'.repeat(900) }
+    }).card as TaskCard
+    const profile = getJevState(withText).profile as Record<string, unknown>
+    expect(profile.p95Ms).toBe(50)
+    expect(String(profile.throughput)).not.toContain('abcdef')
+    expect(String(profile.dataScale).length).toBeLessThanOrEqual(500)
+  })
+
   it('超时视为可重试失败', async () => {
     const hanging = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
       init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))

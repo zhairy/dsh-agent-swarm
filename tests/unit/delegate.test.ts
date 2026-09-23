@@ -316,6 +316,32 @@ describe('intDelegator.delegate', () => {
     expect(order).toEqual(['start:疾风·T-1', 'end:疾风·T-1', 'start:疾风·T-1', 'end:疾风·T-1'])
   })
 
+  it('原生后端启动失败（例如未登录）时归还调用次数并退回 spawn', async () => {
+    const h = track(makeHarness({ providers: ['swarm-codex'], plans: [
+      { startError: 'not logged in', result: { output: [], stopReason: 'error' } },
+      { result: { output: [], structured: VALID_OUTPUTS.tan_wei, stopReason: 'completed' } }
+    ] }))
+    const record = await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'x', backend: 'codex' }, exec(), h.session)
+    expect(record).toMatchObject({ status: 'completed', backend: 'spawn' })
+    expect(record.attempts).toContainEqual({ route: 'swarm-codex', backend: 'codex', outcome: 'failed', reason: 'start: not logged in' })
+    expect(h.session.counters.native).toBe(0)
+  })
+
+  it('执行中出现意外异常时记录收尾为 failed，不会卡在 running', async () => {
+    const h = track(makeHarness({ gitStatus: async () => { throw new Error('git exploded') } }))
+    const record = await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'x' }, exec(), h.session)
+    expect(record).toMatchObject({ status: 'failed', error: 'git exploded' })
+    expect(h.session.store.getDelegation(record.delegationId)?.status).toBe('failed')
+  })
+
+  it('调用方已取消时不再启动子智能体', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const record = await harness.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'x' }, { agent, signal: controller.signal }, harness.session)
+    expect(record).toMatchObject({ status: 'failed', error: 'aborted' })
+    expect(harness.subagents.start).not.toHaveBeenCalled()
+  })
+
   it('超时中止子智能体', async () => {
     const h = track(makeHarness({ config: getSwarmConfig({ budgets: { delegationTimeoutMs: 1 } }) }))
     h.subagents.start.mockImplementation(async (_name, request) => ({

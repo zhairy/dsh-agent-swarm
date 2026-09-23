@@ -124,6 +124,29 @@ describe('委派、状态与验收', () => {
     expect(service.getStatus({}, exec()).tasks[0]?.acceptance?.status).toBe('accepted')
   })
 
+  it('天枢在复核之后亲自改文件，已有验证失效，需重新复核', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false } } })
+    const { task_id } = await service.AddTaskCard(cardInput({ changesCode: true }), exec())
+    await service.delegate({ task_id, role: 'ji_feng', prompt: '改文件' }, exec())
+    await service.delegate({ task_id, role: 'fu_he', prompt: '跑测试' }, exec())
+    expect(service.getGuardReason({ name: 'edit', agent: root })).toBeUndefined()
+    const stale = service.AcceptTask({ task_id, decision: 'accept', summary: 's', stopReason: 's' }, exec())
+    expect(stale.status).toBe('blocked')
+    expect(stale.missing.join('')).toContain('G_VERIFY')
+    await service.delegate({ task_id, role: 'fu_he', prompt: '重新跑测试' }, exec())
+    expect(service.AcceptTask({ task_id, decision: 'accept', summary: 's', stopReason: 's' }, exec()).status).toBe('accepted')
+  })
+
+  it('天枢在任务创建之前的编辑不影响之后的任务；子会话的写操作不算天枢编辑', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false } } })
+    service.getGuardReason({ name: 'write', agent: root })
+    const { task_id } = await service.AddTaskCard(cardInput({ uiCopy: true }), exec())
+    expect(service.AcceptTask({ task_id, decision: 'accept', summary: 's', stopReason: 's' }, exec()).status).toBe('accepted')
+    const child = { id: 'kid-2', session: { header: { agentPreset: 'tian-shu', parentSession: 'root-1' } } }
+    service.getGuardReason({ name: 'write', agent: child })
+    expect(service.getStatus({ task_id }, exec()).tasks[0]?.gates).toEqual([])
+  })
+
   it('御史高危发现需要处理说明', async () => {
     const { service, subagents } = makeService({ config: { jev: { enabled: false } } })
     const { task_id } = await service.AddTaskCard(cardInput({ crossModuleArchitecture: true }), exec())

@@ -118,7 +118,7 @@ export const ACCEPT_PARAMETERS: JsonSchemaObject = {
     stopReason: { type: 'string', description: '停止理由' },
     findingResolutions: {
       type: 'array',
-      description: '对御史 critical/high 发现逐条说明处理结果',
+      description: '逐条说明处理结果：御史的 critical/high 发现（index 为 findings 下标），以及算衡·验算给出的反例（index 为 claims 下标）',
       items: {
         type: 'object',
         properties: { delegationId: { type: 'string' }, index: { type: 'number' }, resolution: { type: 'string' } },

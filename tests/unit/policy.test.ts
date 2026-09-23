@@ -159,7 +159,7 @@ describe('门禁判定', () => {
     const research = done({ role: 'suan_heng', mode: 'research', structured: { invariants: ['x'], complexity: 'O(n)' } })
     expect(getGateStatus('G_MATH_RESEARCH', [research], []).satisfied).toBe(true)
     expect(getGateStatus('G_MATH_RESEARCH', [done({ role: 'suan_heng', mode: 'research', structured: { invariants: [] } })], []).satisfied).toBe(false)
-    const verify = done({ role: 'suan_heng', mode: 'verify', independence: 'not-achieved' })
+    const verify = done({ role: 'suan_heng', mode: 'verify', independence: 'not-achieved', structured: { claims: [{ statement: 's', status: 'proved' }] } })
     const status = getGateStatus('G_MATH_VERIFY', [verify], [])
     expect(status.satisfied).toBe(true)
     expect(status.notes.join('')).toContain('独立性未实现')
@@ -175,6 +175,70 @@ describe('门禁判定', () => {
     expect(check.ok).toBe(false)
     expect(check.missing[0]).toContain('G_VERIFY')
     expect(getAcceptanceCheck([], [], []).ok).toBe(true)
+  })
+})
+
+describe('审查意见回归：证据冲突时不得验收', () => {
+  const pass = { verdict: 'pass', commands: [{ command: 'tsc', exitCode: 0, kind: 'typecheck', summary: 'ok' }] }
+  const fail = { verdict: 'fail', commands: [{ command: 'npm test', exitCode: 1, kind: 'unit', summary: '1 failed' }] }
+
+  it('最后一次编辑之后任何一次复核判定为 fail，G_VERIFY 不成立', () => {
+    const status = getGateStatus('G_VERIFY', [done({ role: 'fu_he', delegationId: 'P', finishedAt: 5, structured: pass }), done({ role: 'fu_he', delegationId: 'F', finishedAt: 9, structured: fail })], [])
+    expect(status.satisfied).toBe(false)
+    expect(status.missing).toContain('F')
+    const older = getGateStatus('G_VERIFY', [done({ role: 'fu_he', finishedAt: 5, structured: fail }), done({ role: 'ji_feng', finishedAt: 6 }), done({ role: 'fu_he', finishedAt: 9, structured: pass })], [])
+    expect(older.satisfied).toBe(true)
+  })
+
+  it('差分/基准命令失败会否决之前的通过；基准摘要必须带数值', () => {
+    const passDiff = { verdict: 'pass', commands: [{ command: 'diff', exitCode: 0, kind: 'differential', summary: '0 mismatch' }] }
+    const failDiff = { verdict: 'fail', commands: [{ command: 'diff', exitCode: 1, kind: 'differential', summary: '3 mismatch' }] }
+    expect(getGateStatus('G_DIFF_TEST', [done({ role: 'fu_he', finishedAt: 5, structured: passDiff }), done({ role: 'fu_he', finishedAt: 9, structured: failDiff })], []).satisfied).toBe(false)
+    const benchNoNumber = { verdict: 'pass', commands: [{ command: 'bench', exitCode: 0, kind: 'benchmark', summary: '很快' }] }
+    expect(getGateStatus('G_BENCH', [done({ role: 'fu_he', structured: benchNoNumber })], []).satisfied).toBe(false)
+  })
+
+  it('G_REVIEW 汇总最后一次编辑之后的全部审查', () => {
+    const high = { findings: [{ severity: 'high', location: 'a', issue: 'x', suggestion: 'y' }] }
+    const clean = { findings: [] }
+    const reviews = [done({ role: 'yu_shi', delegationId: 'R1', finishedAt: 5, structured: high }), done({ role: 'yu_shi', delegationId: 'R2', finishedAt: 9, structured: clean })]
+    const status = getGateStatus('G_REVIEW', reviews, [])
+    expect(status.satisfied).toBe(false)
+    expect(status.missing).toContain('R1#0')
+    expect(getGateStatus('G_REVIEW', reviews, [{ delegationId: 'R1', index: 0, resolution: '已修复' }]).satisfied).toBe(true)
+  })
+
+  it('G_MATH_VERIFY：反例需处理说明，至少证实一条，且须在最后一次编辑之后', () => {
+    const refuted = { claims: [{ statement: 'a', status: 'refuted' }, { statement: 'b', status: 'proved' }] }
+    const verify = done({ role: 'suan_heng', mode: 'verify', delegationId: 'V', finishedAt: 5, structured: refuted })
+    expect(getGateStatus('G_MATH_VERIFY', [verify], []).missing).toContain('V#0')
+    expect(getGateStatus('G_MATH_VERIFY', [verify], [{ delegationId: 'V', index: 0, resolution: '语义已修正' }]).satisfied).toBe(true)
+    const unverified = done({ role: 'suan_heng', mode: 'verify', structured: { claims: [{ statement: 'a', status: 'unverified' }] } })
+    expect(getGateStatus('G_MATH_VERIFY', [unverified], []).satisfied).toBe(false)
+    const stale = [done({ role: 'suan_heng', mode: 'verify', finishedAt: 5, structured: { claims: [{ statement: 'a', status: 'proved' }] } }), done({ role: 'zhu_jian', finishedAt: 8 })]
+    expect(getGateStatus('G_MATH_VERIFY', stale, []).satisfied).toBe(false)
+  })
+
+  it('失败但已启动且产生改动的编辑委派同样使之前的复核失效；未启动的不算', () => {
+    const verifiedEarly = done({ role: 'fu_he', finishedAt: 5, structured: pass })
+    const failedWithChanges = done({ role: 'zhu_jian', status: 'failed', finishedAt: 8, childId: 'c', changeTracking: 'git', changedFiles: ['a.ts'] })
+    expect(getGateStatus('G_VERIFY', [verifiedEarly, failedWithChanges], []).satisfied).toBe(false)
+    const failedUntracked = done({ role: 'zhu_jian', status: 'failed', finishedAt: 8, childId: 'c', changeTracking: 'unavailable' })
+    expect(getGateStatus('G_VERIFY', [verifiedEarly, failedUntracked], []).satisfied).toBe(false)
+    const neverStarted = done({ role: 'zhu_jian', status: 'failed', finishedAt: 8 })
+    expect(getGateStatus('G_VERIFY', [verifiedEarly, neverStarted], []).satisfied).toBe(true)
+    const failedClean = done({ role: 'zhu_jian', status: 'failed', finishedAt: 8, childId: 'c', changeTracking: 'git', changedFiles: [] })
+    expect(getGateStatus('G_VERIFY', [verifiedEarly, failedClean], []).satisfied).toBe(true)
+    expect(getEffectiveGates([], [failedWithChanges]).map((g) => g.gate)).toEqual(['G_VERIFY'])
+  })
+
+  it('天枢自己的编辑（外部编辑时刻）同样使之前的复核失效并补上 G_VERIFY', () => {
+    const verified = done({ role: 'fu_he', finishedAt: 5, structured: pass })
+    expect(getGateStatus('G_VERIFY', [verified], [], 7).satisfied).toBe(false)
+    expect(getGateStatus('G_VERIFY', [verified], [], 3).satisfied).toBe(true)
+    expect(getEffectiveGates([], [], 7).map((g) => g.gate)).toEqual(['G_VERIFY'])
+    expect(getEffectiveGates([], [], 0)).toEqual([])
+    expect(getAcceptanceCheck([{ gate: 'G_VERIFY', role: 'fu_he', reason: 'r', source: 'rule' }], [verified], [], 7).ok).toBe(false)
   })
 })
 

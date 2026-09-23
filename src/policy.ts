@@ -292,9 +292,12 @@ export interface GateDelegationView {
   startedAt?: number
   finishedAt?: number
   independence: 'achieved' | 'not-achieved' | 'n/a'
+  childId?: string
+  changedFiles?: string[]
+  changeTracking?: 'git' | 'unavailable'
 }
 
-/** 天枢对御史发现的处理说明 */
+/** 天枢对御史发现或验算反例的处理说明 */
 export interface FindingResolution {
   delegationId: string
   index: number
@@ -312,8 +315,21 @@ export interface GateStatus {
 
 const EDIT_ROLES: readonly DelegableRoleId[] = ['zhu_jian', 'ji_feng']
 
-const getLastEditTime = (delegations: GateDelegationView[]): number =>
-  Math.max(0, ...delegations.filter((d) => EDIT_ROLES.includes(d.role) && d.status === 'completed').map((d) => d.finishedAt ?? 0))
+/**
+ * 是否算作一次代码编辑：编辑角色完成了委派；或已启动但失败，且确实产生了改动（或改动无法追踪，按保守处理）
+ * @param {GateDelegationView} d - 委派
+ * @returns {boolean} 是否计入最后一次编辑
+ */
+const isEditDelegation = (d: GateDelegationView): boolean => {
+  if (!EDIT_ROLES.includes(d.role)) return false
+  if (d.status === 'completed') return true
+  if (d.status !== 'failed' || d.childId === undefined) return false
+  return d.changeTracking !== 'git' || (d.changedFiles?.length ?? 0) > 0
+}
+
+/** 最后一次编辑的时刻：编辑委派的完成时刻与外部编辑（天枢自己改文件）时刻取最大值 */
+const getLastEditTime = (delegations: GateDelegationView[], externalEditAt: number): number =>
+  Math.max(0, externalEditAt, ...delegations.filter(isEditDelegation).map((d) => d.finishedAt ?? 0))
 
 /** 在 after 时刻之后才开始的已完成委派（验证必须开始于最后一次编辑结束之后），按完成时间倒序 */
 const getCompletedAfter = (delegations: GateDelegationView[], role: DelegableRoleId, after: number, mode?: SuanHengMode): GateDelegationView[] =>
@@ -328,45 +344,95 @@ const getCommands = (d: GateDelegationView): CommandView[] => {
   return Array.isArray(commands) ? (commands as CommandView[]) : []
 }
 
-const hasPassedCommand = (d: GateDelegationView, kinds?: readonly string[]): boolean =>
-  getCommands(d).some((c) => c.exitCode === 0 && (kinds === undefined || kinds.includes(String(c.kind))) && (kinds === undefined || String(c.summary ?? '') !== ''))
+/** 带数值的摘要（基准结论必须给出数字） */
+const HAS_NUMBER = /\d/
+
+const hasPassedCommand = (d: GateDelegationView, kinds: readonly string[], needsNumber = false): boolean =>
+  getCommands(d).some((c) => c.exitCode === 0 && kinds.includes(String(c.kind)) && (needsNumber ? HAS_NUMBER.test(String(c.summary ?? '')) : true))
+
+const hasFailedCommand = (d: GateDelegationView, kinds: readonly string[]): boolean =>
+  getCommands(d).some((c) => kinds.includes(String(c.kind)) && typeof c.exitCode === 'number' && c.exitCode !== 0)
+
+const getVerdict = (d: GateDelegationView): unknown => (d.structured as { verdict?: unknown } | undefined)?.verdict
 
 const isVerdictPass = (d: GateDelegationView): boolean =>
-  (d.structured as { verdict?: unknown } | undefined)?.verdict === 'pass' && getCommands(d).some((c) => typeof c.exitCode === 'number')
+  getVerdict(d) === 'pass' && getCommands(d).some((c) => typeof c.exitCode === 'number')
 
 const getSatisfied = (gate: GateId, by: GateDelegationView | undefined, missing: string, notes: string[] = []): GateStatus =>
   by === undefined ? { gate, satisfied: false, missing, notes } : { gate, satisfied: true, by: by.delegationId, notes }
 
+const getUnsatisfied = (gate: GateId, missing: string): GateStatus => ({ gate, satisfied: false, missing, notes: [] })
+
+const isResolved = (resolutions: FindingResolution[], delegationId: string, index: number): boolean =>
+  resolutions.some((r) => r.delegationId === delegationId && r.index === index && r.resolution.trim() !== '')
+
+/** 列出某些委派中满足条件、且没有处理说明的条目（形如 D-3#0） */
+const getUnresolvedItems = <T>(
+  list: GateDelegationView[], key: string, isSerious: (item: T) => boolean, resolutions: FindingResolution[]
+): string[] =>
+  list.flatMap((d) => {
+    const items = (d.structured as Record<string, unknown> | undefined)?.[key]
+    return (Array.isArray(items) ? (items as T[]) : [])
+      .map((item, index) => ({ item, index }))
+      .filter(({ item, index }) => isSerious(item) && !isResolved(resolutions, d.delegationId, index))
+      .map(({ index }) => `${d.delegationId}#${index}`)
+  })
+
+/** 复核类门禁：最后一次编辑之后，任何一次失败都否决之前的通过 */
+const getVerifyStatus = (fuHe: GateDelegationView[]): GateStatus => {
+  const failing = fuHe.find((d) => getVerdict(d) === 'fail')
+  if (failing !== undefined) return getUnsatisfied('G_VERIFY', `复核 ${failing.delegationId} 判定为 fail，需修复后重新复核`)
+  return getSatisfied('G_VERIFY', fuHe.find(isVerdictPass), '缺少最后一次代码改动之后、判定为通过且带退出码的复核结果')
+}
+
+const getCommandGateStatus = (gate: 'G_DIFF_TEST' | 'G_BENCH', fuHe: GateDelegationView[]): GateStatus => {
+  const kinds = gate === 'G_DIFF_TEST' ? ['differential', 'property'] : ['benchmark']
+  const failing = fuHe.find((d) => hasFailedCommand(d, kinds))
+  if (failing !== undefined) return getUnsatisfied(gate, `复核 ${failing.delegationId} 中有失败的${gate === 'G_DIFF_TEST' ? '差分/性质测试' : '基准'}命令`)
+  return gate === 'G_DIFF_TEST'
+    ? getSatisfied(gate, fuHe.find((d) => hasPassedCommand(d, kinds)), '复核结果中没有通过的差分/性质测试命令')
+    : getSatisfied(gate, fuHe.find((d) => hasPassedCommand(d, kinds, true)), '复核结果中没有通过且带数值摘要的基准命令')
+}
+
+/** 御史门禁：汇总最后一次编辑之后的全部审查，每条严重/高危发现都要有处理说明 */
 const getReviewStatus = (delegations: GateDelegationView[], resolutions: FindingResolution[], after: number): GateStatus => {
-  const review = getCompletedAfter(delegations, 'yu_shi', after)[0]
-  if (review === undefined) return getSatisfied('G_REVIEW', undefined, '缺少最后一次代码改动之后的御史审查')
-  const findings = (review.structured as { findings?: Array<{ severity?: string }> } | undefined)?.findings ?? []
-  const unresolved = findings
-    .map((finding, index) => ({ finding, index }))
-    .filter(({ finding }) => finding.severity === 'critical' || finding.severity === 'high')
-    .filter(({ index }) => !resolutions.some((r) => r.delegationId === review.delegationId && r.index === index && r.resolution.trim() !== ''))
-    .map(({ index }) => `${review.delegationId}#${index}`)
-  if (unresolved.length > 0) return { gate: 'G_REVIEW', satisfied: false, missing: `御史的严重/高危发现未给出处理：${unresolved.join(', ')}`, notes: [] }
-  return getSatisfied('G_REVIEW', review, '', review.independence === 'not-achieved' ? ['审查者与实现者模型家族相同（独立性未实现）'] : [])
+  const reviews = getCompletedAfter(delegations, 'yu_shi', after)
+  if (reviews.length === 0) return getUnsatisfied('G_REVIEW', '缺少最后一次代码改动之后的御史审查')
+  const unresolved = getUnresolvedItems<{ severity?: string }>(reviews, 'findings', (f) => f.severity === 'critical' || f.severity === 'high', resolutions)
+  if (unresolved.length > 0) return getUnsatisfied('G_REVIEW', `御史的严重/高危发现未给出处理：${unresolved.join(', ')}`)
+  const notes = reviews.some((d) => d.independence === 'not-achieved') ? ['审查者与实现者模型家族相同（独立性未实现）'] : []
+  return getSatisfied('G_REVIEW', reviews[0], '', notes)
+}
+
+/** 验算门禁：最后一次编辑之后的验算，反例都要有处理说明，最新一次至少证实一条结论 */
+const getMathVerifyStatus = (delegations: GateDelegationView[], resolutions: FindingResolution[], after: number): GateStatus => {
+  const verifies = getCompletedAfter(delegations, 'suan_heng', after, 'verify')
+  if (verifies.length === 0) return getUnsatisfied('G_MATH_VERIFY', '缺少最后一次代码改动之后的算衡·验算结果')
+  const refuted = getUnresolvedItems<{ status?: string }>(verifies, 'claims', (c) => c.status === 'refuted', resolutions)
+  if (refuted.length > 0) return getUnsatisfied('G_MATH_VERIFY', `验算给出了反例且未说明处理：${refuted.join(', ')}`)
+  const latest = verifies[0] as GateDelegationView
+  const claims = (latest.structured as { claims?: Array<{ status?: string }> } | undefined)?.claims ?? []
+  if (!claims.some((c) => c.status === 'proved')) return getUnsatisfied('G_MATH_VERIFY', `验算 ${latest.delegationId} 没有证实任何结论`)
+  return getSatisfied('G_MATH_VERIFY', latest, '', latest.independence === 'not-achieved' ? ['验算与研算模型家族相同（独立性未实现）'] : [])
 }
 
 /**
  * 判定单个门禁是否已由证据满足
  * @param {GateId} gate - 门禁
  * @param {GateDelegationView[]} delegations - 本任务的委派
- * @param {FindingResolution[]} resolutions - 天枢对御史发现的处理
+ * @param {FindingResolution[]} resolutions - 天枢对御史发现与验算反例的处理
+ * @param {number} [externalEditAt=0] - 委派之外的编辑时刻（天枢自己改文件）
  * @returns {GateStatus} 判定结果
  */
-export const getGateStatus = (gate: GateId, delegations: GateDelegationView[], resolutions: FindingResolution[]): GateStatus => {
-  const lastEdit = getLastEditTime(delegations)
+export const getGateStatus = (gate: GateId, delegations: GateDelegationView[], resolutions: FindingResolution[], externalEditAt = 0): GateStatus => {
+  const lastEdit = getLastEditTime(delegations, externalEditAt)
   const fuHe = getCompletedAfter(delegations, 'fu_he', lastEdit)
   switch (gate) {
     case 'G_VERIFY':
-      return getSatisfied(gate, fuHe.find(isVerdictPass), '缺少最后一次代码改动之后、判定为通过且带退出码的复核结果')
+      return getVerifyStatus(fuHe)
     case 'G_DIFF_TEST':
-      return getSatisfied(gate, fuHe.find((d) => hasPassedCommand(d, ['differential', 'property'])), '复核结果中没有通过的差分/性质测试命令')
     case 'G_BENCH':
-      return getSatisfied(gate, fuHe.find((d) => hasPassedCommand(d, ['benchmark'])), '复核结果中没有通过且带数值摘要的基准命令')
+      return getCommandGateStatus(gate, fuHe)
     case 'G_REVIEW':
       return getReviewStatus(delegations, resolutions, lastEdit)
     case 'G_MATH_RESEARCH': {
@@ -376,26 +442,24 @@ export const getGateStatus = (gate: GateId, delegations: GateDelegationView[], r
       })
       return getSatisfied(gate, research, '缺少含不变量与复杂度的算衡·研算结果')
     }
-    case 'G_MATH_VERIFY': {
-      const verify = getCompletedAfter(delegations, 'suan_heng', 0, 'verify')[0]
-      return getSatisfied(gate, verify, '缺少算衡·验算结果', verify?.independence === 'not-achieved' ? ['验算与研算模型家族相同（独立性未实现）'] : [])
-    }
+    case 'G_MATH_VERIFY':
+      return getMathVerifyStatus(delegations, resolutions, lastEdit)
     case 'G_VISION':
       return getSatisfied(gate, getCompletedAfter(delegations, 'guan_xiang', 0)[0], '缺少观象的视觉观察结果')
   }
 }
 
 /**
- * 实际生效的门禁：出现过编辑委派时自动补上 G_VERIFY
+ * 实际生效的门禁：出现过编辑（含天枢自己改文件）时自动补上 G_VERIFY
  * @param {GateRequirement[]} gates - 任务卡门禁
  * @param {GateDelegationView[]} delegations - 本任务的委派
+ * @param {number} [externalEditAt=0] - 委派之外的编辑时刻
  * @returns {GateRequirement[]} 生效门禁
  */
-export const getEffectiveGates = (gates: GateRequirement[], delegations: GateDelegationView[]): GateRequirement[] => {
+export const getEffectiveGates = (gates: GateRequirement[], delegations: GateDelegationView[], externalEditAt = 0): GateRequirement[] => {
   const out = gates.map((item) => ({ ...item }))
-  if (delegations.some((d) => EDIT_ROLES.includes(d.role) && d.status === 'completed')) {
-    AddGate(out, 'G_VERIFY', '任务中出现过代码改动委派', 'rule')
-  }
+  if (delegations.some(isEditDelegation)) AddGate(out, 'G_VERIFY', '任务中出现过代码改动委派', 'rule')
+  if (externalEditAt > 0) AddGate(out, 'G_VERIFY', '天枢直接修改过文件', 'rule')
   return out
 }
 
@@ -404,10 +468,11 @@ export const getEffectiveGates = (gates: GateRequirement[], delegations: GateDel
  * @param {GateRequirement[]} gates - 生效门禁
  * @param {GateDelegationView[]} delegations - 本任务的委派
  * @param {FindingResolution[]} resolutions - 发现处理
+ * @param {number} [externalEditAt=0] - 委派之外的编辑时刻
  * @returns {{ ok: boolean; statuses: GateStatus[]; missing: string[] }} 是否可验收
  */
-export const getAcceptanceCheck = (gates: GateRequirement[], delegations: GateDelegationView[], resolutions: FindingResolution[]) => {
-  const statuses = gates.map((item) => getGateStatus(item.gate, delegations, resolutions))
+export const getAcceptanceCheck = (gates: GateRequirement[], delegations: GateDelegationView[], resolutions: FindingResolution[], externalEditAt = 0) => {
+  const statuses = gates.map((item) => getGateStatus(item.gate, delegations, resolutions, externalEditAt))
   const missing = statuses.filter((s) => !s.satisfied).map((s) => `${s.gate}：${s.missing ?? '未满足'}`)
   return { ok: missing.length === 0, statuses, missing }
 }
