@@ -1,0 +1,86 @@
+{
+  "name": "dsh-agent-swarm",
+  "version": "2.1.0",
+  "description": "DSH 中文多智能体插件：13 个中文角色、衡鉴分流、统一委派、证据门禁、模型回退、内嵌 Jev 判断工具与按模型家族适配的提示",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./tools": "./lib/tools.js",
+    "./runtime": "./lib/runtime.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "presets",
+    "skills",
+    "locale",
+    "config",
+    "docs",
+    "scripts/doctor.mjs",
+    "README.md",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "gen:presets": "node scripts/gen-presets.mjs",
+    "doctor": "node scripts/doctor.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.4"
+  },
+  "dsh": {
+    "minVersion": "0.1.7-alpha.2",
+    "testedVersions": [
+      "0.2.0-rc.2",
+      "0.1.7-rc.2",
+      "0.1.7-rc.1",
+      "0.1.7-alpha.2"
+    ],
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    },
+    "bundle": {
+      "patch": [
+        "./cordis.patch.yml",
+        "./presets/tian-shu.patch.yml",
+        "./presets/mou-ding.patch.yml",
+        "./presets/shu-ji.patch.yml",
+        "./presets/suan-heng.patch.yml",
+        "./presets/tan-wei.patch.yml",
+        "./presets/bo-wen.patch.yml",
+        "./presets/guan-xiang.patch.yml",
+        "./presets/zhu-jian.patch.yml",
+        "./presets/xing-zhou.patch.yml",
+        "./presets/ji-feng.patch.yml",
+        "./presets/yu-shi.patch.yml",
+        "./presets/fu-he.patch.yml",
+        "./presets/miao-bi.patch.yml"
+      ]
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2",
+    "yaml": "^2.9.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhairy/dsh-agent-swarm.git"
+  }
+}

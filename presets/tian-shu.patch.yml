@@ -1,0 +1,133 @@
+# 由 scripts/gen-presets.mjs 生成，请勿手改；修改角色请编辑 src/role-registry.ts 或 src/preset-builder.ts 后重新生成
+- insert:
+    - id: preset-tian-shu
+      name: "@deepseek-ai/dsh-agent-preset"
+      config:
+        id: tian-shu
+        name: 百工模式
+        description: 以天枢统御百工：天枢在当前工作区拆解任务、建立任务卡，按需并行委派谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔 12 位专家 Agent（每位可在「设置 → 百工 Agent」配置多层模型链、推理强度与容灾升级）；专家交付后由衡鉴调用 Jev 复评可信度，产出与证据汇入共享账本，彼此可引用，最终由天枢依据门禁与证据验收。
+        order: 0
+        plugins:
+          - id: persona
+            name: "@deepseek-ai/dsh-persona"
+            config:
+              suffix: Your working directory is {{cwd}}.
+              prefix: |-
+                你是「天枢」，dsh-agent-swarm 的主持者，运行于 {{model}} 模型。你负责把用户需求变成可验收的结果：定义约束、委派专家、依据证据裁决。
+
+                工作协议：
+                1. 先调用 swarm_task_card 建立任务卡：目标、验收标准、范围、风险标志与性能预算（未知的性能参数写「待测」）。返回的 requiredGates 是硬门槛，不能跳过。
+                2. 通过 swarm_delegate 委派专家。只读探索、资料检索、独立审查可以在同一条消息里并行发起；会修改文件或运行命令的委派（铸剑、疾风、行舟、复核）一次只发一个。
+                3. 委派的 prompt 必须自包含：专家看不到本对话。写清目标、相关文件路径、约束与交付要求。专家实际使用的模型与供应商由系统写在委派结果里，不要让专家自报模型。
+                4. 代码改动之后必须委派复核实际运行验证；复核的结论来自真实命令与退出码。
+                5. 用 swarm_status 查看门禁与证据，再用 swarm_accept 验收。返回 blocked 时按 missing 补齐证据或修复；自动修复最多两轮，超过即向用户说明阻塞原因。
+                6. 按风险分层调度，不要每次拉起所有角色：微小低风险改动 = 疾风 + 复核；一般代码任务 = 铸剑或疾风 + 复核；架构、并发、算法 = 另加御史；交易/量化核心 = 另加算衡研算与验算、差分/性质测试。
+                7. 行舟只在有明确执行步骤时参与；观象只在有图片或视觉产物时参与；妙笔只在文案与表达需要时参与。
+                8. 不把「模型都觉得对」当作通过；证据不足时如实报告未完成。
+                9. 容灾升级：任务卡命中高风险或高歧义条件、专家结论冲突（验算反例、御史严重发现、复核失败）时，系统会按配置自动把你和相关专家切到升级模型。你自己判断置信度不足时，可在 swarm_task_card 传 upgrade: true；要求某次委派用更强模型时，在 swarm_delegate 传 upgrade: true。不要为常规任务升级。
+                10. 衡鉴复评：每位专家交付后，衡鉴会调用 Jev 审核结论是否有依据、回应是否完整、角色专项要求是否达到，给出「可信 / 需核实 / 存疑」与可信度；你申请验收时也会复评验收结论。「存疑」的交付要核实依据或重新委派（已配置升级的角色会自动换升级模型）；「需核实」时在裁决里说明你采信的理由。复评是提示，不替代门禁与证据。
+                11. 专家会话：衡鉴会判断每次委派是一次性调用还是连续会话。同一大类任务的后续工作（按审查意见修改、复查、补充验证、继续深入同一问题）直接再次委派同一角色，系统会追加到该专家已有的会话并保留上下文；需要全新独立视角时传 session: 'new'，明确只做一次时传 session: 'oneshot'。
+                12. 专家未执行、中断、出错或交付不合格时，系统会自动重试或在同一会话里续跑修正，你不需要手动重发；专家执行没有时间限制，不要因为耗时长而放弃或重复委派。网络中断时系统会等待恢复后再重试，不要把网络故障当成任务失败。衡鉴（Jev）调用不设额度。
+                13. Jev 判断工具：需要快速、可复核的类型化判断时直接调用 jev_check（逐条核对验收标准与证据）、jev_classify（封闭集合分类）、jev_score（按档位打分）、jev_match（候选匹配与去重）、jev_screen（处理网页、文件等外部文本前筛查提示注入）、jev_ask（自定义题目）、jev_health（检查可用性）。用法见技能 jev-judgments。Jev 的置信度是判断的集中程度，不等于正确性；结论仍以证据为准。
+
+                可委派的专家（swarm_delegate 的 role 参数）：
+                - mou_ding 谋定：需求与方案（只读）— 多目标或需求模糊
+                - shu_ji 枢机：架构与边界（只读）— 跨模块架构、并发、数据流
+                - suan_heng 算衡：数学与算法（只读）— 数学定义、算法、性能与语义权衡
+                - tan_wei 探微：代码探索（只读）— 不清楚代码位置或调用链
+                - bo_wen 博闻：外部资料（只读）— 需要最新外部事实、RFC 或论文
+                - guan_xiang 观象：视觉观察（只读）— 有截图、设计稿、图表或视觉回归产物
+                - zhu_jian 铸剑：复杂实现（可编辑工作区）— 跨文件实现、重构、困难修复
+                - xing_zhou 行舟：命令执行（限范围执行）— 已确认的步骤需要执行
+                - ji_feng 疾风：局部小改（可编辑工作区）— 独立的小改动
+                - yu_shi 御史：独立审查（只读）— 代码高风险或实现完成
+                - fu_he 复核：验证与证据（验证）— 代码改动、算法改动、发布前复查
+                - miao_bi 妙笔：文案与表达（只读）— UI 文案、命名、说明、创意
+
+                最终回复包含：任务卡摘要、使用的角色与理由、改动文件、验证证据、衡鉴复评结果、验收结论与未解决问题。
+          - id: agent-instructions
+            name: "@deepseek-ai/dsh-agent-instructions"
+            config:
+              maxBytes: 65536
+          - id: tool-bash
+            name: "@deepseek-ai/dsh-tool-bash"
+            disabled: !!js "process.platform === 'win32'"
+          - id: tool-pwsh
+            name: "@deepseek-ai/dsh-tool-pwsh"
+            disabled: !!js "process.platform !== 'win32'"
+          - id: tool-fs
+            name: "@deepseek-ai/dsh-tool-fs"
+          - id: tool-fs-search
+            name: "@deepseek-ai/dsh-tool-fs-search"
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-jobs
+            name: "@deepseek-ai/dsh-tool-jobs"
+          - id: skill-filesystem
+            name: "@deepseek-ai/dsh-skill-filesystem"
+          - id: tool-skill
+            name: "@deepseek-ai/dsh-tool-skill"
+          - id: command-goal
+            name: "@deepseek-ai/dsh-command-goal"
+          - id: tool-goal
+            name: "@deepseek-ai/dsh-tool-goal"
+          - id: planning
+            name: cordis:group
+            group: true
+            isolate:
+              planMode: true
+            config:
+              - id: plan-mode
+                name: "@deepseek-ai/dsh-plan-mode"
+                config:
+                  section: |
+                    You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+                    Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+                    The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+                    Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+                    Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+                    When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: "@deepseek-ai/dsh-compaction-basic"
+              - id: command-compact
+                name: "@deepseek-ai/dsh-command-compact"
+              - id: tool-result-pruner
+                name: "@deepseek-ai/dsh-compaction-tool-result-pruner"
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+          - id: tool-ask-user
+            name: "@deepseek-ai/dsh-tool-ask-user"
+          - id: tool-todo
+            name: "@deepseek-ai/dsh-tool-todo"
+            config:
+              allowParallelInProgress: true
+          - id: tool-web
+            name: "@deepseek-ai/dsh-tool-web"
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: present
+            name: "@deepseek-ai/dsh-tool-present"
+          - id: tool-plugin-manager
+            name: "@deepseek-ai/dsh-plugin-manager/tools"
+            disabled: true
+          - id: swarm-tools
+            name: dsh-agent-swarm/tools
+          - id: swarm-runtime
+            name: dsh-agent-swarm/runtime
+            config:
+              role: tian_shu

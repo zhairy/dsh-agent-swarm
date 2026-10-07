@@ -1,0 +1,101 @@
+# 由 scripts/gen-presets.mjs 生成，请勿手改；修改角色请编辑 src/role-registry.ts 或 src/preset-builder.ts 后重新生成
+- insert:
+    - id: preset-suan-heng
+      name: "@deepseek-ai/dsh-agent-preset"
+      disabled: !!js "process.env.DSH_SWARM_ROLE_PRESETS !== '1'"
+      config:
+        id: suan-heng
+        name: 算衡
+        description: 数学与算法：完成数学建模与算法分析：前提、定义、不变量、证明义务、反例、复杂度与数值误差。
+        order: 23
+        plugins:
+          - id: persona
+            name: "@deepseek-ai/dsh-persona"
+            config:
+              suffix: Your working directory is {{cwd}}.
+              prefix: |-
+                你是「算衡」（数学与算法），dsh-agent-swarm 的专用角色会话，运行于 {{model}} 模型。用户直接与你协作。
+
+                职责：完成数学建模与算法分析：前提、定义、不变量、证明义务、反例、复杂度与数值误差。
+
+                边界：
+                - 只读，不运行命令：数值验证程序写入 reproducible，交由复核实际运行
+                - 验算模式独立完成，不参考研算结论
+                - 搜索只用于获取定义、论文与标准，不能用搜索摘要代替推导
+
+                典型触发：数学定义、算法、性能与语义权衡
+
+                交付要求：前提、定义、不变量、结论与证明或反例、复杂度、数值误差、未覆盖范围。先给结论，再列证据与未解决问题。
+          - id: agent-instructions
+            name: "@deepseek-ai/dsh-agent-instructions"
+            config:
+              maxBytes: 65536
+          - id: tool-fs
+            name: "@deepseek-ai/dsh-tool-fs"
+          - id: tool-fs-search
+            name: "@deepseek-ai/dsh-tool-fs-search"
+            config:
+              sampleOverCapGlobResults: false
+          - id: skill-filesystem
+            name: "@deepseek-ai/dsh-skill-filesystem"
+          - id: tool-skill
+            name: "@deepseek-ai/dsh-tool-skill"
+          - id: command-goal
+            name: "@deepseek-ai/dsh-command-goal"
+          - id: tool-goal
+            name: "@deepseek-ai/dsh-tool-goal"
+          - id: planning
+            name: cordis:group
+            group: true
+            isolate:
+              planMode: true
+            config:
+              - id: plan-mode
+                name: "@deepseek-ai/dsh-plan-mode"
+                config:
+                  section: |
+                    You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+                    Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+                    The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+                    Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+                    Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+                    When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: "@deepseek-ai/dsh-compaction-basic"
+              - id: command-compact
+                name: "@deepseek-ai/dsh-command-compact"
+              - id: tool-result-pruner
+                name: "@deepseek-ai/dsh-compaction-tool-result-pruner"
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+          - id: tool-ask-user
+            name: "@deepseek-ai/dsh-tool-ask-user"
+          - id: tool-todo
+            name: "@deepseek-ai/dsh-tool-todo"
+            config:
+              allowParallelInProgress: true
+          - id: tool-web
+            name: "@deepseek-ai/dsh-tool-web"
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: present
+            name: "@deepseek-ai/dsh-tool-present"
+          - id: swarm-runtime
+            name: dsh-agent-swarm/runtime
+            config:
+              role: suan_heng

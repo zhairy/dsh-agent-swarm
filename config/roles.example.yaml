@@ -1,0 +1,43 @@
+# 路由覆盖示例：复制到 profile 的 cordis.patch.yml 末尾，然后重启 dsh
+# （例如 %USERPROFILE%\.dsh\profiles\swarm\cordis.patch.yml）。
+# 更方便的做法是直接在 Web 端「设置 → 百工 Agent」里改，保存后即时生效。
+# 注意：覆盖会整体替换 swarm-core 的 config，未写的字段恢复默认值。
+# 路由键：tian_shu mou_ding shu_ji suan_heng:research suan_heng:verify tan_wei bo_wen
+#         guan_xiang zhu_jian xing_zhou ji_feng yu_shi fu_he miao_bi
+# 只需要写想改的路由键；其余路由键继续使用 src/routes.ts 中的默认链。
+# chain 的层数不限；同一模型先走订阅（qwen-token-plan-cn → opencode-go），DeepSeek 官方 API 放最后兜底。
+# upgrade（容灾升级）只对 tian_shu mou_ding shu_ji suan_heng:verify zhu_jian yu_shi 生效；
+#   triggers 可选：ambiguous conflict lowConfidence financial crossModule concurrency stateMachine algorithm security perf retry
+#   （lowConfidence = 衡鉴复评判定该角色此前的交付「存疑」）
+# 每层可写 reasoningEffort（推理强度），取值须是该模型支持的档位，见 src/routes.ts 的 MODEL_REASONING_EFFORTS。
+#   只写 upgrade 不写 chain 时，常规链沿用默认值；enabled: false 可停用默认升级。
+- id: swarm-core
+  config:
+    routes:
+      zhu_jian:
+        chain:
+          - { provider: claude, model: claude-sonnet-5, reasoningEffort: high }
+          - { provider: qwen-token-plan-cn, model: deepseek-v4.1-flash, reasoningEffort: high }
+          - { provider: opencode-go, model: kimi-k2.7-code, reasoningEffort: high }
+          - { provider: qwen-token-plan-cn, model: glm-5.3, reasoningEffort: high }
+          - { provider: deepseek-official, model: deepseek-flash, reasoningEffort: high }
+        upgrade:
+          enabled: true
+          chain:
+            - { provider: claude, model: claude-opus-5-5, reasoningEffort: xhigh }
+            - { provider: codex, model: gpt-6-astra, reasoningEffort: xhigh }
+          triggers: [crossModule, concurrency, financial, stateMachine, perf, lowConfidence, retry]
+      shu_ji:
+        upgrade:
+          chain:
+            - { provider: codex, model: gpt-6-astra, reasoningEffort: max }
+          triggers: [conflict, lowConfidence]
+      mou_ding:
+        upgrade:
+          enabled: false
+    nativeEscalation: manual
+    # 衡鉴复评（专家交付后与验收时调用 Jev 打分）；enabled: false 可关闭
+    review:
+      enabled: true
+      trustedAbove: 0.67
+      doubtfulBelow: 0.4

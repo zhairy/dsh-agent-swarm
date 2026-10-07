@@ -1,0 +1,43 @@
+# 策略与预算覆盖示例：复制到 profile 的 cordis.patch.yml 末尾，然后重启 dsh。
+# 注意：与路由覆盖写在同一个 swarm-core 条目里，因为覆盖会整体替换 config。
+- id: swarm-core
+  config:
+    # 主会话模型遇到致命失败（额度耗尽、模型不可用、认证失败）时，按天枢链回退
+    rootFallback: true
+    # manual：只在 swarm_delegate 显式传 backend: codex/claude 时使用原生后端
+    # auto：任务带 G_MATH_VERIFY / G_REVIEW / G_DIFF_TEST 或涉及安全时，按角色的升级通道自动使用
+    nativeEscalation: manual
+    native:
+      maxCallsPerSession: 5        # 每个会话最多调用原生 Codex/Claude 的次数（消耗 Plus/Pro 额度）
+    jev:
+      enabled: true
+      apiKeyEnv: TYPESAFE_API_KEY  # 凭据引用名：环境变量或 DSH 凭据库
+      timeoutMs: 10000
+      maxRetries: 4                # 429/529/5xx/超时的重试次数；Jev 调用不设会话额度（单次约 $0.00001）
+      maxRequestsPerSecond: 8      # 进程内每秒最多发出的 Jev 请求（衡鉴与 jev_* 工具共用）
+      maxRequestChars: 120000      # 单次请求体字符上限
+      mathConfidence: 0.7          # math_task 置信度低于此值时走严格路径（算法任务强制验算与审查）
+      benchmarkNoul: 0.5           # need_benchmark 概率达到此值时追加 G_BENCH
+      noveltyScore: 1              # novelty（0–2）达到此值且置信度达标时追加 G_REVIEW
+      noveltyConfidence: 0.5
+    # 专家的会话与重试策略；专家执行不设时间限制
+    agents:
+      session: auto                # auto：衡鉴判断一次性调用 / 新建连续会话 / 追加到已有会话；oneshot；continuable
+      repeatAbove: 0.5             # 「同一大类任务还会再调用该专家」的概率达到此值时开连续会话
+      sameCategoryAbove: 0.5       # 「新请求与已有会话同类」的概率达到此值时追加到该会话
+      maxRetries: 3                # 未执行、中断、出错或交付不合格时的自动重试次数
+      retryBackoffMs: 5000         # 出错重试前的等待（逐次加倍）
+      promptStyle: auto            # auto：按模型家族组织提示（Claude：XML 分节；GPT：目标/停止条件/证据；其他：编号步骤）；也可固定 claude / gpt / generic
+      networkWaitMs: 600000        # 断网引起的失败先等网络恢复（最长 10 分钟），再在原模型重试；0 为直接回退
+      rootRecoverMs: 600000        # 天枢回退到备用模型 10 分钟后重新尝试对话框所选模型；0 为不恢复
+      modelCallDisplay: every      # 聊天窗口「调用模型」行：every 每次调用都显示；turn 只在每轮首次与换模型时显示
+      networkProbeUrls:            # 联网探测地址：任一有 HTTP 响应即视为联网
+        - https://api.deepseek.com
+        - https://dashscope.aliyuncs.com
+        - https://www.baidu.com
+    budgets:
+      maxDelegationsPerTask: 0     # 0 为不限
+      maxCallsPerRole: 0           # 0 为不限
+      maxCallsZhuJian: 0           # 0 为不限
+      maxAutoFixRounds: 1          # swarm_accept 的 reject 轮次上限
+    ledgerDir: ''                  # 留空：<DSH_HOME>/share/dsh-agent-swarm/ledger
