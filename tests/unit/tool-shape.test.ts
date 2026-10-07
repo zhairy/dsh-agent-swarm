@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getToolDefinition } from '../../src/tool-shape.js'
+import { getToolDefinition, getLosslessToolValue } from '../../src/tool-shape.js'
 
 const spec = {
   name: 'demo_tool',
@@ -41,5 +41,19 @@ describe('getToolDefinition', () => {
     expect('isConcurrencySafe' in tool).toBe(false)
     expect('timeoutMs' in tool).toBe(false)
     expect(getToolDefinition({ ...spec, timeoutMs: 5 }).timeoutMs).toBe(5)
+  })
+})
+
+
+describe('lossless DSH tool results', () => {
+  it('omits optional fields at every object level and preserves meaningful zero/null values', () => {
+    const result = getLosslessToolValue({ task: { optional: undefined, count: 0 }, rows: [{ optional: undefined, value: null }], text: '' })
+    expect(result).toEqual({ task: { count: 0 }, rows: [{ value: null }], text: '' })
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result)
+  })
+  it('rejects invalid numbers, undefined array entries and host handles rather than silently changing data', () => {
+    for (const value of [NaN, Infinity, { value: -Infinity }, [undefined], new Date(), new Map(), () => 0, 1n]) {
+      expect(() => getLosslessToolValue(value)).toThrow(/不能无损编码/)
+    }
   })
 })

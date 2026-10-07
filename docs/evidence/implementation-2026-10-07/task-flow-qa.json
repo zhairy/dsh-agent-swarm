@@ -1,0 +1,55 @@
+{
+  "date": "2026-10-07",
+  "finalReviewDate": "2026-10-08",
+  "timezone": "Asia/Shanghai",
+  "scope": "Task-flow component preview using real SwarmService, production RPC route helpers and the installed DSH React/MarkdownText modules",
+  "previewCommand": "npm run build && node scripts/preview-task-flow.mjs",
+  "url": "http://127.0.0.1:4183/",
+  "browser": "agent-browser isolated session swarm-flow-qa",
+  "browserPlugin": "not available; the instructed default agent-browser CLI was used",
+  "hostFrontendVersion": "0.2.0-rc.2",
+  "mermaidVersion": "11.12.0",
+  "taskExecution": "not started",
+  "planningReview": "disabled in the preview; all captured task states remain pending and do not claim review pass",
+  "viewports": [
+    { "width": 1280, "height": 800 },
+    { "width": 390, "height": 844 }
+  ],
+  "checks": {
+    "pageIdentity": "pass",
+    "meaningfulContent": "pass",
+    "frameworkErrorOverlay": "absent",
+    "realSvgRendered": 1,
+    "hostKatexFormulaRendered": 1,
+    "refreshPreservesTaskIdentity": "T-1",
+    "sourceDisclosure": "open=true and source begins with flowchart TD",
+    "mobilePageHorizontalOverflow": false,
+    "mobileZoom": "zoom=2; diagram container scrolls horizontally while the page does not overflow",
+    "invalidMermaidFallback": "diagnostic shown; 7 steps and source preserved; no SVG; planning remains pending",
+    "rpcFailureFallback": "explicit failure shown; real tool result and source preserved; no review pass",
+    "consoleErrorsAndWarnings": []
+    ,"threeDimensions": "3 rows; independent Agent and Jev opinions separate; absent data explicitly not reviewed; Mermaid syntax/projection/semantic states distinct"
+    ,"settingsResourceLabels": ["subscription", "subscription", "subscription", "metered_api"]
+    ,"settingsPolicyRoundTrip": "machine unit tests preserve regular/upgrade quotaDomainId, accessMode, quotaScope, poolId, capabilities and bounded opaque future metadata"
+  },
+  "repairsVerified": [
+    "Set both global and flowchart htmlLabels=false so strict Mermaid emits SVG text rather than foreignObject",
+    "Separate node pending from planning pending labels",
+    "Keep readable task contract once and expose Mermaid source in a disclosure",
+    "Add reversible zoom and fit controls for mobile diagrams"
+  ],
+  "screenshots": [
+    "task-flow-desktop.png",
+    "task-flow-source.png",
+    "task-flow-mobile.png",
+    "task-flow-mobile-zoom.png",
+    "task-flow-invalid-mermaid.png",
+    "task-flow-rpc-error.png",
+    "task-flow-three-dimensions.png",
+    "task-flow-three-dimensions-mobile.png"
+  ],
+  "limits": [
+    "This preview is component and production HTTP-helper QA, not a claim that the complete DSH boot and authentication middleware have been browser-tested",
+    "No live generation model, Jev API, business mutation, completed task or review approval was simulated"
+  ]
+}

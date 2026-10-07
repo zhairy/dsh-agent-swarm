@@ -42,5 +42,16 @@ export const SCENARIOS = {
   },
   'jev-triage': { preset: 'tian-shu', root: [card({ changesCode: true }), { text: 'DONE' }] },
   'jev-fallback': { preset: 'tian-shu', root: [card({ changesCode: true, changesAlgorithm: true }), { text: 'DONE' }] },
-  'root-fallback': { preset: 'tian-shu', root: [card({ uiCopy: true }), { text: 'DONE' }] }
+  'root-fallback': { preset: 'tian-shu', root: [card({ uiCopy: true }), { text: 'DONE' }] },
+  'thread-flow': {
+    preset: 'tian-shu',
+    root: [
+      card({ changesCode: true }),
+      delegate({ role: 'fu_he', prompt: '第一次验证 hello.txt' }),
+      delegate({ role: 'fu_he', prompt: '修复后重新验证 hello.txt' }),
+      delegate({ role: 'tan_wei', prompt: '一次性定位入口', session: 'oneshot' }),
+      { tool: 'swarm_status', args: { task_id: '$TASK' } },
+      { text: 'DONE' }
+    ]
+  }
 }

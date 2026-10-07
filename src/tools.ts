@@ -1,15 +1,22 @@
 import { DELEGATE_BACKENDS } from './delegate.js'
 import type { DelegationRecord } from './evidence.js'
-import { SWARM_SERVICE, type PluginContextLike, type ToolsLike } from './host-contract.js'
+import { SWARM_SERVICE, type PluginContextLike, type PromptAssemblyLike, type SkillsLike, type ToolsLike } from './host-contract.js'
+import { getJevToolDefinitions } from './jev-tools.js'
+import { getMathToolDefinitions } from './math-tools.js'
+import { getCollaborationToolDefinitions } from './collaboration-tools.js'
+import { PROMPT_STYLE_LABELS, getOrchestratorStyleSection, getPromptStyle, type PromptStylePolicy } from './model-family.js'
 import { FLAG_KEYS, GATE_IDS, type FlagKey } from './policy.js'
-import { getDelegableRoleIds, getRoleCatalogText, getRoleInfo, isDelegableRoleId } from './role-registry.js'
-import { getRouteLabel } from './routes.js'
+import { ROLE_TAG_PATTERN, getDelegableRoleIds, getRoleCatalogText, getRoleInfo, isDelegableRoleId } from './role-registry.js'
+import { getAssessmentText } from './review.js'
+import { getRouteDisplay } from './routes.js'
+import { getEmbeddedSkills } from './skills.js'
+import { SESSION_CHOICES } from './threads.js'
 import type { AcceptResultInfo, SwarmService } from './service.js'
 import { getToolDefinition, type ToolDefinitionLike, type ToolExecLike } from './tool-shape.js'
 import { SwarmError } from './util/errors.js'
 import type { JsonSchemaObject } from './util/json-schema.js'
 
-/** 预设行：只挂在天枢预设上，注册 4 个模型工具 */
+/** 预设行：只挂在天枢预设上，注册 4 个百工工具、7 个 Jev 判断工具与 2 个内嵌技能，并按模型家族补充天枢的调度说明 */
 export const name = 'dsh-agent-swarm-tools'
 export const inject = [SWARM_SERVICE, 'tools']
 
@@ -31,7 +38,6 @@ const FLAG_DESCRIPTIONS: Readonly<Record<FlagKey, string>> = {
 }
 
 const MAX_RENDER = 7000
-const DELEGATE_TIMEOUT_MS = 2 * 60 * 60 * 1000
 
 const clip = (text: string, max = MAX_RENDER): string =>
   text.length > max ? `${text.slice(0, max)}\n…（已截断，完整内容见 swarm_status verbose 或账本）` : text
@@ -40,13 +46,16 @@ const strList = (description: string): JsonSchemaObject => ({ type: 'array', ite
 
 const getExec = (exec: ToolExecLike) => {
   if (exec.agent === undefined) throw new SwarmError('SERVICE_UNAVAILABLE', '工具调用缺少会话上下文')
-  return { agent: exec.agent, signal: exec.signal }
+  return { agent: exec.agent, signal: exec.signal, callId: exec.callId }
 }
 
 export const TASK_CARD_PARAMETERS: JsonSchemaObject = {
   type: 'object',
   properties: {
     task_id: { type: 'string', description: '更新已有任务时传入；新任务不传' },
+    expected_card_revision: { type: 'number', description: '更新任务时的合同版本，用于并发比较' },
+    workflow: { type: 'object', additionalProperties: true, description: '可选结构化流程；依赖、角色和门禁由宿主校验，Mermaid 自动生成' },
+    intent: { type: 'object', properties: { text: { type: 'string' }, sourceRef: { type: 'string' } }, required: ['text'], additionalProperties: false, description: '旧宿主不能读取用户消息时的显式原始需求，不能冒称已获宿主验证' },
     title: { type: 'string', description: '任务标题' },
     goal: { type: 'string', description: '目标与期望结果' },
     acceptance: strList('可核对的验收标准（至少 1 条）'),
@@ -68,15 +77,21 @@ export const TASK_CARD_PARAMETERS: JsonSchemaObject = {
         p99Ms: { description: 'p99 延迟（毫秒数字）或「待测」' },
         throughput: { type: 'string', description: '吞吐要求' },
         dataScale: { type: 'string', description: '数据规模' }
+        ,targets: { type: 'array', items: { type: 'object', properties: {
+          metric: { type: 'string', enum: ['p95', 'p99', 'throughput', 'peakMemory', 'numericError'] },
+          operator: { type: 'string', enum: ['<=', '>='] }, value: { type: 'number' },
+          unit: { type: 'string', enum: ['ms', 'ops/s', 'bytes', 'absolute'] }, minSamples: { type: 'number' }
+        }, required: ['metric', 'operator', 'value', 'unit'], additionalProperties: false } }
       },
       additionalProperties: false
     },
     flags: {
       type: 'object',
-      description: '风险标志：如实填写，规则据此给出硬门槛',
+      description: '风险标志：如实填写，规则据此给出硬门槛，并决定是否自动触发容灾升级',
       properties: Object.fromEntries(FLAG_KEYS.map((key) => [key, { type: 'boolean', description: FLAG_DESCRIPTIONS[key] }])),
       additionalProperties: false
-    }
+    },
+    upgrade: { type: 'boolean', description: '天枢自身的容灾升级：你对本任务的判断置信度不足、需要更强模型裁决时传 true，本任务后续的主会话请求改用升级模型，验收后恢复；传 false 取消。命中配置的触发条件时会自动升级，无需传' }
   },
   required: ['title', 'goal', 'acceptance', 'flags'],
   additionalProperties: false
@@ -86,6 +101,10 @@ export const DELEGATE_PARAMETERS: JsonSchemaObject = {
   type: 'object',
   properties: {
     task_id: { type: 'string', description: 'swarm_task_card 返回的 task_id' },
+    node_id: { type: 'string', description: '执行节点 ID；必须与 ready 节点及角色对应' },
+    expected_workflow_revision: { type: 'number', description: '流程版本；过期版本拒绝执行' },
+    request_id: { type: 'string', description: '幂等执行标识，重复提交不会重新启动专家' },
+    review_phase: { type: 'string', enum: ['blind', 'response'], description: '审查/验算先默认 blind。response 只能在当前合同与产物已有冻结初审之后使用；宿主验证，不能替代新产物的独立门禁。' },
     role: { type: 'string', enum: getDelegableRoleIds(), description: `专家角色：\n${getRoleCatalogText()}` },
     mode: { type: 'string', enum: ['research', 'verify'], description: '仅算衡：research=研算（实现前定义语义与复杂度），verify=验算（独立找反例）' },
     prompt: { type: 'string', description: '自包含的任务说明：目标、相关文件、约束与交付要求。专家看不到本对话。' },
@@ -93,7 +112,13 @@ export const DELEGATE_PARAMETERS: JsonSchemaObject = {
     image_paths: strList('仅观象：工作区内的截图/设计稿路径'),
     backend: { type: 'string', enum: DELEGATE_BACKENDS, description: 'auto（默认，按配置）/ api / codex（ChatGPT Plus 原生 Codex）/ claude（Claude Pro 原生 Claude Code）' },
     allow_web: { type: 'boolean', description: '仅枢机/算衡/妙笔：本次开放 web_search 与 web_fetch' },
-    gate: { type: 'string', enum: GATE_IDS, description: '本次委派用于满足的门禁' }
+    gate: { type: 'string', enum: GATE_IDS, description: '本次委派用于满足的门禁' },
+    upgrade: { type: 'boolean', description: '要求本次委派使用该角色的容灾升级模型（谋定、枢机、算衡·验算、铸剑、御史可配置）。命中配置的触发条件时会自动升级，只有你判断需要更强模型时才显式传 true' },
+    session: {
+      type: 'string',
+      enum: SESSION_CHOICES,
+      description: '会话方式。auto（默认）：由衡鉴判断一次性调用、新建连续会话，还是追加到该专家已有的会话（同一大类任务的后续工作会追加，保留上下文）；continue：追加到该角色最近的空闲会话；new：开新的连续会话（需要全新视角时）；oneshot：一次性调用'
+    }
   },
   required: ['task_id', 'role', 'prompt'],
   additionalProperties: false
@@ -134,20 +159,52 @@ export const ACCEPT_PARAMETERS: JsonSchemaObject = {
 type TaskCardResult = Awaited<ReturnType<SwarmService['AddTaskCard']>>
 type StatusResult = ReturnType<SwarmService['getStatus']>
 
+/** 天枢容灾升级的状态行 */
+const getRootUpgradeLines = (upgrade: TaskCardResult['rootUpgrade']): string[] => {
+  if (upgrade === null) return []
+  if (upgrade.cancelledByUser === true) return [`天枢容灾升级：你已在对话框中换过模型，本批任务不再自动升级（原因：${upgrade.reasons.join('；')}）`]
+  if (upgrade.chain.length === 0) return [`天枢容灾升级：已触发，但升级模型当前都不可用，继续使用对话框所选模型（原因：${upgrade.reasons.join('；')}）`]
+  return [`天枢容灾升级：生效中 → ${upgrade.chain.join(' → ')}；任务 ${upgrade.taskIds.join('、')} 验收或标记未完成后恢复（原因：${upgrade.reasons.join('；')}）`]
+}
+
 export const getTaskCardText = (result: TaskCardResult): string => {
   const triage = result.triage
   const answers = triage.answers === undefined ? '' : `；Jev：${JSON.stringify(triage.answers)}`
-  return clip([
+  const summary = clip([
     `task_id: ${result.task_id}（任务卡已记录）`,
     `标题：${result.title}`,
+    `目标：${result.goal}`,
+    `验收标准：${result.acceptance.join('；')}`,
+    `相关文件：${result.scope.join(', ') || '无文件变更'}`,
+    `性能要求：${result.perf === null ? '待测' : JSON.stringify(result.perf)}`,
     '必需门禁（硬门槛，不能跳过）：',
     ...(result.requiredGates.length === 0 ? ['- 无'] : result.requiredGates.map((g) => `- ${g.gate} ${g.label} → ${g.roleName}（${g.source}：${g.reason}）`)),
     '建议角色：',
     ...(result.suggestedRoles.length === 0 ? ['- 无'] : result.suggestedRoles.map((s) => `- ${s.role} ${s.roleName}：${s.reason}`)),
     `衡鉴：${triage.source}${triage.fallbackReason === undefined ? '' : `（回退原因：${triage.fallbackReason}）`}${answers}`,
-    `预算：每任务最多 ${result.budgets.maxDelegationsPerTask} 次委派；每角色 ${result.budgets.maxCallsPerRole} 次（铸剑 ${result.budgets.maxCallsZhuJian} 次）；自动修复最多 ${result.budgets.maxAutoFixRounds} 轮`,
-    `账本：${result.ledgerPath}`
+    `预算：每任务 ${result.budgets.maxDelegationsPerTask || '不限'} 次委派；每角色 ${result.budgets.maxCallsPerRole || '不限'} 次（铸剑 ${result.budgets.maxCallsZhuJian || '不限'} 次）；自动修复最多 ${result.budgets.maxAutoFixRounds} 轮`,
+    `需求版本：${result.requestRevision}；合同版本：${result.cardRevision}；流程版本：${result.workflowRevision}；规划审核：${result.planningReview?.status ?? 'pending'}`,
+    `上下文引用：${result.contextRefs.join(', ')}`,
   ].join('\n'))
+  // Keep the complete bounded projection and closing fence: clipping Mermaid produces invalid code.
+  return [summary,
+    ...(result.flow === null ? [] : [`任务流程：\n\`\`\`mermaid\n${result.flow.mermaid}\n\`\`\``]),
+    clip([...getRootUpgradeLines(result.rootUpgrade), `账本：${result.ledgerPath}`].join('\n'))
+  ].join('\n')
+}
+
+const RETRY_ACTION_LABELS: Readonly<Record<NonNullable<DelegationRecord['retries']>[number]['action'], string>> = {
+  continue: '同一会话续跑或修正',
+  restart: '重新启动',
+  fallback: '改为一次性调用'
+}
+
+/** 会话方式的一行说明 */
+const getSessionLine = (session: NonNullable<DelegationRecord['session']>): string => {
+  const source = ({ jev: '衡鉴判定', rules: '规则', explicit: '天枢指定', config: '配置' } as Record<string, string>)[session.source] ?? session.source
+  if (session.kind === 'oneshot') return `会话：一次性调用（${source}：${session.reason}）`
+  const where = session.appended ? `追加到连续会话 ${session.threadId ?? ''}，第 ${session.round ?? 1} 轮` : `新建连续会话 ${session.threadId ?? ''}`
+  return `会话：${where}（${source}：${session.reason}）；同类后续工作再次委派同一角色即可追加`
 }
 
 export const getDelegationText = (record: DelegationRecord): string => {
@@ -156,8 +213,12 @@ export const getDelegationText = (record: DelegationRecord): string => {
     .map((a) => `${a.outcome === 'skipped' ? '跳过' : a.outcome === 'fallback' ? '回退' : '失败'} ${a.route}（${a.reason ?? ''}）`)
   return clip([
     `【${record.roleName}】${record.status}：${record.summary}`,
-    `委派 ${record.delegationId} · 后端 ${record.backend ?? '无'} · 路由 ${record.route === undefined ? '无' : getRouteLabel(record.route)}`,
+    `委派 ${record.delegationId} · 后端 ${record.backend ?? '无'} · 模型 ${record.route === undefined ? '无' : getRouteDisplay(record.route)}${record.promptStyle === undefined ? '' : ` · ${PROMPT_STYLE_LABELS[record.promptStyle]}`}`,
+    ...(record.upgrade === undefined ? [] : [`容灾升级：${record.upgrade.reasons.join('；')} → 优先使用 ${record.upgrade.chain.join(' → ')}`]),
+    ...(record.session === undefined ? [] : [getSessionLine(record.session)]),
+    ...((record.retries ?? []).length > 0 ? [`自动重试 ${(record.retries ?? []).length} 次：${(record.retries ?? []).map((r) => `${r.attempt}. ${RETRY_ACTION_LABELS[r.action]}（${r.reason}）`).join('；')}`] : []),
     ...(attempts.length > 0 ? [`路由记录：${attempts.join('；')}`] : []),
+    ...[getAssessmentText(record.assessment)].filter((line): line is string => line !== undefined),
     `独立性：${record.independence}　硬隔离：${record.hardIsolation ? '是' : '否'}`,
     ...(record.changedFiles !== undefined && record.changedFiles.length > 0 ? [`改动文件：${record.changedFiles.join(', ')}`] : []),
     ...(record.unresolved.length > 0 ? [`未解决：${record.unresolved.join('；')}`] : []),
@@ -168,15 +229,20 @@ export const getDelegationText = (record: DelegationRecord): string => {
 
 export const getStatusText = (result: StatusResult): string => {
   const tasks = result.tasks.flatMap((task) => [
-    `任务 ${task.task_id}：${task.title}（修复轮次 ${task.rounds}；委派 ${task.budget.used}/${task.budget.max}）`,
+    `任务 ${task.task_id}：${task.title}（修复轮次 ${task.rounds}；委派 ${task.budget.used}${task.budget.max > 0 ? `/${task.budget.max}` : ' 次（不限）'}）`,
     ...task.gates.map((g) => `${g.satisfied ? '✓' : '✗'} ${g.gate} ${g.label}${g.satisfied ? `（${g.by ?? ''}）` : `：${g.missing ?? ''}`}${g.notes.length > 0 ? `；${g.notes.join('；')}` : ''}`),
-    ...task.delegations.map((d) => `- ${d.delegationId} ${d.roleName} ${d.status} · ${d.route ?? '无路由'} · ${d.summary}${d.error === null ? '' : ` · 错误：${d.error}`}`),
+    ...task.delegations.map((d) => {
+      const review = getAssessmentText(d.assessment ?? undefined)
+      return `- ${d.delegationId} ${d.roleName} ${d.status} · ${d.route ?? '无路由'} · ${d.summary}${d.error === null ? '' : ` · 错误：${d.error}`}${review === undefined ? '' : ` · ${review}`}`
+    }),
     ...(task.acceptance === null ? [] : [`验收：${task.acceptance.status}（${task.acceptance.stopReason}）`]),
     ...task.delegations.filter((d) => 'structured' in d).map((d) => `${d.delegationId} 结构化结果：${JSON.stringify((d as { structured?: unknown }).structured)}`)
   ])
   return clip([
     ...(tasks.length > 0 ? tasks : ['本会话还没有任务卡']),
-    `调用：原生后端 ${result.usage.nativeCalls} 次，Jev ${result.usage.jevCalls} 次`,
+    ...getRootUpgradeLines(result.rootUpgrade),
+    ...(result.threads.length > 0 ? ['连续会话：', ...result.threads.map((t) => `- ${t.threadId} ${t.roleName}${t.mode === undefined ? '' : `·${t.mode === 'research' ? '研算' : '验算'}`} · ${t.rounds} 轮 · ${t.closed ? '已关闭' : t.busy ? '工作中' : '空闲'} · 任务 ${t.taskIds.join('、') || '无'}${t.lastSummary === null ? '' : ` · 最近：${t.lastSummary}`}`)] : []),
+    `调用：原生后端 ${result.usage.nativeCalls} 次，Jev 分诊 ${result.usage.jevCalls} 次，衡鉴会话判断 ${result.usage.sessionCalls} 次，衡鉴复评 ${result.usage.reviewCalls} 次`,
     ...(result.diagnostics.length > 0 ? [`宿主降级：${result.diagnostics.join('；')}`] : []),
     `账本：${result.ledgerPath}`
   ].join('\n'))
@@ -186,7 +252,8 @@ export const getAcceptText = (result: AcceptResultInfo): string =>
   clip([
     `验收结果：${result.status}`,
     ...(result.missing.length > 0 ? ['缺少：', ...result.missing.map((m) => `- ${m}`)] : []),
-    `修复轮次：${result.roundsUsed}/${result.maxAutoFixRounds}`
+    `修复轮次：${result.roundsUsed}/${result.maxAutoFixRounds}`,
+    ...[getAssessmentText(result.assessment)].filter((line): line is string => line !== undefined).map((line) => line.replace('衡鉴复评', '衡鉴复评（验收结论）'))
   ].join('\n'))
 
 /**
@@ -206,7 +273,6 @@ export const getSwarmToolDefinitions = (service: SwarmService): ToolDefinitionLi
     name: 'swarm_delegate',
     description: '委派专家：把一项自包含的子任务交给指定中文角色，自动选择模型路由、限制工具权限并校验结构化交付。只读角色可在同一条消息里并行委派；编辑与执行类角色会串行执行。',
     parameters: DELEGATE_PARAMETERS,
-    timeoutMs: DELEGATE_TIMEOUT_MS,
     isConcurrencySafe: (args) => isDelegableRoleId(args.role) && getRoleInfo(args.role).concurrencySafe,
     execute: (args, exec) => service.delegate(args, getExec(exec)),
     render: (_args, value) => getDelegationText(value)
@@ -227,6 +293,24 @@ export const getSwarmToolDefinitions = (service: SwarmService): ToolDefinitionLi
   })
 ]
 
+/** 天枢系统提示里按模型家族追加的调度风格一节 */
+export const ORCHESTRATION_STYLE_SECTION = 'dsh-agent-swarm:orchestration-style'
+
+/**
+ * 按所选模型的家族给天枢的系统提示追加调度风格说明（Claude / GPT / 其他）。
+ * 专家子会话的 persona 带角色标签，它们沿用委派时按路由生成的 persona，不追加。
+ * @param {PromptAssemblyLike} assembled - 组装结果
+ * @param {PromptStylePolicy} policy - 配置的提示风格
+ * @returns {PromptAssemblyLike} 追加后的组装结果
+ */
+export const getStyledAssembly = (assembled: PromptAssemblyLike, policy: PromptStylePolicy): PromptAssemblyLike => {
+  const sections = Array.isArray(assembled.sections) ? assembled.sections : []
+  if (sections.some((section) => section.name === ORCHESTRATION_STYLE_SECTION || ROLE_TAG_PATTERN.test(section.text))) return assembled
+  const variables = assembled.variables ?? {}
+  const style = getPromptStyle({ ...(variables.provider === undefined ? {} : { provider: variables.provider }), ...(variables.model === undefined ? {} : { model: variables.model }) }, policy)
+  return { ...assembled, sections: [...sections, { name: ORCHESTRATION_STYLE_SECTION, text: getOrchestratorStyleSection(style), interpolate: false }] }
+}
+
 /**
  * 工具插件入口
  * @param {PluginContextLike} ctx - 预设作用域上下文
@@ -235,5 +319,25 @@ export const apply = (ctx: PluginContextLike): void => {
   const service = ctx.get(SWARM_SERVICE) as SwarmService | undefined
   const tools = ctx.get('tools') as ToolsLike | undefined
   if (service === undefined || tools === undefined) return
-  for (const definition of getSwarmToolDefinitions(service)) ctx.effect(() => tools.register(definition))
+  // Jev 与衡鉴共享客户端及凭据，不设本地限流或使用额度；新工具另有真实会话/任务权限检查。
+  const taskParameters: JsonSchemaObject = { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'], additionalProperties: false }
+  const definitions = [
+    ...getSwarmToolDefinitions(service), ...getJevToolDefinitions(() => service.jev.tools),
+    ...getMathToolDefinitions({ calculate: (args, exec) => service.Calculate(args, exec) }),
+    ...getCollaborationToolDefinitions({ send: service.MessageSend, read: service.MessageRead, acknowledge: service.MessageAck }),
+    getToolDefinition({ name: 'swarm_review_plan', description: '独立只读 Agent 与 Jev 复审当前目标、流程设计和 Mermaid 源码。结果绑定原始需求及当前版本，不能代替实现后验证。',
+      parameters: { ...taskParameters, properties: { ...taskParameters.properties, bypass_cache: { type: 'boolean' } } },
+      execute: (args, exec) => service.ReviewPlan(args, getExec(exec)), render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => false }),
+    getToolDefinition({ name: 'swarm_context_read', description: '按当前任务/版本授权读取分层材料，不读取其他任务或盲审禁止的作者过程。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' }, ref: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'number' }, expectedDigest: { type: 'string' } }, required: ['ref'], additionalProperties: false },
+      execute: service.ReadContext, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true }),
+    getToolDefinition({ name: 'swarm_experience', description: '检索最多三条有出处、版本与失效条件的经验；候选不能当作已验证事实，盲审不能读取经验。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' }, problemClass: { type: 'string' }, includeCandidates: { type: 'boolean' } }, additionalProperties: false },
+      execute: service.Experience, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true })
+  ]
+  for (const definition of definitions) ctx.effect(() => tools.register(definition))
+  const skills = ctx.get('skills') as SkillsLike | undefined
+  if (skills !== undefined) for (const skill of getEmbeddedSkills()) ctx.effect(() => skills.register(skill))
+  ctx.on('system-prompt/assemble', async (_assembly: unknown, _context: unknown, next: () => Promise<PromptAssemblyLike>) =>
+    getStyledAssembly(await next(), service.getConfig().agents.promptStyle))
 }

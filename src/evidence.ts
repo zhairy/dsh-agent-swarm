@@ -4,6 +4,11 @@ import type { EvidenceItem } from './contracts.js'
 import type { FindingResolution, GateDelegationView, GateRequirement, TaskCard, TriageAnswers } from './policy.js'
 import type { RouteInfo } from './routes.js'
 import { SwarmError } from './util/errors.js'
+import type { PromptStyle } from './model-family.js'
+import type { WorkflowDefinition, WorkflowStateInfo } from './workflow.js'
+import type { PlanningReviewRecord } from './planning-review.js'
+import type { ArtifactSnapshot } from './artifacts.js'
+import type { CheckpointInfo } from './checkpoint.js'
 
 export type DelegationStatus = GateDelegationView['status']
 export type BackendKind = 'spawn' | 'codex' | 'codex-edit' | 'claude-plan' | 'claude-edit'
@@ -16,8 +21,25 @@ export interface RouteAttempt {
   reason?: string
 }
 
+/** 衡鉴复评：交付完成后由 Jev 给出的置信度评分；它衡量判断的集中程度，不等于正确性，不作为硬门槛 */
+export interface AssessmentInfo {
+  status: 'ok' | 'unavailable'
+  /** 未执行的原因（例如 missing-api-key、disabled、http-503） */
+  reason?: string
+  /** 可信 / 需核实 / 存疑 */
+  verdict?: 'trusted' | 'review' | 'doubtful'
+  /** 整体可信度，0–1（四档评分的期望值归一化） */
+  reliability?: number
+  /** Jev 对该评分的置信度（分布集中程度） */
+  confidence?: number
+  /** 各项是/否检查为「成立」的概率 */
+  checks?: Record<string, number>
+  model?: string
+}
+
 /** 一次委派的完整记录 */
 export interface DelegationRecord extends GateDelegationView {
+  requestRevision?: number
   taskId: string
   roleName: string
   gate?: string
@@ -34,6 +56,42 @@ export interface DelegationRecord extends GateDelegationView {
   error?: string
   startedAt: number
   durationMs?: number
+  /** 本次委派触发了容灾升级：原因与升级模型链 */
+  upgrade?: { reasons: string[]; chain: string[] }
+  /** 衡鉴复评 */
+  assessment?: AssessmentInfo
+  /** 会话方式：一次性，或连续会话（threadId 为子会话 ID，round 为该会话的第几轮） */
+  session?: DelegationSessionInfo
+  /** 自动重试：未执行、中断、出错或交付不合格时的重试记录 */
+  retries?: DelegationRetryInfo[]
+  /** 按所用模型家族选定的提示风格（claude / gpt / generic） */
+  promptStyle?: PromptStyle
+  artifactBefore?: string
+  artifactAfter?: string
+  staleReason?: string
+  reviewPhase?: 'blind' | 'response'
+}
+
+/** 一次委派的会话方式 */
+export interface DelegationSessionInfo {
+  kind: 'oneshot' | 'continuable'
+  /** 连续会话的子会话 ID */
+  threadId?: string
+  /** 连续会话的第几轮（从 1 开始） */
+  round?: number
+  /** 是否追加到了已有会话 */
+  appended: boolean
+  /** 决定来源：衡鉴、规则、天枢指定或配置 */
+  source: string
+  reason: string
+}
+
+/** 一次自动重试 */
+export interface DelegationRetryInfo {
+  attempt: number
+  reason: string
+  /** continue：在同一会话里续跑或修正；restart：重新启动一次性子智能体；fallback：退回一次性调用 */
+  action: 'continue' | 'restart' | 'fallback'
 }
 
 /** 衡鉴分流记录 */
@@ -68,6 +126,25 @@ export interface TaskRecord {
   acceptance?: AcceptanceRecord
   createdAt: number
   updatedAt: number
+  cardRevision?: number
+  workflowRevision?: number
+  requestRevision?: number
+  intentText?: string
+  intentSource?: 'host' | 'declared'
+  intentSourceRef?: string
+  intentLastDigest?: string
+  workflowDefinition?: WorkflowDefinition
+  workflowState?: WorkflowStateInfo
+  workflowDigest?: string
+  planningReview?: PlanningReviewRecord
+  planningFixRounds?: number
+  artifactSnapshot?: ArtifactSnapshot
+  checkpoint?: CheckpointInfo
+  workspaceId?: string
+  requestIds?: Record<string, string>
+  requestInputs?: Record<string, string>
+  recovered?: boolean
+  contextRefs?: Array<{ ref: string; digest: string; layer: string; kind: string }>
 }
 
 const TRANSITIONS: Readonly<Record<DelegationStatus, readonly DelegationStatus[]>> = {
@@ -147,7 +224,10 @@ export const intTaskStore = (): TaskStore => {
 
 export type LedgerEventType =
   | 'task/card' | 'delegation/queued' | 'delegation/running' | 'delegation/completed' | 'delegation/failed'
-  | 'delegation/blocked' | 'route/skipped' | 'route/fallback' | 'jev/call' | 'native/call' | 'accept/decision'
+  | 'delegation/blocked' | 'route/skipped' | 'route/fallback' | 'route/upgrade' | 'jev/call' | 'review/assessment' | 'native/call' | 'accept/decision'
+  | 'session/plan' | 'delegation/retry'
+  | 'workflow/review' | 'workflow/checkpoint' | 'workflow/stale' | 'math/computed'
+  | 'message/send' | 'message/ack' | 'state/recovered' | 'experience/candidate'
 
 /** 账本事件（一行 JSON） */
 export interface LedgerEvent {

@@ -2,6 +2,7 @@
 - insert:
     - id: preset-mou-ding
       name: "@deepseek-ai/dsh-agent-preset"
+      disabled: !!js "process.env.DSH_SWARM_ROLE_PRESETS !== '1'"
       config:
         id: mou-ding
         name: 谋定

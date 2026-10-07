@@ -2,6 +2,7 @@
 - insert:
     - id: preset-fu-he
       name: "@deepseek-ai/dsh-agent-preset"
+      disabled: !!js "process.env.DSH_SWARM_ROLE_PRESETS !== '1'"
       config:
         id: fu-he
         name: 复核

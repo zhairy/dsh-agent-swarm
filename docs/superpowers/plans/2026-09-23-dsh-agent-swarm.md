@@ -7479,4 +7479,3 @@ git commit -m "docs: add install, usage, roles, upgrade and evaluation guides wi
 - **Spec 覆盖**：§1 目标 → Task 1–15；§2 宿主事实 → `host-contract.ts` 与集成测试；§3 架构 → Task 11–13；§4 包结构 → 各 Task；§5 bundle 补丁 → Task 13；§6 角色 → Task 2；§7 路由 → Task 3、7、9、10；§8 策略与衡鉴 → Task 4、5、11；§9 工具 → Task 12；§10 委派细节 → Task 8、10；§11 账本 → Task 6；§12 配置 → Task 7；§13 验证点 → 已在计划前沙箱实测，Task 15 回写 spec；§14 升级 → Task 13 生成器、Task 15 sync-dsh/doctor；§15 测试 → 各 Task 单测 + Task 14；§16 交付 → Task 15。
 - **与 spec 的有意偏差**：`verification.ts` 合并入 `contracts.ts`（交付契约统一校验）；新增 `route-state.ts`、`preset-builder.ts`、`util/*`；天枢预设移除通用 `subagent/workflow` 工具，统一走 `swarm_delegate`。
 - **类型一致性**：`GateDelegationView`（policy）⊂ `DelegationRecord`（evidence）；`RouteInfo`（routes）贯穿 config/route-state/delegate；`SwarmService` 方法名在 tools/runtime/index 中一致；`VALID_OUTPUTS` 由 JSON 单一来源供单测与驱动共用。
-

@@ -1,9 +1,25 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "2.0.0",
-  "description": "DSH 中文多智能体插件：13 个中文角色、衡鉴分流、统一委派、证据门禁与模型回退",
+  "version": "2.2.0",
+  "description": "DSH 中文多智能体插件：版本化 Mermaid 任务流程、独立规划审核、额度耗尽立即回退、Jev 判断、受限专家协作与纯函数数学验证",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "multi-agent",
+    "agent-swarm",
+    "jev"
+  ],
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhairy/dsh-agent-swarm.git"
+  },
+  "homepage": "https://github.com/zhairy/dsh-agent-swarm#readme",
+  "bugs": {
+    "url": "https://github.com/zhairy/dsh-agent-swarm/issues"
+  },
   "engines": {
     "node": ">=22.19.0"
   },
@@ -11,6 +27,7 @@
     ".": "./lib/index.js",
     "./tools": "./lib/tools.js",
     "./runtime": "./lib/runtime.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
@@ -18,14 +35,17 @@
     "lib",
     "cordis.patch.yml",
     "presets",
+    "skills",
     "locale",
     "config",
     "docs",
     "scripts/doctor.mjs",
-    "README.md"
+    "README.md",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
@@ -33,16 +53,34 @@
     "gen:presets": "node scripts/gen-presets.mjs",
     "sandbox": "node scripts/sandbox.mjs",
     "doctor": "node scripts/doctor.mjs",
+    "bench:workflow": "npm run build && node scripts/bench-workflow.mjs",
     "sync-dsh": "node scripts/sync-dsh.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "~3.18.4"
+    "@deepseek-ai/schemastery": "~3.18.4",
+    "mermaid": "11.12.0",
+    "jsdom": "26.1.0"
   },
   "dsh": {
     "minVersion": "0.1.7-alpha.2",
     "testedVersions": [
+      "0.2.0-rc.2",
+      "0.1.7-rc.2",
+      "0.1.7-rc.1",
       "0.1.7-alpha.2"
     ],
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    },
     "bundle": {
       "patch": [
         "./cordis.patch.yml",

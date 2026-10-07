@@ -57,6 +57,13 @@ add('原生 Codex 后端（可选）', bundles.includes('@deepseek-ai/dsh-subage
 add('原生 Claude Code 后端（可选）', bundles.includes('@deepseek-ai/dsh-subagent-claude-code'), bundles.includes('@deepseek-ai/dsh-subagent-claude-code') ? '已安装' : '未安装', `dsh plugin --profile ${profile} add @deepseek-ai/dsh-subagent-claude-code`)
 add('免费网页搜索（可选）', bundles.includes('dsh-web-search-free'), bundles.includes('dsh-web-search-free') ? '已安装' : '未安装', `dsh plugin --profile ${profile} add dsh-web-search-free`)
 
+// dsh-llm-fallbacks 的全局回退会抢在百工之前改写路由；需要它读取百工的会话登记（MANAGED_AGENTS_KEY）后跳过百工模式
+const fallbacksEntry = join(profileDir, 'node_modules', 'dsh-llm-fallbacks', 'dist', 'index.js')
+if (bundles.includes('dsh-llm-fallbacks') && existsSync(fallbacksEntry)) {
+  const honors = readFileSync(fallbacksEntry, 'utf8').includes('dsh-agent-swarm/managed-agents')
+  add('llm-fallbacks 跳过百工模式', honors, honors ? '已排除：百工会话由百工自己的路由链回退' : '未排除：全局回退会接管百工会话的模型切换', '给 dsh-llm-fallbacks 打补丁，在 agent/request 与 agent/request-error 中遇到 globalThis[Symbol.for(\'dsh-agent-swarm/managed-agents\')].isManaged(agent) 为 true 时直接交给 next（见 docs/安装.md）')
+}
+
 // 0.1.5 及更早把 provider 写在 settings.yaml；0.1.7 首次启动时迁移到 profile 配置并改名为 settings.yaml.imported
 const getLegacySettings = () => ['settings.yaml', 'settings.yaml.imported']
   .map((name) => join(dshHome, name))
@@ -66,7 +73,7 @@ const getLegacySettings = () => ['settings.yaml', 'settings.yaml.imported']
 
 const dump = version !== undefined ? run(`${dsh} --profile ${profile} --dump-config`) : undefined
 if (dump !== undefined) {
-  add('13 个 swarm 预设已组合', ['tian-shu', 'fu-he', 'miao-bi'].every((id) => dump.includes(`preset-${id}`)), dump.includes('preset-tian-shu') ? '已组合' : '未找到 preset-tian-shu')
+  add('百工模式与 12 个角色预设已组合', ['tian-shu', 'fu-he', 'miao-bi'].every((id) => dump.includes(`preset-${id}`)), dump.includes('preset-tian-shu') ? (process.env.DSH_SWARM_ROLE_PRESETS === '1' ? '已组合（角色预设可见）' : '已组合（模式列表只显示百工模式）') : '未找到 preset-tian-shu')
   const legacy = getLegacySettings()
   for (const provider of ['qwen-token-plan-cn', 'opencode-go']) {
     const inProfile = dump.includes(provider)
@@ -82,7 +89,7 @@ const credentialsText = existsSync(join(dshHome, '.credentials.yaml')) ? readFil
 for (const ref of ['QWEN_TOKEN_PLAN_CN_API_KEY', 'OPENCODE_GO_API_KEY', 'DEEPSEEK_API_KEY', 'TYPESAFE_API_KEY']) {
   const fromEnv = (process.env[ref] ?? '') !== ''
   const fromStore = new RegExp(`^\\s+${ref}:`, 'm').test(credentialsText)
-  add(`凭据引用 ${ref}`, fromEnv || fromStore, fromEnv ? '来源：环境变量' : fromStore ? '来源：凭据库' : '未配置', ref === 'TYPESAFE_API_KEY' ? '设置用户环境变量后重启 dsh；未配置时衡鉴按严格路径运行' : '在 Web 设置 → 模型中填写')
+  add(`凭据引用 ${ref}`, fromEnv || fromStore, fromEnv ? '来源：环境变量' : fromStore ? '来源：凭据库' : '未配置', ref === 'TYPESAFE_API_KEY' ? '在 Web「设置 → 百工 Agent」顶部填写 Jev API key（或设置环境变量后重启 dsh）；未配置时衡鉴按严格路径运行、jev_* 工具不可用。注意：只写在服务环境文件（如 systemd EnvironmentFile）里的变量 doctor 看不到，以设置页的「测试连接」为准' : '在 Web 设置 → 模型中填写')
 }
 
 const legacyDir = join(dshHome, '.agent-presets')

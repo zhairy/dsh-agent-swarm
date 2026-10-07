@@ -1,17 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CLAUDE_MODELS,
+  CODEX_MODELS,
+  DEEPSEEK_OFFICIAL_MODELS,
   DEFAULT_ESCALATION,
   DEFAULT_ROUTE_CHAINS,
   FindUsableRoutes,
+  MODEL_REASONING_EFFORTS,
   OPENCODE_GO_MODELS,
+  PROVIDER_CLAUDE,
+  PROVIDER_CODEX,
   PROVIDER_DS,
   PROVIDER_GO,
   PROVIDER_QWEN,
+  PROVIDER_LABELS,
+  PROBE_FAIL_TTL_MS,
+  PROBE_OK_TTL_MS,
   QWEN_PREFERRED_MODELS,
   QWEN_TOKEN_PLAN_MODELS,
   getCatalogVision,
   getFailureClass,
   getModelFamily,
+  getRouteDisplay,
   getRouteKey,
   getRouteLabel,
   intRouteProbe,
@@ -21,6 +31,9 @@ import {
   type RouteProbe
 } from '../../src/routes.js'
 import { ROLE_IDS } from '../../src/role-registry.js'
+import { DEFAULT_UPGRADES } from '../../src/upgrade.js'
+import { normalizeRouteFailure, getRouteResourcePolicy, getRouteResourceInfo } from '../../src/provider-policy.js'
+import { intRouteStateRegistry } from '../../src/route-state.js'
 
 describe('默认路由表', () => {
   it('每个路由键都有非空链，且覆盖全部角色（算衡分研算/验算）', () => {
@@ -28,18 +41,25 @@ describe('默认路由表', () => {
       if (role === 'suan_heng') continue
       expect(DEFAULT_ROUTE_CHAINS[role].length).toBeGreaterThan(0)
     }
-    expect(DEFAULT_ROUTE_CHAINS['suan_heng:research'][0]).toEqual({ provider: PROVIDER_QWEN, model: 'deepseek-v4-pro', reasoningEffort: 'max' })
+    expect(DEFAULT_ROUTE_CHAINS['suan_heng:research'][0]).toEqual({ provider: PROVIDER_CODEX, model: 'gpt-6-astra', reasoningEffort: 'max' })
+    for (const chain of Object.values(DEFAULT_ROUTE_CHAINS)) expect(chain).toHaveLength(4)
     expect(DEFAULT_ROUTE_CHAINS['suan_heng:verify'].length).toBeGreaterThan(0)
   })
 
-  it('qwen 优先：链中凡是 qwen 目录有的模型，qwen 路由都排在同模型 go 路由之前', () => {
+  it('同一模型的 provider 优先级：先消耗订阅（qwen → go），DeepSeek 官方 API 兜底并位于最后一层', () => {
+    /** 各 provider 下同一模型的 ID 不同：官方 API 的 deepseek-flash 即 V4.1 Flash */
+    const canonical = (route: RouteInfo): string => (route.provider === PROVIDER_DS && route.model === 'deepseek-flash' ? 'deepseek-v4.1-flash' : route.model)
+    const rank: Record<string, number> = { [PROVIDER_QWEN]: 0, [PROVIDER_GO]: 1, [PROVIDER_DS]: 2 }
     for (const [key, chain] of Object.entries(DEFAULT_ROUTE_CHAINS)) {
       chain.forEach((route, index) => {
-        if (route.provider !== PROVIDER_GO || !(route.model in QWEN_TOKEN_PLAN_MODELS)) return
-        const qwenIndex = chain.findIndex((r) => r.provider === PROVIDER_QWEN && r.model === route.model)
-        expect(qwenIndex, `${key} ${route.model}`).toBeGreaterThanOrEqual(0)
-        expect(qwenIndex, `${key} ${route.model}`).toBeLessThan(index)
+        chain.slice(index + 1).filter((later) => canonical(later) === canonical(route) && rank[later.provider] !== undefined)
+          .forEach((later) => expect(rank[route.provider], `${key} ${canonical(route)}`).toBeLessThan(rank[later.provider] as number))
       })
+      expect(chain.at(-1)?.provider, `${key} 兜底层`).toBe(PROVIDER_DS)
+      expect(chain.slice(0, -1).some((r) => r.provider === PROVIDER_DS), `${key} 官方 API 只在兜底层`).toBe(false)
+      // 第一次出现的 go 路由：若 qwen 目录也有该模型，说明应改走 qwen（kimi-k2.7-code 在 qwen 未开通，例外）
+      chain.filter((route) => route.provider === PROVIDER_GO && route.model in QWEN_TOKEN_PLAN_MODELS && route.model !== 'kimi-k2.7-code')
+        .forEach((route) => expect(chain.some((r) => r.provider === PROVIDER_QWEN && r.model === route.model), `${key} ${route.model}`).toBe(true))
     }
   })
 
@@ -47,10 +67,21 @@ describe('默认路由表', () => {
     const catalogs: Record<string, Record<string, unknown>> = {
       [PROVIDER_QWEN]: QWEN_TOKEN_PLAN_MODELS,
       [PROVIDER_GO]: OPENCODE_GO_MODELS,
-      [PROVIDER_DS]: { 'deepseek-flash': 1, 'deepseek-v4-pro': 1 }
+      [PROVIDER_DS]: DEEPSEEK_OFFICIAL_MODELS,
+      [PROVIDER_CODEX]: CODEX_MODELS,
+      [PROVIDER_CLAUDE]: CLAUDE_MODELS
     }
     for (const chain of Object.values(DEFAULT_ROUTE_CHAINS)) {
       for (const route of chain) expect(catalogs[route.provider]?.[route.model], getRouteLabel(route)).toBeDefined()
+    }
+  })
+
+  it('默认链与升级链的推理强度都在该模型支持的档位内，且每层都显式指定', () => {
+    const routes = [...Object.values(DEFAULT_ROUTE_CHAINS).flat(), ...Object.values(DEFAULT_UPGRADES).flatMap((upgrade) => upgrade?.chain ?? [])]
+    for (const route of routes) {
+      const efforts = MODEL_REASONING_EFFORTS[getRouteLabel(route)]
+      expect(efforts, getRouteLabel(route)).toBeDefined()
+      expect(efforts, `${getRouteLabel(route)} ${route.reasoningEffort}`).toContain(route.reasoningEffort)
     }
   })
 
@@ -70,6 +101,62 @@ describe('默认路由表', () => {
 })
 
 describe('路由工具函数', () => {
+  it('已核验Qwen单key内置provider是共享plan，Go按model，Claude/Codex不臆测账号；显式policy优先', () => {
+    expect(getRouteResourcePolicy({ provider: PROVIDER_QWEN, model: 'glm-5.3' })).toEqual({ accessMode: 'subscription', quotaScope: 'plan', quotaDomainId: 'provider-instance:qwen-token-plan-cn' })
+    expect(getRouteResourcePolicy({ provider: PROVIDER_GO, model: 'glm-5.3' })).toEqual({ accessMode: 'subscription', quotaScope: 'model' })
+    expect(getRouteResourcePolicy({ provider: PROVIDER_CLAUDE, model: 'opus' })).toEqual({ accessMode: 'subscription', quotaScope: 'unknown' })
+    expect(getRouteResourcePolicy({ provider: PROVIDER_CODEX, model: 'astra' }).quotaDomainId).toBeUndefined()
+    expect(getRouteResourcePolicy({ provider: PROVIDER_QWEN, model: 'custom', policy: { accessMode: 'metered_api' } })).toEqual({ accessMode: 'metered_api', quotaScope: 'unknown' })
+    expect(getRouteResourceInfo({ provider: PROVIDER_DS, model: 'deepseek-flash' })).toMatchObject({ inferredResourceType: 'metered_api', metadataSource: 'provider-kind' })
+  })
+  it('解析预检的结构化quota进入共享隔离，缓存15s过期也不反复查询同账号', async () => {
+    let at = 0
+    const state = intRouteStateRegistry(undefined, undefined, { now: () => at })
+    const calls: string[] = []
+    const first: RouteInfo = { provider: 'p', model: 'first', policy: { quotaDomainId: 'account-a', quotaScope: 'account' } }
+    const peer: RouteInfo = { provider: 'p', model: 'peer', policy: { quotaDomainId: 'account-a', quotaScope: 'account' } }
+    const backup: RouteInfo = { provider: 'p', model: 'backup', policy: { quotaDomainId: 'account-b', quotaScope: 'account' } }
+    const probe = intRouteProbe(() => ({ listProviders: () => [{ id: 'p' }], resolveModelInfo: async (_provider, model) => {
+      calls.push(model)
+      if (model === 'first') throw Object.assign(new Error('subscription quota exhausted'), { failure: { code: 'QUOTA', message: 'subscription quota exhausted', quotaDomainId: 'account-a', quotaScope: 'account' } })
+      return { inputModalities: ['text'] }
+    } }), { now: () => at, isRouteAvailable: (route) => state.isRouteAvailable(route), onFailure: (route, failure) => state.ObserveRouteFailure(route, failure) })
+    expect((await probe(first)).ok).toBe(false)
+    at = PROBE_FAIL_TTL_MS + 1
+    expect(await probe(first)).toEqual({ ok: false, reason: 'route-isolated' })
+    expect(await probe(peer)).toEqual({ ok: false, reason: 'route-isolated' })
+    expect((await probe(backup)).ok).toBe(true)
+    expect(calls).toEqual(['first', 'backup'])
+  })
+
+  it('解析预检等待健康态提交，持久写失败不能变成可忽略预检结果', async () => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const state = intRouteStateRegistry(undefined, undefined, { onHealthChange: () => pending })
+    const route: RouteInfo = { provider: 'p', model: 'first', policy: { quotaDomainId: 'account', quotaScope: 'account' } }
+    const source = () => ({ listProviders: () => [{ id: 'p' }], resolveModelInfo: async () => { throw Object.assign(new Error('quota exhausted'), { code: 'QUOTA' }) } })
+    const probe = intRouteProbe(source, { isRouteAvailable: (route) => state.isRouteAvailable(route), onFailure: (route, failure) => state.ObserveRouteFailure(route, failure) })
+    let done = false
+    const result = probe(route).then((value) => { done = true; return value })
+    await Promise.resolve(); await Promise.resolve()
+    expect(done).toBe(false)
+    release()
+    expect(await result).toEqual({ ok: false, reason: 'route-isolated' })
+    const broken = intRouteProbe(source, { onFailure: async () => { throw new Error('storage-failed') } })
+    await expect(broken(route)).rejects.toThrow('storage-failed')
+  })
+  it('结构化终态/池不可用优先，普通每分钟配额不封禁账号，402只在已知按量域解释余额', () => {
+    const route = { provider: 'deepseek-official', model: 'deepseek-flash' }
+    expect(normalizeRouteFailure({ status: 402 }, route).kind).toBe('insufficient_balance')
+    expect(normalizeRouteFailure({ status: 429, message: 'quota per minute: too many requests' }, route).kind).toBe('rate_limited')
+    expect(normalizeRouteFailure({ status: 429, code: 'RATE_LIMIT', message: 'TPM quota exceeded: tokens per minute' }, route).kind).toBe('rate_limited')
+    expect(normalizeRouteFailure({ status: 429, code: 'RATE_LIMIT', message: 'You exceeded your current quota, please check your plan and billing details.' }, route).kind).toBe('quota_exhausted')
+    expect(getFailureClass({ status: 429, message: 'quota per minute: too many requests' })).toBe('transient')
+    expect(normalizeRouteFailure({ status: 429, message: "You've hit your limit" }, route).kind).toBe('quota_exhausted')
+    expect(normalizeRouteFailure({ code: 'SERVER_ERROR', message: 'pool "claude-opus-5-5" exhausted: every member is unavailable or failed' }, route).kind).toBe('pool_exhausted')
+    const poolError = { message: 'pool "opus" exhausted: every member is unavailable or failed' }
+    expect(normalizeRouteFailure(poolError, { provider: 'account-a-pool', model: 'opus' }).poolId).not.toBe(normalizeRouteFailure(poolError, { provider: 'independent-account-pool', model: 'opus' }).poolId)
+  })
   it('路由键、标签、相等', () => {
     expect(getRouteKey('suan_heng')).toBe('suan_heng:research')
     expect(getRouteKey('suan_heng', 'verify')).toBe('suan_heng:verify')
@@ -178,5 +265,57 @@ describe('intRouteProbe', () => {
     expect(await probe({ provider: 'p', model: 'plain' })).toEqual({ ok: true, vision: false })
     expect(await probe({ provider: 'p', model: 'bad' })).toEqual({ ok: false, reason: 'model-unavailable: unknown model' })
     expect(await intRouteProbe(() => undefined)({ provider: 'p', model: 'm' })).toEqual({ ok: false, reason: 'llm-service-unavailable' })
+  })
+})
+
+describe('预检缓存与并行', () => {
+  it('可用结果缓存较久、失败结果很快过期；并发的同一预检只解析一次', async () => {
+    let at = 0
+    let calls = 0
+    let broken = true
+    const llm = {
+      listProviders: () => [{ id: 'p' }],
+      resolveModelInfo: async (_p: string, model: string) => {
+        calls += 1
+        if (model === 'flaky' && broken) throw new Error('offline')
+        return {}
+      }
+    }
+    const probe = intRouteProbe(() => llm, { now: () => at })
+    const ok = { provider: 'p', model: 'ok' }
+    await Promise.all([probe(ok), probe(ok), probe(ok)])
+    expect(calls).toBe(1)
+    at = PROBE_OK_TTL_MS - 1
+    await probe(ok)
+    expect(calls).toBe(1)
+    at = PROBE_OK_TTL_MS
+    await probe(ok)
+    expect(calls).toBe(2)
+    const flaky = { provider: 'p', model: 'flaky' }
+    expect((await probe(flaky)).ok).toBe(false)
+    broken = false
+    expect((await probe(flaky)).ok).toBe(false)
+    at += PROBE_FAIL_TTL_MS
+    expect(await probe(flaky)).toEqual({ ok: true, vision: false })
+  })
+
+  it('各层并行预检，结果按链的顺序', async () => {
+    const order: string[] = []
+    const probe: RouteProbe = async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, route.model === 'slow' ? 20 : 1))
+      order.push(route.model)
+      return { ok: true, vision: false }
+    }
+    const result = await FindUsableRoutes([{ provider: 'p', model: 'slow' }, { provider: 'p', model: 'fast' }], { probe })
+    expect(order).toEqual(['fast', 'slow'])
+    expect(result.usable.map((route) => route.model)).toEqual(['slow', 'fast'])
+  })
+})
+
+describe('模型与供应商的显示文本', () => {
+  it('中文供应商名 + 路由名 + 推理强度；未知供应商显示路由名', () => {
+    expect(getRouteDisplay({ provider: PROVIDER_CLAUDE, model: 'claude-opus-5-5', reasoningEffort: 'high' })).toBe('claude-opus-5-5 · Claude 订阅（claude） · 推理 high')
+    expect(getRouteDisplay({ provider: 'custom', model: 'm' })).toBe('m · custom')
+    expect(Object.keys(PROVIDER_LABELS).sort()).toEqual([PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_DS, PROVIDER_GO, PROVIDER_QWEN].sort())
   })
 })

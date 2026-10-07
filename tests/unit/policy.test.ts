@@ -51,7 +51,7 @@ describe('ValidateTaskCard', () => {
       'scope 必须是字符串数组',
       '未知风险标志 nope',
       'flags.changesCode 必须是布尔值',
-      'perf.p95Ms 必须是数字或「待测」',
+      'perf.p95Ms 必须是有限非负数字或「待测」',
       'constraints.apiCompat 必须是字符串'
     ]))
   })
@@ -159,7 +159,7 @@ describe('门禁判定', () => {
     const research = done({ role: 'suan_heng', mode: 'research', structured: { invariants: ['x'], complexity: 'O(n)' } })
     expect(getGateStatus('G_MATH_RESEARCH', [research], []).satisfied).toBe(true)
     expect(getGateStatus('G_MATH_RESEARCH', [done({ role: 'suan_heng', mode: 'research', structured: { invariants: [] } })], []).satisfied).toBe(false)
-    const verify = done({ role: 'suan_heng', mode: 'verify', independence: 'not-achieved', structured: { claims: [{ statement: 's', status: 'proved' }] } })
+    const verify = done({ role: 'suan_heng', mode: 'verify', independence: 'not-achieved', structured: { claims: [{ statement: 's', status: 'proved', proofOrCounterexample: '对定义逐项核对' }] } })
     const status = getGateStatus('G_MATH_VERIFY', [verify], [])
     expect(status.satisfied).toBe(true)
     expect(status.notes.join('')).toContain('独立性未实现')
@@ -209,7 +209,7 @@ describe('审查意见回归：证据冲突时不得验收', () => {
   })
 
   it('G_MATH_VERIFY：反例需处理说明，至少证实一条，且须在最后一次编辑之后', () => {
-    const refuted = { claims: [{ statement: 'a', status: 'refuted' }, { statement: 'b', status: 'proved' }] }
+    const refuted = { claims: [{ statement: 'a', status: 'refuted', proofOrCounterexample: '输入 x=0 为反例' }, { statement: 'b', status: 'proved', proofOrCounterexample: '按定义推导 b' }] }
     const verify = done({ role: 'suan_heng', mode: 'verify', delegationId: 'V', finishedAt: 5, structured: refuted })
     expect(getGateStatus('G_MATH_VERIFY', [verify], []).missing).toContain('V#0')
     expect(getGateStatus('G_MATH_VERIFY', [verify], [{ delegationId: 'V', index: 0, resolution: '语义已修正' }]).satisfied).toBe(true)
@@ -243,12 +243,15 @@ describe('审查意见回归：证据冲突时不得验收', () => {
 })
 
 describe('预算', () => {
-  it('任务总数与角色次数上限', () => {
-    const many = Array.from({ length: DEFAULT_BUDGETS.maxDelegationsPerTask }, () => done({ role: 'tan_wei' }))
-    expect(ValidateDelegationBudget(many, 'fu_he', DEFAULT_BUDGETS)).toContain('上限')
+  it('任务总数与角色次数上限；默认 0 为不限', () => {
+    const limited = { ...DEFAULT_BUDGETS, maxDelegationsPerTask: 20, maxCallsPerRole: 4, maxCallsZhuJian: 6 }
+    const many = Array.from({ length: 20 }, () => done({ role: 'tan_wei' }))
+    expect(ValidateDelegationBudget(many, 'fu_he', limited)).toContain('上限')
+    expect(ValidateDelegationBudget(many, 'fu_he', DEFAULT_BUDGETS)).toBeUndefined()
     const four = Array.from({ length: 4 }, () => done({ role: 'fu_he' }))
-    expect(ValidateDelegationBudget(four, 'fu_he', DEFAULT_BUDGETS)).toContain('「复核」')
-    expect(ValidateDelegationBudget(four, 'zhu_jian', DEFAULT_BUDGETS)).toBeUndefined()
+    expect(ValidateDelegationBudget(four, 'fu_he', limited)).toContain('「复核」')
+    expect(ValidateDelegationBudget(four, 'fu_he', DEFAULT_BUDGETS)).toBeUndefined()
+    expect(ValidateDelegationBudget(four, 'zhu_jian', limited)).toBeUndefined()
     const blocked = Array.from({ length: 4 }, () => done({ role: 'fu_he', status: 'blocked' }))
     expect(ValidateDelegationBudget(blocked, 'fu_he', DEFAULT_BUDGETS)).toBeUndefined()
   })

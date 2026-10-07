@@ -80,7 +80,8 @@ describe('角色注册表', () => {
   it('子智能体 persona 带角色标签与交付要求，算衡区分模式', () => {
     const persona = getChildPersona('fu_he')
     expect(persona).toContain('「复核」')
-    expect(persona).toContain('structured_output')
+    expect(persona).toContain('「交付」一节')
+    expect(persona).toContain('同一会话')
     expect(ROLE_TAG_PATTERN.exec(persona)?.[1]).toBe('fu_he')
     expect(getChildPersona('suan_heng', 'verify')).toContain('当前模式：验算')
     expect(getChildPersona('suan_heng')).toContain('当前模式：研算')

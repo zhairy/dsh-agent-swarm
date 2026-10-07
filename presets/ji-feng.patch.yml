@@ -2,6 +2,7 @@
 - insert:
     - id: preset-ji-feng
       name: "@deepseek-ai/dsh-agent-preset"
+      disabled: !!js "process.env.DSH_SWARM_ROLE_PRESETS !== '1'"
       config:
         id: ji-feng
         name: 疾风

@@ -19,6 +19,14 @@ export interface PresetDeclarationInfo {
 }
 
 export const PRESET_PACKAGE = '@deepseek-ai/dsh-agent-preset'
+/** 模式列表里只露出一个入口：天枢主持的「百工模式」 */
+export const BAIGONG_NAME = '百工模式'
+export const BAIGONG_DESCRIPTION = '以天枢统御百工：建立含 Mermaid 执行流程的版本化任务卡，由独立专家与 Jev 审核目标和流程，按风险选用谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔 12 位专家；通过短检查点、按需材料、受限 P2P 邮箱及纯函数计算辅助协作。各专家可配置模型链、推理强度与容灾升级；交付由衡鉴复评，最终以当前版本的真实证据与硬门禁验收。'
+/**
+ * 12 个单角色预设默认停用，不出现在模式列表中（委派子智能体不依赖它们）。
+ * 需要把某个专家单独作为主会话使用时，设置环境变量 DSH_SWARM_ROLE_PRESETS=1 后重启 dsh。
+ */
+export const ROLE_PRESETS_DISABLED = "process.env.DSH_SWARM_ROLE_PRESETS !== '1'"
 export const SWARM_TOOLS_ROW: PluginRow = { id: 'swarm-tools', name: 'dsh-agent-swarm/tools' }
 
 /** 委派统一走 swarm_delegate，通用委派组在全部 swarm 预设中移除；swarm 行由构建器自己追加 */
@@ -71,7 +79,7 @@ export const getPresetPlugins = (role: RoleId, standard: readonly PluginRow[]): 
 
 export const getPresetDescription = (role: RoleId): string => {
   const info = getRoleInfo(role)
-  if (role === 'tian_shu') return `dsh-agent-swarm 主持者：${info.duty}按需委派 12 位中文专家，并以证据验收。`
+  if (role === 'tian_shu') return BAIGONG_DESCRIPTION
   const base = `${info.title}：${info.duty}`
   return info.needsVision ? `${base}（需要支持图片输入的模型）` : base
 }
@@ -80,7 +88,7 @@ export const getPresetDeclaration = (role: RoleId, standard: readonly PluginRow[
   const info = getRoleInfo(role)
   return {
     id: info.presetId,
-    name: info.name,
+    name: role === 'tian_shu' ? BAIGONG_NAME : info.name,
     description: getPresetDescription(role),
     order: role === 'tian_shu' ? 0 : ROLE_ORDER_BASE + info.order,
     plugins: getPresetPlugins(role, standard)
@@ -94,7 +102,14 @@ export const getPresetDeclaration = (role: RoleId, standard: readonly PluginRow[
  * @returns {unknown[]} 补丁（YAML 顶层数组）
  */
 export const getPresetPatch = (role: RoleId, standard: readonly PluginRow[]): unknown[] => [
-  { insert: [{ id: `preset-${getRoleInfo(role).presetId}`, name: PRESET_PACKAGE, config: getPresetDeclaration(role, standard) }] }
+  {
+    insert: [{
+      id: `preset-${getRoleInfo(role).presetId}`,
+      name: PRESET_PACKAGE,
+      ...(role === 'tian_shu' ? {} : { disabled: { $js: ROLE_PRESETS_DISABLED } }),
+      config: getPresetDeclaration(role, standard)
+    }]
+  }
 ]
 
 export const getPresetFileName = (role: RoleId): string => `presets/${getRoleInfo(role).presetId}.patch.yml`

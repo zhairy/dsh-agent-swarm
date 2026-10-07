@@ -1,6 +1,6 @@
 import { getRoleRoute, type SwarmConfigInfo } from './config.js'
 import { ValidateStructuredOutput, getEvidenceFromOutput, getOutputSchema, type EvidenceItem } from './contracts.js'
-import type { BackendKind, DelegationRecord, Ledger, RouteAttempt, TaskRecord, TaskStore } from './evidence.js'
+import type { BackendKind, DelegationRecord, DelegationRetryInfo, DelegationSessionInfo, Ledger, RouteAttempt, TaskRecord, TaskStore } from './evidence.js'
 import {
   SPAWN_PROVIDER,
   STRUCTURED_OUTPUT_TOOL,
@@ -8,11 +8,14 @@ import {
   type AgentLike,
   type AttachmentsLike,
   type ContentBlockLike,
+  type SubagentEndInfoLike,
   type SubagentResultLike,
   type SubagentRunLike,
   type SubagentsLike,
   type ToolsLike
 } from './host-contract.js'
+import { getPromptStyle, getStyledTaskPrompt, type PromptStyle } from './model-family.js'
+import { isNetworkSuspect, type NetworkMonitorInfo } from './network.js'
 import { GATE_IDS, GATE_ROLE, ValidateDelegationBudget, type GateId } from './policy.js'
 import type { FallbackEventInfo, RouteStateRegistry } from './route-state.js'
 import {
@@ -25,7 +28,10 @@ import {
   type SuanHengMode
 } from './role-registry.js'
 import { FindUsableRoutes, getModelFamily, getRouteKey, getRouteLabel, type EscalationKind, type ModelFamily, type RouteInfo, type RouteProbe } from './routes.js'
+import { SESSION_CHOICES, getRuleSessionPlan, type ChildEndHub, type SessionChoice, type SessionPlan, type ThreadInfo, type ThreadRegistry } from './threads.js'
+import { getUpgradeReasons, getUpgradedChain } from './upgrade.js'
 import { SwarmError, getErrorText } from './util/errors.js'
+import { getExplainedError } from './util/failure-hint.js'
 import { getChangedFiles, type GitStatusInfo } from './util/git.js'
 import type { MutexInfo } from './util/mutex.js'
 import { ValidateImagePaths, getImageBlocks } from './vision.js'
@@ -44,6 +50,16 @@ export interface DelegateInput {
   backend?: DelegateBackend
   allow_web?: boolean
   gate?: GateId
+  /** 天枢判断本次需要更强的模型（高风险、高歧义或置信度不足） */
+  upgrade?: boolean
+  /** 会话方式：auto 由衡鉴判断；new 新建连续会话；continue 追加到该角色已有的会话；oneshot 一次性调用 */
+  session?: SessionChoice
+  node_id?: string
+  request_id?: string
+  expected_workflow_revision?: number
+  /** 仅服务层生成；不公开给模型参数 schema。 */
+  attempt_id?: string
+  review_phase?: 'blind' | 'response'
 }
 
 const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string')
@@ -70,6 +86,10 @@ export const ValidateDelegateInput = (raw: unknown): { input?: DelegateInput; er
   if (value.image_paths !== undefined && !isStringList(value.image_paths)) errors.push('image_paths 必须是字符串数组')
   if (value.context_paths !== undefined && !isStringList(value.context_paths)) errors.push('context_paths 必须是字符串数组')
   if (value.allow_web !== undefined && typeof value.allow_web !== 'boolean') errors.push('allow_web 必须是布尔值')
+  if (value.upgrade !== undefined && typeof value.upgrade !== 'boolean') errors.push('upgrade 必须是布尔值')
+  if (value.session !== undefined && !(SESSION_CHOICES as readonly unknown[]).includes(value.session)) errors.push(`session 必须是 ${SESSION_CHOICES.join(' / ')} 之一`)
+  if (value.review_phase !== undefined && !['blind', 'response'].includes(String(value.review_phase))) errors.push('review_phase 必须是 blind 或 response')
+  if (value.review_phase !== undefined && role !== 'yu_shi' && !(role === 'suan_heng' && value.mode === 'verify')) errors.push('只有独立审查/验算角色可声明评审阶段')
   if (value.allow_web === true && getRoleInfo(role).web === 'never') errors.push(`「${getRoleInfo(role).name}」不开放 web 工具`)
   if (value.gate !== undefined && !(GATE_IDS as readonly unknown[]).includes(value.gate)) errors.push(`gate 必须是 ${GATE_IDS.join(' / ')} 之一`)
   if (value.backend !== undefined && !(DELEGATE_BACKENDS as readonly unknown[]).includes(value.backend)) errors.push(`backend 必须是 ${DELEGATE_BACKENDS.join(' / ')} 之一`)
@@ -132,7 +152,12 @@ export const getTaskBrief = (task: TaskRecord, input: DelegateInput, delegationI
   const constraints = Object.entries(card.constraints ?? {}).map(([key, value]) => `${key}=${String(value)}`)
   const perf = Object.entries(card.perf ?? {}).map(([key, value]) => `${key}=${String(value)}`)
   return [
-    `任务 ${task.taskId} / 委派 ${delegationId}`,
+    `任务 ${task.taskId} / 委派 ${delegationId} / 需求版本 ${task.requestRevision ?? 1} / 合同版本 ${task.cardRevision ?? 1} / 流程版本 ${task.workflowRevision ?? 1}`,
+    ...((input.role === 'yu_shi' || (input.role === 'suan_heng' && input.mode === 'verify')) ? [
+      input.review_phase === 'response'
+        ? '评审阶段：response。宿主已确认同版本、同产物的冻结初审；可读取同伴材料并回应，保留原初审，回应不能替代初审门禁。产物改变后重新盲审。'
+        : '评审阶段：blind。独立初审不读取作者推理、历史评分或同伴解释；先提交并冻结结论，之后才能进入 response。'
+    ] : []),
     `任务标题：${card.title}`,
     `目标：${card.goal}`,
     `验收标准：\n${card.acceptance.map((item) => `- ${item}`).join('\n')}`,
@@ -140,28 +165,82 @@ export const getTaskBrief = (task: TaskRecord, input: DelegateInput, delegationI
     ...(constraints.length > 0 ? [`约束：${constraints.join('；')}`] : []),
     ...(perf.length > 0 ? [`性能预算：${perf.join('；')}`] : []),
     ...(input.gate === undefined ? [] : [`本次委派用于满足门禁：${input.gate}（${GATE_ROLE[input.gate].label}）`]),
+    ...((input as DelegateInput & { node_id?: string }).node_id === undefined ? [] : [`当前节点：${(input as DelegateInput & { node_id?: string }).node_id}；完成节点要求后提交证据，立即停止。`]),
     ...((input.context_paths ?? []).length > 0 ? [`相关文件：\n${(input.context_paths ?? []).map((path) => `- ${path}`).join('\n')}`] : [])
   ].join('\n')
 }
 
-export const getChildPromptText = (task: TaskRecord, input: DelegateInput, delegationId: string): string =>
+/**
+ * 一次性调用的任务说明（宿主提供结构化提交工具），按模型家族组织
+ * @param {TaskRecord} task - 任务
+ * @param {DelegateInput} input - 委派参数
+ * @param {string} delegationId - 委派 ID
+ * @param {PromptStyle} [style='generic'] - 提示风格
+ * @returns {string} 文本
+ */
+export const getChildPromptText = (task: TaskRecord, input: DelegateInput, delegationId: string, style: PromptStyle = 'generic'): string =>
+  getStyledTaskPrompt({
+    brief: getTaskBrief(task, input, delegationId),
+    request: input.prompt,
+    delivery: `完成后调用 ${STRUCTURED_OUTPUT_TOOL} 提交结果（${getRoleInfo(input.role).deliverables.join('、')}）。`
+  }, style)
+
+/** 连续会话的交付要求正文：宿主不为连续会话提供结构化提交工具，结果以 json 代码块回复 */
+export const getJsonDeliveryBody = (role: DelegableRoleId): string =>
   [
-    getTaskBrief(task, input, delegationId),
-    '—— 本次任务 ——',
-    input.prompt,
-    '—— 交付 ——',
-    `完成后调用 ${STRUCTURED_OUTPUT_TOOL} 提交结果（${getRoleInfo(input.role).deliverables.join('、')}）。`
+    `完成后，最后一条回复只包含一个 \`\`\`json 代码块（代码块外不要写其他文字），提交结构化结果（${getRoleInfo(role).deliverables.join('、')}），字段必须符合以下 JSON Schema：`,
+    JSON.stringify(getOutputSchema(role))
   ].join('\n\n')
 
-export const getNativePromptText = (task: TaskRecord, input: DelegateInput, delegationId: string, mode?: SuanHengMode): string =>
+/** 带标题的连续会话交付要求（用于会话内的重试提示） */
+export const getJsonDeliveryText = (role: DelegableRoleId): string => ['—— 交付 ——', getJsonDeliveryBody(role)].join('\n\n')
+
+/** 连续会话的首轮任务 */
+export const getThreadPromptText = (task: TaskRecord, input: DelegateInput, delegationId: string, style: PromptStyle = 'generic'): string =>
+  getStyledTaskPrompt({ brief: getTaskBrief(task, input, delegationId), request: input.prompt, delivery: getJsonDeliveryBody(input.role) }, style)
+
+/**
+ * 追加到连续会话的新任务：会话没见过的任务附完整背景，同一任务只附编号
+ * @param {TaskRecord} task - 任务
+ * @param {DelegateInput} input - 委派参数
+ * @param {string} delegationId - 委派 ID
+ * @param {boolean} knowsTask - 该会话此前处理过这个任务
+ * @param {PromptStyle} [style='generic'] - 提示风格（与建会话时的 persona 一致）
+ * @returns {string} 文本
+ */
+export const getThreadFollowupText = (task: TaskRecord, input: DelegateInput, delegationId: string, knowsTask: boolean, style: PromptStyle = 'generic'): string =>
+  getStyledTaskPrompt({
+    header: knowsTask ? `【追加】任务 ${task.taskId} / 委派 ${delegationId}（同一任务的后续工作，沿用你已有的上下文）` : '【追加】新的任务，背景如下。',
+    ...(knowsTask ? {} : { brief: getTaskBrief(task, input, delegationId) }),
+    request: input.prompt,
+    delivery: getJsonDeliveryBody(input.role)
+  }, style)
+
+/**
+ * 连续会话内的重试提示：中断则续跑，交付不合格则只修正结构化结果
+ * @param {DelegableRoleId} role - 角色
+ * @param {{ stopReason: string; error?: string; missing: boolean }} failure - 失败情况
+ * @returns {string} 文本
+ */
+export const getThreadRetryText = (role: DelegableRoleId, failure: { stopReason: string; error?: string; missing: boolean }): string => {
+  if (failure.stopReason !== 'completed') {
+    return `上一次执行中断（${failure.error ?? failure.stopReason}）。请在已有进展的基础上继续完成本次任务，不要从头重做。\n\n${getJsonDeliveryText(role)}`
+  }
+  if (failure.missing) return `你的上一条回复里没有可解析的 json 代码块。不要重做已完成的工作，只按下面的要求提交结构化结果。\n\n${getJsonDeliveryText(role)}`
+  return `上一条回复的结构化结果不符合要求：${failure.error ?? '未知错误'}。不要重做已完成的工作，修正后重新提交。\n\n${getJsonDeliveryText(role)}`
+}
+
+/** 原生后端（Codex / Claude Code 客户端）对应的提示风格 */
+export const getNativeStyle = (kind: BackendKind): PromptStyle => (kind.startsWith('codex') ? 'gpt' : 'claude')
+
+export const getNativePromptText = (task: TaskRecord, input: DelegateInput, delegationId: string, mode?: SuanHengMode, style: PromptStyle = 'generic'): string =>
   [
-    getChildPersona(input.role, mode),
-    getTaskBrief(task, input, delegationId),
-    '—— 本次任务 ——',
-    input.prompt,
-    '—— 交付 ——',
-    '最后以一个 ```json 代码块输出结果，字段必须符合以下 JSON Schema（不要输出其他 json 代码块）：',
-    JSON.stringify(getOutputSchema(input.role))
+    getChildPersona(input.role, mode, style),
+    getStyledTaskPrompt({
+      brief: getTaskBrief(task, input, delegationId),
+      request: input.prompt,
+      delivery: ['最后以一个 ```json 代码块输出结果，字段必须符合以下 JSON Schema（不要输出其他 json 代码块）：', JSON.stringify(getOutputSchema(input.role))].join('\n\n')
+    }, style)
   ].join('\n\n')
 
 /**
@@ -204,11 +283,24 @@ export interface DelegateSessionInfo {
   ledger: Ledger
   editLock: MutexInfo
   counters: { native: number }
+  /** 该根会话的连续会话 */
+  threads: ThreadRegistry
+}
+
+/** 衡鉴判断会话方式的输入 */
+export interface PlanSessionInput {
+  input: DelegateInput
+  task: TaskRecord
+  /** 可追加的候选会话（同一路由键中最近使用的空闲会话） */
+  thread?: ThreadInfo
+  session: DelegateSessionInfo
+  signal: AbortSignal
 }
 
 export interface DelegateExecInfo {
   agent: AgentLike
   signal: AbortSignal
+  callId?: string
 }
 
 /** 委派执行依赖（全部可替换，便于测试） */
@@ -223,6 +315,29 @@ export interface DelegateDepsInfo {
   gitStatus: (cwd: string) => Promise<GitStatusInfo | undefined>
   now: () => number
   newId: (prefix: string) => string
+  /** 连续会话的子会话 ID */
+  newChildId: () => string
+  /** 连续会话的结束事件 */
+  hub: ChildEndHub
+  /** 衡鉴判断会话方式；缺省或返回 undefined 时按规则 */
+  planSession?: (input: PlanSessionInput) => Promise<SessionPlan | undefined>
+  /** 等待；传入 signal 时调用方取消即提前结束 */
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>
+  /** 联网探测：出错重试前若已断网，等待网络恢复而不是按固定间隔重试 */
+  network?: NetworkMonitorInfo
+  onChildStart?: (info: { agentId: string; task: TaskRecord; record: DelegationRecord; role: DelegableRoleId; signal: AbortSignal }) => void | Promise<void>
+  onChildEnd?: (agentId: string) => void | Promise<void>
+}
+
+/** 一次运行（一次性或连续会话的一轮，含自动重试）的结果 */
+interface RunOutcomeInfo {
+  evaluation: EvaluationInfo
+  childId: string
+  finalRoute?: RouteInfo
+  retries: DelegationRetryInfo[]
+  session: DelegationSessionInfo
+  /** 实际使用的提示风格 */
+  promptStyle?: PromptStyle
 }
 
 interface EvaluationInfo {
@@ -247,7 +362,7 @@ const HIGH_RISK_GATES: readonly GateId[] = ['G_MATH_VERIFY', 'G_REVIEW', 'G_DIFF
 const getEvaluation = (role: DelegableRoleId, mode: SuanHengMode | undefined, result: SubagentResultLike, structured: unknown): EvaluationInfo => {
   const text = getOutputText(result).slice(0, 500)
   if (result.stopReason !== 'completed') {
-    return { status: 'failed', summary: text || '子智能体未完成', unresolved: [], evidence: [], error: `${result.stopReason}${result.diagnostic === undefined ? '' : `：${result.diagnostic}`}` }
+    return { status: 'failed', summary: text || '子智能体未完成', unresolved: [], evidence: [], error: getExplainedError(`${result.stopReason}${result.diagnostic === undefined ? '' : `：${result.diagnostic}`}`) }
   }
   if (structured === undefined) return { status: 'failed', summary: text || '无结果', unresolved: [], evidence: [], error: '子智能体没有提交结构化结果' }
   const errors = ValidateStructuredOutput(role, structured, mode)
@@ -290,24 +405,22 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
   }
 
   /**
-   * 带超时与调用方取消的运行：超时或取消都会中止子智能体
+   * 跟随调用方取消的运行；专家执行不设时间限制，只有天枢（或用户）取消才会中止
    * beforeDispose 在释放子智能体之前调用：宿主在释放时触发 agent/disposed，运行时行会随即清理该子智能体的路由状态
    */
   const runWithSignal = async (
     exec: DelegateExecInfo,
-    config: SwarmConfigInfo,
     start: (signal: AbortSignal) => Promise<SubagentRunLike>,
-    hooks: { onRun?: (run: SubagentRunLike) => void; beforeDispose?: (run: SubagentRunLike) => void } = {}
+    hooks: { onRun?: (run: SubagentRunLike) => void | Promise<void>; beforeDispose?: (run: SubagentRunLike) => void } = {}
   ) => {
     const controller = new AbortController()
     const onAbort = (): void => controller.abort()
     exec.signal.addEventListener('abort', onAbort, { once: true })
     // 已经取消的信号不会再触发 abort 事件，必须主动检查
     if (exec.signal.aborted) controller.abort()
-    const timer = setTimeout(() => controller.abort(), config.budgets.delegationTimeoutMs)
     try {
       const run = await start(controller.signal)
-      hooks.onRun?.(run)
+      await hooks.onRun?.(run)
       try {
         return { run, result: await run.result }
       } catch (error) {
@@ -315,9 +428,9 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       } finally {
         hooks.beforeDispose?.(run)
         await run.dispose().catch(() => undefined)
+        await deps.onChildEnd?.(run.id)
       }
     } finally {
-      clearTimeout(timer)
       exec.signal.removeEventListener('abort', onAbort)
     }
   }
@@ -365,10 +478,11 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const running = markRunning(session, record, kind)
     const cwd = getWorkspaceRoot(exec.agent)
     const before = await deps.gitStatus(cwd)
-    const text = getNativePromptText(task, input, record.delegationId, input.mode)
+    const promptStyle = getNativeStyle(kind)
+    const text = getNativePromptText(task, input, record.delegationId, input.mode, promptStyle)
     let outcome: { run: SubagentRunLike; result: SubagentResultLike }
     try {
-      outcome = await runWithSignal(exec, config, (signal) =>
+      outcome = await runWithSignal(exec, (signal) =>
         subagents.start(provider, { label: `${getRoleInfo(input.role).name}·${task.taskId}`, prompt: [{ type: 'text', text }], parent: exec.agent, signal }))
     } catch (error) {
       // 启动失败（例如原生客户端未登录）没有消耗订阅额度：归还次数，记录失败并退回 spawn
@@ -391,9 +505,279 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       hardIsolation: false,
       independence: avoid.length === 0 ? 'n/a' : avoid.includes(getModelFamily(route.model)) ? 'not-achieved' : 'achieved',
       attempts: [...attempts, { route: getRouteLabel(route), backend: kind, outcome: 'used' }],
+      promptStyle,
       changeTracking: change.changeTracking,
       ...(change.changedFiles === undefined ? {} : { changedFiles: change.changedFiles })
     })
+  }
+
+  /** 重试原因；不可重试（已完成、调用方取消、模型拒绝）时为 undefined */
+  const getRetryReason = (evaluation: EvaluationInfo, result: SubagentResultLike, exec: DelegateExecInfo): { reason: string; backoff: boolean } | undefined => {
+    if (evaluation.status === 'completed' || exec.signal.aborted || result.stopReason === 'refusal') return undefined
+    if (result.stopReason !== 'completed') return { reason: `执行中断：${evaluation.error ?? result.stopReason}`, backoff: result.stopReason === 'error' }
+    return { reason: evaluation.error ?? '交付不合格', backoff: false }
+  }
+
+  const AddRetry = (session: DelegateSessionInfo, record: DelegationRecord, retries: DelegationRetryInfo[], retry: DelegationRetryInfo): void => {
+    retries.push(retry)
+    session.ledger.AddLedgerEvent({ type: 'delegation/retry', taskId: record.taskId, delegationId: record.delegationId, data: { ...retry } })
+  }
+
+  const getBackoffMs = (config: SwarmConfigInfo, attempt: number): number => config.agents.retryBackoffMs * 2 ** Math.max(0, attempt - 1)
+
+  /**
+   * 出错重试前的等待：可能由断网引起的失败，在确认断网后等网络恢复（最长 networkWaitMs），否则按退避时间等待
+   * @param {SwarmConfigInfo} config - 配置
+   * @param {number} attempt - 第几次重试
+   * @param {boolean} suspectNetwork - 失败是否可能由断网引起
+   * @param {AbortSignal} signal - 调用方取消信号
+   * @returns 是否因断网而等待
+   */
+  const WaitBeforeRetry = async (config: SwarmConfigInfo, attempt: number, suspectNetwork: boolean, signal: AbortSignal): Promise<boolean> => {
+    const network = deps.network
+    if (network !== undefined && config.agents.networkWaitMs > 0 && suspectNetwork && !(await network.isOnline())) {
+      await network.waitOnline(signal, config.agents.networkWaitMs)
+      return true
+    }
+    await deps.sleep(getBackoffMs(config, attempt), signal)
+    return false
+  }
+
+  /** 执行出错（stopReason 为 error）时连续会话拿不到诊断文本，一律先做联网探测；其余按错误文本判断 */
+  const isNetworkFailure = (result: SubagentResultLike, error: string | undefined): boolean =>
+    result.stopReason === 'error' || isNetworkSuspect({ message: error ?? '' })
+
+  const getStyle = (route: RouteInfo | undefined, config: SwarmConfigInfo): PromptStyle => getPromptStyle(route, config.agents.promptStyle)
+
+  /** 本次委派的会话安排：天枢显式指定 > 配置 > 衡鉴 > 规则 */
+  const getSessionPlan = async (input: DelegateInput, task: TaskRecord, exec: DelegateExecInfo, session: DelegateSessionInfo, config: SwarmConfigInfo): Promise<SessionPlan> => {
+    // 工具范围在建会话时固定：只追加到开放 web 与否一致的会话
+    const thread = session.threads.getCandidates(getRouteKey(input.role, input.mode)).find((t) => t.allowWeb === (input.allow_web === true))
+    const choice = input.session ?? 'auto'
+    if (choice === 'oneshot') return { kind: 'oneshot', source: 'explicit', reason: '天枢指定一次性调用' }
+    if (choice === 'new') return { kind: 'new', source: 'explicit', reason: '天枢指定新建连续会话' }
+    if (choice === 'continue') {
+      return thread !== undefined
+        ? { kind: 'continue', threadId: thread.threadId, source: 'explicit', reason: '天枢指定追加到已有会话' }
+        : { kind: 'new', source: 'explicit', reason: '天枢要求追加，但该角色没有空闲的会话，新建连续会话' }
+    }
+    if (config.agents.session === 'oneshot') return { kind: 'oneshot', source: 'config', reason: '配置为一次性调用' }
+    const decided = await deps.planSession?.({ input, task, session, signal: exec.signal, ...(thread === undefined ? {} : { thread }) })
+    const plan = decided ?? getRuleSessionPlan({ role: input.role, taskId: task.taskId, reason: 'Jev 未启用', ...(thread === undefined ? {} : { thread }) })
+    if (config.agents.session === 'continuable' && plan.kind === 'oneshot') return { kind: 'new', source: 'config', reason: '配置为连续会话' }
+    return plan
+  }
+
+  interface RunContext {
+    input: DelegateInput
+    task: TaskRecord
+    record: DelegationRecord
+    exec: DelegateExecInfo
+    session: DelegateSessionInfo
+    config: SwarmConfigInfo
+    subagents: SubagentsLike
+    usable: RouteInfo[]
+    toolFilter: { allow?: string[]; deny?: string[] } | undefined
+    images: ContentBlockLike[]
+    attempts: RouteAttempt[]
+    onFallback: (event: FallbackEventInfo) => void
+    retries: DelegationRetryInfo[]
+  }
+
+  /** 一次性调用（宿主强制结构化提交）；未执行、中断或交付不合格时重新启动，最多 maxRetries 次 */
+  const runOneShot = async (ctx: RunContext, plan: SessionPlan): Promise<RunOutcomeInfo> => {
+    const { input, task, record, exec, session, config, subagents, usable, toolFilter, images, attempts, onFallback, retries } = ctx
+    const role = getRoleInfo(input.role)
+    const session_: DelegationSessionInfo = { kind: 'oneshot', appended: false, source: plan.source, reason: plan.reason }
+    let last: RunOutcomeInfo | undefined
+    for (let attempt = 0; ; attempt++) {
+      const retryNote = attempt === 0 ? '' : `\n\n（第 ${attempt} 次重试：上一次${retries.at(-1)?.reason ?? '未完成'}。请完整完成任务，并按交付要求提交。）`
+      let usedIndex = -1
+      let usedStyle: PromptStyle | undefined
+      const startSpawn = async (signal: AbortSignal): Promise<SubagentRunLike> => {
+        for (const [index, route] of usable.entries()) {
+          // 任务说明与 persona 按这一层路由的模型家族组织
+          const style = getStyle(route, config)
+          try {
+            const run = await subagents.start(SPAWN_PROVIDER, {
+              label: `${role.name}·${task.taskId}`,
+              prompt: [{ type: 'text', text: getChildPromptText(task, input, record.delegationId, style) + retryNote }, ...images],
+              parent: exec.agent,
+              signal,
+              agentOptions: route,
+              outputSchema: getOutputSchema(input.role),
+              maxDepth: 1,
+              ...(toolFilter === undefined ? {} : { toolFilter }),
+              persona: getChildPersona(input.role, input.mode, style)
+            })
+            usedIndex = index
+            usedStyle = style
+            return run
+          } catch (error) {
+            attempts.push({ route: getRouteLabel(route), backend: 'spawn', outcome: 'failed', reason: `start: ${getErrorText(error)}` })
+          }
+        }
+        throw new SwarmError('SERVICE_UNAVAILABLE', '所有可用路由都无法启动子智能体')
+      }
+      let finalRoute: RouteInfo | undefined
+      let outcome: { run: SubagentRunLike; result: SubagentResultLike } | undefined
+      let startError: string | undefined
+      try {
+        outcome = await runWithSignal(exec, startSpawn, {
+          onRun: async (run) => {
+            deps.routeState.AddChild(run.id, { chain: usable.slice(usedIndex), role: input.role, onFallback, logicalRequestId: record.delegationId })
+            await deps.onChildStart?.({ agentId: run.id, task, record, role: input.role, signal: exec.signal })
+          },
+          beforeDispose: (run) => {
+            finalRoute = deps.routeState.getChild(run.id)?.route
+            deps.routeState.DelAgent(run.id)
+          }
+        })
+      } catch (error) {
+        startError = getErrorText(error)
+      }
+      const result: SubagentResultLike = outcome?.result ?? { output: [], stopReason: 'error', diagnostic: `未能启动：${startError ?? 'unknown'}` }
+      const evaluation = getEvaluation(input.role, input.mode, result, result.structured)
+      last = {
+        evaluation, childId: outcome?.run.id ?? '', ...(finalRoute ?? usable[usedIndex] ? { finalRoute: finalRoute ?? usable[usedIndex] } : {}), retries, session: session_,
+        ...(usedStyle === undefined ? {} : { promptStyle: usedStyle })
+      }
+      const retry = getRetryReason(evaluation, result, exec)
+      if (deps.routeState.getTerminal(outcome?.run.id ?? '') !== undefined || retry === undefined || attempt >= config.agents.maxRetries) return last
+      AddRetry(session, record, retries, { attempt: attempt + 1, reason: retry.reason, action: 'restart' })
+      if (retry.backoff) await WaitBeforeRetry(config, attempt + 1, isNetworkFailure(result, evaluation.error ?? startError), exec.signal)
+      if (exec.signal.aborted) return last
+    }
+  }
+
+  /**
+   * 连续会话的一轮：新建或追加到已有会话，等待该轮沉寂并解析 json 结果；
+   * 中断则在同一会话续跑，交付不合格则只要求修正，最多 maxRetries 次。
+   * 会话无法建立或无法投递时返回 undefined，由调用方退回一次性调用。
+   */
+  const runThread = async (ctx: RunContext, plan: Exclude<SessionPlan, { kind: 'oneshot' }>): Promise<RunOutcomeInfo | undefined> => {
+    const { input, task, record, exec, session, config, subagents, usable, toolFilter, images, attempts, onFallback, retries } = ctx
+    // 宿主方法依赖 this（SubagentRuntime 实例），必须以 subagents.xxx(...) 调用，不能解构
+    if (subagents.startContinuable === undefined || subagents.sendMessage === undefined) return undefined
+    const role = getRoleInfo(input.role)
+    const key = getRouteKey(input.role, input.mode)
+    let appended = plan.kind === 'continue'
+    let thread = appended ? session.threads.get((plan as { threadId: string }).threadId) : undefined
+    // 衡鉴判断期间可能被并行委派占用：已忙或已关闭就新建
+    if (thread !== undefined && (thread.busy || thread.closed || thread.allowWeb !== (input.allow_web === true))) {
+      thread = undefined
+      appended = false
+    }
+    let threadId = thread?.threadId ?? deps.newChildId()
+    // 新会话按首选路由的模型家族定风格；追加沿用会话建立时的风格，与其 persona 一致
+    const newStyle = getStyle(usable[0], config)
+    if (thread !== undefined) session.threads.Update(threadId, { busy: true })
+    else {
+      thread = { threadId, key, role: input.role, ...(input.mode === undefined ? {} : { mode: input.mode }), rounds: 0, busy: true, closed: false, allowWeb: input.allow_web === true, style: newStyle, taskIds: [], history: [], createdAt: deps.now(), lastUsedAt: deps.now() }
+      session.threads.Add(thread)
+    }
+    let style: PromptStyle = thread.style ?? newStyle
+    const Arm = (id: string): void => deps.routeState.AddChild(id, { chain: usable, role: input.role, onFallback, persistent: true, logicalRequestId: record.delegationId })
+    Arm(threadId)
+    await deps.onChildStart?.({ agentId: threadId, task, record, role: input.role, signal: exec.signal })
+    const seen = thread.seenRevisions?.[task.taskId]
+    const knowsRevision = thread.taskIds.includes(task.taskId) && (seen === undefined
+      ? (task.cardRevision ?? 1) === 1 && (task.workflowRevision ?? 1) === 1 && (task.requestRevision ?? 1) === 1
+      : seen.cardRevision === (task.cardRevision ?? 1) && seen.workflowRevision === (task.workflowRevision ?? 1) && (seen.requestRevision ?? 1) === (task.requestRevision ?? 1))
+    let text = appended ? getThreadFollowupText(task, input, record.delegationId, knowsRevision, style) : getThreadPromptText(task, input, record.delegationId, style)
+    let content: ContentBlockLike[] = [{ type: 'text', text }, ...images]
+    let started = appended
+    let evaluation: EvaluationInfo | undefined
+    for (let attempt = 0; ; attempt++) {
+      const waitAbort = new AbortController()
+      const onAbort = (): void => waitAbort.abort()
+      exec.signal.addEventListener('abort', onAbort, { once: true })
+      if (exec.signal.aborted) waitAbort.abort()
+      const ended = deps.hub.wait(threadId, waitAbort.signal)
+      ended.catch(() => undefined)
+      try {
+        if (started) await subagents.sendMessage(exec.agent, threadId, content, { signal: exec.signal })
+        else {
+          await subagents.startContinuable({
+            provider: SPAWN_PROVIDER,
+            label: `${role.name}·${task.taskId}`,
+            childId: threadId,
+            signal: exec.signal,
+            request: {
+              prompt: content,
+              parent: exec.agent,
+              agentOptions: usable[0] as RouteInfo,
+              maxDepth: 1,
+              ...(toolFilter === undefined ? {} : { toolFilter }),
+              persona: getChildPersona(input.role, input.mode, style)
+            }
+          })
+          started = true
+        }
+      } catch (error) {
+        waitAbort.abort()
+        exec.signal.removeEventListener('abort', onAbort)
+        const reason = getErrorText(error)
+        attempts.push({ route: getRouteLabel(usable[0] as RouteInfo), backend: 'spawn', outcome: 'failed', reason: `${started ? 'send' : 'start'}: ${reason}` })
+        session.threads.Update(threadId, { busy: false, closed: true })
+        deps.routeState.DelAgent(threadId)
+        if (exec.signal.aborted) {
+          return { evaluation: { status: 'failed', summary: '调用方已取消委派', unresolved: [], evidence: [], error: 'aborted' }, childId: threadId, retries, session: { kind: 'continuable', threadId, appended, source: plan.source, reason: plan.reason } }
+        }
+        if (attempt >= config.agents.maxRetries) return undefined
+        // 会话无法建立或投递：换一个新的连续会话重来
+        AddRetry(session, record, retries, { attempt: attempt + 1, reason: `连续会话${started ? '投递' : '建立'}失败：${reason}`, action: 'restart' })
+        await WaitBeforeRetry(config, attempt + 1, isNetworkSuspect({ message: reason }), exec.signal)
+        threadId = deps.newChildId()
+        style = newStyle
+        thread = { threadId, key, role: input.role, ...(input.mode === undefined ? {} : { mode: input.mode }), rounds: 0, busy: true, closed: false, allowWeb: input.allow_web === true, style, taskIds: [], history: [], createdAt: deps.now(), lastUsedAt: deps.now() }
+        session.threads.Add(thread)
+        Arm(threadId)
+        appended = false
+        started = false
+        text = getThreadPromptText(task, input, record.delegationId, style)
+        content = [{ type: 'text', text }, ...images]
+        continue
+      }
+      let info: SubagentEndInfoLike
+      try {
+        info = await ended
+      } catch {
+        // 天枢（或用户）取消：中止该会话当前这一轮，会话保留，之后仍可追加。
+        // 被中止的一轮仍会向天枢投递「子智能体已结束」通知；标记为已取走，避免停止后天枢被它再次唤醒
+        subagents.interrupt?.(threadId, { kind: 'ancestor', agent: exec.agent })
+        deps.hub.MarkConsumed(threadId)
+        session.threads.Update(threadId, { busy: false })
+        return { evaluation: { status: 'failed', summary: '调用方已取消委派', unresolved: [], evidence: [], error: 'aborted' }, childId: threadId, retries, session: { kind: 'continuable', threadId, appended, source: plan.source, reason: plan.reason } }
+      } finally {
+        exec.signal.removeEventListener('abort', onAbort)
+      }
+      deps.hub.MarkConsumed(threadId)
+      const result: SubagentResultLike = { output: [...(info.lastAssistantMessage ?? [])], stopReason: info.stopReason }
+      const structured = ParseNativeOutput(getOutputText(result))
+      evaluation = getEvaluation(input.role, input.mode, result, structured)
+      const retry = getRetryReason(evaluation, result, exec)
+      if (deps.routeState.getTerminal(threadId) !== undefined || retry === undefined || attempt >= config.agents.maxRetries) break
+      AddRetry(session, record, retries, { attempt: attempt + 1, reason: retry.reason, action: 'continue' })
+      if (retry.backoff) {
+        await WaitBeforeRetry(config, attempt + 1, isNetworkFailure(result, evaluation.error), exec.signal)
+        // 出错多半是整条路由链暂时不可用：从主模型重新开始
+        Arm(threadId)
+      }
+      content = [{ type: 'text', text: getThreadRetryText(input.role, { stopReason: result.stopReason, missing: structured === undefined, ...(evaluation.error === undefined ? {} : { error: evaluation.error }) }) }]
+    }
+    const finalRoute = deps.routeState.getChild(threadId)?.route
+    const updated = session.threads.AddRound(threadId, { delegationId: record.delegationId, taskId: task.taskId, request: input.prompt, summary: evaluation.summary, status: evaluation.status }, deps.now())
+    session.threads.Update(threadId, { seenRevisions: { ...updated?.seenRevisions, [task.taskId]: { cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1 } } })
+    await deps.onChildEnd?.(threadId)
+    return {
+      evaluation,
+      childId: threadId,
+      ...(finalRoute === undefined ? {} : { finalRoute }),
+      retries,
+      session: { kind: 'continuable', threadId, round: updated?.rounds ?? 1, appended, source: plan.source, reason: plan.reason },
+      promptStyle: style
+    }
   }
 
   const runSpawn = async (
@@ -401,11 +785,38 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     session: DelegateSessionInfo, config: SwarmConfigInfo, subagents: SubagentsLike, existing: DelegationRecord[], attempts: RouteAttempt[]
   ): Promise<DelegationRecord> => {
     const role = getRoleInfo(input.role)
-    const selection = await FindUsableRoutes(getRoleRoute(config, getRouteKey(input.role, input.mode)).chain, {
+    const roleRoute = getRoleRoute(config, getRouteKey(input.role, input.mode))
+    const reasons = getUpgradeReasons(roleRoute.upgrade, { task, delegations: existing, explicit: input.upgrade === true, role: input.role, ...(input.mode === undefined ? {} : { mode: input.mode }) })
+    if (input.upgrade === true && roleRoute.upgrade === undefined) {
+      attempts.push({ route: 'upgrade', backend: 'spawn', outcome: 'skipped', reason: `「${role.name}」未配置或已停用容灾升级，按常规路由执行` })
+    }
+    const upgrade = reasons.length > 0 && roleRoute.upgrade !== undefined
+      ? { reasons, chain: roleRoute.upgrade.chain.map(getRouteLabel) }
+      : undefined
+    if (upgrade !== undefined) {
+      session.store.UpdateDelegation(record.delegationId, { upgrade })
+      session.ledger.AddLedgerEvent({ type: 'route/upgrade', taskId: task.taskId, delegationId: record.delegationId, data: upgrade })
+    }
+    const chain = upgrade !== undefined && roleRoute.upgrade !== undefined ? getUpgradedChain(roleRoute.upgrade.chain, roleRoute.chain) : roleRoute.chain
+    const retries: DelegationRetryInfo[] = []
+    // 衡鉴判断会话方式（一次 Jev 调用）与路由预检互不依赖：先发起，后面再取结果
+    const planned = getSessionPlan(input, task, exec, session, config)
+    planned.catch(() => undefined)
+    const getSelection = () => FindUsableRoutes(chain, {
       probe: deps.probe,
       requireVision: role.needsVision,
       avoidFamilies: getAvoidFamilies(input.role, input.mode, existing)
     })
+    let selection = await getSelection()
+    // 没有可用路由可能是暂时的（网络或宿主刚启动）：等待后重新检查；视觉能力不足不会因重试改变
+    for (let attempt = 1; selection.usable.length === 0 && attempt <= config.agents.maxRetries && !exec.signal.aborted
+      && !selection.skipped.every((item) => item.reason === 'route-isolated'); attempt++) {
+      if (role.needsVision && selection.skipped.some((s) => s.reason === 'vision-unsupported')) break
+      AddRetry(session, record, retries, { attempt, reason: 'no-usable-route：路由链上暂时没有可用模型', action: 'restart' })
+      // 订阅类 provider 解析模型要联网：断网时整条链都会预检失败
+      await WaitBeforeRetry(config, attempt, true, exec.signal)
+      selection = await getSelection()
+    }
     for (const skipped of selection.skipped) {
       attempts.push({ route: getRouteLabel(skipped.route), backend: 'spawn', outcome: 'skipped', reason: skipped.reason })
       session.ledger.AddLedgerEvent({ type: 'route/skipped', taskId: task.taskId, delegationId: record.delegationId, data: { route: getRouteLabel(skipped.route), reason: skipped.reason } })
@@ -413,7 +824,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     if (selection.usable.length === 0) {
       const visionOnly = role.needsVision && selection.skipped.some((s) => s.reason === 'vision-unsupported')
       const reason = visionOnly ? 'vision-unsupported：路由链上没有支持图片输入的可用模型，不会降级为纯文本推断' : 'no-usable-route：路由链上没有可用的 provider/模型，请检查 Models 配置'
-      return block(session, record, reason, attempts)
+      return finish(session, record, { status: 'blocked', summary: reason, error: reason, attempts: [...record.attempts, ...attempts], ...(retries.length > 0 ? { retries } : {}) })
     }
     const tools = deps.getTools()
     if (tools === undefined) return block(session, record, '工具服务不可用，无法限制子智能体权限', attempts)
@@ -431,50 +842,23 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const running = markRunning(session, record, 'spawn')
     const cwd = getWorkspaceRoot(exec.agent)
     const before = await deps.gitStatus(cwd)
-    const text = getChildPromptText(task, input, record.delegationId)
     const fallbacks: RouteAttempt[] = []
     const onFallback = (event: FallbackEventInfo): void => {
       fallbacks.push({ route: getRouteLabel(event.from), backend: 'spawn', outcome: 'fallback', reason: `${event.failure.code ?? event.failure.status ?? 'error'} → ${getRouteLabel(event.to)}` })
       session.ledger.AddLedgerEvent({ type: 'route/fallback', taskId: task.taskId, delegationId: record.delegationId, data: { from: getRouteLabel(event.from), to: getRouteLabel(event.to), failure: event.failure } })
     }
-    let usedIndex = -1
-    const startSpawn = async (signal: AbortSignal): Promise<SubagentRunLike> => {
-      for (const [index, route] of selection.usable.entries()) {
-        try {
-          const run = await subagents.start(SPAWN_PROVIDER, {
-            label: `${role.name}·${task.taskId}`,
-            prompt: [{ type: 'text', text }, ...images],
-            parent: exec.agent,
-            signal,
-            agentOptions: route,
-            outputSchema: getOutputSchema(input.role),
-            maxDepth: 1,
-            ...(toolFilter === undefined ? {} : { toolFilter }),
-            persona: getChildPersona(input.role, input.mode)
-          })
-          usedIndex = index
-          return run
-        } catch (error) {
-          attempts.push({ route: getRouteLabel(route), backend: 'spawn', outcome: 'failed', reason: `start: ${getErrorText(error)}` })
-        }
-      }
-      throw new SwarmError('SERVICE_UNAVAILABLE', '所有可用路由都无法启动子智能体')
+    const plan = await planned
+    session.ledger.AddLedgerEvent({ type: 'session/plan', taskId: task.taskId, delegationId: record.delegationId, data: { ...plan } })
+    const ctx: RunContext = { input, task, record, exec, session, config, subagents, usable: selection.usable, toolFilter, images, attempts, onFallback, retries }
+    const supportsThreads = subagents.startContinuable !== undefined && subagents.sendMessage !== undefined
+    let outcome = plan.kind === 'oneshot' || !supportsThreads ? undefined : await runThread(ctx, plan)
+    if (outcome === undefined) {
+      if (plan.kind !== 'oneshot' && supportsThreads) AddRetry(session, record, retries, { attempt: retries.length + 1, reason: '连续会话多次无法建立或投递', action: 'fallback' })
+      const reason = plan.kind === 'oneshot' ? plan.reason
+        : supportsThreads ? `${plan.reason}；连续会话无法建立，改为一次性调用` : `${plan.reason}；宿主不支持连续会话（需要 DSH 0.1.7-rc.2 及以上），改为一次性调用`
+      outcome = await runOneShot(ctx, { kind: 'oneshot', source: plan.source, reason })
     }
-    let finalRoute: RouteInfo | undefined
-    let outcome: { run: SubagentRunLike; result: SubagentResultLike }
-    try {
-      outcome = await runWithSignal(exec, config, startSpawn, {
-        onRun: (run) => deps.routeState.AddChild(run.id, { chain: selection.usable.slice(usedIndex), role: input.role, onFallback }),
-        beforeDispose: (run) => {
-          finalRoute = deps.routeState.getChild(run.id)?.route
-          deps.routeState.DelAgent(run.id)
-        }
-      })
-    } catch (error) {
-      return finish(session, running, { status: 'failed', summary: getErrorText(error), error: getErrorText(error), attempts })
-    }
-    finalRoute = finalRoute ?? selection.usable[usedIndex]
-    const evaluation = getEvaluation(input.role, input.mode, outcome.result, outcome.result.structured)
+    const { evaluation, finalRoute } = outcome
     const change = getChangeInfo(input.role, before, await deps.gitStatus(cwd))
     const used: RouteAttempt[] = finalRoute === undefined ? [] : [{ route: getRouteLabel(finalRoute), backend: 'spawn', outcome: 'used' }]
     return finish(session, running, {
@@ -483,9 +867,12 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       evidence: [...evaluation.evidence, ...(isEditRole(input.role) ? (change.changedFiles ?? []).map((ref) => ({ kind: 'file-change' as const, ref })) : [])],
       ...(finalRoute === undefined ? {} : { route: finalRoute }),
       backend: 'spawn',
-      childId: outcome.run.id,
+      ...(outcome.childId === '' ? {} : { childId: outcome.childId }),
       independence: selection.independence,
       attempts: [...attempts, ...fallbacks, ...used],
+      session: outcome.session,
+      ...(outcome.retries.length > 0 ? { retries: outcome.retries } : {}),
+      ...(outcome.promptStyle === undefined ? {} : { promptStyle: outcome.promptStyle }),
       changeTracking: change.changeTracking,
       ...(change.changedFiles === undefined ? {} : { changedFiles: change.changedFiles })
     })
@@ -519,7 +906,11 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const record: DelegationRecord = {
       delegationId: deps.newId('D'), taskId: task.taskId, role: input.role, roleName: role.name,
       ...(mode === undefined ? {} : { mode }), ...(input.gate === undefined ? {} : { gate: input.gate }),
-      status: 'queued', summary: '', evidence: [], attempts: [], independence: 'n/a', hardIsolation: true, unresolved: [], startedAt: deps.now()
+      status: 'queued', summary: '', evidence: [], attempts: [], independence: 'n/a', hardIsolation: true, unresolved: [], startedAt: deps.now(),
+      cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1,
+      ...(input.attempt_id === undefined ? {} : { attemptId: input.attempt_id }),
+      ...(input.review_phase === undefined ? {} : { reviewPhase: input.review_phase }),
+      ...(input.node_id === undefined ? {} : { nodeId: input.node_id })
     }
     session.store.AddDelegation(record)
     session.ledger.AddLedgerEvent({ type: 'delegation/queued', taskId: task.taskId, delegationId: record.delegationId, data: { role: input.role, roleName: role.name, mode, gate: input.gate, backend: input.backend ?? 'auto' } })

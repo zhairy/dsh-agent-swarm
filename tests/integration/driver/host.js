@@ -43,7 +43,7 @@ const getResolvedArgs = (value, state) => {
   return value
 }
 
-const getModelRole = (model) => /^(?:role|writer|textonly)-([a-z_]+?)(?:-verify)?$/.exec(model)?.[1]
+const getModelRole = (model) => /^(?:role|writer|textonly|badjson)-([a-z_]+?)(?:-verify)?$/.exec(model)?.[1]
 
 class MockAdapter {
   constructor(scenario, state) {
@@ -85,6 +85,8 @@ class MockAdapter {
   *streamRoot(options) {
     const last = options.messages?.at(-1)
     if (this.rootStep === 0) this.state.rootTools = (options.tools ?? []).map((tool) => tool.name)
+    const notices = (options.messages ?? []).filter((m) => m.role === 'user' && getText(m).includes('Background subagent'))
+    this.state.rootNotices = Math.max(this.state.rootNotices ?? 0, notices.length)
     if (last?.role === 'tool') {
       const text = getText(last)
       this.state.results.push({ step: this.rootStep - 1, isError: last.isError === true, text })
@@ -112,12 +114,23 @@ class MockAdapter {
       yield* toolChunks('write', getWriteArgs(options, 'hello.txt', 'hello swarm\n'))
       return
     }
+    const output = options.model.endsWith('-verify') ? { ...VALID_OUTPUTS[role], mode: 'verify' } : VALID_OUTPUTS[role]
     if (tools.includes('structured_output') && step <= 1) {
-      const output = options.model.endsWith('-verify') ? { ...VALID_OUTPUTS[role], mode: 'verify' } : VALID_OUTPUTS[role]
       yield* toolChunks('structured_output', output)
       return
     }
-    yield* textChunks('CHILD DONE')
+    if (tools.includes('structured_output')) {
+      yield* textChunks('CHILD DONE')
+      return
+    }
+    // 连续会话没有 structured_output 工具：以 json 代码块回复；badjson- 模型第一次故意漏掉 json，验证修正重试
+    const turn = (this.state.childTurns[key] = (this.state.childTurns[key] ?? 0) + 1)
+    this.state.childMessages.push({ role, sessionId: key, turn, text: getText(options.messages?.filter((m) => m.role === 'user').at(-1)).slice(0, 200) })
+    if (options.model.startsWith('badjson') && turn === 1) {
+      yield* textChunks('完成了，但这里没有 json')
+      return
+    }
+    yield* textChunks('完成。\n```json\n' + JSON.stringify(output) + '\n```')
   }
 }
 
@@ -127,7 +140,7 @@ export const apply = (ctx) => {
   const scenarioName = process.env.SWARM_SCENARIO
   if (scenarioName === undefined || scenarioName === '') return
   const out = process.env.SWARM_DRIVER_OUT
-  const state = { scenario: scenarioName, results: [], children: [], rootTools: [], failQuotaHits: 0 }
+  const state = { scenario: scenarioName, results: [], children: [], rootTools: [], failQuotaHits: 0, childTurns: {}, childMessages: [], rootNotices: 0 }
   let finished = false
   const finish = (status, extra = {}) => {
     if (finished) return

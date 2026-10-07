@@ -1,0 +1,284 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-07T16:44:50.536Z",
+  "environment": {
+    "node": "v24.21.0",
+    "os": "linux",
+    "release": "6.12.107+deb13-amd64",
+    "arch": "x64",
+    "cpu": "Intel(R) Core(TM) Ultra 5 125H",
+    "concurrency": 1
+  },
+  "scope": "Local workflow generation/validation and bounded calculations; model end-to-end quality and token savings require actual paired usage.",
+  "peakRssBytes": 73236480,
+  "cases": [
+    {
+      "id": "readonly",
+      "samples": 100,
+      "mode": "quick",
+      "nodes": 3,
+      "edges": 2,
+      "p50Ms": 0.09216600000000597,
+      "p95Ms": 0.5626519999999999,
+      "p99Ms": 0.9275360000000035,
+      "throughputPerSecond": 6913.675228861687
+    },
+    {
+      "id": "small-edit",
+      "samples": 100,
+      "mode": "quick",
+      "nodes": 4,
+      "edges": 4,
+      "p50Ms": 0.0938859999999977,
+      "p95Ms": 0.4357080000000053,
+      "p99Ms": 0.869692999999998,
+      "throughputPerSecond": 6560.122406635998
+    },
+    {
+      "id": "ambiguous",
+      "samples": 100,
+      "mode": "standard",
+      "nodes": 3,
+      "edges": 2,
+      "p50Ms": 0.0664069999999981,
+      "p95Ms": 0.12738000000000227,
+      "p99Ms": 0.48538399999999626,
+      "throughputPerSecond": 12358.137846129848
+    },
+    {
+      "id": "architecture",
+      "samples": 100,
+      "mode": "standard",
+      "nodes": 6,
+      "edges": 8,
+      "p50Ms": 0.06899899999999093,
+      "p95Ms": 0.183684999999997,
+      "p99Ms": 0.34317899999999213,
+      "throughputPerSecond": 10560.463883160659
+    },
+    {
+      "id": "algorithm",
+      "samples": 100,
+      "mode": "algorithm",
+      "nodes": 6,
+      "edges": 8,
+      "p50Ms": 0.15087500000001342,
+      "p95Ms": 0.5970659999999839,
+      "p99Ms": 3.3855609999999956,
+      "throughputPerSecond": 3644.4293548871556
+    },
+    {
+      "id": "numeric",
+      "samples": 100,
+      "mode": "standard",
+      "nodes": 5,
+      "edges": 6,
+      "p50Ms": 0.09106199999999376,
+      "p95Ms": 0.1891480000000172,
+      "p99Ms": 0.5279449999999883,
+      "throughputPerSecond": 8503.215533470104
+    },
+    {
+      "id": "state-machine",
+      "samples": 100,
+      "mode": "standard",
+      "nodes": 5,
+      "edges": 6,
+      "p50Ms": 0.09307000000001153,
+      "p95Ms": 0.26572000000001594,
+      "p99Ms": 0.5287309999999934,
+      "throughputPerSecond": 6616.187362486598
+    },
+    {
+      "id": "concurrency",
+      "samples": 100,
+      "mode": "standard",
+      "nodes": 7,
+      "edges": 10,
+      "p50Ms": 0.12389799999999696,
+      "p95Ms": 0.24980500000000916,
+      "p99Ms": 0.5052909999999997,
+      "throughputPerSecond": 6925.413504320978
+    },
+    {
+      "id": "security",
+      "samples": 100,
+      "mode": "standard",
+      "nodes": 5,
+      "edges": 6,
+      "p50Ms": 0.06355899999999792,
+      "p95Ms": 0.11395000000001687,
+      "p99Ms": 0.42971400000001836,
+      "throughputPerSecond": 12635.19500717729
+    },
+    {
+      "id": "financial",
+      "samples": 100,
+      "mode": "standard",
+      "nodes": 6,
+      "edges": 8,
+      "p50Ms": 0.0802500000000066,
+      "p95Ms": 0.13417700000002242,
+      "p99Ms": 0.42301100000000247,
+      "throughputPerSecond": 10068.765641827342
+    },
+    {
+      "id": "backtest",
+      "samples": 100,
+      "mode": "standard",
+      "nodes": 6,
+      "edges": 8,
+      "p50Ms": 0.07343199999999683,
+      "p95Ms": 0.15408199999998828,
+      "p99Ms": 0.4089519999999993,
+      "throughputPerSecond": 10771.201899178504
+    },
+    {
+      "id": "visual",
+      "samples": 100,
+      "mode": "quick",
+      "nodes": 3,
+      "edges": 2,
+      "p50Ms": 0.05252199999998197,
+      "p95Ms": 0.09944400000000542,
+      "p99Ms": 0.37258799999997905,
+      "throughputPerSecond": 15459.49164862811
+    },
+    {
+      "id": "copy",
+      "samples": 100,
+      "mode": "quick",
+      "nodes": 3,
+      "edges": 2,
+      "p50Ms": 0.04538700000000517,
+      "p95Ms": 0.06914199999999937,
+      "p99Ms": 0.39177100000000564,
+      "throughputPerSecond": 17971.75451230317
+    },
+    {
+      "id": "external",
+      "samples": 100,
+      "mode": "quick",
+      "nodes": 3,
+      "edges": 2,
+      "p50Ms": 0.041867000000024746,
+      "p95Ms": 0.061310999999989235,
+      "p99Ms": 0.09866199999999026,
+      "throughputPerSecond": 21084.075703638442
+    },
+    {
+      "id": "execution",
+      "samples": 100,
+      "mode": "quick",
+      "nodes": 3,
+      "edges": 2,
+      "p50Ms": 0.048034000000029664,
+      "p95Ms": 0.06259099999999762,
+      "p99Ms": 0.31884600000000773,
+      "throughputPerSecond": 17823.065791886682
+    },
+    {
+      "id": "edit-execute",
+      "samples": 100,
+      "mode": "quick",
+      "nodes": 5,
+      "edges": 6,
+      "p50Ms": 0.06519799999995257,
+      "p95Ms": 0.08245100000004868,
+      "p99Ms": 0.3333030000000008,
+      "throughputPerSecond": 13547.692143869466
+    },
+    {
+      "id": "algorithm-architecture",
+      "samples": 100,
+      "mode": "algorithm",
+      "nodes": 7,
+      "edges": 11,
+      "p50Ms": 0.08413999999999078,
+      "p95Ms": 0.10771299999998973,
+      "p99Ms": 0.34665699999999333,
+      "throughputPerSecond": 10745.181565093875
+    },
+    {
+      "id": "visual-copy",
+      "samples": 100,
+      "mode": "quick",
+      "nodes": 4,
+      "edges": 3,
+      "p50Ms": 0.04872899999998026,
+      "p95Ms": 0.0599170000000413,
+      "p99Ms": 0.2696080000000052,
+      "throughputPerSecond": 18363.13915660207
+    },
+    {
+      "id": "perf-target",
+      "samples": 100,
+      "mode": "quick",
+      "nodes": 4,
+      "edges": 4,
+      "p50Ms": 0.06641400000000885,
+      "p95Ms": 0.09322300000002315,
+      "p99Ms": 0.34602499999999736,
+      "throughputPerSecond": 13325.471305263485
+    },
+    {
+      "id": "perf-pending",
+      "samples": 100,
+      "mode": "quick",
+      "nodes": 4,
+      "edges": 4,
+      "p50Ms": 0.0529210000000262,
+      "p95Ms": 0.06851899999998068,
+      "p99Ms": 0.31985099999997146,
+      "throughputPerSecond": 16275.983386779875
+    }
+  ],
+  "math": [
+    {
+      "op": "gcd",
+      "samples": 100,
+      "p95Ms": 0.15768600000001243,
+      "value": "1",
+      "evidenceKind": "computed"
+    },
+    {
+      "op": "sum",
+      "samples": 100,
+      "p95Ms": 0.05451599999997825,
+      "value": 1,
+      "evidenceKind": "computed"
+    },
+    {
+      "op": "variance",
+      "samples": 100,
+      "p95Ms": 0.04877199999998538,
+      "value": 0.6666666666666666,
+      "evidenceKind": "computed"
+    },
+    {
+      "op": "dot",
+      "samples": 100,
+      "p95Ms": 0.044507000000010066,
+      "value": 11,
+      "evidenceKind": "computed"
+    },
+    {
+      "op": "norm2",
+      "samples": 100,
+      "p95Ms": 0.023440999999991163,
+      "value": 5,
+      "evidenceKind": "computed"
+    },
+    {
+      "op": "compare_close",
+      "samples": 100,
+      "p95Ms": 0.07120900000001029,
+      "value": false,
+      "evidenceKind": "computed"
+    }
+  ],
+  "usage": null,
+  "baselineUsage": null,
+  "tokenSavingsByProvider": {},
+  "tokenSavingsClaim": "unknown; 28% has not been measured"
+}

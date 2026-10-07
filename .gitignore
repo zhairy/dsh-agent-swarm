@@ -3,3 +3,7 @@ lib/
 coverage/
 .sandbox/
 *.tgz
+.enola/
+.omc/
+.work/
+*.log

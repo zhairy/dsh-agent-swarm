@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as host from '../../src/index.js'
 import * as runtime from '../../src/runtime.js'
 import * as tools from '../../src/tools.js'
-import type { PluginContextLike, SubagentStartRequestLike, ToolExecutionLike } from '../../src/host-contract.js'
+import { MANAGED_AGENTS_KEY, type ManagedAgentsInfo, type PluginContextLike, type SubagentStartRequestLike, type ToolExecutionLike } from '../../src/host-contract.js'
 import { ROLE_TAG_PATTERN, type DelegableRoleId } from '../../src/role-registry.js'
 import type { SwarmService } from '../../src/service.js'
 import type { ToolDefinitionLike } from '../../src/tool-shape.js'
@@ -66,7 +66,44 @@ describe('宿主插件', () => {
     expect(provided.get('agentSwarm')).toBeDefined()
     expect(guards).toHaveLength(1)
     expect(guards[0]?.({ name: 'write', agent: { id: 'a', session: { header: { agentPreset: 'yu-shi' } } } })).toContain('守卫')
-    expect(disposers).toHaveLength(2)
+    expect(disposers).toHaveLength(4)
+  })
+
+  it('在 globalThis 登记百工管理的会话，供 llm-fallbacks 跳过全局回退；卸载时撤销', () => {
+    const store = globalThis as Record<symbol, unknown>
+    const { disposers } = makeHost()
+    const registry = store[MANAGED_AGENTS_KEY] as ManagedAgentsInfo
+    expect(registry.version).toBe(1)
+    expect(registry.isManaged({ id: 'r', session: { header: { agentPreset: 'tian-shu' } } })).toBe(true)
+    expect(registry.isManaged({ id: 's', session: { header: { agentPreset: 'standard' } } })).toBe(false)
+    expect(registry.isManaged({ id: 'c', session: { header: { agentPreset: 'tian-shu', parentSession: 'r' } } })).toBe(false)
+    expect(registry.isManaged(undefined)).toBe(false)
+    expect(registry.isManaged({ id: 1 })).toBe(false)
+    for (const dispose of disposers) dispose()
+    expect(store[MANAGED_AGENTS_KEY]).toBeUndefined()
+  })
+
+  it('只撤销自己登记的那一份；判定函数出错时视为未管理', () => {
+    const store = globalThis as Record<symbol, unknown>
+    const first = host.PublishManagedAgents(() => { throw new Error('boom') })
+    expect((store[MANAGED_AGENTS_KEY] as ManagedAgentsInfo).isManaged({ id: 'a' })).toBe(false)
+    const second = host.PublishManagedAgents(() => true)
+    first()
+    expect((store[MANAGED_AGENTS_KEY] as ManagedAgentsInfo).isManaged({ id: 'a' })).toBe(true)
+    second()
+    expect(store[MANAGED_AGENTS_KEY]).toBeUndefined()
+  })
+
+  it('有 connection 时注册设置页 RPC（Jev 密钥状态与测试连接）', async () => {
+    const { ctx, provided } = makeHost()
+    expect(provided.get('agentSwarm')).toBeDefined()
+    const routes: Array<{ path: string; fetch: (request: Request) => Promise<Response> }> = []
+    const connection = { fetch: { register: (route: { path: string; fetch: (request: Request) => Promise<Response> }) => { routes.push(route); return () => undefined } } }
+    const scoped = makeContext({ connection })
+    host.apply({ ...ctx, inject: (deps, callback) => { expect(deps).toEqual(['connection']); callback(scoped.ctx) } }, { jev: { enabled: false } })
+    expect(routes.map((route) => route.path)).toEqual(['/api/swarm.jevStatus', '/api/swarm.jevHealth', '/api/swarm.taskView', '/swarm-assets/mermaid.min.js'])
+    const response = await routes[1]!.fetch(new Request('http://h/api/swarm.jevHealth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'x', method: 'swarm.jevHealth' }) }))
+    expect(await response.json()).toMatchObject({ rpcId: 'x', result: { ok: true, value: { enabled: false, result: { ok: false, error: 'Jev is disabled in swarm-core config' } } } })
   })
 
   it('DSH_HOME 解析顺序：profileContext.home → 环境变量 → ~/.dsh', () => {
@@ -79,15 +116,20 @@ describe('宿主插件', () => {
 })
 
 describe('工具插件', () => {
-  it('注册 4 个工具并能走通任务卡 → 委派 → 状态 → 验收', async () => {
+  it('注册百工与审核/协作工具并能走通任务卡 → 委派 → 状态 → 验收', async () => {
     const hostHarness = makeHost()
     const service = hostHarness.provided.get('agentSwarm') as SwarmService
     const registered: ToolDefinitionLike[] = []
     const context = makeContext({ agentSwarm: service, tools: { ...hostHarness.toolsService, register: (d: unknown) => { registered.push(d as ToolDefinitionLike); return () => undefined } } })
     tools.apply(context.ctx)
-    expect(registered.map((d) => d.name)).toEqual(['swarm_task_card', 'swarm_delegate', 'swarm_status', 'swarm_accept'])
+    expect(registered.map((d) => d.name)).toEqual([
+      'swarm_task_card', 'swarm_delegate', 'swarm_status', 'swarm_accept',
+      'jev_ask', 'jev_check', 'jev_classify', 'jev_score', 'jev_match', 'jev_screen', 'jev_health',
+      'swarm_calculate', 'swarm_message_send', 'swarm_message_read', 'swarm_message_ack',
+      'swarm_review_plan', 'swarm_context_read', 'swarm_experience'
+    ])
     const byName = (name: string) => registered.find((d) => d.name === name) as ToolDefinitionLike
-    const exec = { agent: { id: 'root', session: { header: { agentPreset: 'tian-shu', cwd: process.cwd() } } }, signal: new AbortController().signal }
+    const exec = { agent: { id: 'root', session: { header: { agentPreset: 'tian-shu', cwd: hostHarness.home } } }, signal: new AbortController().signal }
 
     const cardArgs = { title: '小改动', goal: '改一行', acceptance: ['测试通过'], scope: ['a.ts'], flags: { changesCode: true } }
     const card = await byName('swarm_task_card').execute(cardArgs, exec)
@@ -113,6 +155,26 @@ describe('工具插件', () => {
     expect(statusText).toContain('疾风')
     const accepted = await byName('swarm_accept').execute({ task_id: 'T-1', decision: 'accept', summary: 's', stopReason: '门禁满足' }, exec)
     expect(byName('swarm_accept').output.render({}, accepted)[0]?.text).toContain('accepted')
+  })
+
+  it('注册内嵌技能，并按天枢所选模型追加调度风格说明', async () => {
+    const hostHarness = makeHost()
+    const service = hostHarness.provided.get('agentSwarm') as SwarmService
+    const skills: Array<{ name: string; source: string }> = []
+    const context = makeContext({ agentSwarm: service, tools: hostHarness.toolsService, skills: { register: (skill: { name: string; source: string }) => { skills.push(skill); return () => undefined } } })
+    tools.apply(context.ctx)
+    expect(skills.map((skill) => [skill.name, skill.source])).toEqual([['jev-judgments', 'bundled'], ['typesafe-ai', 'bundled']])
+    const assemble = context.listeners.get('system-prompt/assemble') as unknown as (a: unknown, c: unknown, next: () => Promise<unknown>) => Promise<{ sections: Array<{ name: string; text: string }> }>
+    const assembled = await assemble({}, {}, async () => ({ sections: [{ name: 'p', text: '你是「天枢」' }], contexts: [], tools: [], variables: { provider: 'claude', model: 'claude-opus-5-5' } }))
+    expect(assembled.sections.at(-1)).toMatchObject({ name: tools.ORCHESTRATION_STYLE_SECTION, text: expect.stringContaining('<orchestration_style model_family="claude">') })
+  })
+
+  it('委派结果显示模型、中文供应商名与提示风格', () => {
+    const text = tools.getDelegationText({
+      delegationId: 'D-1', taskId: 'T-1', role: 'yu_shi', roleName: '御史', status: 'completed', summary: 'ok', evidence: [], attempts: [],
+      independence: 'n/a', hardIsolation: true, unresolved: [], startedAt: 1, route: { provider: 'codex', model: 'gpt-6-sol', reasoningEffort: 'xhigh' }, backend: 'spawn', promptStyle: 'gpt'
+    })
+    expect(text).toContain('模型 gpt-6-sol · ChatGPT 订阅（codex） · 推理 xhigh · GPT 风格（目标/停止条件/证据）')
   })
 
   it('缺少会话上下文或参数非法时报错', async () => {

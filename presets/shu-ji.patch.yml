@@ -2,6 +2,7 @@
 - insert:
     - id: preset-shu-ji
       name: "@deepseek-ai/dsh-agent-preset"
+      disabled: !!js "process.env.DSH_SWARM_ROLE_PRESETS !== '1'"
       config:
         id: shu-ji
         name: 枢机

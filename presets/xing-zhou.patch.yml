@@ -2,6 +2,7 @@
 - insert:
     - id: preset-xing-zhou
       name: "@deepseek-ai/dsh-agent-preset"
+      disabled: !!js "process.env.DSH_SWARM_ROLE_PRESETS !== '1'"
       config:
         id: xing-zhou
         name: 行舟

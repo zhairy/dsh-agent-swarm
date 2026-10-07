@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DEFAULT_JEV_CONFIG, JEV_PATH, JEV_QUESTIONS, ParseJevAnswers, getJevState, getRedactedText, intJevClient } from '../../src/jev.js'
+import { DEFAULT_JEV_CONFIG, JEV_PATH, JEV_QUESTIONS, ParseJevAnswers, getJevState, getRedactedText, intJevClient, intRequestLimiter } from '../../src/jev.js'
 import { ValidateTaskCard, type TaskCard } from '../../src/policy.js'
 
 const card = ValidateTaskCard({
@@ -28,6 +28,22 @@ describe('脱敏与请求体', () => {
     expect(getRedactedText('key=sk-abcdefghijklmnop')).not.toContain('sk-abcdefghijklmnop')
     expect(getRedactedText('Authorization: Bearer abc.def')).toContain('[已脱敏]')
     expect(getRedactedText('x'.repeat(600)).length).toBeLessThanOrEqual(500)
+    // 结构化交付先 JSON.stringify 再脱敏：带引号的键值同样要去掉
+    const json = getRedactedText(JSON.stringify({ password: 'hunter2xx', api_key: 'abc123SECRET', db_token: 'zzzzzzzz', maxTokens: 12, note: 'ok' }), 2000)
+    expect(json).not.toMatch(/hunter2xx|abc123SECRET|zzzzzzzz/)
+    expect(json).toContain('"password":"[已脱敏]"')
+    expect(json).toContain('"note":"ok"')
+    const formats = [
+      'AKIAABCDEFGHIJKLMNOP',
+      'ghp_abcdefghijklmnopqrstuvwxyz0123',
+      'github_pat_abcdefghijklmnopqrstuvwxyz',
+      'tsk_live_abcdefgh12345',
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop',
+      'xoxb-1234567890-abcdefghij',
+      '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----'
+    ]
+    for (const secret of formats) expect(getRedactedText(`值：${secret} 结束`, 2000)).not.toContain(secret)
+    expect(getRedactedText('token: abc', 100)).toBe('token: abc')
   })
 
   it('state 只含结构化摘要，不含源码与密钥', () => {
@@ -48,6 +64,52 @@ describe('脱敏与请求体', () => {
 
 describe('intJevClient', () => {
   const sleep = async () => undefined
+
+  it('服务未报告或报告非法usage时保留unknown；合法零与部分观测分别保留', async () => {
+    for (const usage of [undefined, {}, { input_tokens: -1, output_tokens: -2 }, { input_tokens: NaN, output_tokens: Infinity }, { input_tokens: 1.5, output_tokens: Number.MAX_SAFE_INTEGER + 1 }]) {
+      const response = jsonResponse(200, okBody)
+      response.json = async () => ({ ...okBody, ...(usage === undefined ? {} : { usage }) })
+      const client = intJevClient(DEFAULT_JEV_CONFIG, { fetch: (async () => response) as typeof globalThis.fetch, getApiKey: async () => 'k', sleep })
+      const outcome = await client.ask({}, {})
+      expect(outcome.ok).toBe(true)
+      expect(outcome.ok && outcome.usage).toEqual({})
+    }
+    for (const [usage, expected] of [[{ input_tokens: 0, output_tokens: 0 }, { inputTokens: 0, outputTokens: 0 }], [{ input_tokens: 12, output_tokens: -1 }, { inputTokens: 12 }]]) {
+      const client = intJevClient(DEFAULT_JEV_CONFIG, { fetch: (async () => jsonResponse(200, { ...okBody, usage })) as typeof globalThis.fetch, getApiKey: async () => 'k', sleep })
+      expect(await client.ask({}, {})).toMatchObject({ ok: true, usage: expected })
+    }
+  })
+
+  it('旧非零RPS配置不限制并行请求；0 limiter 真正旁路', async () => {
+    const wait = vi.fn(async () => undefined)
+    await Promise.all(Array.from({ length: 100 }, () => intRequestLimiter(0, wait)()))
+    const fetch = vi.fn(async () => jsonResponse(200, okBody))
+    const client = intJevClient({ ...DEFAULT_JEV_CONFIG, maxRequestsPerSecond: 1 }, { fetch: fetch as typeof globalThis.fetch, getApiKey: async () => 'k', sleep: wait })
+    await Promise.all(Array.from({ length: 32 }, () => client.ask({}, { q: { type: 'noul' } })))
+    expect(fetch).toHaveBeenCalledTimes(32)
+    expect(wait).not.toHaveBeenCalled()
+  })
+
+  it('余额和明确quota型429终态不重试；长Retry-After不截短提前调用', async () => {
+    for (const status of [401, 402, 403, 429]) {
+      const wait = vi.fn(async () => undefined)
+      const fetch = vi.fn(async () => jsonResponse(status, { error: { code: 'insufficient_quota', message: 'quota exhausted' } }))
+      const client = intJevClient(DEFAULT_JEV_CONFIG, { fetch: fetch as typeof globalThis.fetch, getApiKey: async () => 'k', sleep: wait })
+      expect(await client.ask({}, {})).toMatchObject({ ok: false, attempts: 1 })
+      expect(fetch).toHaveBeenCalledTimes(1)
+      expect(wait).not.toHaveBeenCalled()
+    }
+    const fetch = vi.fn(async () => new Response('{}', { status: 429, headers: { 'retry-after': '9060.669' } }))
+    const wait = vi.fn(async () => undefined)
+    const client = intJevClient(DEFAULT_JEV_CONFIG, { fetch: fetch as typeof globalThis.fetch, getApiKey: async () => 'k', sleep: wait })
+    expect(await client.ask({}, {})).toMatchObject({ ok: false, attempts: 1, retryAfterMs: 9060669 })
+    expect(wait).not.toHaveBeenCalled()
+    const terminalBody = new Response('{}', { status: 402 })
+    terminalBody.json = vi.fn(async () => { throw new Error('terminal response body must not be consumed') })
+    const terminalClient = intJevClient(DEFAULT_JEV_CONFIG, { fetch: (async () => terminalBody) as typeof globalThis.fetch, getApiKey: async () => 'k', sleep: wait })
+    expect(await terminalClient.ask({}, {})).toMatchObject({ ok: false, status: 402, attempts: 1 })
+    expect(terminalBody.json).not.toHaveBeenCalled()
+  })
 
   it('成功调用：发送 Bearer 与 JSON，返回答案', async () => {
     const fetchMock = vi.fn(async () => jsonResponse(200, okBody))
@@ -78,7 +140,10 @@ describe('intJevClient', () => {
     expect((await client.triage(card)).attempts).toBe(3)
     const always = vi.fn(async () => jsonResponse(529, {}))
     const failing = intJevClient(DEFAULT_JEV_CONFIG, { fetch: always as unknown as typeof fetch, getApiKey: async () => 'k', sleep })
-    expect(await failing.triage(card)).toEqual({ ok: false, reason: 'http-529', attempts: 3 })
+    expect(await failing.triage(card)).toEqual({ ok: false, reason: 'http-529', attempts: 5 })
+    const rpm = vi.fn().mockResolvedValueOnce(jsonResponse(429, { error: { code: 'RATE_LIMIT', message: 'TPM quota exceeded: tokens per minute' } })).mockResolvedValueOnce(jsonResponse(200, okBody))
+    const limited = intJevClient(DEFAULT_JEV_CONFIG, { fetch: rpm as unknown as typeof fetch, getApiKey: async () => 'k', sleep })
+    expect((await limited.triage(card)).attempts).toBe(2)
   })
 
   it('401/422 不重试；网络错误与格式错误', async () => {

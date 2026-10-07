@@ -2,6 +2,7 @@
 - insert:
     - id: preset-bo-wen
       name: "@deepseek-ai/dsh-agent-preset"
+      disabled: !!js "process.env.DSH_SWARM_ROLE_PRESETS !== '1'"
       config:
         id: bo-wen
         name: 博闻

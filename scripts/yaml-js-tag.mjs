@@ -22,6 +22,7 @@ export const JS_TAG = {
  * @returns {unknown} 还原后的值
  */
 export const getJsRevived = (value) => {
+  if (value instanceof JsExpr) return value
   if (Array.isArray(value)) return value.map(getJsRevived)
   if (value === null || typeof value !== 'object') return value
   const keys = Object.keys(value)

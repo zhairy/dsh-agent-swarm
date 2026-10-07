@@ -39,7 +39,8 @@ export const ensureDsh = (version = getTestedVersion()) => {
   return join(dir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 }
 
-const getEnv = (version, env) => ({ ...process.env, DSH_HOME: getHome(version), DSH_TELEMETRY_DISABLED: '1', ...env })
+// 集成场景会直接以单角色预设（如御史）作主会话，沙箱里打开这些默认停用的预设
+const getEnv = (version, env) => ({ ...process.env, DSH_HOME: getHome(version), DSH_TELEMETRY_DISABLED: '1', DSH_SWARM_ROLE_PRESETS: '1', ...env })
 
 /**
  * 同步运行沙箱 DSH

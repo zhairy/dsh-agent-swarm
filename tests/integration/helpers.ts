@@ -29,6 +29,8 @@ export interface ScenarioRunInfo {
   taskId?: string
   sessionId?: string
   failQuotaHits: number
+  childMessages: Array<{ role: string; sessionId: string; turn: number; text: string }>
+  rootNotices: number
   subagentProviders?: string[]
   ledgerEvents: Array<{ type: string; data: Record<string, unknown> }>
   workspace: string
@@ -61,7 +63,7 @@ export const runScenario = async (
   git(workspace, ['add', '-A'])
   git(workspace, ['commit', '-q', '-m', 'init'])
   const overlay = `${workspace}.overlay.yml`
-  writeFileSync(overlay, YAML.stringify([{ id: 'swarm-core', config: coreConfig }]))
+  writeFileSync(overlay, YAML.stringify([{ id: 'swarm-core', config: { planningReview: { enabled: false }, ...coreConfig } }]))
   const out = `${workspace}.out.json`
   const result = await runDshAsync({
     args: ['--profile', PROFILE, '--patch', overlay],

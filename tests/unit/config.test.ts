@@ -34,8 +34,26 @@ describe('Config schema', () => {
     expect(config.jev.timeoutMs).toBe(10000)
     expect(config.thresholds.mathConfidence).toBe(0.8)
     expect(config.budgets.maxAutoFixRounds).toBe(1)
-    expect(config.budgets.maxCallsPerRole).toBe(4)
+    expect(config.budgets.maxCallsPerRole).toBe(0)
+    expect(config.agents).toEqual({
+      session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000,
+      promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000,
+      networkProbeUrls: ['https://api.deepseek.com', 'https://dashscope.aliyuncs.com', 'https://www.baidu.com'],
+      modelCallDisplay: 'every'
+    })
+    expect(config.jev).toMatchObject({ maxRequestsPerSecond: 0, maxRequestChars: 120000 })
+    expect(getSwarmConfig({ agents: { modelCallDisplay: 'turn' } }).agents.modelCallDisplay).toBe('turn')
+    expect(getSwarmConfig({ agents: { modelCallDisplay: 'sometimes' } }).agents.modelCallDisplay).toBe('every')
     expect(config.routes.fu_he?.chain).toEqual([{ provider: 'p', model: 'm' }])
+  })
+
+  it('提示风格与探测地址：非法值退回默认', () => {
+    const config = getSwarmConfig({ agents: { promptStyle: 'weird', networkProbeUrls: ['ftp://x', 3], networkWaitMs: 0 } })
+    expect(config.agents.promptStyle).toBe('auto')
+    expect(config.agents.networkProbeUrls).toEqual(['https://api.deepseek.com', 'https://dashscope.aliyuncs.com', 'https://www.baidu.com'])
+    expect(config.agents.networkWaitMs).toBe(0)
+    expect(getSwarmConfig({ agents: { promptStyle: 'claude', networkProbeUrls: ['http://127.0.0.1:9'] } }).agents)
+      .toMatchObject({ promptStyle: 'claude', networkProbeUrls: ['http://127.0.0.1:9'] })
   })
 })
 
@@ -54,7 +72,8 @@ describe('getSwarmConfig', () => {
     expect(Object.keys(config.routes)).toEqual(['yu_shi'])
     expect(config.routes.yu_shi).toEqual({ chain: [{ provider: 'p', model: 'm', reasoningEffort: 'high' }], escalation: 'claude' })
     expect(config.nativeEscalation).toBe('manual')
-    expect(config.budgets.maxCallsPerRole).toBe(4)
+    expect(config.budgets.maxCallsPerRole).toBe(0)
+    expect(getSwarmConfig({ agents: { session: 'weird', maxRetries: 1 } }).agents).toMatchObject({ session: 'auto', maxRetries: 1 })
     expect(getSwarmConfig(undefined).rootFallback).toBe(true)
   })
 

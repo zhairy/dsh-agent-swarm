@@ -13,6 +13,32 @@ beforeAll(() => {
   ensureProfile()
 })
 
+describe('连续会话与重试', () => {
+  it('thread-flow：复核开连续会话，第二次委派追加到同一会话（漏交 json 时在会话内修正）；一次性调用照常；天枢不收到重复的结束通知', async () => {
+    const run = await runScenario('thread-flow', { ...JEV_OFF, routes: getRoutesOverlay({ fu_he: ['badjson-fu_he'] }) })
+    expect(run.status, run.error ?? run.stderr).toBe('done')
+    const [, first, second, oneshot, status] = run.results
+    expect(first?.text).toContain('【复核】completed')
+    expect(first?.text).toContain('新建连续会话')
+    expect(first?.text).toContain('自动重试 1 次')
+    expect(second?.text).toContain('【复核】completed')
+    expect(second?.text).toContain('追加到连续会话')
+    expect(second?.text).toContain('第 2 轮')
+    expect(oneshot?.text).toContain('【探微】completed')
+    expect(oneshot?.text).toContain('会话：一次性调用（天枢指定')
+    expect(status?.text).toContain('连续会话：')
+    const fuHe = run.childMessages.filter((m) => m.role === 'fu_he')
+    expect(new Set(fuHe.map((m) => m.sessionId)).size).toBe(1)
+    expect(fuHe.map((m) => m.turn)).toEqual([1, 2, 3])
+    expect(fuHe[1]?.text).toContain('没有可解析的 json')
+    expect(fuHe[2]?.text).toContain('【追加】任务 T-1')
+    expect(run.rootNotices).toBe(0)
+    const types = run.ledgerEvents.map((e) => e.type)
+    expect(types.filter((t) => t === 'session/plan')).toHaveLength(3)
+    expect(types).toContain('delegation/retry')
+  })
+})
+
 describe('委派、门禁与回退', () => {
   it('gate-flow：疾风改文件 → 验收被拦 → 复核（首路由 QUOTA 回退）→ 验收通过', async () => {
     const run = await runScenario('gate-flow', { ...JEV_OFF, routes: getRoutesOverlay({ ji_feng: ['writer-ji_feng'], fu_he: ['fail-quota', 'role-fu_he'] }) })
@@ -25,7 +51,7 @@ describe('委派、门禁与回退', () => {
     expect(blocked?.text).toContain('验收结果：blocked')
     expect(verify?.text).toContain('【复核】completed')
     expect(verify?.text).toContain('回退 swarm-mock/fail-quota')
-    expect(verify?.text).toContain('路由 swarm-mock/role-fu_he')
+    expect(verify?.text).toContain('模型 role-fu_he · swarm-mock')
     expect(accepted?.text).toContain('验收结果：accepted')
     expect(status?.text).toContain('✓ G_VERIFY')
     expect(run.failQuotaHits).toBeGreaterThanOrEqual(1)

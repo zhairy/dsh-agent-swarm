@@ -1,0 +1,191 @@
+{
+  "date": "2026-10-08",
+  "timezone": "Asia/Shanghai",
+  "reviewerRole": "Software function, task-flow and three-dimension planning-review specialist",
+  "verdict": "core_implementation_reviewed_with_explicit_limits",
+  "snapshotBinding": {
+    "status": "review-time snapshot; root must bind or recheck against its final freeze before release",
+    "notAFinalJevApproval": true,
+    "sha256": {
+      "src/service.ts": "8c80cd6bf4a25b49e7c94739167177fcc169f4db745ab5fd49c8afead3bc505e",
+      "src/workflow.ts": "29bc60036b57201ca93613530191f69405e3d9bb528da94932b9897db5dd24ad",
+      "src/planning-review.ts": "9d135a235f4756ec99f08e68c73ecee1d1e1009a020eb037e3d734df2559a4c4",
+      "src/checkpoint.ts": "da15451c487d12f2a5dfa468c12a9321cefe91b505ae1dfe3c4634e321160e0d",
+      "src/context-store.ts": "36ca68521f11adfb14721962e053df7c4cadcc30d30d0430761fa3b903daee7a",
+      "src/artifacts.ts": "e86bc80a2f4fd44dd10d85792f438311ddd7ee12352956ee1e3b3190f5b6c90f",
+      "src/task-model.ts": "2577b01ace132410e3db171cc0df7b49c3fdc8f64a07df3c9ce384c23f0515aa",
+      "src/agent-binding.ts": "21e4165433a06623ad1014ae165f2543d55436496117a50ba7a133d62e3ec559",
+      "src/feature-session.ts": "28f41ead58f54e9b115a54c432452050b620f4d719d05fb7dbd81cad321356c8",
+      "src/rpc.ts": "14b97b82b22825961db744ef10b0f6c5e5070d2fa085d0dfdf6937cb6cf22d4f",
+      "src/index.ts": "ba7e90eab358d80bf75b418e6a1c06f1fb87870a40c77a0de672d4ade3614a39",
+      "client/task-flow.js": "b1f0472bddcdd6e6d56456ec5f79abf47b24882bf51418d1d293fdaa86331691",
+      "client/settings-page.js": "1f495a47d54419032b278a2fbe9440250e23b4508c13db312ee77ee62218dca4",
+      "scripts/build-client.mjs": "7eb9ed4a0c51d9ef68b15ef8c0d89582d5adf551796284c720cc2f348da69b46"
+    }
+  },
+  "machineEvidence": [
+    {
+      "executor": "this reviewer",
+      "command": "npm test -- tests/unit/client-task-flow.test.ts tests/unit/workflow.test.ts tests/unit/planning-review.test.ts tests/unit/planning-runtime.test.ts tests/unit/checkpoint.test.ts tests/unit/artifacts.test.ts tests/unit/rpc-task-view.test.ts tests/unit/task-runtime.test.ts",
+      "result": "8 files, 67 tests passed",
+      "scope": "DAG, real official parser, planning composition/CAS, checkpoints, controlled artifacts, RPC and public service with test adapters; before subsequent request-fencing regressions"
+    },
+    {
+      "executor": "this reviewer",
+      "command": "npm test -- tests/unit/client-settings.test.ts tests/unit/client-task-flow.test.ts",
+      "result": "2 files, 26 tests passed",
+      "scope": "Opaque route-policy round trip, metadata bounds and three-dimension review rendering"
+    },
+    {
+      "executor": "this reviewer",
+      "command": "npm test -- tests/unit/planning-runtime.test.ts tests/unit/planning-review.test.ts tests/unit/checkpoint.test.ts tests/unit/client-settings.test.ts tests/unit/client-task-flow.test.ts",
+      "result": "5 files, 47 tests passed",
+      "scope": "Latest targeted planning/runtime and frontend regressions; not a complete final repository run"
+    },
+    {
+      "executor": "this reviewer",
+      "command": "npm run build",
+      "result": "passed after frontend review and route metadata changes",
+      "scope": "TypeScript compilation and generated browser bundle; root reruns after final parallel changes"
+    },
+    {
+      "executor": "root, reported to this reviewer",
+      "result": "typecheck and 432 full-unit tests passed before final pending-writer request-version regressions",
+      "scope": "Parent-reported verification, not independently relabeled as this reviewer's execution"
+    }
+  ],
+  "codeReviewConclusions": [
+    "Task execution is a bounded structured DAG; Mermaid is its deterministic canonical projection, never a second writable execution source.",
+    "The backend checks DAG/required gates and official Mermaid parsing/projection before independent fresh read-only Agent and batched Jev semantics run in parallel.",
+    "Goal, workflow-design and Mermaid results stay separate; malformed structure, missing evidence or unresolved semantic objections cannot be replaced by high Jev probabilities.",
+    "Planning review is a control-plane operation and cannot satisfy post-implementation verification/review/math gates.",
+    "Current request, contract, workflow, policy and parser/generator bindings are compared before publishing review and before enforced execution/acceptance.",
+    "Missing Jev permits only explicitly labelled degradation when the policy allows it; semantic objections or incomplete answers remain review_required.",
+    "The client now exposes three dimensions and evidence/error locations while separating Agent/Jev opinions from syntax/projection checks; absent results remain not reviewed.",
+    "The settings editor preserves bounded opaque route policy in regular and upgrade chains, so unrelated settings saves do not erase quota-domain isolation."
+  ],
+  "issuesFoundAndResolvedDuringReview": [
+    {
+      "issue": "Mermaid global htmlLabels default produced foreignObject and was rejected by the strict SVG boundary",
+      "fix": "Set global and flowchart htmlLabels=false",
+      "verification": "Actual browser SVG and formula rendering"
+    },
+    {
+      "issue": "Only total planning-review badge was visible, hiding the failed dimension and finding location",
+      "fix": "Add goal/design/code review rows, distinct Agent/Jev states and requirement/acceptance/node findings",
+      "verification": "Frontend unit tests and desktop/mobile browser rendering"
+    },
+    {
+      "issue": "Settings toSlot/getChain discarded route policy during save",
+      "fix": "Bounded deep copying, policy-aware equality and round-trip save tests for regular/upgrade policy",
+      "verification": "Controller save tests; real installed default resource labels rendered"
+    },
+    {
+      "issue": "Repeated evidence could be treated as progress when only the prior round was known",
+      "fix": "Persist optional accumulated knownEvidenceRefs, retain old-record compatibility and use semantic/artifact fingerprints",
+      "verification": "Three-round regression and no-progress tests"
+    },
+    {
+      "issue": "Gate/request revisions left material references bound to old versions",
+      "fix": "Root rebases L0/L1 contract/source references; complete expert output is now deposited as L2 material",
+      "verification": "Latest service code inspection; root runtime regressions"
+    },
+    {
+      "issue": "Same user-message id with changed text did not invalidate old review",
+      "fix": "Root stores and compares intentLastDigest as well as sourceRef",
+      "verification": "Planning runtime same-id regression"
+    },
+    {
+      "issue": "Old active writer authority needed request-version fencing in addition to contract/workflow versions",
+      "fix": "Root and algorithm specialist extend request-version binding/guards/context/mailbox validation",
+      "verification": "Root final pending-writer regressions are required before freeze"
+    },
+    {
+      "issue": "Planner capability checks only verified outputSchema and maxDepth=0 did not match the real host's absolute child depth",
+      "fix": "Require all five spawn capabilities and use child maxDepth=1",
+      "verification": "Latest service code inspection and host-derived parent verification"
+    },
+    {
+      "issue": "Host-injected skill-catalog user-role messages could be mistaken for human intent",
+      "fix": "Root uses the verified human-source whitelist",
+      "verification": "Parent-reported real-host finding and added regression"
+    },
+    {
+      "issue": "Volatile budget snapshot and actual cached execution limits could diverge",
+      "fix": "Algorithm specialist updates current configuration/consumed snapshot boundary",
+      "verification": "Root final tests must include this change before sealing"
+    }
+  ],
+  "browserEvidence": {
+    "tool": "agent-browser",
+    "preview": "scripts/preview-task-flow.mjs uses real SwarmService/getTaskViewForRpc and production RPC route helpers plus installed DSH React/MarkdownText",
+    "planningReviewInPreview": "disabled; no approved review, model execution or business mutation was fabricated",
+    "observed": {
+      "dimensions": 3,
+      "unknownLabels": "Goal, design, syntax, projection, Agent semantic opinion and Jev opinion all explicitly not reviewed when no result exists",
+      "svg": 1,
+      "katex": 1,
+      "defaultResourceLabels": [
+        "subscription",
+        "subscription",
+        "subscription",
+        "metered_api"
+      ],
+      "mobileHorizontalPageOverflow": false,
+      "refreshAndInvalidSourceFallback": "passed; pending stayed pending and Mermaid source remained available",
+      "consoleErrorsAndWarnings": []
+    },
+    "screenshots": [
+      "task-flow-three-dimensions.png",
+      "task-flow-three-dimensions-mobile.png"
+    ],
+    "limits": "Component and HTTP-helper QA does not establish full DSH UI boot/authentication or live model semantic accuracy."
+  },
+  "jevReview": {
+    "status": "unavailable_approval_policy_blocked",
+    "attemptedTool": "mcp__jev__jev_health",
+    "attemptExecutor": "root; tool failure reported directly to this reviewer",
+    "error": "MCP tool call requires approval, but approval policy is never",
+    "semanticAuditExecutedThisRound": false,
+    "modelOpinions": [],
+    "noBypass": "No alternate API, CLI, credential access or other tool was used to circumvent the rejection.",
+    "historicalOpinions": "Earlier dated/snapshot-bound Jev records remain historical and are not reused as final implementation approval."
+  },
+  "remainingPlanScopeAndLimits": [
+    "P4 real paired task/model usage and quality experiments are not complete; the local benchmark report explicitly leaves the claimed 28% token saving unknown.",
+    "End-to-end live generation/Jev account behavior, strict billing completeness and user-workload quality require actual provider instrumentation and permitted service calls.",
+    "API/native capabilities must remain separately reported; API test success does not imply native P2P tool binding or hard isolation.",
+    "Mermaid depicts a single-round execution DAG; repair control is bounded in runtime rounds and diagnostics, not a general graph scheduler.",
+    "Current planning-record reuse is not evidence that all Jev entry points have a universal shared result cache or that expert live contexts have an implemented eviction/watermark policy.",
+    "Persistence reconstructs audited state and fresh expert context where supported; it does not promise resume of an old live thread or distributed multi-owner NFS writes.",
+    "Root must run and bind final typecheck, complete unit/integration suites and source hashes after the remaining parallel regressions; this report is not an unconditional release certificate."
+  ],
+  "primaryDocumentation": [
+    {
+      "url": "https://docs.typesafe.ai/llms.txt",
+      "checkedDate": "2026-10-08"
+    },
+    {
+      "url": "https://docs.typesafe.ai/confidence",
+      "checkedDate": "2026-10-08",
+      "use": "Choice/Score confidence concentration is not workflow correctness; no extra Noul confidence."
+    },
+    {
+      "url": "https://docs.typesafe.ai/primitives/noul",
+      "checkedDate": "2026-10-08",
+      "use": "Noul probability is a semantic model opinion and cannot replace deterministic structure, permission or budget checks."
+    }
+  ],
+  "rootFinalFreezeCheck": {
+    "date": "2026-10-08",
+    "status": "Root rechecked changes and complete final suites passed; earlier reviewer snapshot remains preserved",
+    "evidence": "implementation-manifest.json",
+    "changedSinceReviewerSnapshot": [
+      {
+        "file": "src/service.ts",
+        "reviewSha256": "8c80cd6bf4a25b49e7c94739167177fcc169f4db745ab5fd49c8afead3bc505e",
+        "finalSha256": "8cc8910760802ceccc193fdd5be75387895be7d4eafdd294340c58f6068bdabc"
+      }
+    ]
+  }
+}
