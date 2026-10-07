@@ -8,6 +8,25 @@ DeepSeek Harness（DSH）的中文多智能体插件：「天枢」主持 12 位
 - **聊天窗口显示模型**：百工会话每次调用模型都显示「调用模型：模型 · 供应商（路由名）· 推理强度」（可改为只在每轮首次与换模型时显示），回退 / 升级换模型时标为「切换模型」；会话头部显示当前模型；委派结果写明专家使用的模型、供应商与提示风格
 - 设计：[docs/V2-完整设计说明.md](docs/V2-完整设计说明.md)
 
+![聊天窗口里的「调用模型」行与头部模型徽标](assets/screenshots/model-calls.png)
+
+## 安装
+
+需要 DSH 0.2.0-rc.2（最低 0.1.7-alpha.2）。任选一种方式，装好后重启 dsh：
+
+- **插件市场（dsh-market）**：搜索 `dsh-agent-swarm` 一键安装（市场优先使用 Release 里的预构建包）。
+- **预构建包**：
+  ```sh
+  dsh plugin --profile <profile> add https://github.com/zhairy/dsh-agent-swarm/releases/latest/download/dsh-agent-swarm.tgz
+  ```
+- **从源码**：`git clone https://github.com/zhairy/dsh-agent-swarm.git && cd dsh-agent-swarm && npm install`（`prepare` 会构建 `lib/`），再 `dsh plugin --profile <profile> add <该目录的绝对路径>`。
+
+装好后：新建会话选「百工模式」；在「设置 → 百工 Agent」顶部填写 Jev API key（不填也能用，衡鉴按规则分流），并按你的订阅调整各角色的模型链。详见 [docs/安装.md](docs/安装.md)。
+
+| 委派结果与专家会话 | Jev API key | 专家会话与重试 |
+|---|---|---|
+| ![委派结果](assets/screenshots/delegation-result.png) | ![Jev API key](assets/screenshots/jev-api-key.png) | ![会话策略](assets/screenshots/session-policy.png) |
+
 ## 组成
 
 ```

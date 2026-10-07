@@ -2,8 +2,24 @@
   "name": "dsh-agent-swarm",
   "version": "2.1.0",
   "description": "DSH 中文多智能体插件：13 个中文角色、衡鉴分流、统一委派、证据门禁、模型回退、内嵌 Jev 判断工具与按模型家族适配的提示",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "multi-agent",
+    "agent-swarm",
+    "jev"
+  ],
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhairy/dsh-agent-swarm.git"
+  },
+  "homepage": "https://github.com/zhairy/dsh-agent-swarm#readme",
+  "bugs": {
+    "url": "https://github.com/zhairy/dsh-agent-swarm/issues"
+  },
   "engines": {
     "node": ">=22.19.0"
   },
@@ -28,6 +44,7 @@
     "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "gen:presets": "node scripts/gen-presets.mjs",
@@ -78,9 +95,5 @@
     "@types/node": "^26.6.2",
     "typescript": "^7.0.2",
     "yaml": "^2.9.1"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/zhairy/dsh-agent-swarm.git"
   }
 }
