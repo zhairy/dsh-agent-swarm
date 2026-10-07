@@ -1,4 +1,5 @@
 import { getRoleInfo, type DelegableRoleId, type SuanHengMode } from './role-registry.js'
+import type { WorkflowDefinition } from './workflow.js'
 
 export const GATE_IDS = ['G_VERIFY', 'G_REVIEW', 'G_MATH_RESEARCH', 'G_MATH_VERIFY', 'G_DIFF_TEST', 'G_BENCH', 'G_VISION'] as const
 export type GateId = typeof GATE_IDS[number]
@@ -17,6 +18,27 @@ export interface PerfInfo {
   p99Ms?: number | string
   throughput?: string
   dataScale?: string
+  targets?: PerfTarget[]
+}
+
+export interface PerfTarget {
+  metric: 'p95' | 'p99' | 'throughput' | 'peakMemory' | 'numericError'
+  operator: '<=' | '>='
+  value: number
+  unit: 'ms' | 'ops/s' | 'bytes' | 'absolute'
+  minSamples?: number
+}
+
+export interface BenchmarkMeasurement {
+  metric: PerfTarget['metric']
+  value: number
+  unit: PerfTarget['unit']
+  sampleCount: number
+  dataScale: string
+  inputDigest: string
+  environment: string
+  commandRef: string
+  rawArtifactRef: string
 }
 
 /** 经校验的任务卡 */
@@ -28,6 +50,8 @@ export interface TaskCard {
   constraints?: { apiCompat?: string; environment?: string; resourceLimits?: string }
   perf?: PerfInfo
   flags: TaskFlags
+  workflow?: WorkflowDefinition
+  intent?: { text: string; sourceRef?: string }
 }
 
 export type GateSource = 'rule' | 'jev' | 'jev-fallback'
@@ -91,10 +115,20 @@ const getPerf = (raw: unknown, errors: string[]): PerfInfo | undefined => {
   }
   for (const key of PERF_NUMBER_KEYS) {
     const value = raw[key]
-    if (value !== undefined && typeof value !== 'number' && value !== '待测') errors.push(`perf.${key} 必须是数字或「待测」`)
+    if (value !== undefined && value !== '待测' && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) errors.push(`perf.${key} 必须是有限非负数字或「待测」`)
   }
   for (const key of PERF_TEXT_KEYS) {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') errors.push(`perf.${key} 必须是字符串`)
+  }
+  if (raw.targets !== undefined) {
+    if (!Array.isArray(raw.targets) || raw.targets.length > 16) errors.push('perf.targets 必须是不超过 16 项的数组')
+    else for (const target of raw.targets) {
+      const metricUnits: Record<string, string> = { p95: 'ms', p99: 'ms', throughput: 'ops/s', peakMemory: 'bytes', numericError: 'absolute' }
+      if (!isPlainObject(target) || !['p95', 'p99', 'throughput', 'peakMemory', 'numericError'].includes(String(target.metric))
+        || !['<=', '>='].includes(String(target.operator)) || typeof target.value !== 'number' || !Number.isFinite(target.value) || target.value < 0
+        || !['ms', 'ops/s', 'bytes', 'absolute'].includes(String(target.unit)) || metricUnits[String(target.metric)] !== target.unit
+        || (target.minSamples !== undefined && (!Number.isSafeInteger(target.minSamples) || Number(target.minSamples) < 1))) errors.push('perf.targets 条目包含无效指标、单位、比较符或样本要求')
+    }
   }
   return raw as PerfInfo
 }
@@ -133,12 +167,16 @@ export const ValidateTaskCard = (input: unknown): { card?: TaskCard; errors: str
   const flags = getFlags(input.flags, errors)
   const perf = getPerf(input.perf, errors)
   const constraints = getConstraints(input.constraints, errors)
+  const intent = input.intent
+  if (intent !== undefined && (!isPlainObject(intent) || typeof intent.text !== 'string' || intent.text.trim() === '')) errors.push('intent.text 必须是原始需求非空文本')
   if (errors.length > 0) return { errors }
   return {
     card: {
       title, goal, acceptance, scope, flags,
       ...(perf === undefined ? {} : { perf }),
       ...(constraints === undefined ? {} : { constraints })
+      ,...(input.workflow === undefined ? {} : { workflow: input.workflow as WorkflowDefinition })
+      ,...(intent === undefined ? {} : { intent: intent as TaskCard['intent'] })
     },
     errors: []
   }
@@ -295,6 +333,12 @@ export interface GateDelegationView {
   childId?: string
   changedFiles?: string[]
   changeTracking?: 'git' | 'unavailable'
+  cardRevision?: number
+  workflowRevision?: number
+  artifactDigest?: string
+  nodeId?: string
+  attemptId?: string
+  reviewPhase?: 'blind' | 'response'
 }
 
 /** 天枢对御史发现或验算反例的处理说明 */
@@ -398,10 +442,12 @@ const getCommandGateStatus = (gate: 'G_DIFF_TEST' | 'G_BENCH', fuHe: GateDelegat
 const getReviewStatus = (delegations: GateDelegationView[], resolutions: FindingResolution[], after: number): GateStatus => {
   const reviews = getCompletedAfter(delegations, 'yu_shi', after)
   if (reviews.length === 0) return getUnsatisfied('G_REVIEW', '缺少最后一次代码改动之后的御史审查')
+  const blind = reviews.find((record) => record.reviewPhase !== 'response')
+  if (blind === undefined) return getUnsatisfied('G_REVIEW', '交叉回应不能替代首次独立盲审')
   const unresolved = getUnresolvedItems<{ severity?: string }>(reviews, 'findings', (f) => f.severity === 'critical' || f.severity === 'high', resolutions)
   if (unresolved.length > 0) return getUnsatisfied('G_REVIEW', `御史的严重/高危发现未给出处理：${unresolved.join(', ')}`)
   const notes = reviews.some((d) => d.independence === 'not-achieved') ? ['审查者与实现者模型家族相同（独立性未实现）'] : []
-  return getSatisfied('G_REVIEW', reviews[0], '', notes)
+  return getSatisfied('G_REVIEW', blind, '', notes)
 }
 
 /** 验算门禁：最后一次编辑之后的验算，反例都要有处理说明，最新一次至少证实一条结论 */
@@ -410,9 +456,10 @@ const getMathVerifyStatus = (delegations: GateDelegationView[], resolutions: Fin
   if (verifies.length === 0) return getUnsatisfied('G_MATH_VERIFY', '缺少最后一次代码改动之后的算衡·验算结果')
   const refuted = getUnresolvedItems<{ status?: string }>(verifies, 'claims', (c) => c.status === 'refuted', resolutions)
   if (refuted.length > 0) return getUnsatisfied('G_MATH_VERIFY', `验算给出了反例且未说明处理：${refuted.join(', ')}`)
-  const latest = verifies[0] as GateDelegationView
-  const claims = (latest.structured as { claims?: Array<{ status?: string }> } | undefined)?.claims ?? []
-  if (!claims.some((c) => c.status === 'proved')) return getUnsatisfied('G_MATH_VERIFY', `验算 ${latest.delegationId} 没有证实任何结论`)
+  const latest = verifies.find((record) => record.reviewPhase !== 'response')
+  if (latest === undefined) return getUnsatisfied('G_MATH_VERIFY', '交叉回应不能替代首次独立验算')
+  const claims = (latest.structured as { claims?: Array<{ status?: string; proofOrCounterexample?: string; evidenceType?: string }> } | undefined)?.claims ?? []
+  if (!claims.some((c) => c.status === 'proved' && c.evidenceType !== 'numerical_checked' && c.proofOrCounterexample?.trim())) return getUnsatisfied('G_MATH_VERIFY', `验算 ${latest.delegationId} 没有带推导证据的已证实结论`)
   return getSatisfied('G_MATH_VERIFY', latest, '', latest.independence === 'not-achieved' ? ['验算与研算模型家族相同（独立性未实现）'] : [])
 }
 
@@ -471,10 +518,38 @@ export const getEffectiveGates = (gates: GateRequirement[], delegations: GateDel
  * @param {number} [externalEditAt=0] - 委派之外的编辑时刻
  * @returns {{ ok: boolean; statuses: GateStatus[]; missing: string[] }} 是否可验收
  */
-export const getAcceptanceCheck = (gates: GateRequirement[], delegations: GateDelegationView[], resolutions: FindingResolution[], externalEditAt = 0) => {
+export const getAcceptanceCheck = (gates: GateRequirement[], delegations: GateDelegationView[], resolutions: FindingResolution[], externalEditAt = 0, perf?: PerfInfo) => {
   const statuses = gates.map((item) => getGateStatus(item.gate, delegations, resolutions, externalEditAt))
+  const benchmark = statuses.find((s) => s.gate === 'G_BENCH')
+  if (benchmark?.satisfied && perf !== undefined) {
+    const validation = ValidatePerformanceEvidence(perf, delegations)
+    if (validation.length > 0) { benchmark.satisfied = false; benchmark.missing = validation.join('；') }
+  }
   const missing = statuses.filter((s) => !s.satisfied).map((s) => `${s.gate}：${s.missing ?? '未满足'}`)
   return { ok: missing.length === 0, statuses, missing }
+}
+
+export const getPerfTargets = (perf?: PerfInfo): PerfTarget[] => [
+  ...(perf?.targets ?? []),
+  ...(['p95Ms', 'p99Ms'] as const).flatMap((key): PerfTarget[] => typeof perf?.[key] === 'number'
+    ? [{ metric: key === 'p95Ms' ? 'p95' : 'p99', operator: '<=', value: perf[key] as number, unit: 'ms', minSamples: 20 }] : [])
+]
+
+/** 零退出码不等于达到性能预算；测量必须有单位、样本与可复查来源。 */
+export const ValidatePerformanceEvidence = (perf: PerfInfo, delegations: GateDelegationView[]): string[] => {
+  const targets = getPerfTargets(perf)
+  if (targets.length === 0) return (perf.throughput && perf.throughput !== '待测') ? ['吞吐预算尚未规范成 perf.targets，不能声明达标'] : []
+  const measurements = delegations.filter((d) => d.role === 'fu_he' && d.status === 'completed')
+    .flatMap((d) => ((d.structured as { measurements?: BenchmarkMeasurement[] })?.measurements ?? []))
+  return targets.flatMap((target) => {
+    const candidates = measurements.filter((m) => m.metric === target.metric && m.unit === target.unit
+      && Number.isFinite(m.value) && m.value >= 0 && Number.isSafeInteger(m.sampleCount) && m.sampleCount >= (target.minSamples ?? 1)
+      && m.inputDigest && m.environment && m.commandRef && m.rawArtifactRef && m.dataScale && (!perf.dataScale || perf.dataScale === '待测' || m.dataScale === perf.dataScale))
+    if (candidates.length === 0) return [`缺少 ${target.metric} 的当前规模、单位与样本充分的结构化测量`]
+    const latest = candidates.at(-1)!
+    if (!(target.operator === '<=' ? latest.value <= target.value : latest.value >= target.value)) return [`${target.metric} 超出性能预算（${target.operator} ${target.value} ${target.unit}），实测 ${latest.value} ${latest.unit}`]
+    return []
+  })
 }
 
 /** 调用预算；委派次数上限为 0 表示不限（同一大类任务可以反复追加调用同一专家） */

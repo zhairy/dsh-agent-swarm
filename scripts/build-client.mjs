@@ -14,6 +14,7 @@ const { ROLE_INFO_LIST } = await import(pathToFileURL(join(root, 'lib/role-regis
 const { DEFAULT_ROUTE_CHAINS, PROVIDER_LABELS } = await import(pathToFileURL(join(root, 'lib/routes.js')).href)
 const { DEFAULT_UPGRADES, UPGRADEABLE_KEYS, UPGRADE_TRIGGERS, UPGRADE_TRIGGER_LABELS } = await import(pathToFileURL(join(root, 'lib/upgrade.js')).href)
 const { DEFAULT_AGENTS_CONFIG } = await import(pathToFileURL(join(root, 'lib/config.js')).href)
+const { getRouteResourcePolicy } = await import(pathToFileURL(join(root, 'lib/provider-policy.js')).href)
 
 /** swarm-core 条目 id：设置 namespace 即宿主 cordis 条目 id（见 cordis.patch.yml） */
 const NAMESPACE = 'swarm-core'
@@ -43,7 +44,8 @@ const agents = ROLE_INFO_LIST.flatMap((role) => {
 })
 
 const triggers = UPGRADE_TRIGGERS.map((id) => ({ id, label: UPGRADE_TRIGGER_LABELS[id] }))
-const data = { namespace: NAMESPACE, agents, triggers, policy: { defaults: DEFAULT_AGENTS_CONFIG } }
+const resourceTypes = Object.fromEntries(Object.keys(PROVIDER_LABELS).map((provider) => [provider, getRouteResourcePolicy({ provider, model: '' }).accessMode ?? 'unknown']))
+const data = { namespace: NAMESPACE, agents, triggers, resourceTypes, policy: { defaults: DEFAULT_AGENTS_CONFIG } }
 const display = { presets: ROLE_INFO_LIST.map((role) => role.presetId), providers: PROVIDER_LABELS }
 
 /**
@@ -72,12 +74,14 @@ ${indent(body, 6)}
 
 const settingsBody = getModuleBody('settings-page.js', 'const DATA = __SWARM_DATA__', data)
 const displayBody = getModuleBody('model-display.js', 'const DISPLAY = __SWARM_DISPLAY__', display)
+const taskFlowBody = readFileSync(join(root, 'client', 'task-flow.js'), 'utf8')
 
 const bundle = `window.__ModuleLoader__.load({
   id: ${JSON.stringify(pkg.name)},
   factory: (require) => {
 ${wrapModule('settingsModule', settingsBody)}
 ${wrapModule('displayModule', displayBody)}
+${wrapModule('taskFlowModule', taskFlowBody)}
     var module = { exports: {} };
     var exports = module.exports;
     // 设置页只依赖设置与凭据服务；模型显示依赖会话视图，单独等待 uiConversation，两者互不阻塞
@@ -86,10 +90,13 @@ ${wrapModule('displayModule', displayBody)}
       settingsModule.apply(ctx);
       if (typeof ctx.inject === 'function') ctx.inject(displayModule.inject, function (scoped) { displayModule.apply(scoped); });
       else displayModule.apply(ctx);
+      if (typeof ctx.inject === 'function') ctx.inject(taskFlowModule.inject, function (scoped) { taskFlowModule.apply(scoped); });
+      else taskFlowModule.apply(ctx);
     };
     exports.NS = settingsModule.NS;
     exports.__test__ = settingsModule.__test__;
     exports.__display__ = displayModule.__test__;
+    exports.__taskFlow__ = taskFlowModule.__test__;
     return module.exports;
   }
 });

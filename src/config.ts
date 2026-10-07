@@ -10,7 +10,14 @@ import { readLiveObject } from './util/live.js'
 const RouteSchema = Schema.object({
   provider: Schema.string().required().description('provider 路由名，例如 qwen-token-plan-cn'),
   model: Schema.string().required().description('模型 ID'),
-  reasoningEffort: Schema.string().description('推理强度（可选）')
+  reasoningEffort: Schema.string().description('推理强度（可选）'),
+  policy: Schema.object({
+    accessMode: Schema.union(['subscription', 'metered_api', 'judgment_api', 'unknown']),
+    quotaDomainId: Schema.string(),
+    quotaScope: Schema.union(['account', 'plan', 'model', 'pool', 'unknown']),
+    poolId: Schema.string(),
+    capabilities: Schema.object({ generation: Schema.boolean(), structuredOutput: Schema.boolean(), vision: Schema.boolean(), tools: Schema.boolean() })
+  }).description('适配器或用户明确配置的资源与共享额度域；不含凭据')
 })
 
 const UpgradeSchema = Schema.object({
@@ -46,7 +53,7 @@ export const Config = Schema.object({
     model: Schema.string().default('jev-latest'),
     timeoutMs: Schema.natural().default(10000),
     maxRetries: Schema.natural().default(4).description('单次 Jev 请求失败后的重试次数；Jev 调用不设会话额度'),
-    maxRequestsPerSecond: Schema.natural().default(8).description('进程内每秒最多发出的 Jev 请求数（衡鉴与 jev_* 工具共用）'),
+    maxRequestsPerSecond: Schema.natural().default(0).description('兼容旧配置；Jev 不设插件侧限流，所有入口实际按不限处理'),
     maxRequestChars: Schema.natural().default(120000).description('单次 Jev 请求体的字符上限，超出时直接拒绝'),
     mathConfidence: Schema.number().default(0.6),
     benchmarkNoul: Schema.number().default(0.5),
@@ -80,7 +87,46 @@ export const Config = Schema.object({
     maxCallsZhuJian: Schema.natural().default(0).description('每个任务中铸剑的调用次数上限；0 为不限'),
     maxAutoFixRounds: Schema.natural().default(2)
   }).default({}).description('预算').volatile(),
-  ledgerDir: Schema.string().default('').description('账本目录；留空为 <DSH_HOME>/share/dsh-agent-swarm/ledger').volatile()
+  ledgerDir: Schema.string().default('').description('账本目录；留空为 <DSH_HOME>/share/dsh-agent-swarm/ledger').volatile(),
+  workflow: Schema.object({
+    mode: Schema.union(['off', 'advisory', 'enforced']).default('advisory'),
+    maxNodes: Schema.natural().default(32),
+    maxEdges: Schema.natural().default(64)
+  }).default({}).description('任务流程：观察模式兼容旧委派；强制模式执行依赖与审核门槛').volatile(),
+  planningReview: Schema.object({
+    enabled: Schema.boolean().default(true),
+    requireJev: Schema.boolean().default(false),
+    maxFixRounds: Schema.natural().default(2),
+    reviewAbove: Schema.number().default(0.8)
+  }).default({}).description('生成后独立审核目标、流程设计与 Mermaid 代码').volatile(),
+  execution: Schema.object({
+    profile: Schema.union(['legacy', 'bounded']).default('legacy'),
+    maxCalls: Schema.natural().default(0),
+    maxTokens: Schema.natural().default(0),
+    maxCostUsd: Schema.number().default(0)
+  }).default({}).description('生成模型执行预算；0 表示不限，Jev 完全排除').volatile(),
+  recovery: Schema.object({
+    maxTransientRetries: Schema.natural().default(1),
+    maxLogicalAttempts: Schema.natural().default(8),
+    maxShortRetryDelayMs: Schema.natural().default(2000),
+    maxTransientWaitMs: Schema.natural().default(5000)
+  }).default({}).description('额度/模型池耗尽立即回退；只对临时故障进行短时重试').volatile(),
+  persistence: Schema.object({
+    enabled: Schema.boolean().default(false),
+    directory: Schema.string().default('')
+  }).default({}).description('完整状态快照与恢复；不以脱敏账本作为恢复真源').volatile(),
+  messageBus: Schema.object({
+    enabled: Schema.boolean().default(false),
+    maxPending: Schema.natural().default(128)
+  }).default({}).description('专家受限文件邮箱，启用时需同时启用持久化').volatile(),
+  math: Schema.object({
+    enabled: Schema.boolean().default(true),
+    enableExtended: Schema.boolean().default(false),
+    maxCallsPerTask: Schema.natural().default(64)
+  }).default({}).description('有界纯函数数学计算；计算结果不等于数学证明').volatile(),
+  experience: Schema.object({
+    enabled: Schema.boolean().default(false)
+  }).default({}).description('有证据的经验候选、复核晋升与失效管理').volatile()
 })
 
 /** 原生后端实例配置 */
@@ -166,7 +212,20 @@ export interface SwarmConfigInfo {
   agents: AgentsConfigInfo
   budgets: BudgetInfo
   ledgerDir: string
+  workflow: { mode: 'off' | 'advisory' | 'enforced'; maxNodes: number; maxEdges: number }
+  planningReview: { enabled: boolean; requireJev: boolean; maxFixRounds: number; reviewAbove: number }
+  execution: { profile: 'legacy' | 'bounded'; maxCalls: number; maxTokens: number; maxCostUsd: number }
+  recovery: { maxTransientRetries: number; maxLogicalAttempts: number; maxShortRetryDelayMs: number; maxTransientWaitMs: number }
+  persistence: { enabled: boolean; directory: string }
+  messageBus: { enabled: boolean; maxPending: number }
+  math: { enabled: boolean; enableExtended: boolean; maxCallsPerTask: number }
+  experience: { enabled: boolean }
 }
+
+export const DEFAULT_WORKFLOW_CONFIG: SwarmConfigInfo['workflow'] = { mode: 'advisory', maxNodes: 32, maxEdges: 64 }
+export const DEFAULT_PLANNING_REVIEW: SwarmConfigInfo['planningReview'] = { enabled: true, requireJev: false, maxFixRounds: 2, reviewAbove: 0.8 }
+export const DEFAULT_EXECUTION_CONFIG: SwarmConfigInfo['execution'] = { profile: 'legacy', maxCalls: 0, maxTokens: 0, maxCostUsd: 0 }
+export const DEFAULT_RECOVERY_CONFIG: SwarmConfigInfo['recovery'] = { maxTransientRetries: 1, maxLogicalAttempts: 8, maxShortRetryDelayMs: 2000, maxTransientWaitMs: 5000 }
 
 export const ROUTE_KEYS: readonly RouteKey[] = Object.keys(DEFAULT_ROUTE_CHAINS) as RouteKey[]
 
@@ -187,10 +246,17 @@ const isRoute = (value: unknown): value is RouteInfo => {
     && (record.reasoningEffort === undefined || typeof record.reasoningEffort === 'string')
 }
 
+const meaningfulPolicy = (policy: RouteInfo['policy']): RouteInfo['policy'] => {
+  if (policy === undefined) return undefined
+  const fields = Object.fromEntries(Object.entries(policy).filter(([key, value]) =>
+    key === 'capabilities' ? value !== undefined && Object.values(value).some((item) => typeof item === 'boolean') : value !== undefined && value !== ''))
+  return Object.keys(fields).length === 0 ? undefined : fields as RouteInfo['policy']
+}
 const toRoute = (route: RouteInfo): RouteInfo => ({
   provider: route.provider,
   model: route.model,
-  ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort })
+  ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
+  ...(meaningfulPolicy(route.policy) === undefined ? {} : { policy: structuredClone(meaningfulPolicy(route.policy)) })
 })
 
 /** 解析升级配置；不可升级的角色或格式不对时忽略 */
@@ -241,12 +307,20 @@ export const getSwarmConfig = (raw: unknown): SwarmConfigInfo => {
     rootFallback: typeof plain.rootFallback === 'boolean' ? plain.rootFallback : true,
     nativeEscalation: plain.nativeEscalation === 'auto' ? 'auto' : 'manual',
     native: getMerged(DEFAULT_NATIVE_CONFIG, plain.native),
-    jev: getMerged(DEFAULT_JEV_CONFIG, plain.jev),
+    jev: { ...getMerged(DEFAULT_JEV_CONFIG, plain.jev), maxRequestsPerSecond: 0 },
     thresholds: getMerged(DEFAULT_TRIAGE_THRESHOLDS, plain.jev),
     review: getMerged(DEFAULT_REVIEW_CONFIG, plain.review),
     agents: getAgentsConfig(plain.agents),
     budgets: getMerged(DEFAULT_BUDGETS, plain.budgets),
-    ledgerDir: typeof plain.ledgerDir === 'string' ? plain.ledgerDir : ''
+    ledgerDir: typeof plain.ledgerDir === 'string' ? plain.ledgerDir : '',
+    workflow: getMerged(DEFAULT_WORKFLOW_CONFIG, plain.workflow),
+    planningReview: getMerged(DEFAULT_PLANNING_REVIEW, plain.planningReview),
+    execution: getMerged(DEFAULT_EXECUTION_CONFIG, plain.execution),
+    recovery: getMerged(DEFAULT_RECOVERY_CONFIG, plain.recovery),
+    persistence: getMerged({ enabled: false, directory: '' }, plain.persistence),
+    messageBus: getMerged({ enabled: false, maxPending: 128 }, plain.messageBus),
+    math: getMerged({ enabled: true, enableExtended: false, maxCallsPerTask: 64 }, plain.math),
+    experience: getMerged({ enabled: false }, plain.experience)
   }
 }
 

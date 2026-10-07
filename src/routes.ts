@@ -1,6 +1,7 @@
 import type { LlmFailureLike, LlmLike } from './host-contract.js'
 import type { RoleId, SuanHengMode } from './role-registry.js'
 import { getErrorText } from './util/errors.js'
+import { normalizeRouteFailure, getRouteFailure, type RouteResourcePolicy } from './provider-policy.js'
 
 export const PROVIDER_QWEN = 'qwen-token-plan-cn'
 export const PROVIDER_GO = 'opencode-go'
@@ -14,6 +15,7 @@ export interface RouteInfo {
   provider: string
   model: string
   reasoningEffort?: string
+  policy?: RouteResourcePolicy
 }
 
 /** 路由表的键：算衡按模式拆成两条 */
@@ -99,7 +101,7 @@ const c = (model: string, reasoningEffort?: string): RouteInfo => ({ provider: P
 
 /**
  * 常用模型的路由。同一模型先消耗订阅额度：qwen-token-plan-cn → opencode-go，
- * DeepSeek 官方 API 不限额、按量计费，只作兜底（每条链的最后一层）。
+ * DeepSeek 官方 API 按量计费，只作兜底；其余额与上游限速仍可能导致失败。
  */
 /** 各模型的路由；推理等级按角色需要传入（每个模型支持的档位见 MODEL_REASONING_EFFORTS） */
 const astra = (effort: string): RouteInfo => o('gpt-6-astra', effort)
@@ -303,7 +305,6 @@ export type FailureClass = 'route-fatal' | 'auth' | 'transient' | 'other'
 const ROUTE_FATAL_CODES = new Set(['NO_ADAPTER', 'UNKNOWN_MODEL', 'UNKNOWN_PROVIDER', 'MISSING_CREDENTIAL', 'QUOTA', 'UNSUPPORTED_OPTION', 'IMAGE_UNSUPPORTED'])
 const AUTH_CODES = new Set(['INVALID_CREDENTIAL', 'UNAUTHORIZED', 'FORBIDDEN'])
 const TRANSIENT_CODES = new Set(['RATE_LIMIT', 'TIMEOUT', 'NETWORK', 'TRANSPORT', 'OVERLOADED', 'SERVER_ERROR', 'SERVER', 'EMPTY_RESPONSE'])
-const QUOTA_MESSAGE = /usage limit|quota|insufficient (balance|quota)|余额不足|额度|pool "[^"]*" exhausted/i
 /** 账号未开通该模型：只影响这个模型，不能按认证失败把整个 provider 跳过 */
 const UNPURCHASED_MESSAGE = /Unpurchased|Access to model denied|not eligible for (using )?(this|the) model/i
 
@@ -316,9 +317,11 @@ export const getFailureClass = (failure: LlmFailureLike | undefined): FailureCla
   if (failure === undefined) return 'other'
   const code = String(failure.code ?? '').toUpperCase()
   const status = failure.status ?? 0
+  const normalized = normalizeRouteFailure(failure, { provider: '', model: '' })
+  if (['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'model_unavailable'].includes(normalized.kind)) return 'route-fatal'
   if (UNPURCHASED_MESSAGE.test(failure.message ?? '')) return 'route-fatal'
   if (AUTH_CODES.has(code) || status === 401 || status === 403) return 'auth'
-  if (ROUTE_FATAL_CODES.has(code) || QUOTA_MESSAGE.test(failure.message ?? '')) return 'route-fatal'
+  if (ROUTE_FATAL_CODES.has(code)) return 'route-fatal'
   if (TRANSIENT_CODES.has(code) || status === 408 || status === 429 || status >= 500) return 'transient'
   if (status === 400 || status === 404 || status === 422) return 'route-fatal'
   return 'other'
@@ -344,7 +347,11 @@ export const PROBE_FAIL_TTL_MS = 15_000
  * @param {{ now?: () => number }} [options] - 时钟
  * @returns {RouteProbe} 预检函数
  */
-export const intRouteProbe = (getLlm: () => LlmLike | undefined, options: { now?: () => number } = {}): RouteProbe => {
+export const intRouteProbe = (getLlm: () => LlmLike | undefined, options: {
+  now?: () => number
+  isRouteAvailable?: (route: RouteInfo) => boolean
+  onFailure?: (route: RouteInfo, failure: LlmFailureLike) => void | Promise<void>
+} = {}): RouteProbe => {
   const now = options.now ?? Date.now
   const cache = new Map<string, { at: number; result: RouteProbeResult }>()
   const pending = new Map<string, Promise<RouteProbeResult>>()
@@ -357,11 +364,14 @@ export const intRouteProbe = (getLlm: () => LlmLike | undefined, options: { now?
       const vision = info.inputModalities === undefined ? (getCatalogVision(route) ?? false) : info.inputModalities.includes('image')
       return { ok: true, vision }
     } catch (error) {
+      await options.onFailure?.(route, getRouteFailure(error))
+      if (options.isRouteAvailable?.(route) === false) return { ok: false, reason: 'route-isolated' }
       return { ok: false, reason: `model-unavailable: ${getErrorText(error)}` }
     }
   }
   return async (route) => {
-    const key = getRouteLabel(route)
+    if (options.isRouteAvailable?.(route) === false) return { ok: false, reason: 'route-isolated' }
+    const key = `${getRouteLabel(route)}:${route.policy?.quotaDomainId ?? ''}:${route.policy?.poolId ?? ''}`
     const hit = cache.get(key)
     if (hit !== undefined && now() - hit.at < (hit.result.ok ? PROBE_OK_TTL_MS : PROBE_FAIL_TTL_MS)) return hit.result
     const running = pending.get(key)

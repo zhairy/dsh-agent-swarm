@@ -1,0 +1,605 @@
+{
+  "schemaVersion": 4,
+  "recordKind": "implementation-reference-with-preserved-design-audit",
+  "document": "2026-10-07-tian-shu-workflow-and-verification.md",
+  "historicalDesignAudit": {
+    "schemaVersion": 3,
+    "date": "2026-10-07",
+    "timezone": "Asia/Shanghai",
+    "document": "2026-10-07-tian-shu-workflow-and-verification.md",
+    "finalDocumentSha256": "f0ae2aff66408715564875d4f3bd601d9bd589cade7ae051d44b12a6f01d75ce",
+    "reviewedBodySha256": "ef0efeedafc2f9d7975745cb0bad2ac26be253234ae087f00df7acae10e81c25",
+    "reviewedBodyBoundary": "Full body bytes before the newline preceding '## 16. 初版设计审查历史', including the original body's final newline.",
+    "deliverableScope": "Design plan and review record only; no product code, configuration, presets, dependencies or published runtime changed.",
+    "userAmendments": [
+      "生成后由独立Agent和Jev审核任务目标与图",
+      "分别核对流程设计正确性与Mermaid代码正确性",
+      "Jev不设插件侧限流与调用数/token/费用额度",
+      "订阅额度耗尽或模型池不可用立即切已配置备用，不在原模型重试十多次或等待数小时",
+      "区分Jev判断API、DeepSeek等按量生成API以及Claude/ChatGPT/OpenCodeGo/Qwen订阅额度策略"
+    ],
+    "plannedJevPolicy": {
+      "activeRpsThrottle": false,
+      "concurrencyQuota": false,
+      "taskSessionGlobalCallQuota": false,
+      "tokenQuota": false,
+      "costQuota": false,
+      "excludedFromExecutionBudget": true,
+      "observeUsage": true,
+      "preserveRequestTimeoutAndUpstreamErrorRecovery": true,
+      "currentRuntimeChanged": false
+    },
+    "quotaRoutingPolicy": {
+      "implemented": false,
+      "priority": "P0-R",
+      "sameRouteRetriesOnQuotaExhausted": 0,
+      "samePoolRetriesOnPoolExhausted": 0,
+      "sameCredentialRetriesOnInsufficientBalance": 0,
+      "transientExtraRetriesPerRoute": 1,
+      "transientDelayThresholdMs": 2000,
+      "transientWaitPerLogicalRequestMs": 5000,
+      "generationSendsPerLogicalRequestMax": 8,
+      "jevExcludedFromGenerationRecoveryCaps": true,
+      "sharedLogicalRequestRecoveryState": true,
+      "quotaDomainHealthSharedAcrossRoles": true,
+      "hostRecoveryMustNotWaitBeforeTerminalClassification": true,
+      "noFallbackTerminatesRequest": true,
+      "nativeStopMustBeVerifiedBeforeNewMutation": true,
+      "poolExhaustionDoesNotProveSubscriptionQuotaCause": true,
+      "upstreamRateLimitsAndBalanceNotIgnored": true
+    },
+    "incidentFixture": {
+      "failure": "pool \"claude-opus-5-5\" exhausted: every member is unavailable or failed",
+      "retryDelayMs": 9060669,
+      "readableDelay": "2小时31分0.669秒",
+      "expectedWithConfiguredEligibleFallback": "立即回退；失败池重复请求为0，不等待9060669ms",
+      "expectedWithoutEligibleFallback": "明确终止，记录route_chain_exhausted或recovery_attempts_exhausted"
+    },
+    "currentReview": {
+      "scope": "Quota-routing addendum and continued Jev no-limit policy",
+      "reviewer": "Primary agent, grounded in current source and official documents",
+      "independentSubagentReviewRun": false,
+      "status": "plan-updated; runtime integration required",
+      "reviewedBodySha256": "ef0efeedafc2f9d7975745cb0bad2ac26be253234ae087f00df7acae10e81c25",
+      "jevReviewScope": "§7.5 and §7.3 plus user incident and source findings",
+      "implementationEvidenceGate": "Host normal/always and native/outer retry interactions must be proven in P0-R tests"
+    },
+    "sourceFindings": [
+      {
+        "file": "src/routes.ts",
+        "symbol": "getFailureClass",
+        "line": 315,
+        "finding": "Quota/pool text already classified route-fatal"
+      },
+      {
+        "file": "src/runtime.ts",
+        "line": 34,
+        "finding": "Recovery action requested after await next()"
+      },
+      {
+        "file": "src/route-state.ts",
+        "line": 144,
+        "finding": "No next fallback preserves incoming action"
+      },
+      {
+        "file": "src/route-state.ts",
+        "line": 276,
+        "finding": "Root automatic recovery is not quota-reset-aware"
+      },
+      {
+        "file": "src/delegate.ts",
+        "line": 528,
+        "finding": "Every error stop reason initially considered network suspect"
+      },
+      {
+        "file": "src/host-contract.ts",
+        "line": 62,
+        "finding": "Minimum local failure interface omits providerRetryAfterMs"
+      },
+      {
+        "file": ".sandbox/dsh-0.2.0-rc.2/node_modules/@deepseek-ai/dsh-llm-retry/lib/index.js",
+        "line": 142,
+        "finding": "Host recovery backoff waits before returning retry"
+      }
+    ],
+    "externalSources": [
+      {
+        "title": "DeepSeek API Error Codes",
+        "url": "https://api-docs.deepseek.com/quick_start/error_codes/",
+        "access": "Official page fetched with urllib after web-open errors; 402 balance and 429 rate facts verified"
+      },
+      {
+        "title": "Claude usage limits",
+        "url": "https://support.claude.com/en/articles/11647753-how-do-usage-and-length-limits-work",
+        "access": "Official page opened"
+      },
+      {
+        "title": "OpenAI Docs pricing and usage",
+        "url": "https://learn.chatgpt.com/docs/pricing",
+        "access": "Official page opened and relevant usage/API-key sections read"
+      },
+      {
+        "title": "OpenCode Go",
+        "url": "https://opencode.ai/docs/go/",
+        "access": "Official page opened and usage-limits section read"
+      },
+      {
+        "title": "Qwen Coding Plan",
+        "url": "https://www.alibabacloud.com/help/en/model-studio/coding-plan",
+        "access": "Official page opened and quota section read"
+      }
+    ],
+    "staticChecks": {
+      "closedFences": true,
+      "codeBlocks": 13,
+      "mermaidBlocks": 5,
+      "sourceHashes": [
+        {
+          "file": "src/policy.ts",
+          "sha256": "dec9810be42933c3a7118cf3c3028cd06eeb67914a5ab9d764d8e364354207f8"
+        },
+        {
+          "file": "src/service.ts",
+          "sha256": "43e9ac37ac80ec97ff555e503bc8b9d235218bb980a6a4fdd94d96e3b17d8844"
+        },
+        {
+          "file": "src/evidence.ts",
+          "sha256": "b35c0f921c7bfffcd8983598b3009c66f7c0301445ff7001ea6f0250956152e0"
+        },
+        {
+          "file": "src/delegate.ts",
+          "sha256": "470ef4f4fb5875d9759bbf3097a02ea205dfa0b2182f692c706ed41fcd680d22"
+        },
+        {
+          "file": "src/threads.ts",
+          "sha256": "4d25f2bb590d5614732b91fb1fc898d4d01bf6c942ddea3afdd87d8d7f90619d"
+        },
+        {
+          "file": "src/jev.ts",
+          "sha256": "4b6740ae99d1776221b86cefc9ce77898ed214b6296ea9e99c857939bdbc165c"
+        },
+        {
+          "file": "src/jev-hub.ts",
+          "sha256": "2457285afd669bb15e0eeb46280704ee00c4644f7201185f80f92bbc39eb321d"
+        },
+        {
+          "file": "src/role-registry.ts",
+          "sha256": "0d438c664906ca536e5a314c183ed203560ff6eb1271faccedba31425e9ae656"
+        },
+        {
+          "file": "src/host-contract.ts",
+          "sha256": "7088faade106653f35ea32fd3ccc1c1345abd4a6d7b79ba4883567d3aace5920"
+        },
+        {
+          "file": "package.json",
+          "sha256": "25dabbc845187f89946e991253e17aab32986d55540ce0fa4ee98ecdc0dd6758"
+        }
+      ],
+      "sourceHashesUnchanged": true,
+      "localLinksChecked": true,
+      "whitespaceChecked": true,
+      "productFilesChanged": false
+    },
+    "mermaidSyntax": {
+      "parser": "mermaid",
+      "version": "11.12.0",
+      "domAdapter": "jsdom 26.1.0",
+      "results": [
+        {
+          "index": 1,
+          "syntax": "pass",
+          "diagramType": "flowchart-v2",
+          "sourceSha256": "8b6b0bd97a03faffeda9cd10a6ecd09e1140c188b430d783f1c0962717bad672"
+        },
+        {
+          "index": 2,
+          "syntax": "pass",
+          "diagramType": "flowchart-v2",
+          "sourceSha256": "3914baf7922310c1644afffc2d9c0485a8fa92f90c20919b9ace3d81b34773c0"
+        },
+        {
+          "index": 3,
+          "syntax": "pass",
+          "diagramType": "flowchart-v2",
+          "sourceSha256": "8837e0b8c7e53d06c78e73a21280e3ba854fcca4d6c492982c5748ea4570ac84"
+        },
+        {
+          "index": 4,
+          "syntax": "pass",
+          "diagramType": "flowchart-v2",
+          "sourceSha256": "d060168c4b061a11434b45b684597b12b1ce38a2a6d548331da487fd8e9fca7f"
+        },
+        {
+          "index": 5,
+          "syntax": "pass",
+          "diagramType": "flowchart-v2",
+          "sourceSha256": "08340f3c41f8fa5f5ba0926109ef99efdc1763658e6f7826837e0217e305d365"
+        }
+      ],
+      "invalidSyntaxControl": "rejected",
+      "scope": "Syntax parsing of five plan examples, including immediate fallback; no plugin runtime validation."
+    },
+    "jev": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "probabilities": {
+          "immediate_switch": 0.96,
+          "host_order": 0.96,
+          "resource_types": 0.96,
+          "failure_accuracy": 0.94,
+          "no_retry_loop": 0.78,
+          "no_duplicate_effects": 0.96,
+          "jev_unlimited": 0.96
+        },
+        "flags": [
+          "immediate_switch",
+          "host_order",
+          "resource_types",
+          "failure_accuracy",
+          "no_retry_loop",
+          "no_duplicate_effects",
+          "jev_unlimited"
+        ],
+        "uncertain": []
+      },
+      "usage": {
+        "input_tokens": 6279,
+        "output_tokens": 130,
+        "est_cost_usd": 0.000263718
+      },
+      "latency_ms": 1815.331,
+      "reviewedBodySha256": "ef0efeedafc2f9d7975745cb0bad2ac26be253234ae087f00df7acae10e81c25",
+      "reviewedScope": "Routing addendum and Jev policy only",
+      "limitations": "Design-text judgments only; probabilities are not runtime evidence. no_retry_loop=0.78 is below the plan's provisional 0.8 review threshold.",
+      "remainingEvidence": [
+        "Prove no multiplied retries in actual host normal/always and native paths before P0-R completion"
+      ]
+    },
+    "revisionHistory": [
+      {
+        "label": "initial-plan-before-user-amendments",
+        "schemaVersion": 1,
+        "date": "2026-10-07",
+        "timezone": "Asia/Shanghai",
+        "document": "2026-10-07-tian-shu-workflow-and-verification.md",
+        "finalDocumentSha256": "8e29cee0eef3323759e28fed1e28d3dc9b047b7546913273955f48c78f8835e6",
+        "reviewedBodySha256": "9ada09cc47132ae58103aa4a78d8d2cbfb2fdfd705d0cc1f7ad4671bf18faa19",
+        "reviewedBodyBoundary": "Bytes before the newline preceding '## 16. 本次交付的审查记录'; full original body includes its final newline.",
+        "deliverableScope": "Design plan and review record only; no product code, configuration, presets, dependencies or published runtime changed.",
+        "expertReview": [
+          {
+            "agent": "functional_advocate",
+            "role": "软件功能设计专家/正方",
+            "peerRebuttalsCompleted": true,
+            "draftReviewCompleted": true
+          },
+          {
+            "agent": "engineering_skeptic",
+            "role": "软件工程设计专家/反方",
+            "peerRebuttalsCompleted": true,
+            "draftReviewCompleted": true
+          },
+          {
+            "agent": "algorithm_performance",
+            "role": "软件算法与性能研究专家/第三方",
+            "peerRebuttalsCompleted": true,
+            "draftReviewCompleted": true
+          }
+        ],
+        "staticChecks": {
+          "reviewedBodySha256": "9ada09cc47132ae58103aa4a78d8d2cbfb2fdfd705d0cc1f7ad4671bf18faa19",
+          "markdown": {
+            "codeBlocks": 9,
+            "mermaidBlocks": 3,
+            "externalLinks": 8,
+            "closedFences": true,
+            "diagramSourceStructure": true,
+            "requirementTerms": 17
+          },
+          "sourceHashes": [
+            {
+              "file": "src/policy.ts",
+              "sha256": "dec9810be42933c3a7118cf3c3028cd06eeb67914a5ab9d764d8e364354207f8"
+            },
+            {
+              "file": "src/service.ts",
+              "sha256": "43e9ac37ac80ec97ff555e503bc8b9d235218bb980a6a4fdd94d96e3b17d8844"
+            },
+            {
+              "file": "src/evidence.ts",
+              "sha256": "b35c0f921c7bfffcd8983598b3009c66f7c0301445ff7001ea6f0250956152e0"
+            },
+            {
+              "file": "src/delegate.ts",
+              "sha256": "470ef4f4fb5875d9759bbf3097a02ea205dfa0b2182f692c706ed41fcd680d22"
+            },
+            {
+              "file": "src/threads.ts",
+              "sha256": "4d25f2bb590d5614732b91fb1fc898d4d01bf6c942ddea3afdd87d8d7f90619d"
+            },
+            {
+              "file": "src/jev.ts",
+              "sha256": "4b6740ae99d1776221b86cefc9ce77898ed214b6296ea9e99c857939bdbc165c"
+            },
+            {
+              "file": "src/jev-hub.ts",
+              "sha256": "2457285afd669bb15e0eeb46280704ee00c4644f7201185f80f92bbc39eb321d"
+            },
+            {
+              "file": "src/role-registry.ts",
+              "sha256": "0d438c664906ca536e5a314c183ed203560ff6eb1271faccedba31425e9ae656"
+            },
+            {
+              "file": "src/host-contract.ts",
+              "sha256": "7088faade106653f35ea32fd3ccc1c1345abd4a6d7b79ba4883567d3aace5920"
+            },
+            {
+              "file": "package.json",
+              "sha256": "25dabbc845187f89946e991253e17aab32986d55540ce0fa4ee98ecdc0dd6758"
+            }
+          ],
+          "git": {
+            "baselineHead": "127e226",
+            "priorChangesPreserved": true,
+            "added": [
+              "?? docs/superpowers/plans/2026-10-07-tian-shu-workflow-and-verification.md"
+            ]
+          },
+          "limitation": "Checked fences, links and diagram source structure; Mermaid parser/browser rendering and new runtime features were not executed."
+        },
+        "jev": {
+          "ok": true,
+          "model": "jev-1.13.0",
+          "answers": {
+            "probabilities": {
+              "coverage": 0.98,
+              "unique_source": 0.97,
+              "evidence_versioning": 0.97,
+              "advisory_boundary": 0.98,
+              "cancellation_budget": 0.98,
+              "math_scope": 0.98,
+              "no_unmeasured_claim": 0.98
+            },
+            "flags": [
+              "coverage",
+              "unique_source",
+              "evidence_versioning",
+              "advisory_boundary",
+              "cancellation_budget",
+              "math_scope",
+              "no_unmeasured_claim"
+            ],
+            "uncertain": []
+          },
+          "usage": {
+            "input_tokens": 22830,
+            "output_tokens": 136,
+            "est_cost_usd": 0.00095886
+          },
+          "latency_ms": 3888.91,
+          "limitations": "Only checks supplied design text; probabilities are not correctness guarantees. This MCP call does not validate the plugin runtime Jev integration."
+        },
+        "validationsNotRun": [
+          "Mermaid official parser",
+          "Browser rendering",
+          "New runtime features",
+          "Cross-restart recovery",
+          "Actual token-savings benchmark"
+        ],
+        "limitations": "Historical review of old body only; not evidence that the amended plan was already reviewed."
+      },
+      {
+        "label": "generated-plan-review-and-jev-unlimited-amendment",
+        "schemaVersion": 2,
+        "date": "2026-10-07",
+        "timezone": "Asia/Shanghai",
+        "document": "2026-10-07-tian-shu-workflow-and-verification.md",
+        "finalDocumentSha256": "a05f4c089ea83b88d1ffc7fb2bb6d9925acd50d8e9d929fe23c0147ad1a62441",
+        "reviewedBodySha256": "1c95a95239f0f573a44601dafff131b70b06acd2acbfb3708573926d9da21c67",
+        "reviewedBodyBoundary": "Full body bytes before the newline preceding '## 16. 初版设计审查历史', including the original body's final newline.",
+        "deliverableScope": "Design plan and review record only; no product code, configuration, presets, dependencies or published runtime changed.",
+        "userAmendments": [
+          "生成后由独立Agent和Jev审核任务目标与图",
+          "分别核对流程设计正确性与Mermaid代码正确性",
+          "Jev不设插件侧限流与调用数/token/费用额度"
+        ],
+        "plannedJevPolicy": {
+          "activeRpsThrottle": false,
+          "concurrencyQuota": false,
+          "taskSessionGlobalCallQuota": false,
+          "tokenQuota": false,
+          "costQuota": false,
+          "excludedFromExecutionBudget": true,
+          "observeUsage": true,
+          "preserveRequestTimeoutAndUpstreamErrorRecovery": true,
+          "currentRuntimeChanged": false
+        },
+        "expertReview": [
+          {
+            "agent": "functional_advocate",
+            "role": "软件功能设计专家/正方",
+            "peerRebuttalsCompleted": true,
+            "draftReviewCompleted": true
+          },
+          {
+            "agent": "engineering_skeptic",
+            "role": "软件工程设计专家/反方",
+            "peerRebuttalsCompleted": true,
+            "draftReviewCompleted": true
+          },
+          {
+            "agent": "algorithm_performance",
+            "role": "软件算法与性能研究专家/第三方",
+            "peerRebuttalsCompleted": true,
+            "draftReviewCompleted": true
+          }
+        ],
+        "followupExpertReview": {
+          "agent": "engineering_skeptic",
+          "role": "软件工程设计专家/反方",
+          "verdict": "pass",
+          "reviewedBodySha256": "1c95a95239f0f573a44601dafff131b70b06acd2acbfb3708573926d9da21c67",
+          "finalComment": "三维审核独立、前置语法失败阻断、展示回退与修正终止边界均已明确；Jev全入口无本地限流及预算限额，无遗留冲突。",
+          "findingsAddressed": [
+            "目标审核以原始需求为依据",
+            "审核身份与执行之间版本核对",
+            "Jev全局预算排除及0旁路",
+            "前置parser失败与展示回退区分",
+            "结构错误且修正轮用尽时终止"
+          ]
+        },
+        "staticChecks": {
+          "closedFences": true,
+          "codeBlocks": 10,
+          "mermaidBlocks": 4,
+          "sourceHashes": [
+            {
+              "file": "src/policy.ts",
+              "sha256": "dec9810be42933c3a7118cf3c3028cd06eeb67914a5ab9d764d8e364354207f8"
+            },
+            {
+              "file": "src/service.ts",
+              "sha256": "43e9ac37ac80ec97ff555e503bc8b9d235218bb980a6a4fdd94d96e3b17d8844"
+            },
+            {
+              "file": "src/evidence.ts",
+              "sha256": "b35c0f921c7bfffcd8983598b3009c66f7c0301445ff7001ea6f0250956152e0"
+            },
+            {
+              "file": "src/delegate.ts",
+              "sha256": "470ef4f4fb5875d9759bbf3097a02ea205dfa0b2182f692c706ed41fcd680d22"
+            },
+            {
+              "file": "src/threads.ts",
+              "sha256": "4d25f2bb590d5614732b91fb1fc898d4d01bf6c942ddea3afdd87d8d7f90619d"
+            },
+            {
+              "file": "src/jev.ts",
+              "sha256": "4b6740ae99d1776221b86cefc9ce77898ed214b6296ea9e99c857939bdbc165c"
+            },
+            {
+              "file": "src/jev-hub.ts",
+              "sha256": "2457285afd669bb15e0eeb46280704ee00c4644f7201185f80f92bbc39eb321d"
+            },
+            {
+              "file": "src/role-registry.ts",
+              "sha256": "0d438c664906ca536e5a314c183ed203560ff6eb1271faccedba31425e9ae656"
+            },
+            {
+              "file": "src/host-contract.ts",
+              "sha256": "7088faade106653f35ea32fd3ccc1c1345abd4a6d7b79ba4883567d3aace5920"
+            },
+            {
+              "file": "package.json",
+              "sha256": "25dabbc845187f89946e991253e17aab32986d55540ce0fa4ee98ecdc0dd6758"
+            }
+          ],
+          "sourceHashesUnchanged": true,
+          "localLinksChecked": true,
+          "whitespaceChecked": true,
+          "productFilesChanged": false
+        },
+        "mermaidSyntax": {
+          "parser": "mermaid",
+          "version": "11.12.0",
+          "domAdapter": "jsdom 26.1.0",
+          "results": [
+            {
+              "index": 1,
+              "syntax": "pass",
+              "diagramType": "flowchart-v2",
+              "sourceSha256": "8b6b0bd97a03faffeda9cd10a6ecd09e1140c188b430d783f1c0962717bad672"
+            },
+            {
+              "index": 2,
+              "syntax": "pass",
+              "diagramType": "flowchart-v2",
+              "sourceSha256": "3914baf7922310c1644afffc2d9c0485a8fa92f90c20919b9ace3d81b34773c0"
+            },
+            {
+              "index": 3,
+              "syntax": "pass",
+              "diagramType": "flowchart-v2",
+              "sourceSha256": "8837e0b8c7e53d06c78e73a21280e3ba854fcca4d6c492982c5748ea4570ac84"
+            },
+            {
+              "index": 4,
+              "syntax": "pass",
+              "diagramType": "flowchart-v2",
+              "sourceSha256": "d060168c4b061a11434b45b684597b12b1ce38a2a6d548331da487fd8e9fca7f"
+            }
+          ],
+          "invalidSyntaxControl": "rejected",
+          "scope": "Syntax parsing of final plan examples only; no browser rendering or runtime workflow verification."
+        },
+        "jev": {
+          "ok": true,
+          "model": "jev-1.13.0",
+          "answers": {
+            "probabilities": {
+              "three_reviews": 0.98,
+              "independent_review": 0.96,
+              "syntax_and_design": 0.97,
+              "no_jev_limits": 0.81,
+              "zero_limiter_bypass": 0.98,
+              "version_binding": 0.97,
+              "rendering_boundary": 0.94,
+              "scope_honesty": 0.96
+            },
+            "flags": [
+              "three_reviews",
+              "independent_review",
+              "syntax_and_design",
+              "no_jev_limits",
+              "zero_limiter_bypass",
+              "version_binding",
+              "rendering_boundary",
+              "scope_honesty"
+            ],
+            "uncertain": []
+          },
+          "usage": {
+            "input_tokens": 29804,
+            "output_tokens": 152,
+            "est_cost_usd": 0.001251768
+          },
+          "latency_ms": 3163.431,
+          "limitations": "Eight narrow judgments of the amended design body; no current Agent verdict was supplied to Jev. Probabilities are not correctness guarantees or plugin runtime validation."
+        },
+        "validationsNotRun": [
+          "Browser rendering",
+          "Runtime workflow generation/projection consistency",
+          "New runtime feature implementation",
+          "Cross-restart recovery",
+          "Actual token-savings benchmark"
+        ]
+      }
+    ],
+    "validationsNotRun": [
+      "Browser rendering",
+      "Runtime workflow generation/projection consistency",
+      "New runtime feature implementation",
+      "Cross-restart recovery",
+      "Actual token-savings benchmark",
+      "Runtime quota/pool exhaustion failover",
+      "Host normal/always precedence and abort interaction",
+      "Native backend quota failure termination",
+      "Quota-domain recovery across root and specialist sessions"
+    ]
+  },
+  "implementation": {
+    "version": "2.2.0",
+    "date": "2026-10-08",
+    "evidence": "../../evidence/implementation-2026-10-07/implementation-manifest.json",
+    "report": "../../evidence/implementation-2026-10-07/README.md",
+    "scope": "Product implementation and explicit tested coverage; historical model judgments do not certify subsequent code edits.",
+    "finalJevMcpAttempt": {
+      "status": "approval-policy-blocked",
+      "tool": "mcp__jev__jev_health",
+      "reason": "MCP tool call requires approval, but approval policy is never"
+    },
+    "finalDocumentSha256": "1137af09598d3973c4dfa13aa8ba0ee254e5ac44387d724055a5c2cceda62fb2",
+    "manifestSha256": "f2c2d4daed663e67d08c0aa671b1deb93a5c0f1dc29318f5cb563287bda4ebb5"
+  }
+}

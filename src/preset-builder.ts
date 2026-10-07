@@ -21,7 +21,7 @@ export interface PresetDeclarationInfo {
 export const PRESET_PACKAGE = '@deepseek-ai/dsh-agent-preset'
 /** 模式列表里只露出一个入口：天枢主持的「百工模式」 */
 export const BAIGONG_NAME = '百工模式'
-export const BAIGONG_DESCRIPTION = '以天枢统御百工：天枢在当前工作区拆解任务、建立任务卡，按需并行委派谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔 12 位专家 Agent（每位可在「设置 → 百工 Agent」配置多层模型链、推理强度与容灾升级）；专家交付后由衡鉴调用 Jev 复评可信度，产出与证据汇入共享账本，彼此可引用，最终由天枢依据门禁与证据验收。'
+export const BAIGONG_DESCRIPTION = '以天枢统御百工：建立含 Mermaid 执行流程的版本化任务卡，由独立专家与 Jev 审核目标和流程，按风险选用谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔 12 位专家；通过短检查点、按需材料、受限 P2P 邮箱及纯函数计算辅助协作。各专家可配置模型链、推理强度与容灾升级；交付由衡鉴复评，最终以当前版本的真实证据与硬门禁验收。'
 /**
  * 12 个单角色预设默认停用，不出现在模式列表中（委派子智能体不依赖它们）。
  * 需要把某个专家单独作为主会话使用时，设置环境变量 DSH_SWARM_ROLE_PRESETS=1 后重启 dsh。

@@ -4,12 +4,13 @@
  */
 
 const RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/pool\s+["'][^"']+["']\s+exhausted/i, '模型池当前没有可用成员：停止原池重试，尝试已配置备用；具体成员故障原因尚不确定'],
+  [/usage limit|(?:^|error[:：]\s*)QUOTA(?:$|\s*[;；])|quota\s+(exhausted|exceeded)|insufficient (balance|quota)|余额不足|额度(已)?(耗尽|用尽)/i, '额度用尽或余额不足：停止原故障域重试；是否已切换及有无备用以运行记录为准'],
   [/transport failed|fetch failed|ECONN(RESET|REFUSED|ABORTED)|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|socket hang up|\bTRANSPORT\b|\bNETWORK\b/i,
     '网络连接失败：无法连到模型服务（常见于本机断网、代理异常或服务端故障），网络恢复后会自动重试'],
   [/timed? ?out|\bTIMEOUT\b|ETIMEDOUT/i, '请求超时：模型服务长时间没有响应，可能是网络不稳定或服务繁忙'],
   [/No eligible account|NO_ADAPTER/i, '订阅账号暂不可用：未登录、令牌过期或刷新令牌时连不上网络，请在「设置 → 订阅」检查登录状态'],
   [/Unpurchased|Access to model denied|not eligible for (using )?(this|the) model/i, '账号未开通该模型：请换用其他模型或开通对应套餐'],
-  [/usage limit|quota|insufficient (balance|quota)|余额不足|额度|exhausted/i, '额度用尽或余额不足：已按路由链切换备用模型，可稍后再试或充值'],
   [/RATE_LIMIT|\b429\b|rate.?limit|too many requests/i, '触发限流：请求过于频繁，稍后会自动重试'],
   [/INVALID_CREDENTIAL|UNAUTHORIZED|FORBIDDEN|\b401\b|\b403\b|invalid api key|authentication/i, '认证失败：API Key 无效或已过期，请在「设置 → 模型」更新密钥'],
   [/UNKNOWN_MODEL|model[^\n]*not (found|exist)|model-unavailable/i, '模型不可用：供应商目录里没有该模型，请检查路由配置'],

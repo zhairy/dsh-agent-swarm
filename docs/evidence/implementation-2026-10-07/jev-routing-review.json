@@ -1,0 +1,51 @@
+{
+  "recorded_on": "2026-10-08",
+  "timezone": "Asia/Shanghai",
+  "tool": "mcp__jev__jev_check",
+  "original_call_date": "2026-10-07",
+  "exact_call_time": "not_recorded",
+  "scope": "Initial implementation summary; not a final review of all subsequent edits. No new Jev call was made to create this artifact.",
+  "provenance": "Transcribed from the actual successful MCP tool result in this agent session. structuredContent is retained without changes.",
+  "input": {
+    "state": {
+      "user_requirement": "Quota/pool/balance terminal failures must not retry failed resources or wait 9060669ms; use configured backups. No local Jev RPS, concurrency, calls/token/cost caps. Short transient lifecycle retry retained.",
+      "implementation": "Managed runtime error listener prepended in Cordis, recover does not call next for managed agents. normalized explicit quota/pool/balance facts mark shared account/pool health unavailable. No usable backup returns host-verified undefined and terminal route_chain_exhausted; delegate integration will stop outer restarts. Same step max8 observed generation requests, max1 short extra retry with <=2000ms delay <=5000ms total. Unknown quota domain isolates route. Explicit reset permits one half-open, successful model finish clears; no fixed 10min quota reset. Native internal retry coverage false when unobservable. Jev client ignores old positive RPS, 0 limiter bypasses; explicit quota429/402/auth stop; ordinary429 finite retries; longRetryAfter unavailable instead of truncated early retry.",
+      "tests": "57 targeted unit tests passed. Two tests actually imported sandbox official Cordis, dsh-scope and dsh-llm-retry in normal/always modes; pool9060669 causes immediate backupretry, no llm/retry event; backup exhaustion undefined with no retry event. Full agent loop/native integration still pending root."
+    },
+    "propositions": {
+      "terminal_precedence": "Explicit terminal resource failures are handled before invoking host retry next(), avoiding host long backoff in tested managed Cordis recovery paths.",
+      "no_jev_local_cap": "The described Jev implementation has no local RPS/concurrency/usage quota despite keeping finite timeout and upstream-error retries.",
+      "honest_coverage": "The description separates real Cordis recovery test coverage from full agent-loop/native coverage, avoiding an unsupported complete-guarantee claim."
+    }
+  },
+  "structuredContent": {
+    "ok": true,
+    "model": "jev-1.13.0",
+    "answers": {
+      "probabilities": {
+        "terminal_precedence": 0.86,
+        "no_jev_local_cap": 0.8,
+        "honest_coverage": 0.89
+      },
+      "flags": [
+        "terminal_precedence",
+        "no_jev_local_cap",
+        "honest_coverage"
+      ],
+      "uncertain": []
+    },
+    "usage": {
+      "input_tokens": 677,
+      "output_tokens": 63,
+      "est_cost_usd": 2.8434000000000003e-05
+    },
+    "latency_ms": 4160.765
+  },
+  "isError": false,
+  "limitations": [
+    "This call evaluated supplied summary, not full source or running implementation.",
+    "The initial summary said successful finish clears half-open; later code corrected the hook to committed assistant/message end frames.",
+    "Full AgentLoop integration, default Qwen policy and persistent failure-event hooks were added after this review.",
+    "No Jev final audit of those later changes is claimed."
+  ]
+}

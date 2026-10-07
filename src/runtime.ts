@@ -1,6 +1,7 @@
 import Schema from '@deepseek-ai/schemastery'
 import {
   SWARM_SERVICE,
+  getAgentHeader,
   type AgentLike,
   type CallConfigLike,
   type PluginContextLike,
@@ -29,10 +30,21 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   if (service === undefined) return
   const role = readLive<unknown>((config as { role?: unknown } | undefined)?.role)
   const presetRole = isRoleId(role) ? role : undefined
-  ctx.on('agent/request', async (payload: { agent: AgentLike }, next: () => Promise<CallConfigLike>) =>
-    service.routeState.getRequestOverride(payload.agent, await next(), presetRole, service.getConfig()))
-  ctx.on('agent/request-error', async (payload: RequestErrorPayloadLike, next: () => Promise<RequestErrorActionLike>) =>
-    service.routeState.getErrorAction(payload, await next(), presetRole, service.getConfig()))
+  const isTracked = (agent: AgentLike): boolean => service.routeState.getChildRole(agent.id) !== undefined || (presetRole !== undefined && getAgentHeader(agent).parentSession === undefined)
+  ctx.on('agent/request', async (payload: { agent: AgentLike; turn?: number; step?: number }, next: () => Promise<CallConfigLike>) => {
+    await service.WaitAgentReady(payload.agent)
+    if (isTracked(payload.agent) && payload.turn !== undefined && payload.step !== undefined) service.routeState.BeginRequestStep(payload.agent.id, payload.turn, payload.step)
+    return service.routeState.getRequestOverride(payload.agent, await next(), presetRole, service.getConfig())
+  })
+  // prepend 在真实 Cordis waterfall 中先运行；没有调用 next 就截断宿主 retry 的 sleep。
+  ctx.on('agent/request-error', (payload: RequestErrorPayloadLike, next: () => Promise<RequestErrorActionLike>) =>
+    service.routeState.recover(payload, next, presetRole, service.getConfig()), { prepend: true })
+  ctx.on('agent/assistant-stream', (payload: { agent: AgentLike; frame?: { type?: string; attemptId?: string; outcome?: { kind?: string; eventType?: string } } }) => {
+    if (!isTracked(payload.agent)) return
+    if (payload.frame?.type === 'start' && typeof payload.frame.attemptId === 'string') service.routeState.MarkRequestStarted(payload.agent.id, payload.frame.attemptId)
+    // 真实宿主发布 end/committed（原始 finish 在 chunk 内）；失败只提交 assistant/attempt。
+    if (payload.frame?.type === 'end' && payload.frame.outcome?.kind === 'committed' && payload.frame.outcome.eventType === 'assistant/message') service.routeState.MarkRequestSucceeded(payload.agent.id)
+  })
   ctx.on('agent/disposed', (event: { agent?: AgentLike } | undefined) => {
     const id = event?.agent?.id
     if (id !== undefined) service.routeState.ReleaseAgent(id)

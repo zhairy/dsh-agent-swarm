@@ -127,7 +127,28 @@ export interface TaskPromptPartsInfo {
   delivery: string
   /** 追加到已有会话时的抬头 */
   header?: string
+  /** 本轮贴近任务的有限身份/节点/版本信息；旧调用不传时格式保持不变 */
+  envelope?: TaskEnvelopeInfo
 }
+
+export interface TaskEnvelopeInfo {
+  role: string
+  permission: string
+  taskId: string
+  nodeId: string
+  attemptId: string
+  cardRevision: number
+  workflowRevision: number
+  allowedPaths: string[]
+  materialRefs?: string[]
+}
+export const getTaskEnvelopeText = (envelope: TaskEnvelopeInfo): string => [
+  `身份：${envelope.role}；权限：${envelope.permission}`,
+  `本轮：${envelope.taskId} / ${envelope.nodeId} / ${envelope.attemptId}；合同 ${envelope.cardRevision}；流程 ${envelope.workflowRevision}`,
+  `允许范围：${envelope.allowedPaths.length === 0 ? '由当前合同指定' : envelope.allowedPaths.join('、')}`,
+  ...(envelope.materialRefs === undefined || envelope.materialRefs.length === 0 ? [] : [`按需材料：${envelope.materialRefs.join('、')}；读取时核对当前版本与摘要`]),
+  '仅按本轮交付契约提交；阻塞、反例或资源不足写入 unresolved，不扩大任务。'
+].join('\n')
 
 /**
  * 按风格组织委派任务说明：Claude 长材料在前、要求在后并用 XML 分节；GPT 用目标/停止条件/证据；其余用分隔标题
@@ -142,6 +163,7 @@ export const getStyledTaskPrompt = (parts: TaskPromptPartsInfo, style: PromptSty
       ...header,
       ...(parts.brief === undefined ? [] : [`<task_context>\n${parts.brief}\n</task_context>`]),
       `<task>\n${parts.request}\n</task>`,
+      ...(parts.envelope === undefined ? [] : [`<current_contract>\n${getTaskEnvelopeText(parts.envelope)}\n</current_contract>`]),
       `<deliverable>\n${parts.delivery}\n</deliverable>`
     ].join('\n\n')
   }
@@ -149,6 +171,7 @@ export const getStyledTaskPrompt = (parts: TaskPromptPartsInfo, style: PromptSty
     return [
       ...header,
       `GOAL:\n${parts.request}`,
+      ...(parts.envelope === undefined ? [] : [`CURRENT CONTRACT:\n${getTaskEnvelopeText(parts.envelope)}`]),
       ...(parts.brief === undefined ? [] : [`CONTEXT:\n${parts.brief}`]),
       'STOP WHEN: 本次任务的要求已完成，并能用证据（文件路径、命令与退出码、来源链接）证明。',
       'EVIDENCE: 结论依据天枢可以复核的事实，而不是自述。',
@@ -160,6 +183,7 @@ export const getStyledTaskPrompt = (parts: TaskPromptPartsInfo, style: PromptSty
     ...(parts.brief === undefined ? [] : [parts.brief]),
     '—— 本次任务 ——',
     parts.request,
+    ...(parts.envelope === undefined ? [] : [getTaskEnvelopeText(parts.envelope)]),
     '—— 交付 ——',
     parts.delivery
   ].join('\n\n')

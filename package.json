@@ -1,7 +1,7 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "2.1.0",
-  "description": "DSH 中文多智能体插件：13 个中文角色、衡鉴分流、统一委派、证据门禁、模型回退、内嵌 Jev 判断工具与按模型家族适配的提示",
+  "version": "2.2.0",
+  "description": "DSH 中文多智能体插件：版本化 Mermaid 任务流程、独立规划审核、额度耗尽立即回退、Jev 判断、受限专家协作与纯函数数学验证",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -47,11 +47,19 @@
     "prepare": "npm run build",
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "test:integration": "npm run build && vitest run --config vitest.integration.config.ts",
     "gen:presets": "node scripts/gen-presets.mjs",
-    "doctor": "node scripts/doctor.mjs"
+    "sandbox": "node scripts/sandbox.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "bench:workflow": "npm run build && node scripts/bench-workflow.mjs",
+    "sync-dsh": "node scripts/sync-dsh.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "~3.18.4"
+    "@deepseek-ai/schemastery": "~3.18.4",
+    "mermaid": "11.12.0",
+    "jsdom": "26.1.0"
   },
   "dsh": {
     "minVersion": "0.1.7-alpha.2",
@@ -69,7 +77,8 @@
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-api-session-controller",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-primitives"
       ]
     },
     "bundle": {
@@ -93,7 +102,9 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
+    "@vitest/coverage-v8": "^5.0.1",
     "typescript": "^7.0.2",
+    "vitest": "^5.0.1",
     "yaml": "^2.9.1"
   }
 }

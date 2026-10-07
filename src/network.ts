@@ -1,4 +1,5 @@
 import type { LlmFailureLike } from './host-contract.js'
+import { isTerminalRouteFailure, normalizeRouteFailure } from './provider-policy.js'
 
 /**
  * 联网探测：模型请求因传输失败、超时或订阅令牌刷新失败而出错时，先判断是整机断网还是单个供应商故障。
@@ -56,6 +57,10 @@ const NETWORK_MESSAGE = /transport failed|fetch failed|timed out|ECONN(RESET|REF
  */
 export const isNetworkSuspect = (failure: LlmFailureLike | undefined): boolean => {
   if (failure === undefined) return false
+  if (isTerminalRouteFailure(normalizeRouteFailure(failure, { provider: '', model: '' }))) {
+    // NO_ADAPTER 可能来自断网时的登录刷新；已确认 pool/quota/余额不走网络恢复。
+    if (String(failure.code ?? '').toUpperCase() !== 'NO_ADAPTER' || !/No eligible account/i.test(failure.message ?? '')) return false
+  }
   if (NETWORK_CODES.has(String(failure.code ?? '').toUpperCase())) return true
   return NETWORK_MESSAGE.test(failure.message ?? '')
 }

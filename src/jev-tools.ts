@@ -30,7 +30,7 @@ import type { JsonSchemaObject } from './util/json-schema.js'
 /**
  * 内嵌的 7 个 Jev 工具：jev_ask / jev_check / jev_classify / jev_health / jev_match / jev_score / jev_screen。
  * 语义与返回结构对齐 jev-mcp v0.2.1（MIT，Copyright (c) 2026 Blake Stone），由插件直接调用 TypeSafe System One，
- * 共用百工的 Jev 客户端（限流、重试、凭据解析）。返回信封：
+ * 共用百工的 Jev 客户端（无本地限流/使用额度，保留错误重试与凭据解析）。返回信封：
  * 成功 { ok: true, model, answers, usage: { input_tokens, output_tokens, est_cost_usd }, latency_ms }，
  * 失败 { ok: false, status, error, details? }。置信度表示判断的集中程度，不等于正确性。
  */
@@ -40,7 +40,7 @@ export type JevToolResult =
       ok: true
       model: string
       answers: unknown
-      usage: { input_tokens: number; output_tokens: number; est_cost_usd: number }
+      usage: { input_tokens: number | null; output_tokens: number | null; est_cost_usd: number | null; usage_unknown?: boolean }
       latency_ms: number
     }
   | { ok: false; status: number; error: string; details?: Array<{ loc: string[]; msg: string }>; retry_after_ms?: number; [key: string]: unknown }
@@ -196,9 +196,13 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
   const now = deps.now ?? Date.now
 
   const getUsage = (outcomes: Array<Extract<JevAskOutcome, { ok: true }>>) => {
-    const input = outcomes.reduce((sum, item) => sum + item.usage.inputTokens, 0)
-    const output = outcomes.reduce((sum, item) => sum + item.usage.outputTokens, 0)
-    return { input_tokens: input, output_tokens: output, est_cost_usd: input * DEFAULT_PRICE_PER_MTOK / 1_000_000 }
+    const valid = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    const inputs = outcomes.map((item) => item.usage?.inputTokens)
+    const outputs = outcomes.map((item) => item.usage?.outputTokens)
+    const input = inputs.every(valid) ? inputs.reduce((sum: number, value) => sum + value, 0) : null
+    const output = outputs.every(valid) ? outputs.reduce((sum: number, value) => sum + value, 0) : null
+    const unknown = input === null || output === null
+    return { input_tokens: input, output_tokens: output, est_cost_usd: unknown ? null : input * DEFAULT_PRICE_PER_MTOK / 1_000_000, ...(unknown ? { usage_unknown: true } : {}) }
   }
 
   const success = (outcomes: Array<Extract<JevAskOutcome, { ok: true }>>, answers: unknown, started: number): JevToolResult => ({
@@ -557,7 +561,7 @@ export const getJevToolText = (name: string, result: JevToolResult): string => {
   const json = JSON.stringify(result, null, 2)
   const body = json.length > MAX_RENDER ? `${json.slice(0, MAX_RENDER)}\n…（已截断）` : json
   if (!result.ok) return `${name} 失败（${result.status}）：${result.error}\n${body}`
-  const cost = result.usage.est_cost_usd > 0 ? `，约 $${result.usage.est_cost_usd.toFixed(6)}` : ''
+  const cost = result.usage.est_cost_usd === null ? '，用量/费用未知' : result.usage.est_cost_usd > 0 ? `，约 $${result.usage.est_cost_usd.toFixed(6)}` : ''
   return `${name} 完成（${result.model}，${Math.round(result.latency_ms)} ms${cost}）\n${body}`
 }
 

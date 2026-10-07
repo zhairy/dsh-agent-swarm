@@ -36,7 +36,10 @@ export const CAPABILITY_TOOL_CANDIDATES = {
   edit: ['write', 'edit'],
   shell: ['pwsh', 'bash'],
   web: ['web_search', 'web_fetch'],
-  jev: ['jev_ask', 'jev_check', 'jev_classify', 'jev_health', 'jev_match', 'jev_score', 'jev_screen']
+  jev: ['jev_ask', 'jev_check', 'jev_classify', 'jev_health', 'jev_match', 'jev_score', 'jev_screen'],
+  calculate: ['swarm_calculate'],
+  context: ['swarm_context_read'],
+  message: ['swarm_message_send', 'swarm_message_read', 'swarm_message_ack']
 } as const satisfies Record<string, readonly string[]>
 
 /** 角色能力名 */
@@ -55,7 +58,10 @@ export interface SessionHeaderLike {
 /** Agent 的最小形状 */
 export interface AgentLike {
   id: string
-  session?: { header?: SessionHeaderLike }
+  session?: {
+    header?: SessionHeaderLike
+    deriveMessages?: () => readonly { id?: string; role?: string; source?: { kind?: string }; content?: readonly ContentBlockLike[] }[]
+  }
 }
 
 /** LLM 失败信息 */
@@ -63,6 +69,13 @@ export interface LlmFailureLike {
   code?: string
   status?: number
   message?: string
+  providerRetryAfterMs?: number
+  requestId?: string
+  kind?: string
+  quotaDomainId?: string
+  quotaScope?: 'account' | 'plan' | 'model' | 'pool' | 'unknown'
+  poolId?: string
+  resetAt?: string
 }
 
 /** 一次模型调用的路由配置 */

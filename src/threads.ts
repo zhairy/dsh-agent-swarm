@@ -29,6 +29,7 @@ export interface ThreadInfo {
   style?: PromptStyle
   /** 该会话处理过的任务 */
   taskIds: string[]
+  seenRevisions?: Record<string, { cardRevision: number; workflowRevision: number; requestRevision?: number }>
   /** 最近几轮的请求与结论，供衡鉴判断新请求是否同类 */
   history: Array<{ delegationId: string; taskId: string; request: string; summary: string; status: string }>
   createdAt: number

@@ -90,6 +90,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     network: intNetworkMonitor({ fetch: fetchImpl, getUrls: () => getConfig().agents.networkProbeUrls })
   })
   ctx.effect(() => ctx.provide(SWARM_SERVICE, service))
+  ctx.effect(() => () => service.dispose())
   ctx.effect(() => PublishManagedAgents((agent) => service.isManagedAgent(agent as AgentLike)))
   // 连续会话（continuable）的每一轮结束都经 subagent/end 通知；swarm_delegate 据此取回结果
   ctx.on('subagent/end', (info: SubagentEndInfoLike) => service.OnSubagentEnd(info))
@@ -97,10 +98,11 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   ctx.on('agent/pre-step', async (_payload: unknown, next: () => Promise<PreStepDecisionLike>) => service.FilterPreStep(await next()))
   const tools = ctx.get('tools') as ToolsLike | undefined
   if (tools !== undefined) ctx.effect(() => tools.guard((execution) => service.getGuardReason(execution)))
-  // 设置页「Jev API key」卡片的状态与测试连接；无界面的 profile 没有 connection，跳过
+  // 使用宿主 connection 同一 profile owner 的认证，任务只读并要求已登记根会话。
+  // 本层不宣称跨租户 ACL；无界面的 profile 没有 connection，跳过。
   ctx.inject?.(['connection'], (scoped) => {
     const connection = scoped.get('connection') as ConnectionLike | undefined
     if (connection?.fetch?.register === undefined) return
-    for (const route of getRpcRoutes(() => service.jev)) scoped.effect(() => connection.fetch.register(route))
+    for (const route of getRpcRoutes(() => service.jev, { taskView: (sessionId, taskId) => service.getTaskViewForRpc(sessionId, taskId) })) scoped.effect(() => connection.fetch.register(route))
   })
 }

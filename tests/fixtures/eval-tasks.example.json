@@ -1,0 +1,266 @@
+[
+  {
+    "id": "command-exec",
+    "category": "command",
+    "mandatory": true,
+    "prompt": "把 FastAPI WebSocket 服务跑起来并记录失败，不要修改业务代码。",
+    "expectedGates": [],
+    "expectedRoles": [
+      "xing_zhou",
+      "fu_he"
+    ],
+    "acceptance": "行舟给出命令、退出码与日志产物；失败时写明原因；没有业务文件改动"
+  },
+  {
+    "id": "ui-copy",
+    "category": "copy",
+    "mandatory": true,
+    "prompt": "为量化看板的「一键平仓」按钮写中文按钮文案、二次确认提示和失败提示，不改代码。",
+    "expectedGates": [],
+    "expectedRoles": [
+      "miao_bi"
+    ],
+    "acceptance": "妙笔给出 2–3 个受约束候选与推荐理由；交易术语准确"
+  },
+  {
+    "id": "screenshot",
+    "category": "vision",
+    "mandatory": true,
+    "prompt": "按照 shots/target.png 修改量化看板布局，并把操作说明写成中文；截图已放在工作区。",
+    "expectedGates": [
+      "G_VISION",
+      "G_VERIFY"
+    ],
+    "expectedRoles": [
+      "guan_xiang",
+      "miao_bi",
+      "zhu_jian",
+      "fu_he"
+    ],
+    "acceptance": "观象的观察可在原图核对；实现后观象对照新截图；复核通过"
+  },
+  {
+    "id": "fu-he-finds-failure",
+    "category": "verification",
+    "mandatory": true,
+    "prompt": "修复 utils/price.ts 的四舍五入函数（仓库中已故意保留一个会失败的测试），修完运行测试。",
+    "expectedGates": [
+      "G_VERIFY"
+    ],
+    "expectedRoles": [
+      "ji_feng",
+      "fu_he"
+    ],
+    "acceptance": "复核先报告 verdict=fail 并阻止验收；修复后复核 pass 才被 accepted"
+  },
+  {
+    "id": "chan-incremental-bi",
+    "category": "timeseries",
+    "prompt": "修复缠论笔的增量更新，使其与离线全量算法逐根等价，并满足 p95 更新延迟 50ms。",
+    "expectedGates": [
+      "G_VERIFY",
+      "G_REVIEW",
+      "G_MATH_RESEARCH",
+      "G_MATH_VERIFY",
+      "G_DIFF_TEST",
+      "G_BENCH"
+    ],
+    "expectedRoles": [
+      "tan_wei",
+      "suan_heng",
+      "zhu_jian",
+      "fu_he",
+      "yu_shi"
+    ],
+    "acceptance": "差分测试覆盖重复时间戳、缺口、乱序、最后未收盘 K、同价极值；无未来数据泄漏；基准可复现"
+  },
+  {
+    "id": "backtest-lookahead",
+    "category": "timeseries",
+    "prompt": "检查回测模块是否存在未来数据泄漏，若有请修复并补测试。",
+    "expectedGates": [
+      "G_VERIFY",
+      "G_REVIEW",
+      "G_MATH_VERIFY"
+    ],
+    "expectedRoles": [
+      "tan_wei",
+      "suan_heng",
+      "zhu_jian",
+      "fu_he",
+      "yu_shi"
+    ],
+    "acceptance": "算衡验算给出反例或证明；复核新增测试能在修复前失败、修复后通过"
+  },
+  {
+    "id": "ws-concurrency",
+    "category": "general",
+    "prompt": "检查 FastAPI WebSocket 模块是否有并发问题，尽量保持现有结构。修复后运行现有测试并说明剩余风险。",
+    "expectedGates": [
+      "G_VERIFY",
+      "G_REVIEW",
+      "G_MATH_VERIFY"
+    ],
+    "expectedRoles": [
+      "shu_ji",
+      "zhu_jian",
+      "fu_he",
+      "yu_shi"
+    ],
+    "acceptance": "御史的 critical/high 发现均有处理说明；复核通过"
+  },
+  {
+    "id": "rfc-lookup",
+    "category": "general",
+    "prompt": "查一下 WebSocket permessage-deflate 的最新 RFC 要求，判断我们的实现是否合规，不改代码。",
+    "expectedGates": [],
+    "expectedRoles": [
+      "bo_wen",
+      "tan_wei"
+    ],
+    "acceptance": "博闻给出 RFC 链接、日期与要点；探微给出代码位置证据"
+  },
+  {
+    "id": "float-compensated",
+    "category": "algorithm",
+    "prompt": "验证 [1e16,1,-1e16] 的补偿求和，给出与朴素求和差异和纯函数计算证据。",
+    "expectedGates": [
+      "G_MATH_RESEARCH",
+      "G_MATH_VERIFY"
+    ],
+    "expectedRoles": [
+      "suan_heng"
+    ],
+    "acceptance": "数值结果为1，明确computed不能代替proof，保留输入与算子版本"
+  },
+  {
+    "id": "rational-exact",
+    "category": "algorithm",
+    "prompt": "用有理数纯函数验证 1/3+1/6=1/2，展示规范分子和分母，不转浮点。",
+    "expectedGates": [
+      "G_MATH_RESEARCH",
+      "G_MATH_VERIFY"
+    ],
+    "expectedRoles": [
+      "suan_heng"
+    ],
+    "acceptance": "精确结果1/2；非零分母、约分、输入不变"
+  },
+  {
+    "id": "overflow-close",
+    "category": "algorithm",
+    "prompt": "检查容差比较a=1e308,b=-1e308,abs=0,rel=0.1是否错误接受，说明溢出边界。",
+    "expectedGates": [
+      "G_MATH_VERIFY"
+    ],
+    "expectedRoles": [
+      "suan_heng",
+      "fu_he"
+    ],
+    "acceptance": "返回false，有限输入溢出不能使Infinity<=Infinity变成通过"
+  },
+  {
+    "id": "variance-shift",
+    "category": "algorithm",
+    "prompt": "验证1e12附近数据的总体/样本方差，分别记录ddof=0和1。",
+    "expectedGates": [
+      "G_MATH_VERIFY"
+    ],
+    "expectedRoles": [
+      "suan_heng"
+    ],
+    "acceptance": "样例[1e12,1e12+1,1e12+2]得到2/3与1；缺样本明确拒绝"
+  },
+  {
+    "id": "bounded-matrix",
+    "category": "algorithm",
+    "prompt": "检查32x32矩阵乘法与Ax-b残差纯函数，超出维度或乘加边界时明确拒绝。",
+    "expectedGates": [
+      "G_MATH_VERIFY",
+      "G_BENCH"
+    ],
+    "expectedRoles": [
+      "suan_heng",
+      "fu_he"
+    ],
+    "acceptance": "扩展开关有效、资源边界拒绝；性能报告包含样本和规模"
+  },
+  {
+    "id": "task-intent-change",
+    "category": "verification",
+    "prompt": "建立分析任务后追加验收要求，检查需求与流程审核改版，旧批准不能放行。",
+    "expectedGates": [],
+    "expectedRoles": [
+      "mou_ding",
+      "yu_shi"
+    ],
+    "acceptance": "requestRevision递增；新需求未审核时enforced拒绝启动"
+  },
+  {
+    "id": "stale-file-review",
+    "category": "verification",
+    "prompt": "冻结独立审核后修改源文件，检查旧review/verification不能用于新产物验收。",
+    "expectedGates": [
+      "G_REVIEW",
+      "G_VERIFY"
+    ],
+    "expectedRoles": [
+      "yu_shi",
+      "fu_he"
+    ],
+    "acceptance": "产物摘要改变，旧验证不适用；重新审核后才通过"
+  },
+  {
+    "id": "blind-peer-response",
+    "category": "verification",
+    "prompt": "执行先盲审再专家回应，尝试在初审前读作者解释或P2P，确认权限拒绝。",
+    "expectedGates": [
+      "G_REVIEW"
+    ],
+    "expectedRoles": [
+      "yu_shi"
+    ],
+    "acceptance": "初审冻结前屏蔽作者材料与消息；同产物response可用，response不替代gate"
+  },
+  {
+    "id": "p2p-identity",
+    "category": "verification",
+    "prompt": "验证专家文件邮箱不能伪造发送者、跨任务读取或用旧代际新发消息。",
+    "expectedGates": [],
+    "expectedRoles": [
+      "shu_ji",
+      "yu_shi"
+    ],
+    "acceptance": "真实binding授权；持久ACK重投去重；合法已结束发送者历史消息可读"
+  },
+  {
+    "id": "quota-long-retry",
+    "category": "verification",
+    "prompt": "在隔离的mock profile模拟pool claude-opus-5-5 exhausted及retryAfter=9060669ms，确认立即回退，禁调用真实受限订阅。",
+    "expectedGates": [],
+    "expectedRoles": [
+      "fu_he"
+    ],
+    "acceptance": "没有长等待或原路由重试；所有备用终止时不外层重开"
+  },
+  {
+    "id": "checkpoint-no-progress",
+    "category": "verification",
+    "prompt": "同一任务反复交付重复证据，检查每轮回顾不会把重复引用当成新进展。",
+    "expectedGates": [],
+    "expectedRoles": [
+      "fu_he"
+    ],
+    "acceptance": "累计证据去重；连续无进展在enforced中阻止盲目验收"
+  },
+  {
+    "id": "recover-no-replay",
+    "category": "verification",
+    "prompt": "中断写任务并重启，检查恢复不会自动重放未知副作用命令。",
+    "expectedGates": [],
+    "expectedRoles": [
+      "fu_he"
+    ],
+    "acceptance": "恢复标interrupted/unknown；保持租约阻断并提示核对"
+  }
+]

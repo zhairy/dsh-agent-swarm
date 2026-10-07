@@ -1,0 +1,24 @@
+{
+  "name": "dsh-agent-swarm",
+  "version": "2.2.0",
+  "checkedAt": "2026-10-07T17:17:02.015706+00:00",
+  "size": 1792863,
+  "unpackedSize": 3547208,
+  "fileCount": 214,
+  "requiredFilesPresent": true,
+  "requiredFiles": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/workflow.js",
+    "lib/planning-review.js",
+    "lib/feature-session.js",
+    "lib/math/operators.js",
+    "presets/tian-shu.patch.yml",
+    "skills/typesafe-ai/SKILL.md",
+    "docs/任务流程与验证.md",
+    "docs/evidence/implementation-2026-10-07/README.md",
+    "docs/evidence/implementation-2026-10-07/implementation-manifest.json"
+  ],
+  "privateCacheExcluded": true,
+  "scope": "Final product and evidence npm dry-run; this summary is metadata added after dry-run; no npm publication"
+}

@@ -5,6 +5,10 @@ import type { FindingResolution, GateDelegationView, GateRequirement, TaskCard, 
 import type { RouteInfo } from './routes.js'
 import { SwarmError } from './util/errors.js'
 import type { PromptStyle } from './model-family.js'
+import type { WorkflowDefinition, WorkflowStateInfo } from './workflow.js'
+import type { PlanningReviewRecord } from './planning-review.js'
+import type { ArtifactSnapshot } from './artifacts.js'
+import type { CheckpointInfo } from './checkpoint.js'
 
 export type DelegationStatus = GateDelegationView['status']
 export type BackendKind = 'spawn' | 'codex' | 'codex-edit' | 'claude-plan' | 'claude-edit'
@@ -35,6 +39,7 @@ export interface AssessmentInfo {
 
 /** 一次委派的完整记录 */
 export interface DelegationRecord extends GateDelegationView {
+  requestRevision?: number
   taskId: string
   roleName: string
   gate?: string
@@ -61,6 +66,10 @@ export interface DelegationRecord extends GateDelegationView {
   retries?: DelegationRetryInfo[]
   /** 按所用模型家族选定的提示风格（claude / gpt / generic） */
   promptStyle?: PromptStyle
+  artifactBefore?: string
+  artifactAfter?: string
+  staleReason?: string
+  reviewPhase?: 'blind' | 'response'
 }
 
 /** 一次委派的会话方式 */
@@ -117,6 +126,25 @@ export interface TaskRecord {
   acceptance?: AcceptanceRecord
   createdAt: number
   updatedAt: number
+  cardRevision?: number
+  workflowRevision?: number
+  requestRevision?: number
+  intentText?: string
+  intentSource?: 'host' | 'declared'
+  intentSourceRef?: string
+  intentLastDigest?: string
+  workflowDefinition?: WorkflowDefinition
+  workflowState?: WorkflowStateInfo
+  workflowDigest?: string
+  planningReview?: PlanningReviewRecord
+  planningFixRounds?: number
+  artifactSnapshot?: ArtifactSnapshot
+  checkpoint?: CheckpointInfo
+  workspaceId?: string
+  requestIds?: Record<string, string>
+  requestInputs?: Record<string, string>
+  recovered?: boolean
+  contextRefs?: Array<{ ref: string; digest: string; layer: string; kind: string }>
 }
 
 const TRANSITIONS: Readonly<Record<DelegationStatus, readonly DelegationStatus[]>> = {
@@ -198,6 +226,8 @@ export type LedgerEventType =
   | 'task/card' | 'delegation/queued' | 'delegation/running' | 'delegation/completed' | 'delegation/failed'
   | 'delegation/blocked' | 'route/skipped' | 'route/fallback' | 'route/upgrade' | 'jev/call' | 'review/assessment' | 'native/call' | 'accept/decision'
   | 'session/plan' | 'delegation/retry'
+  | 'workflow/review' | 'workflow/checkpoint' | 'workflow/stale' | 'math/computed'
+  | 'message/send' | 'message/ack' | 'state/recovered' | 'experience/candidate'
 
 /** 账本事件（一行 JSON） */
 export interface LedgerEvent {

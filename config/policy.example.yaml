@@ -14,7 +14,7 @@
       apiKeyEnv: TYPESAFE_API_KEY  # 凭据引用名：环境变量或 DSH 凭据库
       timeoutMs: 10000
       maxRetries: 4                # 429/529/5xx/超时的重试次数；Jev 调用不设会话额度（单次约 $0.00001）
-      maxRequestsPerSecond: 8      # 进程内每秒最多发出的 Jev 请求（衡鉴与 jev_* 工具共用）
+      maxRequestsPerSecond: 0      # 兼容字段；旧非零值也忽略，所有 Jev 入口均不设本地限流
       maxRequestChars: 120000      # 单次请求体字符上限
       mathConfidence: 0.7          # math_task 置信度低于此值时走严格路径（算法任务强制验算与审查）
       benchmarkNoul: 0.5           # need_benchmark 概率达到此值时追加 G_BENCH
@@ -29,7 +29,7 @@
       retryBackoffMs: 5000         # 出错重试前的等待（逐次加倍）
       promptStyle: auto            # auto：按模型家族组织提示（Claude：XML 分节；GPT：目标/停止条件/证据；其他：编号步骤）；也可固定 claude / gpt / generic
       networkWaitMs: 600000        # 断网引起的失败先等网络恢复（最长 10 分钟），再在原模型重试；0 为直接回退
-      rootRecoverMs: 600000        # 天枢回退到备用模型 10 分钟后重新尝试对话框所选模型；0 为不恢复
+      rootRecoverMs: 600000        # 普通故障回退后的恢复；确认耗尽的额度域不会靠此计时器清除
       modelCallDisplay: every      # 聊天窗口「调用模型」行：every 每次调用都显示；turn 只在每轮首次与换模型时显示
       networkProbeUrls:            # 联网探测地址：任一有 HTTP 响应即视为联网
         - https://api.deepseek.com
@@ -40,4 +40,35 @@
       maxCallsPerRole: 0           # 0 为不限
       maxCallsZhuJian: 0           # 0 为不限
       maxAutoFixRounds: 1          # swarm_accept 的 reject 轮次上限
+    workflow:
+      mode: enforced              # 默认 advisory 兼容旧委派；此例按流程依赖和审核结果强制执行
+      maxNodes: 32
+      maxEdges: 64
+    planningReview:
+      enabled: true
+      requireJev: true             # 双审严格模式：Jev 不可用时明确阻断
+      maxFixRounds: 2
+      reviewAbove: 0.8
+    recovery:
+      maxTransientRetries: 1
+      maxLogicalAttempts: 8
+      maxShortRetryDelayMs: 2000
+      maxTransientWaitMs: 5000
+    execution:
+      profile: bounded            # 默认 legacy；本例启用 quick/standard/algorithm 委派数量边界
+      maxCalls: 0                  # bounded 模式 0 使用按任务模式的默认数量；legacy 模式 0 不限
+      maxTokens: 0                 # 0 不限；正值需要可信调用估计，无法估计时拒绝启动
+      maxCostUsd: 0                # Jev 不计入执行预算
+    persistence:
+      enabled: true
+      directory: ''               # 留空使用 profile 下私有状态目录；恢复不自动重放写操作
+    messageBus:
+      enabled: true               # 要求 persistence 同时启用；仅已绑定专家间文件邮箱
+      maxPending: 128
+    math:
+      enabled: true
+      enableExtended: false       # 矩阵/多项式算子需明确开启
+      maxCallsPerTask: 64
+    experience:
+      enabled: true               # 先存候选，有当前独立审查与复核证据才可晋升
     ledgerDir: ''                  # 留空：<DSH_HOME>/share/dsh-agent-swarm/ledger

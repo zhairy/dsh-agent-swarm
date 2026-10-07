@@ -10,7 +10,7 @@ const React = require('react')
 const h = React.createElement
 
 /**
- * @typedef {{ provider: string, model: string, reasoningEffort?: string }} RouteInfo
+ * @typedef {{ provider: string, model: string, reasoningEffort?: string, policy?: Record<string, unknown> }} RouteInfo
  * @typedef {{ enabled: boolean, chain: RouteInfo[], triggers: string[] }} UpgradeInfo
  * @type {{
  *   namespace: string,
@@ -240,16 +240,55 @@ const en = {
   jevLoadFailed: 'Could not read the Jev key status.'
 }
 
+Object.assign(zh, { errRoutePolicy: '路由额度域配置不合法或超限，请在配置中修正后保存', resource_subscription: '订阅', resource_metered_api: '按量 API', resource_judgment_api: '判断 API', resource_unknown: '资源类型未声明' })
+Object.assign(en, { errRoutePolicy: 'Route quota policy is invalid or exceeds limits; repair its configuration before saving', resource_subscription: 'Subscription', resource_metered_api: 'Metered API', resource_judgment_api: 'Judgment API', resource_unknown: 'Resource type unspecified' })
+
 // ───────────────────────── 纯逻辑（单元测试覆盖） ─────────────────────────
 
 const asRecord = (value) => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {})
 
+/** 保留页面不编辑的额度域等 JSON 元数据；容量或形状异常时阻止保存，不静默清掉隔离配置。 */
+const cloneResourcePolicy = (raw) => {
+  try {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+    let remaining = 1024
+    const copy = (value, depth) => {
+      if (depth > 5 || --remaining < 0) throw new Error('policy complexity limit')
+      if (value === null || typeof value === 'boolean') return value
+      if (typeof value === 'string' && value.length <= 1024) return value
+      if (typeof value === 'number' && Number.isFinite(value)) return value
+      if (Array.isArray(value) && value.length <= 32) return value.map((item) => copy(item, depth + 1))
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        const keys = Object.keys(value)
+        if (keys.length > 32 || keys.some((key) => key.length > 128 || ['__proto__', 'prototype', 'constructor'].includes(key))) throw new Error('policy key limit')
+        return Object.fromEntries(keys.map((key) => [key, copy(value[key], depth + 1)]))
+      }
+      throw new Error('policy must be bounded JSON')
+    }
+    const result = copy(raw, 0)
+    return JSON.stringify(result).length <= 8192 ? result : undefined
+  } catch { return undefined }
+}
+
+const policyDigest = (policy) => {
+  const sort = (value) => Array.isArray(value) ? value.map(sort) : value !== null && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sort(value[key])])) : value
+  return JSON.stringify(sort(policy))
+}
+
+const getResourceAccessMode = (slot) => {
+  const configured = slot.policy?.accessMode
+  const mode = configured ?? DATA.resourceTypes?.[slot.provider] ?? 'unknown'
+  return !slot.policyInvalid && ['subscription', 'metered_api', 'judgment_api', 'unknown'].includes(mode) ? mode : 'unknown'
+}
+
 const toSlot = (route) => {
   const record = asRecord(route)
+  const policy = record.policy === undefined ? undefined : cloneResourcePolicy(record.policy)
   return {
     provider: typeof record.provider === 'string' ? record.provider : '',
     model: typeof record.model === 'string' ? record.model : '',
-    reasoningEffort: typeof record.reasoningEffort === 'string' ? record.reasoningEffort : ''
+    reasoningEffort: typeof record.reasoningEffort === 'string' ? record.reasoningEffort : '',
+    ...(record.policy === undefined ? {} : policy === undefined ? { policyInvalid: true } : { policy })
   }
 }
 
@@ -300,6 +339,7 @@ const slotLabel = (slot) => `${slot.provider}/${slot.model}`
 const getSlotErrors = (slots, firstError = 'errPrimary') => {
   const seen = new Set()
   return slots.map((slot, index) => {
+    if (slot.policyInvalid || (slot.policy !== undefined && cloneResourcePolicy(slot.policy) === undefined)) return 'errRoutePolicy'
     if (slot.provider === '') return index === 0 ? firstError : 'errEmptyLayer'
     if (slot.model === '') return 'errModel'
     const label = slotLabel(slot)
@@ -312,10 +352,10 @@ const getSlotErrors = (slots, firstError = 'errPrimary') => {
 /** 槽位 → 宿主 RouteSchema 形状的链（未填完整的槽位不写入） */
 const getChain = (slots) => slots
   .filter((slot) => slot.provider !== '' && slot.model !== '')
-  .map((slot) => ({ provider: slot.provider, model: slot.model, ...(slot.reasoningEffort === '' ? {} : { reasoningEffort: slot.reasoningEffort }) }))
+  .map((slot) => ({ provider: slot.provider, model: slot.model, ...(slot.reasoningEffort === '' ? {} : { reasoningEffort: slot.reasoningEffort }), ...(slot.policy === undefined ? {} : { policy: cloneResourcePolicy(slot.policy) }) }))
 
 const sameSlots = (a, b) => a.length === b.length && a.every((slot, index) =>
-  slot.provider === b[index].provider && slot.model === b[index].model && slot.reasoningEffort === b[index].reasoningEffort)
+  slot.provider === b[index].provider && slot.model === b[index].model && slot.reasoningEffort === b[index].reasoningEffort && slot.policyInvalid === b[index].policyInvalid && policyDigest(slot.policy) === policyDigest(b[index].policy))
 
 const sameUpgrade = (a, b) => (a === undefined || b === undefined)
   ? a === b
@@ -1004,7 +1044,7 @@ function LayerGrid ({ t, rowKey, target, slots, errors, groups, editable, contro
     const common = { t, slot, label, groups, disabled: !editable, onChange }
     const error = errors[index]
     return [
-      h('span', { key: `l${index}`, style: style.slotLabel }, label),
+      h('span', { key: `l${index}`, style: style.slotLabel }, label, h('small', { style: { display: 'block', fontWeight: 400 }, 'data-route-access-mode': getResourceAccessMode(slot) }, t(`resource_${getResourceAccessMode(slot)}`))),
       h(ProviderSelect, { key: `p${index}`, ...common }),
       h(ModelSelect, { key: `m${index}`, ...common }),
       h(EffortSelect, { key: `e${index}`, ...common }),
@@ -1295,4 +1335,4 @@ function apply (ctx) {
 exports.inject = inject
 exports.apply = apply
 exports.NS = NS
-exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, SwarmAgentsController, JevKeyController, DATA }
+exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, LayerGrid, SwarmAgentsController, JevKeyController, DATA }

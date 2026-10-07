@@ -4,7 +4,9 @@ DeepSeek Harness（DSH）的中文多智能体插件：「天枢」主持 12 位
 
 - 适配 DSH **0.2.0-rc.2**，最低 0.1.7-alpha.2（`package.json` 的 `dsh.testedVersions`）；专家的连续会话需要 0.1.7-rc.2 及以上，更早的版本自动改为一次性调用
 - **按模型家族组织提示**：Claude 用 XML 分节、写明约束理由、长材料在前；GPT（Codex）用 Role / Goal / Success criteria / Stop rules 与 GOAL / STOP WHEN / EVIDENCE；其他模型用编号的必做项。专家按实际启动的路由选择风格，天枢按对话框所选模型追加调度说明（参考 oh-my-openagent 的 agent-model-matching 与 Anthropic、OpenAI 官方提示指南）
-- **内嵌 Jev**：7 个判断工具 `jev_ask` / `jev_check` / `jev_classify` / `jev_score` / `jev_match` / `jev_screen` / `jev_health` 与技能 `jev-judgments`、`typesafe-ai` 直接在插件内调用 TypeSafe System One，不需要外部 MCP；与衡鉴共用客户端、限流与凭据
+- **内嵌 Jev**：7 个判断工具与 `jev-judgments`、`typesafe-ai` 技能共用客户端和凭据；所有入口不设插件侧限流或使用额度，保留单次请求超时、体积检查和有限的临时故障重试
+- **2.2 任务流程**：任务卡同时记录目标、验收、性能与文件范围；单一 DAG 派生 Mermaid。生成后用官方 parser、独立只读 Agent 和 Jev 核查目标、流程设计、Mermaid 代码；可选择观察或强制执行模式
+- **即时回退与受限协作**：额度、余额和模型池耗尽在宿主长退避前回退；版本绑定的每轮检查点、按需上下文、持久专家、P2P 文件邮箱、先盲审再回应、经验候选与有界纯函数数学计算。配置及已验证范围见 [任务流程与验证](docs/任务流程与验证.md)
 - **聊天窗口显示模型**：百工会话每次调用模型都显示「调用模型：模型 · 供应商（路由名）· 推理强度」（可改为只在每轮首次与换模型时显示），回退 / 升级换模型时标为「切换模型」；会话头部显示当前模型；委派结果写明专家使用的模型、供应商与提示风格
 - 设计：[docs/V2-完整设计说明.md](docs/V2-完整设计说明.md)
 
@@ -23,9 +25,10 @@ DeepSeek Harness（DSH）的中文多智能体插件：「天枢」主持 12 位
 
 装好后：新建会话选「百工模式」；在「设置 → 百工 Agent」顶部填写 Jev API key（不填也能用，衡鉴按规则分流），并按你的订阅调整各角色的模型链。详见 [docs/安装.md](docs/安装.md)。
 
-| 委派结果与专家会话 | Jev API key | 专家会话与重试 |
-|---|---|---|
-| ![委派结果](assets/screenshots/delegation-result.png) | ![Jev API key](assets/screenshots/jev-api-key.png) | ![会话策略](assets/screenshots/session-policy.png) |
+| 委派结果与专家会话 | Jev API key | 专家会话与重试 | 智能模型设置 |
+|---|---|---|---|
+| ![委派结果](assets/screenshots/delegation-result.png) | ![Jev API key](assets/screenshots/jev-api-key.png) | ![会话策略](assets/screenshots/session-policy.png) | ![模型设置](assets/screenshots/models-seting.png) |
+
 
 ## 组成
 
@@ -54,16 +57,20 @@ DeepSeek Harness（DSH）的中文多智能体插件：「天枢」主持 12 位
 
 见 [docs/安装.md](docs/安装.md)。简要步骤：升级 DSH 到 0.2.0-rc.2 → `npm install && npm run build` → `dsh plugin --profile swarm add <本目录>` → 在「设置 → 模型」添加 qwen-token-plan-cn / opencode-go / DeepSeek → `npm run doctor -- --profile swarm` → `dsh --profile swarm web`。
 
-使用方法见 [docs/使用.md](docs/使用.md)，升级与回退见 [docs/升级与回退.md](docs/升级与回退.md)。
+使用方法见 [docs/使用.md](docs/使用.md)，升级与回退见 [docs/升级与回退.md](docs/升级与回退.md)，评测方法见 [docs/评测.md](docs/评测.md)。
 
 ## 开发命令
 
 | 命令 | 作用 |
 |---|---|
-| `npm install && npm run build` | 编译 `src/` 到 `lib/`，并生成浏览器端 `lib/client.js` |
-| `npm run typecheck` | 类型检查 |
-| `npm run gen:presets -- --dsh "$(npm root -g)/@deepseek-ai/dsh/node_modules"` | 以已安装 DSH 的 standard 预设为底重新生成 13 个预设（先 build） |
+| `npm run build` | 编译 `src/` 到 `lib/` |
+| `npm run typecheck` | 类型检查（含测试） |
+| `npm test` / `npm run coverage` | 单元测试 / 覆盖率（阈值：行 80%、分支 75%） |
+| `npm run test:integration` | 在 `.sandbox/` 安装真实 DSH，用 mock LLM 跑端到端场景 |
+| `npm run gen:presets` | 以沙箱 DSH 的 standard 预设为底重新生成 13 个预设 |
 | `npm run doctor -- --profile <p>` | 只读检查本机环境（不输出密钥） |
+| `npm run sync-dsh -- --version <x>` | 适配新版 DSH：重新生成预设并跑全部测试 |
+| `npm run bench:workflow -- --out /tmp/swarm-bench.json` | 20 类控制面基准、6 类计算基准；模型用量必须另行导入真实记录 |
 
 ## 验证状态
 
@@ -72,11 +79,12 @@ DeepSeek Harness（DSH）的中文多智能体插件：「天枢」主持 12 位
 | bundle 安装、13 个预设、默认预设 | ✓ | 升级后执行 `doctor` |
 | 委派、工具白名单、写文件守卫 | ✓ | — |
 | 门禁拦截与验收 | ✓ | — |
-| 子智能体与主会话的路由回退 | ✓ | 真实 provider 的失败码 |
+| 子智能体与主会话的路由回退 | ✓（真实 Cordis/Retry/AgentLoop，含 9060669ms 模型池案例） | 原生后端内部重试、prepareCall 阶段及真实 provider 的失败码 |
 | 视觉拒收与截图入库 | ✓ | 真实视觉模型的识别质量 |
-| Jev 分流与严格路径、7 个 jev_* 工具 | ✓（本地 mock 服务与单元测试） | 真实 Jev key |
+| Jev 分流与严格路径、7 个 jev_* 工具 | ✓（本地 mock 服务与单元测试）；本次实现另有真实 Jev MCP 辅助审核 | 完整在线模型任务的质量评测 |
 | 按模型家族的提示风格、断网等待与天枢恢复 | ✓（单元测试） | 真实 Claude / GPT 的效果 |
 | 原生 Codex / Claude Code | 仅验证「未安装时退回 API」 | 登录后的真实调用 |
+| V2 设计稿 §8 的 20 题评测 | 另已运行 20 类本地控制面基准 | 完整在线评测与 token 节省；28% 尚未测得 |
 
 ## 许可证
 

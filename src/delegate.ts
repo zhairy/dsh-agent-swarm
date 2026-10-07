@@ -54,6 +54,12 @@ export interface DelegateInput {
   upgrade?: boolean
   /** 会话方式：auto 由衡鉴判断；new 新建连续会话；continue 追加到该角色已有的会话；oneshot 一次性调用 */
   session?: SessionChoice
+  node_id?: string
+  request_id?: string
+  expected_workflow_revision?: number
+  /** 仅服务层生成；不公开给模型参数 schema。 */
+  attempt_id?: string
+  review_phase?: 'blind' | 'response'
 }
 
 const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string')
@@ -82,6 +88,8 @@ export const ValidateDelegateInput = (raw: unknown): { input?: DelegateInput; er
   if (value.allow_web !== undefined && typeof value.allow_web !== 'boolean') errors.push('allow_web 必须是布尔值')
   if (value.upgrade !== undefined && typeof value.upgrade !== 'boolean') errors.push('upgrade 必须是布尔值')
   if (value.session !== undefined && !(SESSION_CHOICES as readonly unknown[]).includes(value.session)) errors.push(`session 必须是 ${SESSION_CHOICES.join(' / ')} 之一`)
+  if (value.review_phase !== undefined && !['blind', 'response'].includes(String(value.review_phase))) errors.push('review_phase 必须是 blind 或 response')
+  if (value.review_phase !== undefined && role !== 'yu_shi' && !(role === 'suan_heng' && value.mode === 'verify')) errors.push('只有独立审查/验算角色可声明评审阶段')
   if (value.allow_web === true && getRoleInfo(role).web === 'never') errors.push(`「${getRoleInfo(role).name}」不开放 web 工具`)
   if (value.gate !== undefined && !(GATE_IDS as readonly unknown[]).includes(value.gate)) errors.push(`gate 必须是 ${GATE_IDS.join(' / ')} 之一`)
   if (value.backend !== undefined && !(DELEGATE_BACKENDS as readonly unknown[]).includes(value.backend)) errors.push(`backend 必须是 ${DELEGATE_BACKENDS.join(' / ')} 之一`)
@@ -144,7 +152,12 @@ export const getTaskBrief = (task: TaskRecord, input: DelegateInput, delegationI
   const constraints = Object.entries(card.constraints ?? {}).map(([key, value]) => `${key}=${String(value)}`)
   const perf = Object.entries(card.perf ?? {}).map(([key, value]) => `${key}=${String(value)}`)
   return [
-    `任务 ${task.taskId} / 委派 ${delegationId}`,
+    `任务 ${task.taskId} / 委派 ${delegationId} / 需求版本 ${task.requestRevision ?? 1} / 合同版本 ${task.cardRevision ?? 1} / 流程版本 ${task.workflowRevision ?? 1}`,
+    ...((input.role === 'yu_shi' || (input.role === 'suan_heng' && input.mode === 'verify')) ? [
+      input.review_phase === 'response'
+        ? '评审阶段：response。宿主已确认同版本、同产物的冻结初审；可读取同伴材料并回应，保留原初审，回应不能替代初审门禁。产物改变后重新盲审。'
+        : '评审阶段：blind。独立初审不读取作者推理、历史评分或同伴解释；先提交并冻结结论，之后才能进入 response。'
+    ] : []),
     `任务标题：${card.title}`,
     `目标：${card.goal}`,
     `验收标准：\n${card.acceptance.map((item) => `- ${item}`).join('\n')}`,
@@ -152,6 +165,7 @@ export const getTaskBrief = (task: TaskRecord, input: DelegateInput, delegationI
     ...(constraints.length > 0 ? [`约束：${constraints.join('；')}`] : []),
     ...(perf.length > 0 ? [`性能预算：${perf.join('；')}`] : []),
     ...(input.gate === undefined ? [] : [`本次委派用于满足门禁：${input.gate}（${GATE_ROLE[input.gate].label}）`]),
+    ...((input as DelegateInput & { node_id?: string }).node_id === undefined ? [] : [`当前节点：${(input as DelegateInput & { node_id?: string }).node_id}；完成节点要求后提交证据，立即停止。`]),
     ...((input.context_paths ?? []).length > 0 ? [`相关文件：\n${(input.context_paths ?? []).map((path) => `- ${path}`).join('\n')}`] : [])
   ].join('\n')
 }
@@ -286,6 +300,7 @@ export interface PlanSessionInput {
 export interface DelegateExecInfo {
   agent: AgentLike
   signal: AbortSignal
+  callId?: string
 }
 
 /** 委派执行依赖（全部可替换，便于测试） */
@@ -310,6 +325,8 @@ export interface DelegateDepsInfo {
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>
   /** 联网探测：出错重试前若已断网，等待网络恢复而不是按固定间隔重试 */
   network?: NetworkMonitorInfo
+  onChildStart?: (info: { agentId: string; task: TaskRecord; record: DelegationRecord; role: DelegableRoleId; signal: AbortSignal }) => void | Promise<void>
+  onChildEnd?: (agentId: string) => void | Promise<void>
 }
 
 /** 一次运行（一次性或连续会话的一轮，含自动重试）的结果 */
@@ -394,7 +411,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
   const runWithSignal = async (
     exec: DelegateExecInfo,
     start: (signal: AbortSignal) => Promise<SubagentRunLike>,
-    hooks: { onRun?: (run: SubagentRunLike) => void; beforeDispose?: (run: SubagentRunLike) => void } = {}
+    hooks: { onRun?: (run: SubagentRunLike) => void | Promise<void>; beforeDispose?: (run: SubagentRunLike) => void } = {}
   ) => {
     const controller = new AbortController()
     const onAbort = (): void => controller.abort()
@@ -403,7 +420,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     if (exec.signal.aborted) controller.abort()
     try {
       const run = await start(controller.signal)
-      hooks.onRun?.(run)
+      await hooks.onRun?.(run)
       try {
         return { run, result: await run.result }
       } catch (error) {
@@ -411,6 +428,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       } finally {
         hooks.beforeDispose?.(run)
         await run.dispose().catch(() => undefined)
+        await deps.onChildEnd?.(run.id)
       }
     } finally {
       exec.signal.removeEventListener('abort', onAbort)
@@ -606,7 +624,10 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       let startError: string | undefined
       try {
         outcome = await runWithSignal(exec, startSpawn, {
-          onRun: (run) => deps.routeState.AddChild(run.id, { chain: usable.slice(usedIndex), role: input.role, onFallback }),
+          onRun: async (run) => {
+            deps.routeState.AddChild(run.id, { chain: usable.slice(usedIndex), role: input.role, onFallback, logicalRequestId: record.delegationId })
+            await deps.onChildStart?.({ agentId: run.id, task, record, role: input.role, signal: exec.signal })
+          },
           beforeDispose: (run) => {
             finalRoute = deps.routeState.getChild(run.id)?.route
             deps.routeState.DelAgent(run.id)
@@ -622,7 +643,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
         ...(usedStyle === undefined ? {} : { promptStyle: usedStyle })
       }
       const retry = getRetryReason(evaluation, result, exec)
-      if (retry === undefined || attempt >= config.agents.maxRetries) return last
+      if (deps.routeState.getTerminal(outcome?.run.id ?? '') !== undefined || retry === undefined || attempt >= config.agents.maxRetries) return last
       AddRetry(session, record, retries, { attempt: attempt + 1, reason: retry.reason, action: 'restart' })
       if (retry.backoff) await WaitBeforeRetry(config, attempt + 1, isNetworkFailure(result, evaluation.error ?? startError), exec.signal)
       if (exec.signal.aborted) return last
@@ -656,9 +677,14 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       session.threads.Add(thread)
     }
     let style: PromptStyle = thread.style ?? newStyle
-    const Arm = (id: string): void => deps.routeState.AddChild(id, { chain: usable, role: input.role, onFallback, persistent: true })
+    const Arm = (id: string): void => deps.routeState.AddChild(id, { chain: usable, role: input.role, onFallback, persistent: true, logicalRequestId: record.delegationId })
     Arm(threadId)
-    let text = appended ? getThreadFollowupText(task, input, record.delegationId, thread.taskIds.includes(task.taskId), style) : getThreadPromptText(task, input, record.delegationId, style)
+    await deps.onChildStart?.({ agentId: threadId, task, record, role: input.role, signal: exec.signal })
+    const seen = thread.seenRevisions?.[task.taskId]
+    const knowsRevision = thread.taskIds.includes(task.taskId) && (seen === undefined
+      ? (task.cardRevision ?? 1) === 1 && (task.workflowRevision ?? 1) === 1 && (task.requestRevision ?? 1) === 1
+      : seen.cardRevision === (task.cardRevision ?? 1) && seen.workflowRevision === (task.workflowRevision ?? 1) && (seen.requestRevision ?? 1) === (task.requestRevision ?? 1))
+    let text = appended ? getThreadFollowupText(task, input, record.delegationId, knowsRevision, style) : getThreadPromptText(task, input, record.delegationId, style)
     let content: ContentBlockLike[] = [{ type: 'text', text }, ...images]
     let started = appended
     let evaluation: EvaluationInfo | undefined
@@ -731,7 +757,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       const structured = ParseNativeOutput(getOutputText(result))
       evaluation = getEvaluation(input.role, input.mode, result, structured)
       const retry = getRetryReason(evaluation, result, exec)
-      if (retry === undefined || attempt >= config.agents.maxRetries) break
+      if (deps.routeState.getTerminal(threadId) !== undefined || retry === undefined || attempt >= config.agents.maxRetries) break
       AddRetry(session, record, retries, { attempt: attempt + 1, reason: retry.reason, action: 'continue' })
       if (retry.backoff) {
         await WaitBeforeRetry(config, attempt + 1, isNetworkFailure(result, evaluation.error), exec.signal)
@@ -742,6 +768,8 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     }
     const finalRoute = deps.routeState.getChild(threadId)?.route
     const updated = session.threads.AddRound(threadId, { delegationId: record.delegationId, taskId: task.taskId, request: input.prompt, summary: evaluation.summary, status: evaluation.status }, deps.now())
+    session.threads.Update(threadId, { seenRevisions: { ...updated?.seenRevisions, [task.taskId]: { cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1 } } })
+    await deps.onChildEnd?.(threadId)
     return {
       evaluation,
       childId: threadId,
@@ -781,7 +809,8 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     })
     let selection = await getSelection()
     // 没有可用路由可能是暂时的（网络或宿主刚启动）：等待后重新检查；视觉能力不足不会因重试改变
-    for (let attempt = 1; selection.usable.length === 0 && attempt <= config.agents.maxRetries && !exec.signal.aborted; attempt++) {
+    for (let attempt = 1; selection.usable.length === 0 && attempt <= config.agents.maxRetries && !exec.signal.aborted
+      && !selection.skipped.every((item) => item.reason === 'route-isolated'); attempt++) {
       if (role.needsVision && selection.skipped.some((s) => s.reason === 'vision-unsupported')) break
       AddRetry(session, record, retries, { attempt, reason: 'no-usable-route：路由链上暂时没有可用模型', action: 'restart' })
       // 订阅类 provider 解析模型要联网：断网时整条链都会预检失败
@@ -877,7 +906,11 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const record: DelegationRecord = {
       delegationId: deps.newId('D'), taskId: task.taskId, role: input.role, roleName: role.name,
       ...(mode === undefined ? {} : { mode }), ...(input.gate === undefined ? {} : { gate: input.gate }),
-      status: 'queued', summary: '', evidence: [], attempts: [], independence: 'n/a', hardIsolation: true, unresolved: [], startedAt: deps.now()
+      status: 'queued', summary: '', evidence: [], attempts: [], independence: 'n/a', hardIsolation: true, unresolved: [], startedAt: deps.now(),
+      cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1,
+      ...(input.attempt_id === undefined ? {} : { attemptId: input.attempt_id }),
+      ...(input.review_phase === undefined ? {} : { reviewPhase: input.review_phase }),
+      ...(input.node_id === undefined ? {} : { nodeId: input.node_id })
     }
     session.store.AddDelegation(record)
     session.ledger.AddLedgerEvent({ type: 'delegation/queued', taskId: task.taskId, delegationId: record.delegationId, data: { role: input.role, roleName: role.name, mode, gate: input.gate, backend: input.backend ?? 'auto' } })

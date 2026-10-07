@@ -1,4 +1,9 @@
 node_modules/
 lib/
 coverage/
+.sandbox/
 *.tgz
+.enola/
+.omc/
+.work/
+*.log

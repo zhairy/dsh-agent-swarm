@@ -37,7 +37,9 @@ const SCHEMAS: Readonly<Record<DelegableRoleId, JsonSchemaObject>> = {
     premises: strList(),
     definitions: strList(),
     invariants: strList(),
-    claims: listOf(obj({ statement: str(), status: oneOf(['proved', 'refuted', 'unverified']), proofOrCounterexample: str() }, ['statement', 'status'])),
+    claims: listOf(obj({ statement: str(), status: oneOf(['proved', 'refuted', 'unverified']), proofOrCounterexample: str(),
+      evidenceType: oneOf(['proof', 'counterexample', 'numerical_checked'])
+    }, ['statement', 'status'])),
     complexity: str(),
     numericError: str(),
     reproducible: listOf(obj({ description: str(), program: str() }, ['description', 'program']))
@@ -69,7 +71,12 @@ const SCHEMAS: Readonly<Record<DelegableRoleId, JsonSchemaObject>> = {
     commands: listOf(obj({ command: str(), exitCode: num(), kind: oneOf(COMMAND_KINDS), summary: str() }, ['command', 'exitCode', 'kind', 'summary'])),
     coverage: str('覆盖范围与缺口'),
     failures: listOf(obj({ command: str(), explanation: str() }, ['command', 'explanation'])),
-    verdict: oneOf(['pass', 'fail', 'partial'])
+    verdict: oneOf(['pass', 'fail', 'partial']),
+    measurements: listOf(obj({
+      metric: oneOf(['p95', 'p99', 'throughput', 'peakMemory', 'numericError']),
+      value: num(), unit: oneOf(['ms', 'ops/s', 'bytes', 'absolute']), sampleCount: num(),
+      dataScale: str(), inputDigest: str(), environment: str(), commandRef: str(), rawArtifactRef: str()
+    }, ['metric', 'value', 'unit', 'sampleCount', 'dataScale', 'inputDigest', 'environment', 'commandRef', 'rawArtifactRef']))
   }, ['plan', 'commands', 'coverage', 'failures', 'verdict']),
   miao_bi: withCommon({
     candidates: listOf(obj({ text: str(), scenario: str() }, ['text', 'scenario'])),
@@ -90,7 +97,7 @@ interface StepRow { command: string; exitCode?: number; artifacts?: string[]; no
 interface FindingRow { severity: string; location: string; issue: string }
 interface SourceRow { url: string; date?: string; version?: string }
 interface ObservationRow { region: string; element: string; evidence: string }
-interface ClaimRow { statement: string; status: string }
+interface ClaimRow { statement: string; status: string; proofOrCounterexample?: string; evidenceType?: string }
 interface LocationRow { path: string; evidence: string }
 
 const getList = <T>(value: unknown, key: string): T[] => {
@@ -121,6 +128,10 @@ export const ValidateStructuredOutput = (role: DelegableRoleId, value: unknown, 
   }
   if (role === 'suan_heng' && mode !== undefined && record.mode !== mode) errors.push(`算衡模式应为 ${mode}`)
   if (role === 'suan_heng' && record.mode === 'verify' && getList(value, 'claims').length === 0) errors.push('验算必须至少检验 1 条结论')
+  if (role === 'suan_heng') for (const claim of getList<ClaimRow>(value, 'claims')) {
+    if (['proved', 'refuted'].includes(claim.status) && !claim.proofOrCounterexample?.trim()) errors.push('证实或反驳结论必须提供非空推导或反例')
+    if (claim.status === 'proved' && claim.evidenceType === 'numerical_checked') errors.push('有限计算证据不能自动升级为 proved')
+  }
   if (role === 'bo_wen' && getList<SourceRow>(value, 'sources').some((row) => !/^https?:\/\//.test(row.url))) {
     errors.push('博闻的来源必须是 http(s) URL')
   }

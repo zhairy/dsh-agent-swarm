@@ -2,6 +2,8 @@ import { DELEGATE_BACKENDS } from './delegate.js'
 import type { DelegationRecord } from './evidence.js'
 import { SWARM_SERVICE, type PluginContextLike, type PromptAssemblyLike, type SkillsLike, type ToolsLike } from './host-contract.js'
 import { getJevToolDefinitions } from './jev-tools.js'
+import { getMathToolDefinitions } from './math-tools.js'
+import { getCollaborationToolDefinitions } from './collaboration-tools.js'
 import { PROMPT_STYLE_LABELS, getOrchestratorStyleSection, getPromptStyle, type PromptStylePolicy } from './model-family.js'
 import { FLAG_KEYS, GATE_IDS, type FlagKey } from './policy.js'
 import { ROLE_TAG_PATTERN, getDelegableRoleIds, getRoleCatalogText, getRoleInfo, isDelegableRoleId } from './role-registry.js'
@@ -44,13 +46,16 @@ const strList = (description: string): JsonSchemaObject => ({ type: 'array', ite
 
 const getExec = (exec: ToolExecLike) => {
   if (exec.agent === undefined) throw new SwarmError('SERVICE_UNAVAILABLE', '工具调用缺少会话上下文')
-  return { agent: exec.agent, signal: exec.signal }
+  return { agent: exec.agent, signal: exec.signal, callId: exec.callId }
 }
 
 export const TASK_CARD_PARAMETERS: JsonSchemaObject = {
   type: 'object',
   properties: {
     task_id: { type: 'string', description: '更新已有任务时传入；新任务不传' },
+    expected_card_revision: { type: 'number', description: '更新任务时的合同版本，用于并发比较' },
+    workflow: { type: 'object', additionalProperties: true, description: '可选结构化流程；依赖、角色和门禁由宿主校验，Mermaid 自动生成' },
+    intent: { type: 'object', properties: { text: { type: 'string' }, sourceRef: { type: 'string' } }, required: ['text'], additionalProperties: false, description: '旧宿主不能读取用户消息时的显式原始需求，不能冒称已获宿主验证' },
     title: { type: 'string', description: '任务标题' },
     goal: { type: 'string', description: '目标与期望结果' },
     acceptance: strList('可核对的验收标准（至少 1 条）'),
@@ -72,6 +77,11 @@ export const TASK_CARD_PARAMETERS: JsonSchemaObject = {
         p99Ms: { description: 'p99 延迟（毫秒数字）或「待测」' },
         throughput: { type: 'string', description: '吞吐要求' },
         dataScale: { type: 'string', description: '数据规模' }
+        ,targets: { type: 'array', items: { type: 'object', properties: {
+          metric: { type: 'string', enum: ['p95', 'p99', 'throughput', 'peakMemory', 'numericError'] },
+          operator: { type: 'string', enum: ['<=', '>='] }, value: { type: 'number' },
+          unit: { type: 'string', enum: ['ms', 'ops/s', 'bytes', 'absolute'] }, minSamples: { type: 'number' }
+        }, required: ['metric', 'operator', 'value', 'unit'], additionalProperties: false } }
       },
       additionalProperties: false
     },
@@ -91,6 +101,10 @@ export const DELEGATE_PARAMETERS: JsonSchemaObject = {
   type: 'object',
   properties: {
     task_id: { type: 'string', description: 'swarm_task_card 返回的 task_id' },
+    node_id: { type: 'string', description: '执行节点 ID；必须与 ready 节点及角色对应' },
+    expected_workflow_revision: { type: 'number', description: '流程版本；过期版本拒绝执行' },
+    request_id: { type: 'string', description: '幂等执行标识，重复提交不会重新启动专家' },
+    review_phase: { type: 'string', enum: ['blind', 'response'], description: '审查/验算先默认 blind。response 只能在当前合同与产物已有冻结初审之后使用；宿主验证，不能替代新产物的独立门禁。' },
     role: { type: 'string', enum: getDelegableRoleIds(), description: `专家角色：\n${getRoleCatalogText()}` },
     mode: { type: 'string', enum: ['research', 'verify'], description: '仅算衡：research=研算（实现前定义语义与复杂度），verify=验算（独立找反例）' },
     prompt: { type: 'string', description: '自包含的任务说明：目标、相关文件、约束与交付要求。专家看不到本对话。' },
@@ -156,18 +170,27 @@ const getRootUpgradeLines = (upgrade: TaskCardResult['rootUpgrade']): string[] =
 export const getTaskCardText = (result: TaskCardResult): string => {
   const triage = result.triage
   const answers = triage.answers === undefined ? '' : `；Jev：${JSON.stringify(triage.answers)}`
-  return clip([
+  const summary = clip([
     `task_id: ${result.task_id}（任务卡已记录）`,
     `标题：${result.title}`,
+    `目标：${result.goal}`,
+    `验收标准：${result.acceptance.join('；')}`,
+    `相关文件：${result.scope.join(', ') || '无文件变更'}`,
+    `性能要求：${result.perf === null ? '待测' : JSON.stringify(result.perf)}`,
     '必需门禁（硬门槛，不能跳过）：',
     ...(result.requiredGates.length === 0 ? ['- 无'] : result.requiredGates.map((g) => `- ${g.gate} ${g.label} → ${g.roleName}（${g.source}：${g.reason}）`)),
     '建议角色：',
     ...(result.suggestedRoles.length === 0 ? ['- 无'] : result.suggestedRoles.map((s) => `- ${s.role} ${s.roleName}：${s.reason}`)),
     `衡鉴：${triage.source}${triage.fallbackReason === undefined ? '' : `（回退原因：${triage.fallbackReason}）`}${answers}`,
-    `预算：每任务最多 ${result.budgets.maxDelegationsPerTask} 次委派；每角色 ${result.budgets.maxCallsPerRole} 次（铸剑 ${result.budgets.maxCallsZhuJian} 次）；自动修复最多 ${result.budgets.maxAutoFixRounds} 轮`,
-    ...getRootUpgradeLines(result.rootUpgrade),
-    `账本：${result.ledgerPath}`
+    `预算：每任务 ${result.budgets.maxDelegationsPerTask || '不限'} 次委派；每角色 ${result.budgets.maxCallsPerRole || '不限'} 次（铸剑 ${result.budgets.maxCallsZhuJian || '不限'} 次）；自动修复最多 ${result.budgets.maxAutoFixRounds} 轮`,
+    `需求版本：${result.requestRevision}；合同版本：${result.cardRevision}；流程版本：${result.workflowRevision}；规划审核：${result.planningReview?.status ?? 'pending'}`,
+    `上下文引用：${result.contextRefs.join(', ')}`,
   ].join('\n'))
+  // Keep the complete bounded projection and closing fence: clipping Mermaid produces invalid code.
+  return [summary,
+    ...(result.flow === null ? [] : [`任务流程：\n\`\`\`mermaid\n${result.flow.mermaid}\n\`\`\``]),
+    clip([...getRootUpgradeLines(result.rootUpgrade), `账本：${result.ledgerPath}`].join('\n'))
+  ].join('\n')
 }
 
 const RETRY_ACTION_LABELS: Readonly<Record<NonNullable<DelegationRecord['retries']>[number]['action'], string>> = {
@@ -296,8 +319,22 @@ export const apply = (ctx: PluginContextLike): void => {
   const service = ctx.get(SWARM_SERVICE) as SwarmService | undefined
   const tools = ctx.get('tools') as ToolsLike | undefined
   if (service === undefined || tools === undefined) return
-  // Jev 工具在插件内直接调用 TypeSafe（与衡鉴共用客户端、限流与凭据），不依赖外部 MCP 进程；专家子会话按角色能力放行
-  const definitions = [...getSwarmToolDefinitions(service), ...getJevToolDefinitions(() => service.jev.tools)]
+  // Jev 与衡鉴共享客户端及凭据，不设本地限流或使用额度；新工具另有真实会话/任务权限检查。
+  const taskParameters: JsonSchemaObject = { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'], additionalProperties: false }
+  const definitions = [
+    ...getSwarmToolDefinitions(service), ...getJevToolDefinitions(() => service.jev.tools),
+    ...getMathToolDefinitions({ calculate: (args, exec) => service.Calculate(args, exec) }),
+    ...getCollaborationToolDefinitions({ send: service.MessageSend, read: service.MessageRead, acknowledge: service.MessageAck }),
+    getToolDefinition({ name: 'swarm_review_plan', description: '独立只读 Agent 与 Jev 复审当前目标、流程设计和 Mermaid 源码。结果绑定原始需求及当前版本，不能代替实现后验证。',
+      parameters: { ...taskParameters, properties: { ...taskParameters.properties, bypass_cache: { type: 'boolean' } } },
+      execute: (args, exec) => service.ReviewPlan(args, getExec(exec)), render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => false }),
+    getToolDefinition({ name: 'swarm_context_read', description: '按当前任务/版本授权读取分层材料，不读取其他任务或盲审禁止的作者过程。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' }, ref: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'number' }, expectedDigest: { type: 'string' } }, required: ['ref'], additionalProperties: false },
+      execute: service.ReadContext, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true }),
+    getToolDefinition({ name: 'swarm_experience', description: '检索最多三条有出处、版本与失效条件的经验；候选不能当作已验证事实，盲审不能读取经验。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' }, problemClass: { type: 'string' }, includeCandidates: { type: 'boolean' } }, additionalProperties: false },
+      execute: service.Experience, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true })
+  ]
   for (const definition of definitions) ctx.effect(() => tools.register(definition))
   const skills = ctx.get('skills') as SkillsLike | undefined
   if (skills !== undefined) for (const skill of getEmbeddedSkills()) ctx.effect(() => skills.register(skill))

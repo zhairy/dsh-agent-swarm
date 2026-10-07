@@ -1,4 +1,5 @@
 import type { TaskCard, TriageAnswers } from './policy.js'
+import { normalizeRouteFailure, isTerminalRouteFailure } from './provider-policy.js'
 
 /** Jev 调用配置 */
 export interface JevConfigInfo {
@@ -8,7 +9,7 @@ export interface JevConfigInfo {
   model: string
   timeoutMs: number
   maxRetries: number
-  /** 进程内限流：每秒最多发出的请求数（与 jev-mcp 的默认值一致） */
+  /** 兼容旧配置；Jev 不主动限流，此值不再参与发送决策 */
   maxRequestsPerSecond: number
   /** 单次请求（state + questions 序列化后）的字符上限 */
   maxRequestChars: number
@@ -21,7 +22,7 @@ export const DEFAULT_JEV_CONFIG: JevConfigInfo = {
   model: 'jev-latest',
   timeoutMs: 10000,
   maxRetries: 4,
-  maxRequestsPerSecond: 8,
+  maxRequestsPerSecond: 0,
   maxRequestChars: 120000
 }
 
@@ -126,8 +127,9 @@ export type JevOutcome =
 
 /** Jev 用量：输入与输出 token（服务端报告） */
 export interface JevUsageInfo {
-  inputTokens: number
-  outputTokens: number
+  /** 缺失/非法服务用量为 unknown，不能冒充零。 */
+  inputTokens?: number
+  outputTokens?: number
 }
 
 /** 通用提问的结果：answers 为 Jev 原始答案（按题目 ID） */
@@ -150,7 +152,7 @@ export interface JevDepsInfo {
 
 type PostResult =
   | { kind: 'ok'; body: unknown }
-  | { kind: 'http'; status: number; retryAfterMs?: number }
+  | { kind: 'http'; status: number; retryAfterMs?: number; terminal?: boolean }
   | { kind: 'timeout' }
   | { kind: 'network' }
   | { kind: 'aborted' }
@@ -170,9 +172,10 @@ const getRetryAfterMs = (value: string | null): number | undefined => {
 
 const getUsage = (record: Record<string, unknown>): JevUsageInfo => {
   const usage = asRecord(record.usage)
+  const valid = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
   return {
-    inputTokens: typeof usage.input_tokens === 'number' ? usage.input_tokens : 0,
-    outputTokens: typeof usage.output_tokens === 'number' ? usage.output_tokens : 0
+    ...(valid(usage.input_tokens) ? { inputTokens: usage.input_tokens } : {}),
+    ...(valid(usage.output_tokens) ? { outputTokens: usage.output_tokens } : {})
   }
 }
 
@@ -187,6 +190,7 @@ const isAborted = (signal?: AbortSignal): boolean => signal?.aborted === true
  * @returns {() => Promise<void>} 申请一个请求名额
  */
 export const intRequestLimiter = (max: number, sleep: (ms: number) => Promise<void>, now: () => number = Date.now) => {
+  if (max <= 0) return async (): Promise<void> => undefined
   const stamps: number[] = []
   let chain = Promise.resolve()
   const acquire = async (): Promise<void> => {
@@ -217,12 +221,10 @@ export const intRequestLimiter = (max: number, sleep: (ms: number) => Promise<vo
 export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
   const sleep = deps.sleep ?? defaultSleep
   const now = deps.now ?? Date.now
-  const acquire = intRequestLimiter(config.maxRequestsPerSecond, sleep, now)
+  // 用户明确选择 Jev 全入口不限流；旧非零 RPS 仅保留配置兼容，不建立队列。
   const baseUrl = config.baseUrl.replace(/\/$/, '')
 
   const send = async (path: string, init: { method: 'GET' | 'POST'; body?: string }, key: string, signal?: AbortSignal): Promise<PostResult> => {
-    await acquire()
-    // 排队等名额期间调用方可能已取消：不再发出请求
     if (isAborted(signal)) return { kind: 'aborted' }
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), config.timeoutMs)
@@ -237,7 +239,17 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
       })
       if (!response.ok) {
         const retryAfterMs = getRetryAfterMs(response.headers?.get?.('retry-after') ?? null)
-        return { kind: 'http', status: response.status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }
+        // 429 既可能是短限速也可能是账号终态；只读取错误类别，不回显服务正文。
+        let terminal = response.status === 402 || response.status === 401 || response.status === 403
+        if (terminal) return { kind: 'http', status: response.status, terminal, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }
+        try {
+          const body = asRecord(await response.json())
+          const error = asRecord(body.error)
+          const code = String(error.code ?? body.code ?? error.type ?? '')
+          const message = String(error.message ?? body.message ?? '')
+          terminal ||= isTerminalRouteFailure(normalizeRouteFailure({ code, status: response.status, message }, { provider: 'jev', model: config.model }))
+        } catch { /* 没有结构化错误正文：按 HTTP 状态处理 */ }
+        return { kind: 'http', status: response.status, ...(terminal ? { terminal } : {}), ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }
       }
       return { kind: 'ok', body: await response.json() }
     } catch {
@@ -256,10 +268,12 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
       if (signal?.aborted === true) return { result: { kind: 'aborted' } as PostResult, attempts: attempt - 1 }
       const result = await send(path, init, key, signal)
       if (result.kind === 'ok') return { result, attempts: attempt }
-      const retryable = result.kind === 'http' ? RETRYABLE_STATUS.has(result.status) : result.kind !== 'aborted'
+      const retryable = result.kind === 'http' ? !result.terminal && RETRYABLE_STATUS.has(result.status) : result.kind !== 'aborted'
       if (!retryable || attempt > config.maxRetries) return { result, attempts: attempt }
       const backoff = 500 * 2 ** (attempt - 1)
-      const wait = result.kind === 'http' && result.retryAfterMs !== undefined ? Math.min(MAX_RETRY_AFTER_MS, Math.max(backoff, result.retryAfterMs)) : backoff
+      // 长 Retry-After 不可截短再提前撞服务；返回 unavailable，等待由调用方管理。
+      if (result.kind === 'http' && (result.retryAfterMs ?? 0) > MAX_RETRY_AFTER_MS) return { result, attempts: attempt }
+      const wait = result.kind === 'http' && result.retryAfterMs !== undefined ? Math.max(backoff, result.retryAfterMs) : backoff
       await sleep(wait)
     }
   }
