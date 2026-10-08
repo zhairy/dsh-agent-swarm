@@ -1,0 +1,265 @@
+{
+  "checkedAt": "2026-10-08T16:08:25.725Z",
+  "version": "2.3.0",
+  "sessionId": "swarm-230-probe-1dcb7f54-108d-42b8-a549-69dc377b0a44",
+  "workspace": "/tmp/swarm-230-production-gdseMc",
+  "taskId": "T-1",
+  "realVendor": true,
+  "continuedAfterObserverCancellation": true,
+  "workflowMode": "advisory",
+  "planningApprovalClaimed": false,
+  "rootSettled": true,
+  "rootActualRoutes": [
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "max"
+    }
+  ],
+  "toolCalls": [
+    {
+      "seq": 28,
+      "name": "swarm_project_files"
+    },
+    {
+      "seq": 33,
+      "name": "swarm_calculate"
+    },
+    {
+      "seq": 38,
+      "name": "swarm_delegate"
+    },
+    {
+      "seq": 46,
+      "name": "swarm_accept"
+    }
+  ],
+  "toolErrors": [],
+  "projectFiles": {
+    "containsFixture": true
+  },
+  "calculation": {
+    "ok": true,
+    "value": 6,
+    "evidenceKind": "computed"
+  },
+  "expert": {
+    "delegationId": "D-1",
+    "status": "completed",
+    "backend": "spawn",
+    "route": "opencode-go/mimo-v2.6-flash",
+    "session": {
+      "kind": "continuable",
+      "threadId": "4b3960a5-46d3-4d25-b6b9-5d75cefb87f6",
+      "round": 1,
+      "appended": false,
+      "source": "explicit",
+      "reason": "天枢指定新建连续会话"
+    },
+    "evidenceAssessment": {
+      "status": "ok",
+      "disposition": "usable",
+      "confidenceMeaning": "distribution-concentration-not-correctness",
+      "items": [
+        {
+          "id": "D-1:finding:0",
+          "credibility": {
+            "status": "known",
+            "score": 0.9466666666666667,
+            "confidence": 0.84,
+            "probabilities": {
+              "0": 0,
+              "1": 0.01,
+              "2": 0.14,
+              "3": 0.85
+            }
+          },
+          "relevance": {
+            "status": "known",
+            "score": 0.9500000000000001,
+            "confidence": 0.87,
+            "probabilities": {
+              "0": 0,
+              "1": 0,
+              "2": 0.13,
+              "3": 0.87
+            }
+          },
+          "support": {
+            "relation": "supports",
+            "confidence": 0.97
+          },
+          "disposition": "usable",
+          "reasons": [],
+          "model": "jev-1.13.0"
+        }
+      ]
+    }
+  },
+  "childReadVerified": true,
+  "childActualRoutes": [
+    {
+      "provider": "opencode-go",
+      "model": "mimo-v2.6-flash",
+      "reasoningEffort": "high"
+    }
+  ],
+  "evidenceScoringObserved": true,
+  "agentControl": {
+    "childId": "4b3960a5-46d3-4d25-b6b9-5d75cefb87f6",
+    "persistent": true,
+    "phase": "idle",
+    "actual": {
+      "attemptId": "4b3960a5-46d3-4d25-b6b9-5d75cefb87f6:3",
+      "delegationId": "D-1",
+      "route": {
+        "provider": "opencode-go",
+        "model": "mimo-v2.6-flash",
+        "reasoningEffort": "high"
+      },
+      "observedAt": 1791475650931,
+      "state": "settled",
+      "source": "agent-loop-attempt"
+    }
+  },
+  "incompleteRecorded": true,
+  "acceptance": {
+    "status": "recorded",
+    "decision": "incomplete"
+  },
+  "settingsUnchanged": true,
+  "fixtureUnchanged": true,
+  "forbiddenToolCalls": [],
+  "boundary": "Actual production read/tool/scoring/model observations, not independent correctness proof. Planning remains unknown/stale; advisory execution is not planning approval.",
+  "ok": true,
+  "rootActualMessageModels": [
+    {
+      "seq": 16,
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "seq": 27,
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "seq": 32,
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "seq": 37,
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "seq": 45,
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "seq": 50,
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    }
+  ],
+  "rootModelEvidence": "Actual persisted request/header plus assistant message.source; unchanged headers need not be re-emitted in later turns. No session.selectModel was called.",
+  "firstPlanningObservation": {
+    "observerWindowMs": 240000,
+    "cancelledByTestObserver": true,
+    "productFailureClaimed": false,
+    "independentVerdict": "unknown / aborted",
+    "actualRoutes": [
+      {
+        "provider": "codex",
+        "model": "gpt-6-sol",
+        "reasoningEffort": "xhigh"
+      },
+      {
+        "provider": "qwen-token-plan-cn",
+        "model": "qwen3.8-max",
+        "reasoningEffort": "xhigh"
+      },
+      {
+        "provider": "opencode-go",
+        "model": "mimo-v2.6-pro",
+        "reasoningEffort": "high"
+      }
+    ],
+    "observedFailures": [
+      {
+        "provider": "codex",
+        "model": "gpt-6-sol",
+        "kind": "pool_exhausted",
+        "quotaExhaustionProved": false
+      },
+      {
+        "provider": "qwen-token-plan-cn",
+        "model": "qwen3.8-max",
+        "kind": "quota_exhausted",
+        "reportedResetUTC": "10-18 16:00:00 UTC"
+      }
+    ],
+    "mermaidParser": "pass",
+    "mermaidProjection": "pass",
+    "semanticApproval": "unknown",
+    "jev": {
+      "status": "ok",
+      "model": "jev-1.13.0",
+      "answersObservedBeforeIntentInvalidation": {
+        "goal_alignment": 0.69,
+        "requirement_coverage": 0.25,
+        "acceptance_testability": 0.84,
+        "design_sufficiency": 0.66,
+        "execution_boundaries": 0.64,
+        "failure_bounds": 0.86,
+        "mermaid_expression": 0.86
+      }
+    },
+    "note": "The timed observer cancelled before receiving a complete independent review. A new explicit human continuation invalidated the earlier review, leaving planningReview absent; advisory execution is not approval. The old optional reviewer.model field was not treated as final actual-model evidence."
+  },
+  "browserQA": {
+    "recordedAt": "2026-10-08T16:14:08.200573+00:00",
+    "tool": "agent-browser",
+    "runtime": "sole production DSH 0.2.0-rc.2 web authentication + actual production agentView RPC + live model catalog",
+    "scope": "Only the newly created independent probe continuable child was selected; its local selection was set on a same-origin asset before loading the SPA. No existing conversation was opened, and no credentials/auth URLs/cookies are included.",
+    "actualRowCount": 3,
+    "actualText": "mimo-v2.6-flash · OpenCode Go（opencode-go） · 推理 high",
+    "observedState": "idle / settled",
+    "actions": [
+      "Open model/recovery modal",
+      "Load actual agentView and model catalog",
+      "Refresh status successfully",
+      "Reopen after responsive header remount",
+      "Escape close"
+    ],
+    "noModelControlMutation": true,
+    "noAdditionalModelRequestRequested": true,
+    "errors": [],
+    "viewports": [
+      [
+        1280,
+        633
+      ],
+      [
+        390,
+        844
+      ]
+    ],
+    "horizontalOverflow": false,
+    "mobilePanelBounds": {
+      "left": 48,
+      "right": 342,
+      "top": 251.40625,
+      "bottom": 650.578125
+    },
+    "privacyMask": "Sidebar hidden with temporary browser CSS before screenshots; inspected screenshots contain only the new probe and model-control interface.",
+    "screenshots": [
+      "production-model-controls-2026-10-09.png",
+      "production-model-controls-mobile-2026-10-09.png"
+    ],
+    "browserClosed": true,
+    "boundary": "Production UI/readonly RPC/catalog were verified without selecting/stopping/continuing a model. Isolated real-Host tests cover lifecycle mutations; this is not a claim that those production mutations were repeated."
+  }
+}

@@ -48,13 +48,13 @@ const makeHost = () => {
     })
   }
   const services = {
-    llm: { listProviders: () => [{ id: 'qwen-token-plan-cn' }], resolveModelInfo: async () => ({ inputModalities: ['text'] }) },
+    llm: { listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'a' }, { id: 'b' }], resolveModelInfo: async () => ({ inputModalities: ['text'], reasoning: { efforts: ['off', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((id) => ({ id, name: id })) } }) },
     subagents,
     tools: toolsService,
     profileContext: { home }
   }
   const context = makeContext(services)
-  host.apply(context.ctx, { jev: { enabled: false } })
+  host.apply(context.ctx, { jev: { enabled: false }, planningReview: { enabled: false } })
   return { ...context, registered, guards, toolsService, home, services }
 }
 
@@ -101,7 +101,7 @@ describe('宿主插件', () => {
     const connection = { fetch: { register: (route: { path: string; fetch: (request: Request) => Promise<Response> }) => { routes.push(route); return () => undefined } } }
     const scoped = makeContext({ connection })
     host.apply({ ...ctx, inject: (deps, callback) => { expect(deps).toEqual(['connection']); callback(scoped.ctx) } }, { jev: { enabled: false } })
-    expect(routes.map((route) => route.path)).toEqual(['/api/swarm.jevStatus', '/api/swarm.jevHealth', '/api/swarm.taskView', '/api/swarm-assets/mermaid.min.js'])
+    expect(routes.map((route) => route.path)).toEqual(['/api/swarm.jevStatus', '/api/swarm.jevHealth', '/api/swarm.taskView', '/api/swarm.agentView', '/api/swarm.agentControl', '/api/swarm-assets/mermaid.min.js'])
     const response = await routes[1]!.fetch(new Request('http://h/api/swarm.jevHealth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'x', method: 'swarm.jevHealth' }) }))
     expect(await response.json()).toMatchObject({ rpcId: 'x', result: { ok: true, value: { enabled: false, result: { ok: false, error: 'Jev is disabled in swarm-core config' } } } })
   })
@@ -126,7 +126,7 @@ describe('工具插件', () => {
       'swarm_task_card', 'swarm_delegate', 'swarm_status', 'swarm_accept',
       'jev_ask', 'jev_check', 'jev_classify', 'jev_score', 'jev_match', 'jev_screen', 'jev_health',
       'swarm_calculate', 'swarm_message_send', 'swarm_message_read', 'swarm_message_ack',
-      'swarm_review_plan', 'swarm_context_read', 'swarm_experience'
+      'swarm_review_plan', 'swarm_context_read', 'swarm_project_files', 'swarm_experience'
     ])
     const byName = (name: string) => registered.find((d) => d.name === name) as ToolDefinitionLike
     const exec = { agent: { id: 'root', session: { header: { agentPreset: 'tian-shu', cwd: hostHarness.home } } }, signal: new AbortController().signal }

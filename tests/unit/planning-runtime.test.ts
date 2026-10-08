@@ -57,6 +57,36 @@ const make = (options: { jevAvailable?: boolean; requireJev?: boolean; reviewVer
 }
 
 describe('automatic planning review through the service', () => {
+  it('does not spend the only execution call on planning review', async () => {
+    const runtime = make()
+    runtime.config.execution.maxCalls = 1
+    const task = await runtime.service.AddTaskCard(runtime.card(), runtime.exec())
+    expect(task.planningReview?.status).toBe('pass')
+    const record = await runtime.service.delegate({ task_id: task.task_id, node_id: 'analysis', role: 'mou_ding', prompt: '交付分析', session: 'oneshot', backend: 'api' }, runtime.exec())
+    expect(record.status).toBe('completed')
+    const budget = runtime.service.getStatus({ task_id: task.task_id }, runtime.exec()).executionBudgets[0]!
+    expect(budget.reservations.filter((r) => r.source === 'delegate')).toHaveLength(1)
+    expect(budget.reservations.some((r) => r.id.startsWith('plan-'))).toBe(false)
+  })
+
+  it('keeps an exhausted task editable and permits explicit review after narrowing scope', async () => {
+    const behavior = { reviewVerdict: 'changes_requested' as 'pass' | 'changes_requested' }
+    const runtime = make(behavior)
+    let task = await runtime.service.AddTaskCard({ ...runtime.card(), scope: ['src'] }, runtime.exec())
+    for (const scope of [['src/a'], ['src/a/b'], ['src/a/b/c'], ['src/a/b/c/d']]) {
+      task = await runtime.service.AddTaskCard({ ...runtime.card(), task_id: task.task_id, expected_card_revision: task.cardRevision, scope }, runtime.exec())
+    }
+    expect(task.scope).toEqual(['src/a/b/c/d'])
+    expect(task.planningReview?.status).toBe('review_required')
+    expect(task.planningRecovery).toMatchObject({ automaticReviewPaused: true, contractEditable: true })
+    expect(runtime.calls).toHaveLength(3)
+    await expect(runtime.service.delegate({ task_id: task.task_id, role: 'mou_ding', prompt: '不能绕过未批准的新合同' }, runtime.exec())).rejects.toThrow(/审核/)
+    behavior.reviewVerdict = 'pass'
+    const review = await runtime.service.ReviewPlan({ task_id: task.task_id }, runtime.exec()) as { status: string }
+    expect(review.status).toBe('pass')
+    expect(runtime.calls).toHaveLength(4)
+    await expect(runtime.service.AddTaskCard({ ...runtime.card(), task_id: task.task_id, expected_card_revision: 1, scope: [] }, runtime.exec())).rejects.toThrow(/版本/)
+  }, 15_000)
   it.each([
     { name: 'malformed JSON', response: () => new Response('broken JSON', { status: 200 }) },
     { name: 'empty answers', response: () => new Response('{"answers":{}}', { status: 200 }) },
@@ -75,6 +105,9 @@ describe('automatic planning review through the service', () => {
     const task = await runtime.service.AddTaskCard(runtime.card(), runtime.exec())
     expect(task.planningReview?.status).toBe('pass')
     expect(task.planningReview?.mermaidReview).toMatchObject({ parseVerdict: 'pass', projectionVerdict: 'pass' })
+    // This fixture emits no actual request observation. A proposed starting
+    // model cannot become a claim about the model that performed the review.
+    expect(task.planningReview?.agent.reviewer).not.toHaveProperty('model')
     expect(runtime.calls).toHaveLength(1)
     expect(runtime.calls[0]?.toolFilter?.allow).not.toContain('write')
     expect(runtime.calls[0]?.toolFilter?.allow).not.toContain('bash')

@@ -13,8 +13,24 @@ import { SwarmError } from './util/errors.js'
 
 export const RPC_PREFIX = 'swarm.'
 export const RPC_METHODS = ['jevStatus', 'jevHealth'] as const
-export type RpcMethod = typeof RPC_METHODS[number] | 'taskView'
-export interface TaskRpcDepsInfo { taskView: (sessionId: string, taskId: string) => unknown | Promise<unknown> }
+export type RpcMethod = typeof RPC_METHODS[number] | 'taskView' | 'agentView' | 'agentControl'
+export interface AgentControlRpcInput {
+  parentSessionId: string
+  childId: string
+  expectedRevision: number
+  action: 'select' | 'stop' | 'continue'
+  route?: { provider: string; model: string; reasoningEffort?: string }
+  interruptRunning?: boolean
+  retryRoute?: boolean
+  forceRetry?: boolean
+  confirmSafeToContinue?: boolean
+  steering?: string
+}
+export interface TaskRpcDepsInfo {
+  taskView?: (sessionId: string, taskId: string) => unknown | Promise<unknown>
+  agentView?: (parentSessionId: string, childId: string) => unknown | Promise<unknown>
+  agentControl?: (input: AgentControlRpcInput) => unknown | Promise<unknown>
+}
 export const MERMAID_ASSET_PATH = '/api/swarm-assets/mermaid.min.js'
 const RPC_BODY_LIMIT = 16384
 
@@ -45,8 +61,24 @@ export const RunRpcMethod = async (jev: JevHub, method: RpcMethod, signal: Abort
     if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return failure('gateway/bad-request', 'taskView payload must contain sessionId and taskId')
     const input = payload as Record<string, unknown>
     const validId = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '' && value.length <= 128 && !/[\u0000-\u001F\u007F]/.test(value)
+    if (method === 'agentView' || method === 'agentControl') {
+      const allowed = method === 'agentView' ? ['parentSessionId', 'childId'] : ['parentSessionId', 'childId', 'expectedRevision', 'action', 'route', 'interruptRunning', 'retryRoute', 'forceRetry', 'confirmSafeToContinue', 'steering']
+      if (Object.keys(input).some((key) => !allowed.includes(key)) || !validId(input.parentSessionId) || !validId(input.childId)) return failure('gateway/bad-request', 'agent controls require bounded parentSessionId and childId')
+      if (signal.aborted) return failure('gateway/cancelled', 'agent control request cancelled before admission')
+      if (method === 'agentView') return deps?.agentView === undefined ? failure('swarm/unavailable', 'agent control view unavailable') : { ok: true, value: await deps.agentView(input.parentSessionId, input.childId) }
+      if (!Number.isSafeInteger(input.expectedRevision) || Number(input.expectedRevision) < 1 || !['select', 'stop', 'continue'].includes(String(input.action))) return failure('gateway/bad-request', 'agent control action/revision invalid')
+      for (const key of ['interruptRunning', 'retryRoute', 'forceRetry', 'confirmSafeToContinue']) if (input[key] !== undefined && typeof input[key] !== 'boolean') return failure('gateway/bad-request', 'agent control flags must be boolean')
+      if (input.steering !== undefined && (typeof input.steering !== 'string' || input.steering.length > 8000)) return failure('gateway/bad-request', 'steering must be bounded text')
+      if (input.action === 'select') {
+        const route = input.route as Record<string, unknown> | undefined
+        if (route === null || typeof route !== 'object' || Array.isArray(route) || Object.keys(route).some((key) => !['provider', 'model', 'reasoningEffort'].includes(key)) || !validId(route.provider) || !validId(route.model) || (route.reasoningEffort !== undefined && !validId(route.reasoningEffort))) return failure('gateway/bad-request', 'select requires a bounded model route without policy overrides')
+      } else if (input.route !== undefined || input.interruptRunning !== undefined || input.retryRoute !== undefined || input.forceRetry !== undefined) return failure('gateway/bad-request', 'route controls apply only to select')
+      if (input.action !== 'continue' && (input.confirmSafeToContinue !== undefined || input.steering !== undefined)) return failure('gateway/bad-request', 'continue controls apply only to continue')
+      if (input.forceRetry === true && input.retryRoute !== true) return failure('gateway/bad-request', 'forceRetry requires explicit retryRoute')
+      return deps?.agentControl === undefined ? failure('swarm/unavailable', 'agent controls unavailable') : { ok: true, value: await deps.agentControl(input as unknown as AgentControlRpcInput) }
+    }
     if (Object.keys(input).some((key) => !['sessionId', 'taskId'].includes(key)) || !validId(input.sessionId) || !validId(input.taskId)) return failure('gateway/bad-request', 'taskView accepts only bounded string sessionId and taskId')
-    if (deps === undefined) return failure('swarm/unavailable', 'taskView service unavailable')
+    if (deps?.taskView === undefined) return failure('swarm/unavailable', 'taskView service unavailable')
     return { ok: true, value: await deps.taskView(input.sessionId, input.taskId) }
   } catch (error) {
     if (error instanceof JevCredentialError) return failure(error.reason === 'credential-permission-denied' ? 'swarm/permission-denied' : 'swarm/credential-unavailable', error.reason)
@@ -61,7 +93,7 @@ export const RunRpcMethod = async (jev: JevHub, method: RpcMethod, signal: Abort
  * @returns {FetchRouteLike[]} 路由
  */
 export const getRpcRoutes = (getJev: () => JevHub, deps?: TaskRpcDepsInfo): FetchRouteLike[] => {
-  const methods: RpcMethod[] = deps === undefined ? [...RPC_METHODS] : [...RPC_METHODS, 'taskView']
+  const methods: RpcMethod[] = [...RPC_METHODS, ...(deps?.taskView === undefined ? [] : ['taskView' as const]), ...(deps?.agentView === undefined ? [] : ['agentView' as const]), ...(deps?.agentControl === undefined ? [] : ['agentControl' as const])]
   const routes = methods.map((method): FetchRouteLike => {
     const full = `${RPC_PREFIX}${method}`
     return {
@@ -91,7 +123,7 @@ export const getRpcRoutes = (getJev: () => JevHub, deps?: TaskRpcDepsInfo): Fetc
       }
     }
   })
-  if (deps !== undefined) routes.push(getMermaidAssetRoute())
+  if (deps?.taskView !== undefined) routes.push(getMermaidAssetRoute())
   return routes
 }
 

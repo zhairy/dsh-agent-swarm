@@ -192,6 +192,14 @@ export const getPlanningReviewPrompt = (snapshot: ReviewSnapshot): string => [
   '逐条核对 R/A/node 引用。存在映射不等于实质覆盖。未核实内容填 unknown/unresolved，重要歧义填 needs-clarification。三个维度分别给依据；语法与精确图投影以宿主 parser/结构检查为准。',
   `快照（完整当前合同与源码）：\n${JSON.stringify(snapshot, null, 2)}`,
   `交付 JSON schema：\n${JSON.stringify(schema)}`,
+  `提交工具参数模板（不要提交平坦的 summary/evidenceRefs；填写真实判断后调用 structured_output，顶层使用 value）：\n${JSON.stringify({ value: {
+    snapshotDigest: snapshot.snapshotDigest, verdict: 'unknown',
+    goalReview: { verdict: 'unknown', summary: '填写目标核对依据', evidenceRefs: [] },
+    designReview: { verdict: 'unknown', summary: '填写步骤与依赖核对依据', evidenceRefs: [] },
+    mermaidReview: { verdict: 'unknown', summary: '填写图表达核对依据', evidenceRefs: [] },
+    requirementCoverage: snapshot.requirements.map((requirement) => ({ requirementId: requirement.id, covered: false, evidence: '填写实际覆盖或缺口' })),
+    findings: [], assumptions: [], unresolved: ['填写尚未核实事项；确认没有时才使用空数组']
+  } })}`,
   `必须回传 snapshotDigest=${snapshot.snapshotDigest}；达成审核合同后立即提交。`
 ].join('\n\n')
 

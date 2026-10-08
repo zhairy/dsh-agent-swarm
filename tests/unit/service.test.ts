@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getSwarmConfig, type SwarmConfigInfo } from '../../src/config.js'
+import { getRoleRoute, getSwarmConfig, type SwarmConfigInfo } from '../../src/config.js'
 import { getLedgerEvents } from '../../src/evidence.js'
 import type { SubagentStartRequestLike } from '../../src/host-contract.js'
 import { ROLE_TAG_PATTERN, type DelegableRoleId } from '../../src/role-registry.js'
@@ -35,7 +35,7 @@ const makeService = (options: { config?: Record<string, unknown>; env?: Partial<
   const config: SwarmConfigInfo = getSwarmConfig({ planningReview: { enabled: false }, ...options.config })
   const deps: SwarmServiceDepsInfo = {
     getConfig: () => config,
-    getLlm: () => ({ listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'opencode-go' }, { id: 'deepseek-official' }], resolveModelInfo: async () => ({ inputModalities: ['text', 'image'] }) }),
+    getLlm: () => ({ listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'opencode-go' }, { id: 'deepseek-official' }], resolveModelInfo: async () => ({ inputModalities: ['text', 'image'], reasoning: { efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((id) => ({ id, name: id })) } }) }),
     getSubagents: () => subagents,
     getTools: () => ({ register: () => () => undefined, schemas: () => ['read', 'write', 'edit', 'glob', 'grep', 'pwsh'].map((name) => ({ name })), guard: () => () => undefined }),
     getAttachments: () => undefined,
@@ -47,21 +47,22 @@ const makeService = (options: { config?: Record<string, unknown>; env?: Partial<
     now: (() => { let clock = 1000; return () => (clock += 10) })(),
     ...options.env
   }
-  return { service: intSwarmService(deps), fetchMock, subagents, dshHome }
+  return { service: intSwarmService(deps), fetchMock, subagents, dshHome, config }
 }
 
 const cardInput = (flags: Record<string, boolean>, extra: Record<string, unknown> = {}) => ({ title: '任务', goal: '目标', acceptance: ['通过'], scope: ['src/a.ts'], flags, ...extra })
 
 describe('天枢容灾升级', () => {
   const okProbe = { probe: async () => ({ ok: true as const, vision: true }) }
+  const fullUpgradeChain = ['codex/gpt-6-astra', 'claude/claude-opus-5-5', 'codex/gpt-6-sol', 'qwen-token-plan-cn/deepseek-v4.1-flash', 'deepseek-official/deepseek-flash']
 
   it('任务卡命中触发条件时切到升级链，任务标记未完成后恢复', async () => {
     const { service } = makeService({ config: { jev: { enabled: false } }, env: okProbe })
     const card = await service.AddTaskCard(cardInput({ changesCode: true, crossModuleArchitecture: true }), exec())
-    expect(card.rootUpgrade).toMatchObject({ taskIds: ['T-1'], chain: ['codex/gpt-6-astra', 'claude/claude-opus-5-5'] })
+    expect(card.rootUpgrade).toMatchObject({ taskIds: ['T-1'], chain: fullUpgradeChain })
     expect(card.rootUpgrade?.reasons[0]).toContain('跨模块')
-    expect(service.routeState.getRootUpgrade(root.id)).toHaveLength(2)
-    expect(service.getStatus({}, exec()).rootUpgrade?.chain).toHaveLength(2)
+    expect(service.routeState.getRootUpgrade(root.id)?.map((route) => `${route.provider}/${route.model}`)).toEqual(fullUpgradeChain)
+    expect(service.getStatus({}, exec()).rootUpgrade?.chain).toEqual(fullUpgradeChain)
     await service.AcceptTask({ task_id: 'T-1', decision: 'incomplete', summary: 's', stopReason: '用户中止' }, exec())
     expect(service.routeState.getRootUpgrade(root.id)).toBeUndefined()
     expect(service.getStatus({}, exec()).rootUpgrade).toBeNull()
@@ -74,7 +75,7 @@ describe('天枢容灾升级', () => {
     expect(upgraded.rootUpgrade?.reasons).toEqual(['T-1：天枢显式要求升级'])
     const cancelled = await service.AddTaskCard(cardInput({ changesCode: true }, { task_id: 'T-1', upgrade: false }), exec())
     expect(cancelled.rootUpgrade).toBeNull()
-    const offline = makeService({ config: { jev: { enabled: false } } })
+    const offline = makeService({ config: { jev: { enabled: false } }, env: { probe: async () => ({ ok: false, reason: 'all-models-unavailable' }) } })
     const unavailable = await offline.service.AddTaskCard(cardInput({ ambiguousRequirements: true }), exec())
     expect(unavailable.rootUpgrade).toMatchObject({ chain: [] })
     expect(offline.service.routeState.getRootUpgrade(root.id)).toBeUndefined()
@@ -85,7 +86,7 @@ describe('天枢容灾升级', () => {
     const projections = { stateOf: vi.fn((session: unknown, key: string) => (session === switched.session && key === 'agentPreset' ? 'tian-shu' : undefined)) }
     const { service } = makeService({ config: { jev: { enabled: false } }, env: { ...okProbe, getSessionProjections: () => projections } })
     const card = await service.AddTaskCard(cardInput({ ambiguousRequirements: true }), { agent: switched, signal: new AbortController().signal })
-    expect(card.rootUpgrade?.chain).toEqual(['codex/gpt-6-astra', 'claude/claude-opus-5-5'])
+    expect(card.rootUpgrade?.chain).toEqual(fullUpgradeChain)
     expect(service.getRoleForAgent(switched)).toBe('tian_shu')
     const broken = makeService({ config: { jev: { enabled: false } }, env: { ...okProbe, getSessionProjections: () => ({ stateOf: () => { throw new Error('unknown session') } }) } })
     expect((await broken.service.AddTaskCard(cardInput({ ambiguousRequirements: true }), { agent: switched, signal: new AbortController().signal })).rootUpgrade).toBeNull()
@@ -99,6 +100,63 @@ describe('天枢容灾升级', () => {
     expect(service.getStatus({}, exec()).rootUpgrade).toMatchObject({ chain: [], cancelledByUser: true })
     const again = await service.AddTaskCard(cardInput({ ambiguousRequirements: true }, { task_id: 'T-1' }), exec())
     expect(again.rootUpgrade?.cancelledByUser).toBe(true)
+    expect(service.routeState.getRootUpgrade(root.id)).toBeUndefined()
+    const explicit = await service.AddTaskCard(cardInput({ ambiguousRequirements: true }, { task_id: 'T-1', upgrade: true }), exec())
+    expect(explicit.rootUpgrade?.cancelledByUser).toBe(true)
+    expect(service.routeState.getRootUpgrade(root.id)).toBeUndefined()
+  })
+
+  it.each([0, 180000])('相同任务卡及委派收尾刷新升级不越过恢复间隔 %i', async (rootRecoverMs) => {
+    const preferred = { provider: 'qwen-token-plan-cn', model: 'preferred' }
+    const backup = { provider: 'qwen-token-plan-cn', model: 'backup' }
+    const { service, config } = makeService({ config: { jev: { enabled: false }, review: { enabled: false },
+      agents: { rootRecoverMs, networkWaitMs: 0 },
+      routes: { tian_shu: { chain: [backup], upgrade: { enabled: true, chain: [preferred, backup], triggers: ['ambiguous'] } } } },
+      env: { ...okProbe, now: () => 1000 } })
+    const input = cardInput({ ambiguousRequirements: true })
+    const card = await service.AddTaskCard(input, exec())
+    const registry = service.routeState
+    registry.BeginRequestStep(root.id, 0, 0)
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', config, true).model).toBe('preferred')
+    const failed = { agent: root, provider: preferred.provider, signal: exec().signal, failure: { code: 'SERVER_ERROR', message: 'temporary fixture failure' } }
+    expect(await registry.getErrorAction(failed, undefined, 'tian_shu', config)).toEqual({ kind: 'retry' })
+    expect(await registry.getErrorAction(failed, undefined, 'tian_shu', config)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', config, true).model).toBe('backup')
+    registry.MarkRequestSucceeded(root.id)
+    expect(registry.getHealth()).toEqual([])
+    const refreshed = await service.AddTaskCard({ ...input, task_id: card.task_id }, exec())
+    expect(refreshed.cardRevision).toBe(card.cardRevision)
+    registry.BeginRequestStep(root.id, 0, 1)
+    await registry.PreparePreferredRecovery(root, backup, 'tian_shu', config)
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', config, true).model).toBe('backup')
+    registry.MarkRequestSucceeded(root.id)
+    expect((await service.delegate({ task_id: card.task_id, role: 'miao_bi', prompt: '只读检查', backend: 'api', session: 'oneshot' }, exec())).status).toBe('completed')
+    registry.BeginRequestStep(root.id, 0, 2)
+    await registry.PreparePreferredRecovery(root, backup, 'tian_shu', config)
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', config, true).model).toBe('backup')
+  })
+
+  it('关闭多个触发任务时逐个清理原因，最后一个关闭才撤销升级', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false } }, env: okProbe })
+    await service.AddTaskCard(cardInput({ ambiguousRequirements: true }), exec())
+    await service.AddTaskCard(cardInput({ crossModuleArchitecture: true }), exec())
+    await service.AcceptTask({ task_id: 'T-1', decision: 'incomplete', summary: '停止', stopReason: '停止' }, exec())
+    expect(service.getStatus({}, exec()).rootUpgrade).toMatchObject({ taskIds: ['T-2'] })
+    expect(service.getStatus({}, exec()).rootUpgrade?.reasons.every((reason) => reason.startsWith('T-2：'))).toBe(true)
+    expect(service.routeState.getRootUpgrade(root.id)).toBeDefined()
+    await service.AcceptTask({ task_id: 'T-2', decision: 'incomplete', summary: '停止', stopReason: '停止' }, exec())
+    expect(service.getStatus({}, exec()).rootUpgrade).toBeNull()
+    expect(service.routeState.getRootUpgrade(root.id)).toBeUndefined()
+  })
+
+  it('触发条件解除或在线关闭升级时撤销覆盖；显式升级在同任务中保留', async () => {
+    const { service, config } = makeService({ config: { jev: { enabled: false } }, env: okProbe })
+    await service.AddTaskCard(cardInput({ ambiguousRequirements: true }), exec())
+    expect((await service.AddTaskCard(cardInput({}, { task_id: 'T-1' }), exec())).rootUpgrade).toBeNull()
+    await service.AddTaskCard(cardInput({}, { task_id: 'T-1', upgrade: true }), exec())
+    expect((await service.AddTaskCard(cardInput({}, { task_id: 'T-1' }), exec())).rootUpgrade?.chain).toEqual(fullUpgradeChain)
+    config.routes.tian_shu = { ...getRoleRoute(config, 'tian_shu'), upgrade: { ...getRoleRoute(config, 'tian_shu').upgrade!, enabled: false } }
+    expect(service.getStatus({}, exec()).rootUpgrade).toBeNull()
     expect(service.routeState.getRootUpgrade(root.id)).toBeUndefined()
   })
 })

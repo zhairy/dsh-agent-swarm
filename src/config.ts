@@ -104,7 +104,7 @@ export const Config = Schema.object({
   planningReview: Schema.object({
     enabled: Schema.boolean().default(true),
     requireJev: Schema.boolean().default(false),
-    maxFixRounds: Schema.natural().default(2),
+    maxFixRounds: Schema.natural().default(2).description('自动规划修正轮数；达到上限仅暂停自动审核，任务卡仍可编辑并显式复审'),
     reviewAbove: Schema.number().default(0.8)
   }).default({}).description('生成后独立审核目标、流程设计与 Mermaid 代码').volatile(),
   execution: Schema.object({

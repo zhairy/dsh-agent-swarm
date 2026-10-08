@@ -5,6 +5,7 @@ import {
   MANAGED_AGENTS_KEY,
   SWARM_SERVICE,
   type AgentLike,
+  type SessionHeaderLike,
   type ConnectionLike,
   type ManagedAgentsInfo,
   type PreStepDecisionLike,
@@ -24,6 +25,8 @@ import { intNetworkMonitor } from './network.js'
 import { getRpcRoutes } from './rpc.js'
 import { intSwarmService, type LoggerLike } from './service.js'
 import { getHostApprovalPolicy, getToolApprovalDecision } from './approval-policy.js'
+import { inspectChildRecovery, inspectRootPreference } from './host-recovery.js'
+import type { RouteInfo } from './routes.js'
 
 /** 宿主行：提供 agentSwarm 服务、注册写操作守卫与设置页 RPC，本身不向模型注册工具 */
 export const name = 'dsh-agent-swarm'
@@ -80,6 +83,21 @@ export const PublishManagedAgents = (isManaged: (agent: unknown) => boolean): ((
 export const apply = (ctx: PluginContextLike, config: unknown): void => {
   const getConfig = () => getSwarmConfig(config)
   const fetchImpl: typeof fetch = (input, init) => globalThis.fetch(input, init)
+  const rootMetadata = new Map<string, Promise<{ header: SessionHeaderLike; preference?: RouteInfo } | undefined>>()
+  const inspectRootMetadata = (id: string) => {
+    let pending = rootMetadata.get(id)
+    if (pending !== undefined) return pending
+    pending = (async () => {
+      const controller = ctx.get('sessionController') as { inspect: (id: string) => Promise<{ meta: SessionHeaderLike }> } | undefined
+      if (controller === undefined) return undefined
+      const inspection = await controller.inspect(id)
+      const preference = inspectRootPreference(inspection)
+      // Retain only bounded metadata, never an entire inspected conversation.
+      return { header: inspection.meta, ...(preference === undefined ? {} : { preference }) }
+    })().catch((error) => { rootMetadata.delete(id); throw error })
+    rootMetadata.set(id, pending)
+    return pending
+  }
   const service = intSwarmService({
     getConfig,
     getLlm: () => ctx.get('llm') as LlmLike | undefined,
@@ -89,6 +107,20 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     getCredentials: () => ctx.get('credentials') as CredentialsLike | undefined,
     getApproval: () => ctx.get('approval') as ApprovalServiceLike | undefined,
     getSessionProjections: () => ctx.get('sessionProjections') as SessionProjectionsLike | undefined,
+    getAgent: (sessionId) => (ctx.get('agents') as { get: (id: string) => AgentLike | undefined } | undefined)?.get(sessionId),
+    inspectParent: async (sessionId) => (await inspectRootMetadata(sessionId))?.header,
+    inspectRootPreference: async (sessionId) => (await inspectRootMetadata(sessionId))?.preference,
+    activateParent: async (sessionId) => {
+      const controller = ctx.get('sessionController') as { resolveAgent: (id: string) => Promise<{ agent?: AgentLike; error?: unknown }> } | undefined
+      return (await controller?.resolveAgent(sessionId))?.agent
+    },
+    inspectChild: async (parentSessionId, childId, notBefore) => {
+      const controller = ctx.get('sessionController') as { inspect: (id: string) => Promise<unknown> } | undefined
+      const subagents = ctx.get('subagents') as SubagentsLike | undefined
+      if (controller === undefined || subagents?.listChildren === undefined) return undefined
+      const [inspection, catalog] = await Promise.all([controller.inspect(childId), subagents.listChildren(parentSessionId)])
+      return inspectChildRecovery({ parentSessionId, childId, inspection, catalog, ...(notBefore === undefined ? {} : { notBefore }) })
+    },
     dshHome: getDshHome(ctx),
     fetch: fetchImpl,
     logger: getLogger(ctx),
@@ -103,6 +135,12 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   ctx.on('agent/pre-step', async (_payload: unknown, next: () => Promise<PreStepDecisionLike>) => service.FilterPreStep(await next()))
   const tools = ctx.get('tools') as ToolsLike | undefined
   if (tools !== undefined) ctx.effect(() => tools.guard((execution) => service.getGuardReason(execution)))
+  // This stage follows admission and the monotonic guards. A rejected tool is
+  // never evidence that a writer actually entered the execution pipeline.
+  ctx.on('tools/execute', (execution: ToolExecutionLike, next: () => Promise<unknown>) => {
+    service.ObserveToolDispatch(execution)
+    return next()
+  })
   // Wrap the complete downstream policy, retaining its deny/cancel/ask. Host approval and
   // monotonic role/revision/workspace guards remain authoritative after this seam.
   ctx.on('tools/pre-execute', async (execution: ToolExecutionLike, next: () => Promise<PreToolDecisionLike>) => {
@@ -118,6 +156,9 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   ctx.inject?.(['connection'], (scoped) => {
     const connection = scoped.get('connection') as ConnectionLike | undefined
     if (connection?.fetch?.register === undefined) return
-    for (const route of getRpcRoutes(() => service.jev, { taskView: (sessionId, taskId) => service.getTaskViewForRpc(sessionId, taskId) })) scoped.effect(() => connection.fetch.register(route))
+    for (const route of getRpcRoutes(() => service.jev, {
+      taskView: (sessionId, taskId) => service.getTaskViewForRpc(sessionId, taskId),
+      agentView: service.getAgentViewForRpc, agentControl: service.ControlAgentForRpc
+    })) scoped.effect(() => connection.fetch.register(route))
   })
 }

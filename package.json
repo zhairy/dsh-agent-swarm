@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "2.2.2",
+  "version": "2.3.0",
   "description": "DSH 中文多智能体插件：版本化 Mermaid 任务流程、独立规划审核、额度耗尽立即回退、Jev 判断、受限专家协作与纯函数数学验证",
   "keywords": [
     "dsh",

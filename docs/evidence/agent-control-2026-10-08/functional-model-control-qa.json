@@ -1,0 +1,176 @@
+{
+  "recordedAt": "2026-10-08T15:47:55.830712+00:00",
+  "scope": "v2.3 persistent delegated-session model identity and manual recovery; owned implementation and actual DSH Host integration",
+  "machineTests": {
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "ownedUnit": {
+      "filesPassed": 6,
+      "testsPassed": 125,
+      "command": "npx vitest run tests/unit/agent-control.test.ts tests/unit/host-recovery.test.ts tests/unit/client-model-display.test.ts tests/unit/route-state.test.ts tests/unit/rpc-agent-control.test.ts tests/unit/delegate.test.ts"
+    },
+    "actualHost": {
+      "command": "npx vitest run --config vitest.integration.config.ts tests/integration/agent-control-host.test.ts",
+      "filesPassed": 1,
+      "testsPassed": 6,
+      "durationSeconds": 29.03,
+      "warmCasesPassed": 4,
+      "coldTwoProcessCasePassed": true,
+      "preferredRecoveryCasePassed": true,
+      "cases": [
+        "manual-switch",
+        "manual-isolated",
+        "manual-retry-isolated",
+        "restart-save + restart-load",
+        "manual-writer",
+        "preferred-recovery"
+      ],
+      "vendorBoundary": "All model responses use the explicitly isolated mock adapter. Sessions, actual tools, stream/turn events, lineage, cancellation, durable reload, routing, RPC and continuation are real DSH 0.2.0-rc.2.",
+      "hostEventArtifact": "host-recovery-events.json"
+    }
+  },
+  "browserQA": {
+    "tool": "agent-browser",
+    "browserPlugin": "not listed; mandatory agent-browser skill used",
+    "url": "http://127.0.0.1:4185/",
+    "title": "持久子会话模型控制 QA",
+    "runtime": "Actual DSH 0.2.0-rc.2 AgentLoop and continuable child; production getRpcRoutes/service controls; existing Host React and Modal primitives",
+    "vendor": "Explicit isolated mock provider; no real ChatGPT/Claude/TypeSafe model calls by this reviewer",
+    "connectionBoundary": "Loopback QA bridge uses actual production RPC handlers. It does not certify the full production Web cookie/trust middleware or visual theme composition.",
+    "viewports": [
+      [
+        1280,
+        633
+      ],
+      [
+        390,
+        844
+      ]
+    ],
+    "checks": {
+      "meaningfulContent": true,
+      "frameworkOverlay": false,
+      "consoleMessages": [],
+      "uncaughtErrors": [],
+      "horizontalOverflow": false,
+      "mobilePanelBounds": {
+        "left": 48,
+        "right": 342,
+        "top": 164.625,
+        "bottom": 737.359375
+      }
+    },
+    "flow": [
+      "Open the model/recovery action in an actual persistent child conversation",
+      "Select recovered and reasoning max while the actual observed call remains hang/high",
+      "Actual Host cancellation ends the child run; Continue is unavailable until real settlement and pipeline cleanup",
+      "Use Continue with read-only guidance; the same child actually calls recovered/max",
+      "Observe idle/settled state and actual new delegation/attempt identity",
+      "Escape closes the Host Modal and returns to the model/recovery action"
+    ],
+    "screenshots": [
+      "desktop-paused.png",
+      "desktop-resumed.png",
+      "mobile-paused.png",
+      "mobile-resumed.png"
+    ],
+    "hostEventArtifact": "browser-host-events.json",
+    "processCleanup": "Browser session closed and isolated preview Host terminated; production DSH service/configuration untouched"
+  },
+  "verifiedCorrections": [
+    {
+      "bug": "Cold persistent child attachments reuse Host attempt IDs such as child:1",
+      "fix": "Actual observation identity also binds the delegation; a new bound run cannot be suppressed as a duplicate"
+    },
+    {
+      "bug": "Changing the next chain could rewrite the cancelled old delegation route",
+      "fix": "Final route follows the actual last prepared/logged request, not selectedNext"
+    },
+    {
+      "bug": "Only success messages showed model identity",
+      "fix": "Failed assistant/attempt events also produce model-call rows; effective adapter defaults are read from the real logged request header at attempt start"
+    },
+    {
+      "bug": "Ordinary Host selectModel/cancel rejects subagent-owned sessions",
+      "fix": "A separate profile-owner control plane persists next selection, uses true ancestor cancellation, and resumes through the existing task/version/lease/budget pipeline"
+    },
+    {
+      "bug": "Old role chain quarantine blocked even a healthy user-selected new model",
+      "fix": "Resolve the exact continuation target and its persisted override before preflight"
+    },
+    {
+      "bug": "Generic continue could pick another recently used expert thread",
+      "fix": "Trusted controlledThreadId fixes the same durable child and refuses silent replacement on busy/closed/not-admitted targets"
+    },
+    {
+      "bug": "Immediate manual retry permit could be released by cancellation or remain held while idle",
+      "fix": "Queue a scoped intent; claim only at the real next request; reject true provider reset floors, and cancel intent before failed persistence unfences execution"
+    },
+    {
+      "bug": "Swarm prepend request-error handling suppressed Host context-overflow compaction",
+      "fix": "Call the actual compaction seam for context overflow, allow one recovery per logical request only after measured surface replacement, otherwise pause with context_recovery_required"
+    },
+    {
+      "bug": "Restart view required a live parent and recovered threads stayed closed",
+      "fix": "Root integration uses real readonly Host inspection/catalog plus official parent activation; same child cold resumes only with lineage/settled/current-task evidence"
+    },
+    {
+      "bug": "Unknown recovery blocked even correcting next model preference",
+      "fix": "Selection can be saved while remaining recovery-required; only execution/Continue stays gated"
+    },
+    {
+      "bug": "Side-effect prompt was inferred from role rather than actual operation",
+      "fix": "Trusted final allowed mutation boundary marks risk; completed runs clear it; actual lease recovery remains authoritative",
+      "machineEvidence": "Real allowed write modifies hello.txt once, next model call hangs; cancellation settles, unconfirmed continuation is refused, confirmed continuation reads the file and never repeats write."
+    },
+    {
+      "bug": "Failed post-publication native registration could orphan a run or replay through a second backend",
+      "fix": "Published runs are disposed even if registration throws; native budget is retained and fallback replay is refused"
+    },
+    {
+      "bug": "The SDK seeds a later tool step from the last automatic fallback request/header; default effort materialization can also differ from that proposal",
+      "fix": "Official model/selection is the explicit intent source. Compatibility inference excludes the same actual provider/model regardless of adapter default effort; automatic headers cannot create a manual child override or cancel a root upgrade.",
+      "machineEvidence": "Real Host header sequence preferred → backup → preferred with zero child selection events; real validated root model/selection followed by a recovered/max request."
+    },
+    {
+      "bug": "Retaining only currently usable routes discarded preferred candidates and prevented later recovery",
+      "fix": "Retain the current attempt compatible declared chain with its initial usable route. New logical step boundaries recheck metadata, vision, generation/tools and scoped health; actual dispatch atomically claims one half-open owner. Same logical retries cannot rewind; failed trials back off."
+    },
+    {
+      "bug": "Root upgrades could retain an automatic fallback outside the original upgrade chain after cancellation",
+      "fix": "Clearing an upgrade removes its automatic root fallback and preserves stable human preference. Restore preference from own explicit selection or first initial/resume header; rootRecoverMs remains authoritative, including zero disabling automatic restoration."
+    },
+    {
+      "bug": "After separating the stable picker from SDK headers, root restoration could rebind quota policy from the old fallback header",
+      "fix": "Bind trusted configured resource policy to preferredRoot itself. Regression verifies a preferred-account failure cannot quarantine the fallback account."
+    }
+  ],
+  "remainingBoundaries": [
+    "Machine/model-source tests are not independent Jev certification. This reviewer did not call external Jev MCP.",
+    "Native backends without Host model evidence explicitly show unknown; no native placeholder is presented as a verified model.",
+    "Cold orphaned/open/conflicting turns, pending delivery and unknown mutations remain recovery-required; confirmation does not clear unknown execution leases.",
+    "Parent agent owns full repository tests, deployment, version bump and release. These hashes are current owned files at report time, not a whole-release freeze claim."
+  ],
+  "sourceSha256AtReport": {
+    "src/agent-control.ts": "753d2c44d28833b16684eb185e3a03ab28d03ac83b3c290d70e9f571c20f3891",
+    "src/host-recovery.ts": "64795e7cf3b8a08b04ee38213b2aa8110f2c9e68f0c135e16c833083c6f3dc84",
+    "src/route-state.ts": "fa2a857aa438ff1b7722e7bef46645f3d3ab0133631952ff7e4316b7f1ff592c",
+    "src/runtime.ts": "b728483999160f24814b3b968e042899b9bd442437f7a7a13e534b02ebe29df5",
+    "src/delegate.ts": "8df30464f994b5d29e941fd10f3c88e8a1fc692d4e0e0d704c8f67e3d8b54516",
+    "src/host-contract.ts": "4ef7bfdedebc1e13b6c387ee8a4229ba98c047ac08e3e6e52efab6501648d1ed",
+    "src/rpc.ts": "ac80cf4610bcb430a589ccc70459b07da449bb88a0755b2ffc43d141fecb6339",
+    "client/model-display.js": "4817f5c592b8f8ab599da5b9c668be336f29f4dd3a45a7eb6b2731cb2026c9b2",
+    "tests/unit/agent-control.test.ts": "a0c55a04df0657d2ee6ca364d460f47755d718308d0ba89a3663419bffea9cf3",
+    "tests/unit/host-recovery.test.ts": "7247809b485919401e4cf53f52922a11a0a50aa16c3c18858ead0b1fc7d6343e",
+    "tests/unit/client-model-display.test.ts": "bb6e3d7c108c369786e2d5f146377c618050780cc6a72534ea3ab162e9ac24b6",
+    "tests/unit/route-state.test.ts": "f3bacd792f52059314cceaff4563bf31d44e231e2c1b0f826c1515642bf59977",
+    "tests/unit/rpc-agent-control.test.ts": "cd50959544ad6d754d28106cf0a31277fe70238797d701afd5d01c6acc484cfa",
+    "tests/unit/delegate.test.ts": "a6ceb96946c82423cfab53dddf80cd45b1f32c2db1fd14a7bb70ee9c81a3476f",
+    "tests/integration/agent-control-host.test.ts": "6be197669f15f3993211d2462de279041feb539e96f6d94ab703cd7ea7120eea",
+    "tests/integration/driver/agent-control-scenarios.js": "8cfcd8d5515aefc316bd79a0cb84d3f4c742d82b2203920623faf79662908b4f",
+    "tests/integration/driver/agent-control-preview.js": "a392aca688a20ca5de36b11b66c6555293954a9a5ea0257fc2e92ff4b4088c11",
+    "scripts/preview-agent-control.mjs": "be09b2fd85a5af13db898038ebdb6275a5e4b6a90c14f8957407b4ea61696214"
+  }
+}

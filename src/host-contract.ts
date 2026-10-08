@@ -32,7 +32,7 @@ export const STRUCTURED_OUTPUT_TOOL = 'structured_output'
 /** 能力 → 宿主工具候选名（0.1.7-alpha.2 实测）；jev 为本插件在天枢预设内注册的 7 个 Jev 判断工具 */
 export const CAPABILITY_TOOL_CANDIDATES = {
   read: ['read', 'read_image'],
-  search: ['glob', 'grep'],
+  search: ['glob', 'grep', 'swarm_project_files'],
   edit: ['write', 'edit'],
   shell: ['pwsh', 'bash'],
   web: ['web_search', 'web_fetch'],
@@ -61,7 +61,14 @@ export interface AgentLike {
   session?: {
     header?: SessionHeaderLike
     deriveMessages?: () => readonly { id?: string; role?: string; source?: { kind?: string }; content?: readonly ContentBlockLike[] }[]
+    surface?: { replaceGeneration: number }
+    requestHeader?: () => { config: CallConfigLike } | undefined
   }
+}
+
+/** Real DSH compaction seam; progress is verified against the durable surface generation. */
+export interface ContextCompactionLike {
+  compactIfNeeded: (agent: AgentLike, trigger: 'context-overflow', signal: AbortSignal) => Promise<unknown | null>
 }
 
 /** LLM 失败信息 */
@@ -147,6 +154,7 @@ export interface SubagentsLike {
   startContinuable?: (spec: ContinuableStartSpecLike) => Promise<{ childId: string; messageId: string }>
   sendMessage?: (sender: AgentLike, targetId: string, content: ContentBlockLike[], options: { signal: AbortSignal }) => Promise<string>
   interrupt?: (targetSessionId: string, authority: { kind: 'ancestor'; agent: AgentLike }) => void
+  listChildren?: (parentSessionId: string, signal?: AbortSignal) => Promise<Array<{ id: string; createdAt: number; mode: 'continuable' | 'one-shot' | 'unknown'; label?: string }>>
 }
 
 /** 进入一步之前的消息（agent/pre-step）；只读取本插件需要的来源字段 */
@@ -161,7 +169,8 @@ export type PreStepDecisionLike = { kind: 'reject' } | { kind: 'enter'; messages
 /** ctx.llm 的最小形状 */
 export interface LlmLike {
   listProviders: () => Array<{ id: string }>
-  resolveModelInfo: (provider: string, model: string, signal?: AbortSignal) => Promise<{ inputModalities?: readonly string[] }>
+  resolveModelInfo: (provider: string, model: string, signal?: AbortSignal) => Promise<{ inputModalities?: readonly string[]; reasoning?: { efforts: readonly { id: string; name?: string }[]; defaultEffort?: string } }>
+  resolveCallConfig?: (config: Pick<CallConfigLike, 'provider' | 'model' | 'reasoningEffort'>, signal?: AbortSignal) => Promise<CallConfigLike>
 }
 
 /** 工具守卫看到的执行信息 */

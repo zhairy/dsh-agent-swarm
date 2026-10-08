@@ -2,6 +2,7 @@ import type { DelegationRecord, TaskRecord } from './evidence.js'
 import { hasPerfBudget } from './policy.js'
 import type { SuanHengMode } from './role-registry.js'
 import { PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_DS, PROVIDER_QWEN, type RouteInfo, type RouteKey } from './routes.js'
+import { getRouteResourcePolicy } from './provider-policy.js'
 
 /**
  * 容灾升级：命中高风险 / 高歧义条件时，先改用更强的「升级模型」，失败再回到常规路由链。
@@ -137,15 +138,26 @@ export const getUpgradeReasons = (upgrade: UpgradeInfo | undefined, ctx: Upgrade
 }
 
 /**
- * 升级链在前、常规链在后，去掉重复路由
+ * 升级优先并去重；两条链共享的按量末级兜底仍留在基础链末尾。
+ * 只识别两条声明中唯一的共同末项，不重排显式 API primary 或任意未知路由。
  * @param {RouteInfo[]} upgrade - 升级链
  * @param {readonly RouteInfo[]} chain - 常规链
  * @returns {RouteInfo[]} 合并后的链
  */
 export const getUpgradedChain = (upgrade: readonly RouteInfo[], chain: readonly RouteInfo[]): RouteInfo[] => {
+  const same = (left: RouteInfo, right: RouteInfo): boolean => left.provider === right.provider && left.model === right.model
+  const upgradeLast = upgrade.at(-1)
+  const baseLast = chain.at(-1)
+  const deferFallback = upgrade.length > 1 && chain.length > 1 && upgradeLast !== undefined && baseLast !== undefined
+    && same(upgradeLast, baseLast) && getRouteResourcePolicy(upgradeLast).accessMode === 'metered_api'
+    && upgrade.findIndex((route) => same(route, upgradeLast)) === upgrade.length - 1
+    && chain.findIndex((route) => same(route, baseLast)) === chain.length - 1
+  const preferred = deferFallback ? upgrade.slice(0, -1) : upgrade
+  // Keep the upgrade's selected effort for the fallback; only its position changes.
+  const base = deferFallback ? [...chain.slice(0, -1), upgradeLast!] : chain
   const out: RouteInfo[] = []
-  for (const item of [...upgrade, ...chain]) {
-    if (!out.some((r) => r.provider === item.provider && r.model === item.model)) out.push(item)
+  for (const item of [...preferred, ...base]) {
+    if (!out.some((route) => same(route, item))) out.push(item)
   }
   return out
 }

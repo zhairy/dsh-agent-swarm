@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-08T15:56:25.570Z",
+  "baselineRef": null,
+  "node": "24.21.0",
+  "cpu": "Intel(R) Core(TM) Ultra 5 125H",
+  "platform": "linux",
+  "kernel": "6.12.107+deb13-amd64",
+  "sampleCount": 15,
+  "warmup": 5,
+  "gcExposed": true,
+  "methodology": "Synthetic ASCII state, memory-only store, no business validator in store timings; alternating baseline/current order in the same process. Feature validation measured separately. This is not a NAS, end-to-end, LLM cost, or token-savings benchmark.",
+  "sources": [
+    {
+      "name": "after",
+      "directory": "/data/nas/public/swarm/dsh-agent-swarm/lib",
+      "moduleDigests": {
+        "state-store.js": "998fa4423e5f7ce5489ddc3e69d957082d33cd5b533f566fee80a37677fd0287",
+        "agent-binding.js": "653fbf0ffc64f3778b63eab3d4c200aff3563acaa63ea783b213f8d3c0118877",
+        "feature-session.js": "8532bf0fec99cd16b3d6ff951715a89b660431d907419f60b6ba4295ce7915d9"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "variant": "after",
+      "payloadBytes": 65536,
+      "stateBytes": 65949,
+      "read": {
+        "medianMs": 0.03317,
+        "p95Ms": 0.07215,
+        "minMs": 0.01791,
+        "maxMs": 0.07215
+      },
+      "commit": {
+        "medianMs": 0.51943,
+        "p95Ms": 1.12208,
+        "minMs": 0.329,
+        "maxMs": 1.12208
+      },
+      "bindingLookup": {
+        "medianMs": 0.01651,
+        "p95Ms": 0.04738,
+        "minMs": 0.00928,
+        "maxMs": 0.04738
+      }
+    },
+    {
+      "variant": "after",
+      "payloadBytes": 262144,
+      "stateBytes": 262557,
+      "read": {
+        "medianMs": 0.26167,
+        "p95Ms": 0.36277,
+        "minMs": 0.22606,
+        "maxMs": 0.36277
+      },
+      "commit": {
+        "medianMs": 2.74739,
+        "p95Ms": 4.06672,
+        "minMs": 2.43722,
+        "maxMs": 4.06672
+      },
+      "bindingLookup": {
+        "medianMs": 0.02682,
+        "p95Ms": 0.1664,
+        "minMs": 0.01741,
+        "maxMs": 0.1664
+      }
+    },
+    {
+      "variant": "after",
+      "payloadBytes": 1048576,
+      "stateBytes": 1048989,
+      "read": {
+        "medianMs": 1.03251,
+        "p95Ms": 1.89289,
+        "minMs": 0.68749,
+        "maxMs": 1.89289
+      },
+      "commit": {
+        "medianMs": 9.94248,
+        "p95Ms": 14.0696,
+        "minMs": 6.59118,
+        "maxMs": 14.0696
+      },
+      "bindingLookup": {
+        "medianMs": 0.04498,
+        "p95Ms": 0.08906,
+        "minMs": 0.03993,
+        "maxMs": 0.08906
+      }
+    },
+    {
+      "variant": "after",
+      "payloadBytes": 2097152,
+      "stateBytes": 2097565,
+      "read": {
+        "medianMs": 1.4214,
+        "p95Ms": 4.51618,
+        "minMs": 1.22725,
+        "maxMs": 4.51618
+      },
+      "commit": {
+        "medianMs": 13.58686,
+        "p95Ms": 20.83354,
+        "minMs": 11.42108,
+        "maxMs": 20.83354
+      },
+      "bindingLookup": {
+        "medianMs": 0.04288,
+        "p95Ms": 0.07376,
+        "minMs": 0.02715,
+        "maxMs": 0.07376
+      }
+    }
+  ],
+  "validationRows": [
+    {
+      "variant": "after",
+      "taskCount": 1,
+      "delegationCount": 1000,
+      "stateBytes": 141190,
+      "validation": {
+        "medianMs": 1.14714,
+        "p95Ms": 1.51461,
+        "minMs": 0.58789,
+        "maxMs": 1.51461
+      }
+    },
+    {
+      "variant": "after",
+      "taskCount": 1,
+      "delegationCount": 4000,
+      "stateBytes": 570190,
+      "validation": {
+        "medianMs": 4.26594,
+        "p95Ms": 5.02675,
+        "minMs": 2.52042,
+        "maxMs": 5.02675
+      }
+    },
+    {
+      "variant": "after",
+      "taskCount": 100,
+      "delegationCount": 4000,
+      "stateBytes": 597937,
+      "validation": {
+        "medianMs": 3.49691,
+        "p95Ms": 11.46193,
+        "minMs": 3.03499,
+        "maxMs": 11.46193
+      }
+    }
+  ]
+}
