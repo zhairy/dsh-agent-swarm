@@ -184,12 +184,14 @@ export const getTaskCardText = (result: TaskCardResult): string => {
     `衡鉴：${triage.source}${triage.fallbackReason === undefined ? '' : `（回退原因：${triage.fallbackReason}）`}${answers}`,
     `预算：每任务 ${result.budgets.maxDelegationsPerTask || '不限'} 次委派；每角色 ${result.budgets.maxCallsPerRole || '不限'} 次（铸剑 ${result.budgets.maxCallsZhuJian || '不限'} 次）；自动修复最多 ${result.budgets.maxAutoFixRounds} 轮`,
     `需求版本：${result.requestRevision}；合同版本：${result.cardRevision}；流程版本：${result.workflowRevision}；规划审核：${result.planningReview?.status ?? 'pending'}`,
+    ...(result.planningRecovery.automaticReviewPaused && !['pass', 'pass_with_degradation'].includes(result.planningReview?.status ?? '')
+      ? ['自动规划审核已暂停；任务卡与 scope 仍可修改。完成修订后调用 swarm_review_plan 显式复审，不能复用旧批准。'] : []),
     `上下文引用：${result.contextRefs.join(', ')}`,
   ].join('\n'))
   // Keep the complete bounded projection and closing fence: clipping Mermaid produces invalid code.
   return [summary,
     ...(result.flow === null ? [] : [`任务流程：\n\`\`\`mermaid\n${result.flow.mermaid}\n\`\`\``]),
-    clip([...getRootUpgradeLines(result.rootUpgrade), `账本：${result.ledgerPath}`].join('\n'))
+    clip([...getRootUpgradeLines(result.rootUpgrade), '执行记录：swarm_status；授权材料：swarm_context_read（不传 ref 可先列出当前任务材料）。私有账本不通过通用文件工具读取。'].join('\n'))
   ].join('\n')
 }
 
@@ -219,6 +221,10 @@ export const getDelegationText = (record: DelegationRecord): string => {
     ...((record.retries ?? []).length > 0 ? [`自动重试 ${(record.retries ?? []).length} 次：${(record.retries ?? []).map((r) => `${r.attempt}. ${RETRY_ACTION_LABELS[r.action]}（${r.reason}）`).join('；')}`] : []),
     ...(attempts.length > 0 ? [`路由记录：${attempts.join('；')}`] : []),
     ...[getAssessmentText(record.assessment)].filter((line): line is string => line !== undefined),
+    ...(record.evidenceAssessment === undefined ? [] : [
+      `探索证据：${record.evidenceAssessment.status} · ${record.evidenceAssessment.disposition}；可信度与项目关联度独立评估，置信程度不等于正确率。`,
+      ...record.evidenceAssessment.items.map((item) => `${item.id}：可信度 ${item.credibility.score === undefined ? '未知' : item.credibility.score.toFixed(2)}（判断置信 ${item.credibility.confidence === undefined ? '未知' : item.credibility.confidence.toFixed(2)}）；项目关联度 ${item.relevance.score === undefined ? '未知' : item.relevance.score.toFixed(2)}（判断置信 ${item.relevance.confidence === undefined ? '未知' : item.relevance.confidence.toFixed(2)}）；${item.disposition}${item.reasons.length === 0 ? '' : `：${item.reasons.join('；')}`}`)
+    ]),
     `独立性：${record.independence}　硬隔离：${record.hardIsolation ? '是' : '否'}`,
     ...(record.changedFiles !== undefined && record.changedFiles.length > 0 ? [`改动文件：${record.changedFiles.join(', ')}`] : []),
     ...(record.unresolved.length > 0 ? [`未解决：${record.unresolved.join('；')}`] : []),
@@ -233,7 +239,7 @@ export const getStatusText = (result: StatusResult): string => {
     ...task.gates.map((g) => `${g.satisfied ? '✓' : '✗'} ${g.gate} ${g.label}${g.satisfied ? `（${g.by ?? ''}）` : `：${g.missing ?? ''}`}${g.notes.length > 0 ? `；${g.notes.join('；')}` : ''}`),
     ...task.delegations.map((d) => {
       const review = getAssessmentText(d.assessment ?? undefined)
-      return `- ${d.delegationId} ${d.roleName} ${d.status} · ${d.route ?? '无路由'} · ${d.summary}${d.error === null ? '' : ` · 错误：${d.error}`}${review === undefined ? '' : ` · ${review}`}`
+      return `- ${d.delegationId} ${d.roleName} ${d.status} · ${d.route ?? '无路由'} · ${d.summary}${d.error === null ? '' : ` · 错误：${d.error}`}${review === undefined ? '' : ` · ${review}`}${d.evidenceAssessment === null ? '' : ` · 探索证据 ${d.evidenceAssessment.status}/${d.evidenceAssessment.disposition}`}`
     }),
     ...(task.acceptance === null ? [] : [`验收：${task.acceptance.status}（${task.acceptance.stopReason}）`]),
     ...task.delegations.filter((d) => 'structured' in d).map((d) => `${d.delegationId} 结构化结果：${JSON.stringify((d as { structured?: unknown }).structured)}`)
@@ -328,9 +334,12 @@ export const apply = (ctx: PluginContextLike): void => {
     getToolDefinition({ name: 'swarm_review_plan', description: '独立只读 Agent 与 Jev 复审当前目标、流程设计和 Mermaid 源码。结果绑定原始需求及当前版本，不能代替实现后验证。',
       parameters: { ...taskParameters, properties: { ...taskParameters.properties, bypass_cache: { type: 'boolean' } } },
       execute: (args, exec) => service.ReviewPlan(args, getExec(exec)), render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => false }),
-    getToolDefinition({ name: 'swarm_context_read', description: '按当前任务/版本授权读取分层材料，不读取其他任务或盲审禁止的作者过程。',
-      parameters: { type: 'object', properties: { task_id: { type: 'string' }, ref: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'number' }, expectedDigest: { type: 'string' } }, required: ['ref'], additionalProperties: false },
+    getToolDefinition({ name: 'swarm_context_read', description: '不传 ref 时列出当前任务授权材料与执行摘要；传 ref 分页读取。始终校验任务/版本，不读取其他任务或盲审禁止的作者过程。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' }, ref: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'number' }, expectedDigest: { type: 'string' } }, additionalProperties: false },
       execute: service.ReadContext, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true }),
+    getToolDefinition({ name: 'swarm_project_files', description: '只列举当前任务工作区实际存在的文件；query为文件名或路径片段。先发现再read/grep；无匹配返回正常空结果和真实候选，不猜测或自动改写路径。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' }, query: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'number' } }, additionalProperties: false },
+      execute: service.ProjectFiles, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true }),
     getToolDefinition({ name: 'swarm_experience', description: '检索最多三条有出处、版本与失效条件的经验；候选不能当作已验证事实，盲审不能读取经验。',
       parameters: { type: 'object', properties: { task_id: { type: 'string' }, problemClass: { type: 'string' }, includeCandidates: { type: 'boolean' } }, additionalProperties: false },
       execute: service.Experience, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true })

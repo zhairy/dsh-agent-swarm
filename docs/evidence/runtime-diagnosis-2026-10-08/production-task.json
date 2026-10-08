@@ -1,0 +1,132 @@
+{
+  "checkedAt": "2026-10-08T16:08:25.725Z",
+  "version": "2.3.0",
+  "taskId": "T-1",
+  "realVendor": true,
+  "continuedAfterObserverCancellation": true,
+  "workflowMode": "advisory",
+  "planningApprovalClaimed": false,
+  "rootSettled": true,
+  "toolCalls": [
+    {
+      "seq": 28,
+      "name": "swarm_project_files"
+    },
+    {
+      "seq": 33,
+      "name": "swarm_calculate"
+    },
+    {
+      "seq": 38,
+      "name": "swarm_delegate"
+    },
+    {
+      "seq": 46,
+      "name": "swarm_accept"
+    }
+  ],
+  "toolErrors": [],
+  "projectFiles": {
+    "containsFixture": true
+  },
+  "calculation": {
+    "ok": true,
+    "value": 6,
+    "evidenceKind": "computed"
+  },
+  "childReadVerified": true,
+  "childActualRoutes": [
+    {
+      "provider": "opencode-go",
+      "model": "mimo-v2.6-flash",
+      "reasoningEffort": "high"
+    }
+  ],
+  "evidenceScoringObserved": true,
+  "incompleteRecorded": true,
+  "acceptance": {
+    "status": "recorded",
+    "decision": "incomplete"
+  },
+  "settingsUnchanged": true,
+  "fixtureUnchanged": true,
+  "forbiddenToolCalls": [],
+  "boundary": "Actual production read/tool/scoring/model observations, not independent correctness proof. Planning remains unknown/stale; advisory execution is not planning approval.",
+  "ok": true,
+  "initialRootActualRoutes": [
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "max"
+    }
+  ],
+  "expert": {
+    "delegationId": "D-1",
+    "status": "completed",
+    "backend": "spawn",
+    "route": "opencode-go/mimo-v2.6-flash",
+    "evidenceAssessment": {
+      "status": "ok",
+      "disposition": "usable",
+      "confidenceMeaning": "distribution-concentration-not-correctness",
+      "items": [
+        {
+          "id": "D-1:finding:0",
+          "credibility": {
+            "status": "known",
+            "score": 0.9466666666666667,
+            "confidence": 0.84,
+            "probabilities": {
+              "0": 0,
+              "1": 0.01,
+              "2": 0.14,
+              "3": 0.85
+            }
+          },
+          "relevance": {
+            "status": "known",
+            "score": 0.9500000000000001,
+            "confidence": 0.87,
+            "probabilities": {
+              "0": 0,
+              "1": 0,
+              "2": 0.13,
+              "3": 0.87
+            }
+          },
+          "support": {
+            "relation": "supports",
+            "confidence": 0.97
+          },
+          "disposition": "usable",
+          "reasons": [],
+          "model": "jev-1.13.0"
+        }
+      ]
+    },
+    "sessionKind": "continuable"
+  },
+  "agentControl": {
+    "persistent": true,
+    "phase": "idle",
+    "actual": {
+      "delegationId": "D-1",
+      "route": {
+        "provider": "opencode-go",
+        "model": "mimo-v2.6-flash",
+        "reasoningEffort": "high"
+      },
+      "observedAt": 1791475650931,
+      "state": "settled",
+      "source": "agent-loop-attempt"
+    }
+  },
+  "initialObservation": {
+    "observerTimeoutMs": 240000,
+    "cancelledByObserver": true,
+    "planningPassed": false,
+    "settingsUnchanged": true,
+    "fixtureUnchanged": true,
+    "note": "The observer timeout interrupted independent planning review. Resume used the same settled session and current advisory policy, without claiming planning approval or bypassing enforced mode."
+  }
+}

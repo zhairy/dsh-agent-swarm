@@ -1,0 +1,1086 @@
+{
+  "recordedAt": "2026-10-08T15:47:55.830712+00:00",
+  "boundary": "Real isolated DSH 0.2.0-rc.2 Host, deterministic mock vendor, metadata and fixture-only tool evidence; no credentials or conversation source exported.",
+  "scenarios": [
+    {
+      "scenario": "manual-switch",
+      "status": "done",
+      "parentSessionId": "agent-control-it-ec1b3875-b273-485c-9009-2afea576e9fb",
+      "taskId": "T-1",
+      "childId": "16f002ea-44f7-483a-a02d-813baceadac6",
+      "requests": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "hang",
+          "sessionId": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "reasoningEffort": "high"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "recovered",
+          "sessionId": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "reasoningEffort": "max"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "recovered",
+          "sessionId": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "reasoningEffort": "max"
+        }
+      ],
+      "requestsBeforeContinue": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "hang",
+          "sessionId": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "reasoningEffort": "high"
+        }
+      ],
+      "ends": [
+        {
+          "id": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "stopReason": "aborted"
+        },
+        {
+          "id": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "stopReason": "completed"
+        },
+        {
+          "id": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "stopReason": "completed"
+        }
+      ],
+      "healthAfterContinue": [],
+      "writeCalls": [],
+      "writeResults": [],
+      "headerModels": [
+        "hang",
+        "recovered",
+        "recovered"
+      ],
+      "selectionEvents": [],
+      "controls": [
+        {
+          "childId": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "parentSessionId": "agent-control-it-ec1b3875-b273-485c-9009-2afea576e9fb",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "running",
+          "paused": false,
+          "needsSideEffectReview": false,
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "hang"
+          },
+          "actual": {
+            "attemptId": "16f002ea-44f7-483a-a02d-813baceadac6:1",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "hang",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474405140,
+            "state": "running",
+            "source": "agent-loop-attempt"
+          }
+        },
+        {
+          "childId": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "parentSessionId": "agent-control-it-ec1b3875-b273-485c-9009-2afea576e9fb",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "paused",
+          "paused": true,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "hang"
+          },
+          "actual": {
+            "attemptId": "16f002ea-44f7-483a-a02d-813baceadac6:1",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "hang",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474405140,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-cancel-requested"
+        },
+        {
+          "childId": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "parentSessionId": "agent-control-it-ec1b3875-b273-485c-9009-2afea576e9fb",
+          "taskId": "T-1",
+          "delegationId": "D-2",
+          "persistent": true,
+          "phase": "idle",
+          "paused": false,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "actual": {
+            "attemptId": "16f002ea-44f7-483a-a02d-813baceadac6:1",
+            "delegationId": "D-2",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "recovered",
+              "reasoningEffort": "max"
+            },
+            "observedAt": 1791474405605,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-continue-requested"
+        },
+        {
+          "childId": "16f002ea-44f7-483a-a02d-813baceadac6",
+          "parentSessionId": "agent-control-it-ec1b3875-b273-485c-9009-2afea576e9fb",
+          "taskId": "T-2",
+          "delegationId": "D-3",
+          "persistent": true,
+          "phase": "idle",
+          "paused": false,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "actual": {
+            "attemptId": "16f002ea-44f7-483a-a02d-813baceadac6:1",
+            "delegationId": "D-3",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "recovered",
+              "reasoningEffort": "max"
+            },
+            "observedAt": 1791474405961,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-continue-requested"
+        }
+      ]
+    },
+    {
+      "scenario": "manual-isolated",
+      "status": "done",
+      "parentSessionId": "agent-control-it-80fe8682-21d4-4e2e-87c0-89447568f346",
+      "taskId": "T-1",
+      "childId": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+      "requests": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "fail-pool",
+          "sessionId": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "reasoningEffort": "high"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "recovered",
+          "sessionId": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "reasoningEffort": "max"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "recovered",
+          "sessionId": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "reasoningEffort": "max"
+        }
+      ],
+      "requestsBeforeContinue": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "fail-pool",
+          "sessionId": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "reasoningEffort": "high"
+        }
+      ],
+      "ends": [
+        {
+          "id": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "stopReason": "error"
+        },
+        {
+          "id": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "stopReason": "completed"
+        },
+        {
+          "id": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "stopReason": "completed"
+        }
+      ],
+      "healthAfterContinue": [
+        {
+          "key": "pool:provider-instance:swarm-control-mock:pool:manual-control-test",
+          "kind": "pool_exhausted",
+          "failedAt": 1791474408601,
+          "route": {
+            "provider": "swarm-control-mock",
+            "model": "fail-pool",
+            "reasoningEffort": "high"
+          },
+          "retryCount": 1,
+          "retryAt": 1791474708601,
+          "aliases": [
+            "pool:provider-instance:swarm-control-mock:pool:manual-control-test",
+            "route:swarm-control-mock/fail-pool"
+          ]
+        }
+      ],
+      "writeCalls": [],
+      "writeResults": [],
+      "headerModels": [
+        "fail-pool",
+        "recovered",
+        "recovered"
+      ],
+      "selectionEvents": [],
+      "agentErrors": [
+        {
+          "message": "pool \"manual-control-test\" exhausted: every member is unavailable or failed",
+          "code": "SERVER_ERROR"
+        }
+      ],
+      "controls": [
+        {
+          "childId": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "parentSessionId": "agent-control-it-80fe8682-21d4-4e2e-87c0-89447568f346",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "stopping",
+          "paused": true,
+          "needsSideEffectReview": false,
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "fail-pool"
+          },
+          "actual": {
+            "attemptId": "d7959137-c204-4fd3-8c72-ee237ab7a066:1",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "fail-pool",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474408587,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "delegation-settling"
+        },
+        {
+          "childId": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "parentSessionId": "agent-control-it-80fe8682-21d4-4e2e-87c0-89447568f346",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "paused",
+          "paused": true,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "fail-pool"
+          },
+          "actual": {
+            "attemptId": "d7959137-c204-4fd3-8c72-ee237ab7a066:1",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "fail-pool",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474408587,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-model-selected"
+        },
+        {
+          "childId": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "parentSessionId": "agent-control-it-80fe8682-21d4-4e2e-87c0-89447568f346",
+          "taskId": "T-1",
+          "delegationId": "D-2",
+          "persistent": true,
+          "phase": "idle",
+          "paused": false,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "actual": {
+            "attemptId": "d7959137-c204-4fd3-8c72-ee237ab7a066:1",
+            "delegationId": "D-2",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "recovered",
+              "reasoningEffort": "max"
+            },
+            "observedAt": 1791474408942,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-continue-requested"
+        },
+        {
+          "childId": "d7959137-c204-4fd3-8c72-ee237ab7a066",
+          "parentSessionId": "agent-control-it-80fe8682-21d4-4e2e-87c0-89447568f346",
+          "taskId": "T-2",
+          "delegationId": "D-3",
+          "persistent": true,
+          "phase": "idle",
+          "paused": false,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "actual": {
+            "attemptId": "d7959137-c204-4fd3-8c72-ee237ab7a066:1",
+            "delegationId": "D-3",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "recovered",
+              "reasoningEffort": "max"
+            },
+            "observedAt": 1791474409237,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-continue-requested"
+        }
+      ]
+    },
+    {
+      "scenario": "manual-retry-isolated",
+      "status": "done",
+      "parentSessionId": "agent-control-it-d34bc4f8-8f6d-44f9-bfc1-9915d784cfa7",
+      "taskId": "T-1",
+      "childId": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+      "requests": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "fail-pool",
+          "sessionId": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "reasoningEffort": "high"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "fail-pool",
+          "sessionId": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "reasoningEffort": "max"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "fail-pool",
+          "sessionId": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "reasoningEffort": "max"
+        }
+      ],
+      "requestsBeforeContinue": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "fail-pool",
+          "sessionId": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "reasoningEffort": "high"
+        }
+      ],
+      "ends": [
+        {
+          "id": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "stopReason": "error"
+        },
+        {
+          "id": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "stopReason": "completed"
+        },
+        {
+          "id": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "stopReason": "completed"
+        }
+      ],
+      "healthAfterContinue": [],
+      "writeCalls": [],
+      "writeResults": [],
+      "headerModels": [
+        "fail-pool",
+        "fail-pool",
+        "fail-pool"
+      ],
+      "selectionEvents": [],
+      "agentErrors": [
+        {
+          "message": "pool \"manual-control-test\" exhausted: every member is unavailable or failed",
+          "code": "SERVER_ERROR"
+        }
+      ],
+      "controls": [
+        {
+          "childId": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "parentSessionId": "agent-control-it-d34bc4f8-8f6d-44f9-bfc1-9915d784cfa7",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "stopping",
+          "paused": true,
+          "needsSideEffectReview": false,
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "fail-pool"
+          },
+          "actual": {
+            "attemptId": "c2ab6673-31f5-4679-95df-3e25605c3cc7:1",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "fail-pool",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474412024,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "delegation-settling"
+        },
+        {
+          "childId": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "parentSessionId": "agent-control-it-d34bc4f8-8f6d-44f9-bfc1-9915d784cfa7",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "paused",
+          "paused": true,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "fail-pool",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "fail-pool"
+          },
+          "actual": {
+            "attemptId": "c2ab6673-31f5-4679-95df-3e25605c3cc7:1",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "fail-pool",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474412024,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-model-selected"
+        },
+        {
+          "childId": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "parentSessionId": "agent-control-it-d34bc4f8-8f6d-44f9-bfc1-9915d784cfa7",
+          "taskId": "T-1",
+          "delegationId": "D-2",
+          "persistent": true,
+          "phase": "idle",
+          "paused": false,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "fail-pool",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "fail-pool",
+            "reasoningEffort": "max"
+          },
+          "actual": {
+            "attemptId": "c2ab6673-31f5-4679-95df-3e25605c3cc7:1",
+            "delegationId": "D-2",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "fail-pool",
+              "reasoningEffort": "max"
+            },
+            "observedAt": 1791474412397,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-continue-requested"
+        },
+        {
+          "childId": "c2ab6673-31f5-4679-95df-3e25605c3cc7",
+          "parentSessionId": "agent-control-it-d34bc4f8-8f6d-44f9-bfc1-9915d784cfa7",
+          "taskId": "T-2",
+          "delegationId": "D-3",
+          "persistent": true,
+          "phase": "idle",
+          "paused": false,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "fail-pool",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "fail-pool",
+            "reasoningEffort": "max"
+          },
+          "actual": {
+            "attemptId": "c2ab6673-31f5-4679-95df-3e25605c3cc7:1",
+            "delegationId": "D-3",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "fail-pool",
+              "reasoningEffort": "max"
+            },
+            "observedAt": 1791474412898,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-continue-requested"
+        }
+      ]
+    },
+    {
+      "scenario": "restart-save",
+      "status": "done",
+      "parentSessionId": "agent-control-it-7f5c60c5-7866-48c1-8346-ce2f320d6eb6",
+      "taskId": "T-1",
+      "childId": "ab46f240-e332-4104-9bdc-649060c1ebb7",
+      "requests": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "hang",
+          "sessionId": "ab46f240-e332-4104-9bdc-649060c1ebb7",
+          "reasoningEffort": "high"
+        }
+      ],
+      "requestsBeforeContinue": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "hang",
+          "sessionId": "ab46f240-e332-4104-9bdc-649060c1ebb7",
+          "reasoningEffort": "high"
+        }
+      ],
+      "ends": [
+        {
+          "id": "ab46f240-e332-4104-9bdc-649060c1ebb7",
+          "stopReason": "aborted"
+        }
+      ],
+      "writeCalls": [],
+      "writeResults": [],
+      "headerModels": [
+        "root",
+        "hang"
+      ],
+      "selectionEvents": [],
+      "controls": [
+        {
+          "childId": "ab46f240-e332-4104-9bdc-649060c1ebb7",
+          "parentSessionId": "agent-control-it-7f5c60c5-7866-48c1-8346-ce2f320d6eb6",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "running",
+          "paused": false,
+          "needsSideEffectReview": false,
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "hang"
+          },
+          "actual": {
+            "attemptId": "ab46f240-e332-4104-9bdc-649060c1ebb7:1",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "hang",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474416009,
+            "state": "running",
+            "source": "agent-loop-attempt"
+          }
+        },
+        {
+          "childId": "ab46f240-e332-4104-9bdc-649060c1ebb7",
+          "parentSessionId": "agent-control-it-7f5c60c5-7866-48c1-8346-ce2f320d6eb6",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "paused",
+          "paused": true,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "hang"
+          },
+          "actual": {
+            "attemptId": "ab46f240-e332-4104-9bdc-649060c1ebb7:1",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "hang",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474416009,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-cancel-requested"
+        }
+      ]
+    },
+    {
+      "scenario": "restart-load",
+      "status": "done",
+      "parentSessionId": "agent-control-it-7f5c60c5-7866-48c1-8346-ce2f320d6eb6",
+      "childId": "ab46f240-e332-4104-9bdc-649060c1ebb7",
+      "requests": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "recovered",
+          "sessionId": "ab46f240-e332-4104-9bdc-649060c1ebb7",
+          "reasoningEffort": "max"
+        }
+      ],
+      "ends": [
+        {
+          "id": "ab46f240-e332-4104-9bdc-649060c1ebb7",
+          "stopReason": "completed"
+        }
+      ],
+      "parentLiveBeforeView": false,
+      "parentLiveAfterView": false,
+      "parentLiveAfterSelect": true,
+      "requestsAfterColdView": [],
+      "writeCalls": [],
+      "writeResults": [],
+      "headerModels": [
+        "recovered"
+      ],
+      "selectionEvents": [],
+      "controls": [],
+      "restoredControl": {
+        "childId": "ab46f240-e332-4104-9bdc-649060c1ebb7",
+        "phase": "idle",
+        "paused": false,
+        "selectedNext": {
+          "provider": "swarm-control-mock",
+          "model": "recovered",
+          "reasoningEffort": "max"
+        },
+        "actual": {
+          "attemptId": "ab46f240-e332-4104-9bdc-649060c1ebb7:1",
+          "delegationId": "D-2",
+          "route": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "observedAt": 1791474420051,
+          "state": "settled",
+          "source": "agent-loop-attempt"
+        }
+      }
+    },
+    {
+      "scenario": "manual-writer",
+      "status": "done",
+      "parentSessionId": "agent-control-it-d8fe1cdc-359a-4933-95b2-319f9e682c34",
+      "taskId": "T-1",
+      "childId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+      "requests": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "writer-hang",
+          "sessionId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "reasoningEffort": "high"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "writer-hang",
+          "sessionId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "reasoningEffort": "high"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "recovered",
+          "sessionId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "reasoningEffort": "max"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "recovered",
+          "sessionId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "reasoningEffort": "max"
+        }
+      ],
+      "requestsBeforeContinue": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "writer-hang",
+          "sessionId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "reasoningEffort": "high"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "writer-hang",
+          "sessionId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "reasoningEffort": "high"
+        }
+      ],
+      "ends": [
+        {
+          "id": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "stopReason": "aborted"
+        },
+        {
+          "id": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "stopReason": "completed"
+        }
+      ],
+      "healthAfterContinue": [],
+      "writerRiskBeforeStop": true,
+      "fileBeforeStop": "one controlled write\n",
+      "fileAfterContinue": "one controlled write\n",
+      "noConfirmationRefusal": {
+        "code": "RECOVERY_REQUIRED",
+        "message": "继续前必须先核对取消后的副作用与当前任务进度；确认不替代工作区恢复检查"
+      },
+      "requestsAfterRefusal": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "writer-hang",
+          "sessionId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "reasoningEffort": "high"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "writer-hang",
+          "sessionId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "reasoningEffort": "high"
+        }
+      ],
+      "writeCalls": [
+        {
+          "callId": "call_72a55c36",
+          "arguments": "{\"file_path\":\"hello.txt\",\"content\":\"one controlled write\\n\"}"
+        }
+      ],
+      "writeResults": [
+        {
+          "isError": false
+        }
+      ],
+      "writerReadResult": "<path>/data/nas/public/swarm/dsh-agent-swarm/.sandbox/agent-control-it-yUNZ4b/hello.txt</path>\n<type>file</type>\n<content>\n1: one controlled write\n\n(End of file - total 1 lines)\n</content>",
+      "headerModels": [
+        "writer-hang",
+        "recovered"
+      ],
+      "selectionEvents": [],
+      "controls": [
+        {
+          "childId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "parentSessionId": "agent-control-it-d8fe1cdc-359a-4933-95b2-319f9e682c34",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "running",
+          "paused": false,
+          "needsSideEffectReview": true,
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "writer-hang"
+          },
+          "actual": {
+            "attemptId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e:1",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "writer-hang",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474422904,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          }
+        },
+        {
+          "childId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "parentSessionId": "agent-control-it-d8fe1cdc-359a-4933-95b2-319f9e682c34",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "paused",
+          "paused": true,
+          "needsSideEffectReview": true,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "writer-hang"
+          },
+          "actual": {
+            "attemptId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e:2",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "writer-hang",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474422980,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-cancel-requested"
+        },
+        {
+          "childId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e",
+          "parentSessionId": "agent-control-it-d8fe1cdc-359a-4933-95b2-319f9e682c34",
+          "taskId": "T-1",
+          "delegationId": "D-2",
+          "persistent": true,
+          "phase": "idle",
+          "paused": false,
+          "needsSideEffectReview": false,
+          "selectedNext": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "recovered",
+            "reasoningEffort": "max"
+          },
+          "actual": {
+            "attemptId": "e869edd8-2f71-4ca4-8bd6-88b6ec48362e:2",
+            "delegationId": "D-2",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "recovered",
+              "reasoningEffort": "max"
+            },
+            "observedAt": 1791474423487,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          },
+          "reason": "manual-continue-requested"
+        }
+      ]
+    },
+    {
+      "scenario": "preferred-recovery",
+      "status": "done",
+      "parentSessionId": "agent-control-it-a478cb90-b0dc-41c2-b4a9-81c3b12d3e19",
+      "taskId": "T-1",
+      "childId": "582581fa-7c2d-425c-ac41-ca27c0c942a6",
+      "requests": [
+        {
+          "provider": "swarm-control-mock",
+          "model": "preferred",
+          "sessionId": "582581fa-7c2d-425c-ac41-ca27c0c942a6",
+          "reasoningEffort": "high"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "backup",
+          "sessionId": "582581fa-7c2d-425c-ac41-ca27c0c942a6",
+          "reasoningEffort": "high"
+        },
+        {
+          "provider": "swarm-control-mock",
+          "model": "preferred",
+          "sessionId": "582581fa-7c2d-425c-ac41-ca27c0c942a6",
+          "reasoningEffort": "high"
+        }
+      ],
+      "ends": [
+        {
+          "id": "582581fa-7c2d-425c-ac41-ca27c0c942a6",
+          "stopReason": "completed"
+        }
+      ],
+      "writeCalls": [],
+      "writeResults": [],
+      "headerModels": [
+        "preferred",
+        "backup",
+        "preferred"
+      ],
+      "selectionEvents": [],
+      "realReadResult": "<path>/data/nas/public/swarm/dsh-agent-swarm/.sandbox/agent-control-it-uAmooO/README.md</path>\n<type>file</type>\n<content>\n1: # Agent control integration fixture\n\n(End of file - total 1 lines)\n</content>",
+      "rootHumanPreference": {
+        "provider": "swarm-control-mock",
+        "model": "recovered",
+        "reasoningEffort": "max"
+      },
+      "rootPickerRequest": {
+        "provider": "swarm-control-mock",
+        "model": "recovered",
+        "reasoningEffort": "max"
+      },
+      "routing": [
+        {
+          "recovery": {
+            "logicalRequestId": "D-1:1:1",
+            "attempts": 1,
+            "transientRetries": 0,
+            "waitedMs": 0,
+            "attemptedRoutes": [
+              "swarm-control-mock/preferred"
+            ],
+            "observedAttemptIds": [
+              "582581fa-7c2d-425c-ac41-ca27c0c942a6:1"
+            ],
+            "observedModelAttempts": 1,
+            "observationCoverage": "agent-loop-stream-attempts"
+          },
+          "child": {
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "preferred"
+            },
+            "role": "tan_wei",
+            "switches": 0
+          },
+          "health": []
+        },
+        {
+          "recovery": {
+            "logicalRequestId": "D-1:1:1",
+            "attempts": 2,
+            "transientRetries": 0,
+            "waitedMs": 0,
+            "attemptedRoutes": [
+              "swarm-control-mock/preferred",
+              "swarm-control-mock/backup"
+            ],
+            "observedAttemptIds": [
+              "582581fa-7c2d-425c-ac41-ca27c0c942a6:1",
+              "582581fa-7c2d-425c-ac41-ca27c0c942a6:2"
+            ],
+            "observedModelAttempts": 2,
+            "observationCoverage": "agent-loop-stream-attempts"
+          },
+          "child": {
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "backup"
+            },
+            "role": "tan_wei",
+            "switches": 1
+          },
+          "health": []
+        },
+        {
+          "recovery": {
+            "logicalRequestId": "D-1:1:2",
+            "attempts": 1,
+            "transientRetries": 0,
+            "waitedMs": 0,
+            "attemptedRoutes": [
+              "swarm-control-mock/preferred"
+            ],
+            "observedAttemptIds": [
+              "582581fa-7c2d-425c-ac41-ca27c0c942a6:3"
+            ],
+            "observedModelAttempts": 1,
+            "observationCoverage": "agent-loop-stream-attempts"
+          },
+          "child": {
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "preferred"
+            },
+            "role": "tan_wei",
+            "switches": 0
+          },
+          "health": []
+        }
+      ],
+      "controls": [
+        {
+          "childId": "582581fa-7c2d-425c-ac41-ca27c0c942a6",
+          "parentSessionId": "agent-control-it-a478cb90-b0dc-41c2-b4a9-81c3b12d3e19",
+          "taskId": "T-1",
+          "delegationId": "D-1",
+          "persistent": true,
+          "phase": "idle",
+          "paused": false,
+          "needsSideEffectReview": false,
+          "requestedRoute": {
+            "provider": "swarm-control-mock",
+            "model": "preferred"
+          },
+          "actual": {
+            "attemptId": "582581fa-7c2d-425c-ac41-ca27c0c942a6:3",
+            "delegationId": "D-1",
+            "route": {
+              "provider": "swarm-control-mock",
+              "model": "preferred",
+              "reasoningEffort": "high"
+            },
+            "observedAt": 1791474402348,
+            "state": "settled",
+            "source": "agent-loop-attempt"
+          }
+        }
+      ]
+    }
+  ]
+}

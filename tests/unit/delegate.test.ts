@@ -194,6 +194,21 @@ describe('intDelegator.delegate', () => {
     expect(vision.error).toContain('vision-unsupported')
   })
 
+  it('preflight preserves temporary preferred candidates without reviving an incompatible effort variant', async () => {
+    const first = { provider: 'p', model: 'same', reasoningEffort: 'unsupported' }
+    const valid = { provider: 'p', model: 'same', reasoningEffort: 'high' }
+    const backup = { provider: 'b', model: 'backup' }
+    const observed: unknown[] = []
+    const h = track(makeHarness({
+      config: getSwarmConfig({ routes: { fu_he: { chain: [first, valid, backup] } } }),
+      probe: async (route) => route.reasoningEffort === 'unsupported' ? { ok: false, reason: 'capability-incompatible: unsupported-reasoning-effort' } : { ok: true, vision: false },
+      onChildStart: ({ agentId }) => { observed.push(h.routeState.getRequestOverride({ id: agentId }, valid, undefined)) }
+    }))
+    const result = await h.delegator.delegate({ task_id: 'T-1', role: 'fu_he', prompt: 'x' }, exec(), h.session)
+    expect(result.status).toBe('completed')
+    expect(observed).toEqual([valid])
+  })
+
   it('子智能体失败、未提交结构化结果、结果不符合契约（不重试时）', async () => {
     const h = track(makeHarness({ config: getSwarmConfig({ agents: { maxRetries: 0 } }), plans: [
       { result: { output: [{ type: 'text', text: '部分' }], stopReason: 'error', diagnostic: 'QUOTA' } },
@@ -250,6 +265,8 @@ describe('intDelegator.delegate', () => {
       onStarted: (id) => {
         registry.getRequestOverride({ id }, { provider: 'x', model: 'y' }, undefined)
         registry.getErrorAction({ agent: { id }, provider: 'qwen-token-plan-cn', failure: { code: 'QUOTA' } }, undefined, undefined, config)
+        // A fallback selection is not an actual new call until the Host assembles it.
+        registry.getRequestOverride({ id }, { provider: 'x', model: 'y' }, undefined)
       }
     }] }))
     registry = h.routeState
@@ -281,6 +298,17 @@ describe('intDelegator.delegate', () => {
     expect(budget.attempts[0]).toMatchObject({ outcome: 'skipped', reason: 'native-budget' })
     const unsupported = await h.delegator.delegate({ task_id: 'T-1', role: 'fu_he', prompt: 'x', backend: 'codex' }, exec(), h.session)
     expect(unsupported.attempts[0]?.reason).toContain('不支持原生后端')
+  })
+  it('已发布原生run的登记失败仍会dispose，不退回另一个后端重放或退款已开始调用', async () => {
+    const h = track(makeHarness({ providers: ['swarm-codex'] }))
+    const dispose = vi.fn(async () => undefined)
+    h.subagents.start.mockImplementation(async () => ({ id: 'published-native', result: Promise.resolve({ output: [], stopReason: 'completed' }), dispose }))
+    h.deps.onChildStart = async () => { throw new Error('registration failed') }
+    const result = await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'x', backend: 'codex' }, exec(), h.session)
+    expect(result).toMatchObject({ status: 'failed', backend: 'codex', hardIsolation: false, error: 'registration failed' })
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(h.subagents.start).toHaveBeenCalledTimes(1)
+    expect(h.session.counters.native).toBe(1)
   })
 
   it('自动升级：nativeEscalation=auto 且高风险任务时优先原生后端', async () => {
@@ -432,6 +460,38 @@ const makeThreadHarness = (turns: FakeTurn[], overrides: Parameters<typeof makeH
 }
 
 describe('连续会话与自动重试', () => {
+  it('人工继续固定到所选thread，手动新模型先于全部不可用的旧角色链预检', async () => {
+    const h = track(makeThreadHarness([{ text: json('tan_wei') }, { text: json('tan_wei') }, { text: json('tan_wei') }]))
+    const first = await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'first', session: 'new' }, exec(), h.session)
+    const second = await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'second', session: 'new' }, exec(), h.session)
+    const target = first.session!.threadId!
+    h.routeState.SetChildOverride(target, { provider: 'manual-provider', model: 'chosen' })
+    h.deps.probe = async (route) => route.provider === 'manual-provider' ? { ok: true, vision: false } : { ok: false, reason: 'route-isolated' }
+    const continued = await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'continue exactly first', session: 'continue' }, { ...exec(), controlledThreadId: target }, h.session)
+    expect(continued.status).toBe('completed')
+    expect(continued.session?.threadId).toBe(target)
+    expect(continued.session?.threadId).not.toBe(second.session!.threadId)
+    expect(h.delivered.at(-1)).toMatchObject({ kind: 'send', childId: target })
+    expect(h.startContinuable).toHaveBeenCalledTimes(2)
+  })
+
+  it('指定thread不可用或未接受投递时不会另开专家或自动重放', async () => {
+    const h = track(makeThreadHarness([{ text: json('tan_wei') }, { text: json('tan_wei') }, { sendError: 'host did not admit message' }]))
+    const first = await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'first', session: 'new' }, exec(), h.session)
+    await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'other', session: 'new' }, exec(), h.session)
+    const target = first.session!.threadId!
+    h.session.threads.Update(target, { busy: true })
+    const unavailable = await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'x', session: 'continue' }, { ...exec(), controlledThreadId: target }, h.session)
+    expect(unavailable).toMatchObject({ status: 'failed', error: expect.stringContaining('不能改为另一专家会话') })
+    h.session.threads.Update(target, { busy: false })
+    const ended = vi.fn(async () => undefined)
+    h.deps.onChildEnd = ended
+    const failed = await h.delegator.delegate({ task_id: 'T-1', role: 'tan_wei', prompt: 'x', session: 'continue' }, { ...exec(), controlledThreadId: target }, h.session)
+    expect(failed).toMatchObject({ status: 'failed', childId: target, error: 'host did not admit message' })
+    expect(h.startContinuable).toHaveBeenCalledTimes(2)
+    expect(h.sendMessage).toHaveBeenCalledTimes(1)
+    expect(ended).toHaveBeenCalledWith(target, 'not-admitted')
+  })
   it('Jev 未配置时按规则：铸剑开连续会话，同一任务的后续委派追加到该会话并保留路由状态', async () => {
     const h = track(makeThreadHarness([{ text: `完成。\n${json('zhu_jian')}` }, { text: json('zhu_jian') }]))
     const first = await h.delegator.delegate({ task_id: 'T-1', role: 'zhu_jian', prompt: '实现登录' }, exec(), h.session)

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { realpathSync } from 'node:fs'
@@ -11,6 +12,7 @@ import {
   WRITE_TOOL_NAMES,
   getAgentHeader,
   type AgentLike,
+  type SessionHeaderLike,
   type ApprovalServiceLike,
   type AttachmentsLike,
   type CredentialsLike,
@@ -23,7 +25,7 @@ import {
   type ToolExecutionLike,
   type ToolsLike
 } from './host-contract.js'
-import { isJevAvailabilityFailure, getJevFailureKind, type JevOutcome } from './jev.js'
+import { isJevAvailabilityFailure, getJevFailureKind, getRedactedText, type JevOutcome } from './jev.js'
 import { intJevHub, type JevHub } from './jev-hub.js'
 import { SleepWithSignal, type NetworkMonitorInfo } from './network.js'
 import {
@@ -41,9 +43,9 @@ import {
 } from './policy.js'
 import { intRouteStateRegistry, type RouteStateRegistry } from './route-state.js'
 import { FindRoleByPresetId, getPermissionLabel, getRoleInfo, isWriteAllowed, type RoleId } from './role-registry.js'
-import { getRouteLabel, intRouteProbe, type RouteInfo, type RouteProbe } from './routes.js'
+import { getRouteKey, getRouteLabel, intRouteProbe, type RouteInfo, type RouteProbe } from './routes.js'
 import { ParseSessionPlan, getRuleSessionPlan, getSessionQuestions, getSessionState, intChildEndHub, intThreadRegistry, type SessionPlan, type ThreadInfo } from './threads.js'
-import { getUpgradeReasons } from './upgrade.js'
+import { getUpgradeReasons, getUpgradedChain } from './upgrade.js'
 import { ACCEPTANCE_QUESTIONS, ParseAssessment, VERDICT_LABELS, getAcceptanceState, getReviewQuestions, getReviewState } from './review.js'
 import { SwarmError } from './util/errors.js'
 import { getGitStatus, type GitStatusInfo } from './util/git.js'
@@ -58,6 +60,14 @@ import { createFeatureSession, type FeatureSession } from './feature-session.js'
 import { calculate } from './math/operators.js'
 import { createWorkspaceLeaseManager, type WorkspaceLease } from './util/workspace-lease.js'
 import type { ToolExecLike } from './tool-shape.js'
+import { getPlanningRecovery } from './planning-recovery.js'
+import { discoverProjectFiles } from './project-discovery.js'
+import { createAgentControl, type AgentControl } from './agent-control.js'
+import type { AgentControlRpcInput } from './rpc.js'
+import type { ExecutionBudgetSnapshot } from './execution-budget.js'
+import { assessExplorationEvidence, revalidateEvidenceAssessment, type EvidenceAssessmentBinding } from './evidence-assessment.js'
+import { createPublicEvidenceSourceResolver } from './evidence-source.js'
+import type { ChildRecoveryEvidence } from './host-recovery.js'
 
 export interface LoggerLike {
   info: (message: string) => void
@@ -75,6 +85,12 @@ export interface SwarmServiceDepsInfo {
   getApproval?: () => ApprovalServiceLike | undefined
   /** 可选：读取会话当前预设（切换过预设的会话，会话头里仍是创建时的预设） */
   getSessionProjections?: () => SessionProjectionsLike | undefined
+  /** Actual public AgentRegistry instance; never synthesize an ancestor authority from an ID. */
+  getAgent?: (sessionId: string) => (AgentLike & { status?: 'idle' | 'running'; whenIdle?: () => Promise<void> }) | undefined
+  inspectParent?: (sessionId: string) => Promise<SessionHeaderLike | undefined>
+  inspectRootPreference?: (sessionId: string) => Promise<RouteInfo | undefined>
+  activateParent?: (sessionId: string) => Promise<AgentLike | undefined>
+  inspectChild?: (parentSessionId: string, childId: string, notBefore?: number) => Promise<ChildRecoveryEvidence | undefined>
   dshHome: string
   fetch: typeof fetch
   logger?: LoggerLike
@@ -141,7 +157,7 @@ export interface RootUpgradeView {
   /** 触发升级的任务；这些任务都验收或标记未完成后撤销升级 */
   taskIds: string[]
   reasons: string[]
-  /** 已预检可用的升级链；为空表示升级模型当前都不可用，仍用对话框所选模型 */
+  /** 完整候选链；为空表示当前没有通过预检的候选，仍用对话框所选模型 */
   chain: string[]
   /** 升级期间用户在对话框里换了模型：以用户选择为准，这批任务不再自动升级 */
   cancelledByUser?: boolean
@@ -152,6 +168,7 @@ interface SessionStateInfo extends DelegateSessionInfo {
   /** 天枢根会话最近一次调用 write/edit 的时刻；0 表示没有 */
   rootEditAt: number
   rootUpgrade?: RootUpgradeView
+  rootUpgradeExplicit: Set<string>
   features?: FeatureSession
   featuresPromise?: Promise<FeatureSession>
   rootAgent?: AgentLike
@@ -167,13 +184,15 @@ const getExternalEditAt = (task: TaskRecord, session: SessionStateInfo): number 
 export interface SwarmService {
   getConfig: () => SwarmConfigInfo
   routeState: RouteStateRegistry
+  agentControl?: AgentControl
   /** Jev 接入点：衡鉴与 jev_* 工具共用的客户端、密钥状态与健康检查 */
   jev: JevHub
   AddTaskCard: (raw: unknown, exec: DelegateExecInfo) => Promise<ReturnType<typeof getTaskCardResult>>
   delegate: (raw: unknown, exec: DelegateExecInfo) => Promise<DelegationRecord>
-  getStatus: (raw: unknown, exec: DelegateExecInfo) => ReturnType<typeof getStatusResult>
+  getStatus: (raw: unknown, exec: DelegateExecInfo) => ReturnType<typeof getStatusResult> & { executionBudgets: Array<ExecutionBudgetSnapshot & { task_id: string }> }
   AcceptTask: (raw: unknown, exec: DelegateExecInfo) => Promise<AcceptResultInfo>
   getGuardReason: (execution: ToolExecutionLike) => string | undefined
+  ObserveToolDispatch: (execution: ToolExecutionLike) => void
   getRoleForAgent: (agent: AgentLike | undefined) => RoleId | undefined
   /** 是否由百工管理：百工预设的根会话，或百工委派出的子会话（其他插件的子会话不算） */
   isManagedAgent: (agent: AgentLike | undefined) => boolean
@@ -185,11 +204,14 @@ export interface SwarmService {
   ReviewPlan: (raw: unknown, exec: DelegateExecInfo) => Promise<unknown>
   Calculate: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   ReadContext: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
+  ProjectFiles: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   MessageSend: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   MessageRead: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   MessageAck: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   Experience: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   getTaskViewForRpc: (sessionId: string, taskId: string) => unknown
+  getAgentViewForRpc: (parentSessionId: string, childId: string) => Promise<unknown>
+  ControlAgentForRpc: (input: AgentControlRpcInput) => Promise<unknown>
   dispose: () => Promise<void>
   WaitAgentReady: (agent: AgentLike) => Promise<void>
 }
@@ -225,6 +247,7 @@ const getTaskCardResult = (task: TaskRecord, card: TaskCard, config: SwarmConfig
   contextRefs: (task.contextRefs ?? []).map((material) => material.ref),
   contextArtifacts: task.contextRefs ?? [],
   planningReview: task.planningReview ?? null,
+  planningRecovery: getPlanningRecovery(task, config.planningReview.maxFixRounds),
   flow: task.workflowDefinition === undefined ? null : {
     definition: task.workflowDefinition, state: task.workflowState,
     digest: task.workflowDigest, mermaid: getWorkflowMermaid(task.workflowDefinition),
@@ -263,11 +286,17 @@ const getDelegationView = (d: DelegationRecord, verbose: boolean) => ({
   durationMs: d.durationMs ?? null,
   error: d.error ?? null,
   assessment: d.assessment ?? null,
+  evidenceAssessment: d.evidenceAssessment === undefined ? null : {
+    status: d.evidenceAssessment.status, disposition: d.evidenceAssessment.disposition,
+    confidenceMeaning: d.evidenceAssessment.confidenceMeaning,
+    items: d.evidenceAssessment.items.map((item) => ({ id: item.id, credibility: item.credibility, relevance: item.relevance,
+      support: item.support, disposition: item.disposition, reasons: item.reasons, model: item.model }))
+  },
   session: d.session ?? null,
   retries: d.retries ?? [],
   unresolved: d.unresolved,
   changedFiles: d.changedFiles ?? [],
-  ...(verbose ? { structured: d.structured, evidence: d.evidence, attempts: d.attempts } : {})
+  ...(verbose ? { structured: d.structured, evidence: d.evidence, attempts: d.attempts, evidenceAssessmentDetails: d.evidenceAssessment } : {})
 })
 
 const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean, externalEditAt: number) => {
@@ -282,6 +311,7 @@ const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: 
     cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1,
     requestRevision: task.requestRevision ?? 1, intentSource: task.intentSource ?? 'declared',
     planningReview: task.planningReview ?? null, checkpoint: task.checkpoint ?? null,
+    planningRecovery: getPlanningRecovery(task, config.planningReview.maxFixRounds),
     recovered: task.recovered ?? false,
     contextRefs: (task.contextRefs ?? []).map((material) => material.ref),
     contextArtifacts: task.contextRefs ?? [],
@@ -335,7 +365,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       editLock: intMutex(),
       counters: { native: 0, jev: 0, review: 0, session: 0 },
       threads: intThreadRegistry(),
-      rootEditAt: 0, taskLock: intMutex(), taskSequence: 0
+      rootEditAt: 0, taskLock: intMutex(), taskSequence: 0,
+      rootUpgradeExplicit: new Set()
     }
     sessions.set(sessionId, created)
     return created
@@ -344,22 +375,90 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const childOwners = new Map<string, string>()
   const childSignals = new Map<string, AbortSignal>()
   const childReady = new Map<string, Promise<void>>()
+  const admissions = new Map<string, { resolve: () => void; reject: (error: unknown) => void }>()
+  const manualRuns = new Map<string, { controller: AbortController; run: Promise<DelegationRecord> }>()
+  let delegateEntry: SwarmService['delegate']
+  const resolveEvidenceSource = createPublicEvidenceSourceResolver()
+  const evidencePrivatePaths = () => [deps.getConfig().persistence.directory || join(deps.dshHome, 'share', 'dsh-agent-swarm', 'state'), getLedgerDir(),
+    join(deps.dshHome, '.credentials.yaml'), join(deps.dshHome, 'plugins', 'subscriptions'),
+    join(homedir(), '.config', 'dsh', 'secrets.env'), join(homedir(), '.ssh')]
   const leases = createWorkspaceLeaseManager()
-  const ensureFeatures = async (session: SessionStateInfo, agent: AgentLike): Promise<FeatureSession> => {
-    session.rootAgent ??= agent
+  const ensureFeatures = async (session: SessionStateInfo, agent?: AgentLike, coldHeader?: SessionHeaderLike): Promise<FeatureSession> => {
+    if (agent !== undefined) session.rootAgent = agent
     if (session.features !== undefined) return session.features
     session.featuresPromise ??= createFeatureSession({
-      rootSessionId: session.sessionId, cwd: getAgentHeader(session.rootAgent).cwd ?? process.cwd(),
+      rootSessionId: session.sessionId, cwd: (session.rootAgent === undefined ? coldHeader?.cwd : getAgentHeader(session.rootAgent).cwd) ?? process.cwd(),
       dshHome: deps.dshHome, config: deps.getConfig(), getConfig: deps.getConfig,
-      tasks: session.store, threads: session.threads, now
-    }).then((features) => {
+      tasks: session.store, threads: session.threads, now,
+      getAgentControls: () => agentControl.Export(session.sessionId).filter((record) => record.persistent)
+    }).then(async (features) => {
+      try {
       routeState.RestoreHealth(features.store.read().routeHealth ?? [])
+      const restoredControls = features.getRestoredAgentControls()
+      const knownChildren = new Set(restoredControls.map((record) => record.childId))
+      const legacyByChild = new Map<string, DelegationRecord>()
+      for (const task of session.store.getTasks()) for (const record of session.store.getTaskDelegations(task.taskId)) {
+        const childId = record.childId ?? record.session?.threadId
+        if (childId === undefined || record.session?.kind !== 'continuable') continue
+        const old = legacyByChild.get(childId)
+        if (old === undefined || record.startedAt > old.startedAt || (record.startedAt === old.startedAt
+          && Number(record.delegationId.replace(/^D-/, '')) > Number(old.delegationId.replace(/^D-/, '')))) legacyByChild.set(childId, record)
+      }
+      // Existing 2.2 continuable sessions have a durable thread/record but no control snapshot.
+      // Migrate their identity and bounded original request, never invent an observed model attempt.
+      for (const thread of session.threads.list()) {
+        if (knownChildren.has(thread.threadId)) continue
+        const previous = legacyByChild.get(thread.threadId)
+        if (previous === undefined) continue
+        const task = session.store.getTask(previous.taskId)
+        if (task === undefined) continue
+        const original = thread.history.findLast((round) => round.delegationId === previous.delegationId && round.taskId === previous.taskId)
+        if (previous.continuationInput === undefined && original !== undefined) session.store.UpdateDelegation(previous.delegationId, {
+          continuationInput: { task_id: task.taskId, role: previous.role, ...(previous.mode === undefined ? {} : { mode: previous.mode }),
+            ...(previous.gate === undefined ? {} : { gate: previous.gate as import('./policy.js').GateId }),
+            ...(previous.nodeId === undefined ? {} : { node_id: previous.nodeId }), prompt: original.request, session: 'continue', backend: 'api', allow_web: thread.allowWeb }
+        })
+        const uncertain = previous.error === 'recovery_required'
+        restoredControls.push({ childId: thread.threadId, parentSessionId: session.sessionId, taskId: task.taskId,
+          delegationId: previous.delegationId, persistent: true, cardRevision: previous.cardRevision ?? 1,
+          workflowRevision: previous.workflowRevision ?? 1, requestRevision: previous.requestRevision ?? 1,
+          revision: 1, phase: uncertain ? 'recovery-required' : previous.status === 'completed' ? 'idle' : 'paused',
+          paused: uncertain || previous.status !== 'completed', updatedAt: now(), reason: uncertain ? 'legacy-run-needs-host-reconciliation' : 'legacy-continuation-metadata' })
+        knownChildren.add(thread.threadId)
+      }
+      const restoredRoutes = restoredControls.map((control) => {
+        const record = session.store.getDelegation(control.delegationId)
+        const thread = session.threads.get(control.childId)
+        const task = session.store.getTask(control.taskId)
+        if (record === undefined || task === undefined || thread === undefined || record.taskId !== control.taskId
+          || (record.childId ?? record.session?.threadId) !== control.childId || record.session?.kind !== 'continuable'
+          || thread.role !== record.role || getRouteKey(thread.role, thread.mode) !== getRouteKey(record.role, record.mode)) {
+          throw new SwarmError('RECOVERY_REQUIRED', '持久子会话的控制、委派与线程身份不一致，不能恢复执行路由')
+        }
+        const configured = getRoleRoute(deps.getConfig(), getRouteKey(record.role, record.mode))
+        const reasons = getUpgradeReasons(configured.upgrade, { task, delegations: getCurrentDelegations(task, session.store.getTaskDelegations(task.taskId)),
+          explicit: record.continuationInput?.upgrade === true, role: record.role, ...(record.mode === undefined ? {} : { mode: record.mode }) })
+        return { control, record, chain: reasons.length > 0 && configured.upgrade !== undefined ? getUpgradedChain(configured.upgrade.chain, configured.chain) : configured.chain }
+      })
+      if (restoredControls.length > 0) agentControl.Restore(restoredControls, session.sessionId)
+      for (const { control, record, chain } of restoredRoutes) {
+        // Restore the policy fence before any cold child can dispatch. This does
+        // not activate the Host child or authorize a new delegation; normal
+        // continuation still performs current capability/DAG/lease preflight.
+        routeState.AddChild(control.childId, { chain, role: record.role, persistent: true, logicalRequestId: record.delegationId,
+          requireVision: getRoleInfo(record.role).needsVision || (record.continuationInput?.image_paths?.length ?? 0) > 0 })
+        childOwners.set(control.childId, session.sessionId)
+      }
       session.features = features
       session.taskSequence = Math.max(session.taskSequence, ...session.store.getTasks().map((task) => Number(/^T-(\d+)$/.exec(task.taskId)?.[1] ?? 0)))
       for (const task of session.store.getTasks()) for (const record of session.store.getTaskDelegations(task.taskId)) {
         sequence = Math.max(sequence, Number(/^D-(\d+)$/.exec(record.delegationId)?.[1] ?? 0))
       }
       return features
+      } catch (error) {
+        await features.dispose().catch(() => undefined)
+        throw error
+      }
     })
     return session.featuresPromise
   }
@@ -392,16 +491,24 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       maxPlanningReviewFixRounds: deps.getConfig().planningReview.maxFixRounds,
       ...deps.getConfig().execution, delegationLimit: deps.getConfig().budgets.maxDelegationsPerTask }
   })
-  const refreshContractContexts = (session: SessionStateInfo, task: TaskRecord): TaskRecord => {
+  const prepareContractContexts = (session: SessionStateInfo, task: TaskRecord) => {
     const features = session.features
-    if (features === undefined) return task
+    if (features === undefined) return undefined
     const binding = getTaskContextBinding(task, features.workspaceId)
-    const contract = features.addContext({ binding, layer: 'L0', kind: 'contract', text: JSON.stringify({
+    return features.prepareTaskContexts(binding, [{ layer: 'L0', kind: 'contract', text: JSON.stringify({
       goal: task.card.goal, acceptance: task.card.acceptance, scope: task.card.scope, flags: task.card.flags,
       perf: task.card.perf, gates: task.gates, workflowRevision: task.workflowRevision
-    }) })
-    const source = features.addContext({ binding, layer: 'L1', kind: 'source', text: task.intentText ?? task.card.goal })
-    return session.store.UpdateTask(task.taskId, { contextRefs: [contract, source].map(({ ref, digest, layer, kind }) => ({ ref, digest, layer, kind })) })
+    }) }, { layer: 'L1', kind: 'source', text: task.intentText ?? task.card.goal }])
+  }
+  const refreshContractContexts = (session: SessionStateInfo, task: TaskRecord): TaskRecord => {
+    const batch = prepareContractContexts(session, task)
+    if (batch === undefined) return task
+    batch.commit()
+    try {
+      const refreshed = session.store.UpdateTask(task.taskId, { contextRefs: batch.artifacts.map(({ ref, digest, layer, kind }) => ({ ref, digest, layer, kind })), contextDelegations: {} })
+      batch.finalize()
+      return refreshed
+    } catch (error) { batch.rollback(); throw error }
   }
   const reconcileTask = (session: SessionStateInfo, task: TaskRecord): TaskRecord => {
     const all = session.store.getTaskDelegations(task.taskId)
@@ -434,6 +541,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       intentText: `${task.intentText ?? task.card.goal}\n\n用户后续要求（${latest.sourceRef}）：\n${latest.text}`,
       intentSourceRef: latest.sourceRef, intentSource: 'host', intentLastDigest: latest.digest,
       requestRevision: (task.requestRevision ?? 1) + 1, planningReview: undefined, acceptance: undefined,
+      planningAutoReviewRuns: 0, planningFixRounds: 0,
       workflowState: task.workflowDefinition === undefined ? undefined : intWorkflowState(task.workflowDefinition, task.rounds)
     }))
   }
@@ -448,6 +556,16 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     getSession(event.agentId).ledger.AddLedgerEvent({ type: 'route/fallback', data: { scope: 'root', from: getRouteLabel(event.from), to: getRouteLabel(event.to), failure: event.failure } })
   }, probe, {
     now,
+    onPreferredRecovery: (event) => {
+      const parentId = childOwners.get(event.agentId) ?? event.agentId
+      const taskId = agentControl.get(event.agentId)?.taskId
+      getSession(parentId).ledger.AddLedgerEvent({
+        type: event.confirmed ? 'route/recovered' : 'route/recovery-probe',
+        ...(taskId === undefined ? {} : { taskId }),
+        data: { scope: event.scope, agentId: event.agentId, logicalRequestId: event.logicalRequestId,
+          from: getRouteLabel(event.from), to: getRouteLabel(event.to), confirmed: event.confirmed }
+      })
+    },
     onHealthChange: (entries) => {
       if (!deps.getConfig().persistence.enabled) return
       // The failure domain is shared by roots. Commit it before publishing a recovery action.
@@ -457,6 +575,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     },
     ...(deps.network === undefined ? {} : { network: deps.network }),
     onNetworkWait: (event) => {
+      agentControl.MarkWaiting(event.agentId, event.recovered === undefined)
       const where = `${event.scope === 'root' ? '主会话' : '子智能体'} ${event.agentId}${event.route === undefined ? '' : `（${getRouteLabel(event.route)}）`}`
       if (event.recovered === undefined) deps.logger?.warn(`${where} 请求失败且网络不可达（${event.failure.code ?? event.failure.message ?? 'error'}），等待网络恢复后重试`)
       else deps.logger?.info(`${where} ${event.recovered ? '网络已恢复，在原路由重试' : '等待网络超时，按路由链回退'}（等待 ${Math.round((event.waitedMs ?? 0) / 1000)} 秒）`)
@@ -464,6 +583,127 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   })
 
   const hub = intChildEndHub()
+  const requireLiveParent = (parentSessionId: string): AgentLike => {
+    const parent = deps.getAgent?.(parentSessionId) ?? sessions.get(parentSessionId)?.rootAgent
+    if (parent === undefined || parent.id !== parentSessionId || !isRootTianShu(parent)) throw new SwarmError('SERVICE_UNAVAILABLE', '父会话尚未在宿主加载，请先打开百工父会话')
+    return parent
+  }
+  const agentControl = createAgentControl({
+    now,
+    validateRoute: async (route) => {
+      const llm = deps.getLlm()
+      if (llm === undefined || !llm.listProviders().some((provider) => provider.id === route.provider)) throw new SwarmError('INVALID_ARGS', '所选模型供应商未在当前宿主配置')
+      const info = await llm.resolveModelInfo(route.provider, route.model)
+      const normalized = llm.resolveCallConfig === undefined ? route : await llm.resolveCallConfig({ ...route })
+      if (llm.resolveCallConfig === undefined && route.reasoningEffort !== undefined && !info.reasoning?.efforts?.some((effort) => effort.id === route.reasoningEffort)) throw new SwarmError('INVALID_ARGS', '所选模型未声明支持此推理级别')
+      return { provider: normalized.provider, model: normalized.model, ...(normalized.reasoningEffort === undefined ? {} : { reasoningEffort: normalized.reasoningEffort }) }
+    },
+    interrupt: (binding) => {
+      const subagents = deps.getSubagents()
+      if (subagents?.interrupt === undefined) throw new SwarmError('SERVICE_UNAVAILABLE', '宿主不支持子智能体中断')
+      subagents.interrupt(binding.childId, { kind: 'ancestor', agent: requireLiveParent(binding.parentSessionId) })
+    },
+    applyOverride: (childId, route) => routeState.SetChildOverride(childId, route),
+    setPaused: (childId, paused) => routeState.SetManualPause(childId, paused),
+    cancelRetryRoute: (childId) => routeState.CancelRouteRetry(childId),
+    retryRoute: async (route, childId, force) => {
+      const result = routeState.RequestRouteRetry(route, childId, { force })
+      if (!result.ok) throw new SwarmError('RECOVERY_REQUIRED', `路由暂不能恢复探针：${result.reason}${result.retryAt === undefined ? '' : `；最早 ${new Date(result.retryAt).toISOString()}`}`)
+    },
+    persist: async (records) => {
+      for (const parentId of new Set(records.map((record) => record.parentSessionId))) {
+        const session = sessions.get(parentId)
+        if (session?.features !== undefined) await session.features.persist('agent/control', session.store, session.threads, routeState.getHealth())
+      }
+    },
+    resume: async (binding, options) => {
+      const parent = requireLiveParent(binding.parentSessionId)
+      const session = getSession(binding.parentSessionId)
+      const features = await ensureFeatures(session, parent)
+      const prior = session.store.getDelegation(binding.delegationId)
+      if (prior?.status === 'completed' && prior.staleReason === undefined) return { accepted: true, delegationId: prior.delegationId }
+      let input: import('./delegate.js').DelegateInput
+      const childEvidence = await deps.inspectChild?.(binding.parentSessionId, binding.childId, prior?.startedAt)
+      const thread = session.threads.get(binding.childId)
+      if (thread?.closed && (!childEvidence?.continuable || !childEvidence.settled)) throw new SwarmError('RECOVERY_REQUIRED', '宿主尚未确认原子会话已结束或可恢复；不能创建替代智能体掩盖未知状态')
+      await session.taskLock.run(async () => {
+        const task = refreshIntent(session, getTaskOrThrow(session, binding.taskId), parent)
+        const previous = session.store.getDelegation(binding.delegationId)
+        if (previous?.continuationInput === undefined || previous.taskId !== task.taskId || previous.childId !== binding.childId
+          || previous.session?.kind !== 'continuable') throw new SwarmError('RECOVERY_REQUIRED', '此子会话缺少可核对的原始委派，请在父会话重新委派')
+        if (['queued', 'running'].includes(previous.status)) throw new SwarmError('RECOVERY_REQUIRED', '上一轮委派仍在收尾，请刷新后继续')
+        if (!isTaskVersionCurrent(task, binding) || !isTaskVersionCurrent(task, previous)) throw new SwarmError('STALE_EVIDENCE', '任务合同已改变，请依据当前版本重新委派')
+        if (task.acceptance?.status === 'accepted' || task.acceptance?.decision === 'incomplete') throw new SwarmError('INVALID_ARGS', '已结束任务不能重复执行，请建立或选择新的任务')
+        const cwd = getAgentHeader(parent).cwd ?? process.cwd()
+        if (leases.peekStatus(cwd)?.mutationUnknown) throw new SwarmError('RECOVERY_REQUIRED', '工作区仍有未确认副作用；需要实际恢复核对，确认按钮不能解除执行租约')
+        if (thread?.closed) session.threads.Update(binding.childId, { closed: false, busy: false })
+        const nodeId = previous.nodeId
+        if (nodeId !== undefined && task.workflowState !== undefined) {
+          const node = task.workflowState.nodes[nodeId]
+          if (node === undefined || !['failed', 'blocked'].includes(node.status)) throw new SwarmError('INVALID_ARGS', '只可人工恢复未完成节点，已完成节点不会重放')
+          if (node.attemptId !== undefined && node.attemptId !== previous.attemptId) throw new SwarmError('STALE_EVIDENCE', '当前节点已由后续委派接管，不能重放旧子会话的工作')
+          session.store.UpdateTask(task.taskId, { workflowState: { ...task.workflowState, nodes: { ...task.workflowState.nodes, [nodeId]: { status: 'pending', reason: '用户显式恢复，重新预约当前节点' } } } })
+        }
+        const { attempt_id: _attempt, request_id: _request, ...original } = previous.continuationInput
+        input = { ...original, session: 'continue', prompt: [original.prompt,
+          '用户显式要求继续未完成部分；先核对当前文件和执行记录，保留已完成工作，不重复已成功的写入或命令。', options?.steering ?? ''].filter(Boolean).join('\n\n') }
+        session.ledger.AddLedgerEvent({ type: 'agent/manual-continue', taskId: task.taskId, delegationId: previous.delegationId, data: { childId: binding.childId } })
+        await features.persist('agent/manual-continue', session.store, session.threads, routeState.getHealth())
+      })
+      const requestId = `manual-${randomUUID()}`
+      const controller = new AbortController()
+      const admission = new Promise<void>((resolve, reject) => admissions.set(requestId, { resolve, reject }))
+      const run = delegateEntry({ ...input!, request_id: requestId }, { agent: parent, signal: controller.signal, controlledThreadId: binding.childId })
+      manualRuns.set(requestId, { controller, run })
+      void run.then(() => admissions.get(requestId)?.resolve(), (error) => {
+        admissions.get(requestId)?.reject(error)
+        deps.logger?.warn(`人工恢复委派未完成：${error instanceof SwarmError ? error.code : 'execution-failed'}`)
+      }).finally(() => { admissions.delete(requestId); manualRuns.delete(requestId) })
+      await admission
+      return { accepted: true }
+    }
+  })
+  const getAgentViewForRpc: SwarmService['getAgentViewForRpc'] = async (parentSessionId, childId) => {
+    const session = getSession(parentSessionId)
+    const parent = deps.getAgent?.(parentSessionId) ?? session.rootAgent
+    if (parent !== undefined) {
+      if (!isRootTianShu(parent)) throw new SwarmError('PERMISSION_DENIED', '该父会话不是百工根会话')
+      await ensureFeatures(session, parent)
+    } else {
+      const header = await deps.inspectParent?.(parentSessionId)
+      if (header === undefined || header.parentSession !== undefined || header.agentPreset !== 'tian-shu' || typeof header.cwd !== 'string') throw new SwarmError('PERMISSION_DENIED', '该持久父会话不是可核对的百工根会话')
+      // Metadata is sufficient for a cold read, but never becomes ancestor authority.
+      await ensureFeatures(session, undefined, header)
+    }
+    let control = agentControl.getView(parentSessionId, childId)
+    const delegation = session.store.getDelegation(control.delegationId)
+    const child = deps.getAgent?.(childId)
+    if (control.phase === 'recovery-required' && child?.status === 'idle' && child.whenIdle !== undefined) {
+      await child.whenIdle()
+      agentControl.ReconcileIdle(childId)
+      routeState.ReleaseAgent(childId)
+      control = agentControl.getView(parentSessionId, childId)
+    }
+    if (control.phase === 'recovery-required' && child === undefined) {
+      const evidence = await deps.inspectChild?.(parentSessionId, childId, delegation?.startedAt)
+      if (evidence?.continuable && evidence.settled) {
+        agentControl.ReconcileIdle(childId)
+        routeState.ReleaseAgent(childId)
+        control = agentControl.getView(parentSessionId, childId)
+      }
+    }
+    if (control.phase === 'paused' && delegation !== undefined && ['queued', 'running'].includes(delegation.status)) return { ...control, phase: 'stopping', reason: 'delegation-settling' }
+    return control
+  }
+  const ControlAgentForRpc: SwarmService['ControlAgentForRpc'] = async (input) => {
+    await getAgentViewForRpc(input.parentSessionId, input.childId)
+    const parent = deps.getAgent?.(input.parentSessionId) ?? await deps.activateParent?.(input.parentSessionId) ?? sessions.get(input.parentSessionId)?.rootAgent
+    if (parent === undefined || !isRootTianShu(parent)) throw new SwarmError('SERVICE_UNAVAILABLE', '宿主尚未加载父会话，不能以会话ID代替真实控制权限')
+    await ensureFeatures(getSession(input.parentSessionId), parent)
+    if (input.action === 'select') return agentControl.Select({ ...input, route: input.route! })
+    if (input.action === 'stop') return agentControl.Stop(input)
+    return agentControl.Continue(input)
+  }
   const jev = intJevHub({
     getConfig: () => deps.getConfig().jev,
     getCredentials: deps.getCredentials,
@@ -498,9 +738,20 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const delegator = intDelegator({
     getConfig: deps.getConfig,
     getSubagents: deps.getSubagents,
-    getTools: deps.getTools,
+    getTools: () => {
+      const tools = deps.getTools()
+      if (tools === undefined) return undefined
+      return { register: tools.register.bind(tools), guard: tools.guard.bind(tools), schemas: (scope?: unknown) => {
+        const config = deps.getConfig()
+        return tools.schemas(scope).filter((tool) => !tool.name.startsWith('swarm_message_') || (config.persistence.enabled && config.messageBus.enabled))
+      } }
+    },
     getAttachments: deps.getAttachments,
     probe,
+    probeForChild: (childId, route) => intRouteProbe(deps.getLlm, {
+      now, isRouteAvailable: (candidate) => routeState.isRouteAvailableFor(candidate, childId),
+      onFailure: (candidate, failure) => routeState.ObserveRouteFailure(candidate, failure, deps.getConfig())
+    })(route),
     routeState,
     readFile: deps.readFile ?? (async (path) => new Uint8Array(await readFile(path))),
     gitStatus: deps.gitStatus ?? ((cwd) => getGitStatus(cwd)),
@@ -510,25 +761,29 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     hub,
     planSession,
     sleep,
-    onChildStart: async ({ agentId, task, record, role, signal }) => {
+    onChildStart: async ({ agentId, task, record, role, signal, persistent, input }) => {
       const session = getSession(task.sessionId)
       childOwners.set(agentId, task.sessionId)
       childSignals.set(agentId, signal)
       const features = await ensureFeatures(session, session.rootAgent ?? { id: task.sessionId })
+      if (input !== undefined) session.store.UpdateDelegation(record.delegationId, { continuationInput: structuredClone(input) })
+      agentControl.Register({ childId: agentId, parentSessionId: task.sessionId,
+        delegationId: record.delegationId, persistent: persistent === true, needsSideEffectReview: false, ...getTaskBinding(task) })
       const ready = features.bindings.bind({
         agentId, ...getTaskContextBinding(task, features.workspaceId),
         nodeId: record.nodeId ?? 'legacy', attemptId: record.attemptId ?? record.delegationId, threadId: agentId, role,
         permissions: [
           ...(getRoleInfo(role).capabilities.includes('calculate') ? ['pure-calc'] : []),
           ...(getRoleInfo(role).capabilities.includes('context') ? ['context-read'] : []),
-          ...(getRoleInfo(role).capabilities.includes('message') ? ['message-send', 'message-read'] : [])
+          ...(getRoleInfo(role).capabilities.includes('message') && features.bus !== undefined && features.store.durable ? ['message-send', 'message-read'] : [])
         ],
         blindReview: record.reviewPhase !== 'response' && (role === 'yu_shi' || (role === 'suan_heng' && record.mode === 'verify'))
       }).then(async () => { await features.persist('delegation/started', session.store, session.threads, routeState.getHealth()) })
       childReady.set(agentId, ready)
       await ready
     },
-    onChildEnd: async (agentId) => {
+    onChildEnd: async (agentId, stopReason) => {
+      agentControl.MarkRunSettled(agentId, stopReason)
       const owner = childOwners.get(agentId)
       if (owner === undefined) return
       const session = getSession(owner)
@@ -602,16 +857,26 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   }
 
   const ClearRootUpgrade = (agent: AgentLike, session: SessionStateInfo, taskId: string): void => {
+    session.rootUpgradeExplicit.delete(taskId)
     const current = session.rootUpgrade
     if (current === undefined || !current.taskIds.includes(taskId)) return
     const taskIds = current.taskIds.filter((id) => id !== taskId)
     if (taskIds.length > 0) {
-      session.rootUpgrade = { ...current, taskIds }
+      session.rootUpgrade = { ...current, taskIds, reasons: current.reasons.filter((reason) => !reason.startsWith(`${taskId}：`)) }
       return
     }
     session.rootUpgrade = undefined
     routeState.SetRootUpgrade(agent.id, undefined)
     session.ledger.AddLedgerEvent({ type: 'route/upgrade', taskId, data: { scope: 'root', active: false } })
+  }
+  const PruneRootUpgrade = (agent: AgentLike, session: SessionStateInfo): void => {
+    const current = session.rootUpgrade
+    if (current === undefined) return
+    const enabled = getRoleRoute(deps.getConfig(), 'tian_shu').upgrade?.enabled === true
+    for (const id of [...current.taskIds]) {
+      const task = session.store.getTask(id)
+      if (!enabled || task === undefined || task.acceptance?.status === 'accepted' || task.acceptance?.decision === 'incomplete') ClearRootUpgrade(agent, session, id)
+    }
   }
 
   /**
@@ -620,31 +885,38 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
    */
   const UpdateRootUpgrade = async (agent: AgentLike, session: SessionStateInfo, task: TaskRecord, explicit?: boolean): Promise<RootUpgradeView | undefined> => {
     if (!isRootTianShu(agent)) return undefined
+    PruneRootUpgrade(agent, session)
     if (explicit === false) {
       ClearRootUpgrade(agent, session, task.taskId)
       return session.rootUpgrade
     }
+    if (explicit === true) session.rootUpgradeExplicit.add(task.taskId)
     SyncRootUpgrade(agent, session)
     const upgrade = getRoleRoute(deps.getConfig(), 'tian_shu').upgrade
-    const reasons = getUpgradeReasons(upgrade, { task, delegations: session.store.getTaskDelegations(task.taskId), explicit: explicit === true })
-    if (upgrade === undefined || reasons.length === 0) return session.rootUpgrade
+    const reasons = getUpgradeReasons(upgrade, { task, delegations: getCurrentDelegations(task, session.store.getTaskDelegations(task.taskId)), explicit: session.rootUpgradeExplicit.has(task.taskId) })
+    if (upgrade === undefined || reasons.length === 0) { ClearRootUpgrade(agent, session, task.taskId); return session.rootUpgrade }
     const current = session.rootUpgrade
     const labeled = reasons.map((reason) => `${task.taskId}：${reason}`)
-    // 用户手动换过模型：只记录原因，不再覆盖用户的选择（天枢显式要求除外）
-    if (current !== undefined && (current.chain.length > 0 || (current.cancelledByUser === true && explicit !== true))) {
+    // upgrade 是模型工具参数，不能撤销用户在对话框中的明确选模。
+    if (current?.cancelledByUser === true) {
       session.rootUpgrade = {
         taskIds: current.taskIds.includes(task.taskId) ? current.taskIds : [...current.taskIds, task.taskId],
-        reasons: [...new Set([...current.reasons, ...labeled])],
+        reasons: [...current.reasons.filter((reason) => !reason.startsWith(`${task.taskId}：`)), ...labeled],
         chain: current.chain,
         ...(current.cancelledByUser === true ? { cancelledByUser: true } : {})
       }
       return session.rootUpgrade
     }
+    const merged = getUpgradedChain(upgrade.chain, getRoleRoute(deps.getConfig(), 'tian_shu').chain)
     const usable: RouteInfo[] = []
-    for (const route of upgrade.chain) if ((await probe(route)).ok) usable.push(route)
-    session.rootUpgrade = { taskIds: [task.taskId], reasons: labeled, chain: usable.map(getRouteLabel) }
-    if (usable.length > 0) routeState.SetRootUpgrade(agent.id, usable)
-    session.ledger.AddLedgerEvent({ type: 'route/upgrade', taskId: task.taskId, data: { scope: 'root', active: usable.length > 0, reasons, chain: usable.map(getRouteLabel) } })
+    for (const route of merged) if ((await probe(route)).ok) usable.push(route)
+    session.rootUpgrade = { taskIds: [...new Set([...(current?.taskIds ?? []), task.taskId])],
+      reasons: [...(current?.reasons ?? []).filter((reason) => !reason.startsWith(`${task.taskId}：`)), ...labeled],
+      chain: usable.length === 0 ? [] : merged.map(getRouteLabel) }
+    if (usable.length > 0) routeState.SetRootUpgrade(agent.id, merged, usable[0])
+    else routeState.SetRootUpgrade(agent.id, undefined)
+    session.ledger.AddLedgerEvent({ type: 'route/upgrade', taskId: task.taskId, data: { scope: 'root', active: usable.length > 0, reasons,
+      chain: merged.map(getRouteLabel), ready: usable.map(getRouteLabel), initial: usable[0] === undefined ? null : getRouteLabel(usable[0]) } })
     return session.rootUpgrade
   }
 
@@ -671,9 +943,6 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const workflowChanged = existing !== undefined && existing.workflowDigest !== workflowDigest
       const intent = getTaskIntent(exec.agent, card)
       const intentChanged = existing !== undefined && (existing.intentLastDigest !== intent.digest || existing.intentSourceRef !== intent.sourceRef)
-      if (existing?.planningReview && !['pass', 'pass_with_degradation'].includes(existing.planningReview.status) && (semanticChanged || workflowChanged)) {
-        if ((existing.planningFixRounds ?? 0) >= deps.getConfig().planningReview.maxFixRounds) throw new SwarmError('BUDGET_EXHAUSTED', '规划修正轮次用尽')
-      }
       const changed = semanticChanged || workflowChanged || intentChanged
       const record: TaskRecord = {
         ...(existing ?? { taskId: `T-${++session.taskSequence}`, sessionId: session.sessionId, delegationIds: [], rounds: 0, createdAt: now() }),
@@ -688,19 +957,30 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         workflowDefinition: check.definition, workflowDigest,
         workflowState: changed || existing?.workflowState === undefined ? intWorkflowState(check.definition, existing?.rounds ?? 0) : existing.workflowState,
         ...(changed ? { acceptance: undefined, planningReview: undefined,
-          planningFixRounds: (existing?.planningFixRounds ?? 0) + (existing?.planningReview && !['pass', 'pass_with_degradation'].includes(existing.planningReview.status) ? 1 : 0)
+          planningAutoReviewRuns: intentChanged ? 0 : getPlanningRecovery(existing ?? {}, deps.getConfig().planningReview.maxFixRounds).automaticReviews,
+          planningFixRounds: intentChanged ? 0 : (existing?.planningFixRounds ?? 0) + (existing?.planningReview?.status === 'changes_requested' ? 1 : 0)
         } : {})
       }
-      if (existing === undefined) session.store.AddTask(record)
-      else session.store.UpdateTask(record.taskId, record)
-      if (changed || existing === undefined) {
-        refreshContractContexts(session, record)
+      const batch = changed || existing === undefined ? prepareContractContexts(session, record) : undefined
+      batch?.commit()
+      try {
+        if (existing === undefined) session.store.AddTask(record)
+        else session.store.UpdateTask(record.taskId, record)
+        if (batch !== undefined) session.store.UpdateTask(record.taskId, {
+          contextRefs: batch.artifacts.map(({ ref, digest, layer, kind }) => ({ ref, digest, layer, kind })), contextDelegations: {}
+        })
+        await features.persist('task/card', session.store, session.threads, routeState.getHealth())
+        batch?.finalize()
+      } catch (error) {
+        const restored = session.store.RollbackTask?.(record.taskId, existing, getTaskBinding(record))
+        batch?.rollback()
+        if (restored !== true) throw new SwarmError('RECOVERY_REQUIRED', '任务修订未确认提交且存在并发变化；请核对当前任务和持久状态，不重放旧修订')
+        throw error
       }
-      await features.persist('task/card', session.store, session.threads, routeState.getHealth())
       session.ledger.AddLedgerEvent({ type: 'task/card', taskId: record.taskId, data: { card, gates: gates.map((gate) => gate.gate), triage: triage.source, cardRevision: record.cardRevision, workflowRevision: record.workflowRevision } })
       return session.store.getTask(record.taskId)!
     })
-    if (deps.getConfig().planningReview.enabled && deps.getConfig().workflow.mode !== 'off') await ReviewPlan({ task_id: task.taskId }, exec)
+    if (deps.getConfig().planningReview.enabled && deps.getConfig().workflow.mode !== 'off') await runReviewPlan({ task_id: task.taskId }, exec, true)
     const explicit = (raw as { upgrade?: unknown }).upgrade
     const latest = session.store.getTask(task.taskId)!
     const rootUpgrade = await UpdateRootUpgrade(exec.agent, session, latest, typeof explicit === 'boolean' ? explicit : undefined)
@@ -714,7 +994,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   }
 
   const reviewRuns = new Map<string, Promise<unknown>>()
-  const ReviewPlan: SwarmService['ReviewPlan'] = async (raw, exec) => {
+  const runReviewPlan = async (raw: unknown, exec: DelegateExecInfo, automatic: boolean): Promise<unknown> => {
     const session = getSession(exec.agent.id)
     const features = await ensureFeatures(session, exec.agent)
     const requested = (raw as { task_id?: unknown })?.task_id
@@ -725,14 +1005,26 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (reviewRuns.has(snapshot.snapshotDigest)) return reviewRuns.get(snapshot.snapshotDigest)!
     const operation = (async () => {
       const config = deps.getConfig()
+      const paused = automatic && getPlanningRecovery(task, config.planningReview.maxFixRounds).automaticReviewPaused
+      const pauseReason = '自动规划审核已暂停；任务卡仍可修改和收窄 scope。修改后调用 swarm_review_plan 显式复审，当前版本通过前不能执行。'
+      if (automatic && !paused) {
+        const admitted = await session.taskLock.run(async () => {
+          const current = getTaskOrThrow(session, task.taskId)
+          if (reviewSnapshot(current).snapshotDigest !== snapshot.snapshotDigest) return false
+          task = session.store.UpdateTask(task.taskId, { planningAutoReviewRuns: getPlanningRecovery(current, config.planningReview.maxFixRounds).automaticReviews + 1 })
+          return true
+        })
+        if (!admitted) return { status: 'stale', reason: '规划审核开始前合同已改变，未启动旧版模型或 Jev 调用' }
+      }
       const record = await RunPlanningReview(snapshot, {
         now, policy: config.planningReview,
         reviewAgent: async (_snapshot, schema, prompt): Promise<PlanningAgentAssessmentInfo> => {
+          if (paused) return { reason: pauseReason }
           const subagents = deps.getSubagents()
           const visible = deps.getTools()?.schemas(exec.agent).map((tool) => tool.name) ?? []
           const capabilities = subagents?.getProvider(SPAWN_PROVIDER)?.capabilities
           if (!subagents || !capabilities || !['agentOptions', 'outputSchema', 'toolFilter', 'persona', 'depthLimit'].every((key) => capabilities[key as keyof typeof capabilities] === true) || visible.length === 0) return { reason: '独立只读审核后端或工具过滤能力不可用' }
-          const budget = features.budgetFor(task)
+          const budget = features.planningBudgetFor(task)
           const reservationId = `plan-${randomUUID()}`
           budget.reserve({ id: reservationId, source: 'delegate' })
           const chain = getRoleRoute(config, 'yu_shi').chain
@@ -761,7 +1053,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
             childReady.set(run.id, ready)
             await ready
             const result = await run.result
-            return { result: result.structured, reviewer: { agentId: run.id, role: 'yu_shi', model: routeState.getChild(run.id)?.route?.model ?? route.model,
+            const observedModel = routeState.getLastRoute(run.id)?.model
+            return { result: result.structured, reviewer: { agentId: run.id, role: 'yu_shi', ...(observedModel === undefined ? {} : { model: observedModel }),
               fresh: true, readOnly: true, authorAgentIds: [exec.agent.id, ...session.store.getTaskDelegations(task.taskId).filter((d) => ['ji_feng', 'zhu_jian'].includes(d.role)).flatMap((d) => d.childId ? [d.childId] : [])] } }
           } catch (error) { return { reason: String(error) } }
           finally {
@@ -774,14 +1067,19 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           }
         },
         reviewJev: async (state, questions) => {
+          if (paused) return { status: 'unknown', reason: pauseReason }
           if (!config.jev.enabled) return { status: 'unavailable', reason: 'Jev 已关闭' }
           session.counters.review += 1
           const outcome = await jev.getClient().ask(state, questions, exec.signal)
-          features.finishBudgetFor(task).observeJev(outcome.ok ? outcome.usage : undefined, outcome.attempts)
+          features.planningBudgetFor(task).observeJev(outcome.ok ? outcome.usage : undefined, outcome.attempts)
           return outcome.ok ? { status: 'ok', answers: outcome.answers, model: outcome.model }
             : { status: isJevAvailabilityFailure(outcome) ? 'unavailable' : 'unknown', reason: outcome.reason }
         }
       })
+      if (paused && record.mermaidReview.parseVerdict === 'pass' && record.mermaidReview.projectionVerdict === 'pass') {
+        record.status = 'review_required'
+        record.errors.push(pauseReason)
+      }
       return session.taskLock.run(async () => {
         const current = refreshIntent(session, getTaskOrThrow(session, task.taskId), exec.agent)
         if (reviewSnapshot(current).snapshotDigest !== snapshot.snapshotDigest) return { status: 'stale', reason: '审核期间需求、合同、流程或策略已经改变' }
@@ -794,6 +1092,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     reviewRuns.set(snapshot.snapshotDigest, operation)
     try { return await operation } finally { reviewRuns.delete(snapshot.snapshotDigest) }
   }
+  const ReviewPlan: SwarmService['ReviewPlan'] = (raw, exec) => runReviewPlan(raw, exec, false)
 
   const Calculate: SwarmService['Calculate'] = async (raw, exec) => {
     if (!deps.getConfig().math.enabled) throw new SwarmError('SERVICE_UNAVAILABLE', '数学算子已关闭')
@@ -820,11 +1119,48 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   }
 
   const ReadContext: SwarmService['ReadContext'] = async (raw, exec) => {
-    const { features, task, binding } = await getToolTask(raw, exec)
+    const { session, features, task, binding } = await getToolTask(raw, exec)
     const args = raw as { ref?: string; cursor?: string; limit?: number; expectedDigest?: string }
-    if (typeof args.ref !== 'string') throw new SwarmError('INVALID_ARGS', '需要上下文 ref')
     if (binding !== undefined) features.bindings.requireActive(binding.agentId, 'context-read')
-    return features.contexts.Read(binding ?? getTaskContextBinding(task, features.workspaceId), args.ref, args)
+    if (args.ref === undefined) {
+      const current = binding?.blindReview ? [] : getCurrentDelegations(task, session.store.getTaskDelegations(task.taskId))
+      return { task_id: task.taskId, materials: features.contexts.List(binding ?? getTaskContextBinding(task, features.workspaceId)),
+        executionSummary: binding?.blindReview ? { omitted: '独立盲审不披露作者执行过程或历史评分' } : {
+          total: current.length, truncated: current.length > 12,
+          delegations: current.slice(-12).map((record) => ({ delegationId: record.delegationId, role: record.role, status: record.status,
+            summary: getRedactedText(record.summary, 500), ...(record.error === undefined ? {} : { error: getRedactedText(record.error, 500) }) }))
+        }, nextAction: '使用返回的 ref 和 digest 分页读取；本工具已提供当前授权执行摘要，不通过文件路径读取私有状态。' }
+    }
+    if (typeof args.ref !== 'string') throw new SwarmError('INVALID_ARGS', '上下文 ref 必须为字符串；不传 ref 可列出当前授权材料')
+    const page = features.contexts.Read(binding ?? getTaskContextBinding(task, features.workspaceId), args.ref, args)
+    const delegationId = task.contextDelegations?.[args.ref]
+    if (delegationId === undefined) return page
+    const record = session.store.getDelegation(delegationId)
+    const notice = await revalidateEvidenceAssessment(getBoundEvidenceAssessment(record), {
+      cwd: getAgentHeader(session.rootAgent ?? exec.agent!).cwd ?? process.cwd(), binding: evidenceBinding(task, features)
+    }, { now, privatePaths: evidencePrivatePaths() })
+    return { ...page, evidenceAssessment: notice,
+      ...(notice.mayUseForImplementation ? {} : { text: `[探索材料：${notice.disposition}；需要核对，不能作为已证实实现依据。]\n${page.text}` }) }
+  }
+  const evidenceBinding = (task: TaskRecord, features: FeatureSession): EvidenceAssessmentBinding => ({
+    ...getTaskContextBinding(task, features.workspaceId), artifactDigest: task.artifactSnapshot?.digest ?? getValueDigest([])
+  })
+  const getBoundEvidenceAssessment = (record: DelegationRecord | undefined) => {
+    const assessment = record?.evidenceAssessment
+    if (record === undefined || assessment === undefined || assessment.delegationId !== record.delegationId || assessment.role !== record.role
+      || assessment.binding.taskId !== record.taskId || assessment.rawDigest !== getValueDigest(record.structured ?? {})
+      || (assessment.binding.cardRevision ?? 1) !== (record.cardRevision ?? 1) || (assessment.binding.workflowRevision ?? 1) !== (record.workflowRevision ?? 1)
+      || (assessment.binding.requestRevision ?? 1) !== (record.requestRevision ?? 1) || assessment.binding.artifactDigest !== record.artifactAfter) return undefined
+    return assessment
+  }
+  const ProjectFiles: SwarmService['ProjectFiles'] = async (raw, exec) => {
+    const { session, binding, features } = await getToolTask(raw, exec)
+    if (binding !== undefined) features.bindings.requireActive(binding.agentId, 'context-read')
+    const config = deps.getConfig()
+    return discoverProjectFiles(getAgentHeader(session.rootAgent ?? exec.agent).cwd ?? process.cwd(), raw as Parameters<typeof discoverProjectFiles>[1], {
+      privateRoots: [config.persistence.directory || join(deps.dshHome, 'share', 'dsh-agent-swarm', 'state'),
+        config.ledgerDir || join(deps.dshHome, 'share', 'dsh-agent-swarm', 'ledger')]
+    })
   }
 
   const requireMailbox = async (raw: unknown, exec: ToolExecLike) => {
@@ -838,8 +1174,27 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     return bus.send(agent.id, raw as Parameters<typeof bus.send>[1])
   }
   const MessageRead: SwarmService['MessageRead'] = async (raw, exec) => {
-    const { bus, agent } = await requireMailbox(raw, exec)
-    return bus.pull(agent.id, raw as Parameters<typeof bus.pull>[1])
+    const { bus, agent, session, task, features } = await requireMailbox(raw, exec)
+    const result = await bus.pull(agent.id, raw as Parameters<typeof bus.pull>[1])
+    const notices = new Map<string, ReturnType<typeof revalidateEvidenceAssessment>>()
+    const evidenceNotices = await Promise.all(result.messages.map(async (message) => ({ messageId: message.id,
+      artifacts: await Promise.all(message.artifactRefs.map(async (ref) => {
+        const delegationId = task.contextDelegations?.[ref]
+        const record = delegationId === undefined ? undefined : session.store.getDelegation(delegationId)
+        const key = delegationId ?? `unassessed:${ref}`
+        let pending = notices.get(key)
+        if (pending === undefined) {
+          pending = revalidateEvidenceAssessment(getBoundEvidenceAssessment(record), {
+            cwd: getAgentHeader(session.rootAgent ?? agent).cwd ?? process.cwd(), binding: evidenceBinding(task, features)
+          }, { now, privatePaths: evidencePrivatePaths() })
+          notices.set(key, pending)
+        }
+        return { ref, ...await pending }
+      })),
+      summaryEvidence: 'unknown', requiresVerification: true,
+      reason: '材料评分只适用于原始已评估主张，不为新消息摘要背书；先核对实际材料，不能把消息当作门禁或实现依据。'
+    })))
+    return { ...result, evidenceNotices }
   }
   const MessageAck: SwarmService['MessageAck'] = async (raw, exec) => {
     const { bus, agent } = await requireMailbox(raw, exec)
@@ -868,6 +1223,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const getStatus: SwarmService['getStatus'] = (raw, exec) => {
     const input = (raw ?? {}) as { task_id?: unknown; verbose?: unknown }
     const session = getSession(exec.agent.id)
+    if (isRootTianShu(exec.agent)) PruneRootUpgrade(exec.agent, session)
     const config = deps.getConfig()
     SyncRootUpgrade(exec.agent, session)
     const tasks = (typeof input.task_id === 'string' ? [getTaskOrThrow(session, input.task_id)] : session.store.getTasks())
@@ -1000,7 +1356,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const session = getSession(owner)
       const binding = session.features?.bindings.get(execution.agent.id)
       if (binding === undefined) return '当前专家的身份绑定尚未就绪，不能执行工具'
-      if (childSignals.get(execution.agent.id)?.aborted) return '专家已经取消，延迟工具调用被拒绝'
+      if (execution.signal?.aborted || childSignals.get(execution.agent.id)?.aborted) return '专家已经取消，延迟工具调用被拒绝'
       {
         if (binding.state !== 'active') return '专家执行身份已经撤销，请重新委派'
         const currentTask = session.store.getTask(binding.taskId)
@@ -1038,7 +1394,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           .map(([, value]) => canonical(isAbsolute(value as string) ? value as string : `${cwd}${sep}${value as string}`))
         if (['glob', 'grep'].includes(execution.name) && targets.length === 0) targets.push(canonical(cwd))
         if (targets.some((target) => privateRoots.some((root) => within(root, target) || (['glob', 'grep'].includes(execution.name) && within(target, root))))) {
-          return '私有状态与账本不能通过通用文件工具读取；请使用当前任务授权的 swarm_context_read'
+          return `私有状态与账本不能通过通用文件工具读取；调用 swarm_context_read({"task_id":${JSON.stringify(binding.taskId)}}) 列出当前授权材料与执行摘要，再按 ref 分页读取。`
         }
         if (WRITE_TOOL_NAMES.includes(execution.name) && targets.length > 0) {
           const task = session.store.getTask(binding.taskId)!
@@ -1064,9 +1420,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   return {
     getConfig: deps.getConfig,
     routeState,
+    agentControl, getAgentViewForRpc, ControlAgentForRpc,
     jev,
     AddTaskCard,
-    delegate: async (raw, exec) => {
+    delegate: delegateEntry = async (raw, exec) => {
       const session = getSession(exec.agent.id)
       const features = await ensureFeatures(session, exec.agent)
       const args = { ...(raw as { task_id: string; role: import('./role-registry.js').DelegableRoleId; mode?: import('./role-registry.js').SuanHengMode; gate?: import('./policy.js').GateId; node_id?: string; request_id?: string; expected_workflow_revision?: number; prompt?: string; session?: string; review_phase?: 'blind' | 'response' }) }
@@ -1136,6 +1493,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         await features.persist('workflow/attempt-reserved', session.store, session.threads, routeState.getHealth())
       })
       if (replay !== undefined) return replay
+      if (args.request_id !== undefined) admissions.get(args.request_id)?.resolve()
       const captured = prepared!
       const cwd = getAgentHeader(exec.agent).cwd ?? process.cwd()
       const kind = ['ji_feng', 'zhu_jian', 'xing_zhou'].includes(args.role) ? 'write' : args.role === 'fu_he' ? 'verify' : undefined
@@ -1158,17 +1516,25 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         const delegated = await delegator.delegate(input, exec, session)
         const record = await ReviewDelegation(session, delegated, args.prompt, exec.signal)
         const after = await getArtifactSnapshot(cwd, [...new Set([...paths, ...(record.changedFiles ?? [])])])
+        const evidenceAssessment = await assessExplorationEvidence({ cwd,
+          binding: { ...getTaskContextBinding(captured, features.workspaceId), artifactDigest: after.digest },
+          goal: captured.card.goal, acceptance: captured.card.acceptance, scope: captured.card.scope,
+          projectPaths: [...new Set([...paths, ...after.entries.filter((entry) => entry.state === 'file').map((entry) => entry.path)])], record
+        }, { ask: (state, questions, signal) => jev.getClient().ask(state, questions, signal), now,
+          privatePaths: evidencePrivatePaths(), resolveSource: resolveEvidenceSource,
+          onJevOutcome: (outcome) => features.finishBudgetFor(captured).observeJev(outcome.ok ? outcome.usage : undefined, outcome.attempts)
+        }, exec.signal)
         executionBudget!.settle(reservationId)
         return await session.taskLock.run(async () => {
           let task = refreshIntent(session, getTaskOrThrow(session, captured.taskId), exec.agent)
-          const stale = (task.cardRevision ?? 1) !== (captured.cardRevision ?? 1)
-            || (task.requestRevision ?? 1) !== (captured.requestRevision ?? 1)
+          const stale = !isTaskVersionCurrent(task, captured)
           const verifier = ['fu_he', 'yu_shi'].includes(args.role) || (args.role === 'suan_heng' && args.mode === 'verify')
           const changedDuringVerification = verifier && (before.digest !== after.digest || !before.complete || !after.complete)
           const updated = session.store.UpdateDelegation(record.delegationId, {
             cardRevision: captured.cardRevision ?? 1, workflowRevision: captured.workflowRevision ?? 1, requestRevision: captured.requestRevision ?? 1,
             attemptId, ...(nodeId === undefined ? {} : { nodeId }), artifactBefore: before.digest, artifactAfter: after.digest,
             artifactDigest: after.digest,
+            ...(evidenceAssessment === undefined ? {} : { evidenceAssessment }),
             ...(stale ? { staleReason: '执行期间合同或原始需求改版' } : changedDuringVerification ? { staleReason: '验证期间产物发生变化或摘要不完整' } : {})
           })
           if (!stale) {
@@ -1190,7 +1556,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
               binding: getTaskContextBinding(task, features.workspaceId),
               layer: 'L2', kind: verifier ? 'evidence' : 'author-reasoning', text: JSON.stringify({ summary: updated.summary, structured: updated.structured, evidence: updated.evidence })
             })
-            session.store.UpdateTask(task.taskId, { contextRefs: [...(task.contextRefs ?? []), { ref: material.ref, digest: material.digest, layer: material.layer, kind: material.kind }] })
+            session.store.UpdateTask(task.taskId, { contextRefs: [...(task.contextRefs ?? []), { ref: material.ref, digest: material.digest, layer: material.layer, kind: material.kind }],
+              ...(updated.evidenceAssessment === undefined ? {} : { contextDelegations: { ...task.contextDelegations, [material.ref]: updated.delegationId } }) })
           }
           if (args.request_id !== undefined) session.store.UpdateTask(task.taskId, { requestIds: { ...task.requestIds, [args.request_id]: updated.delegationId } })
           await features.persist('delegation/completed', session.store, session.threads, routeState.getHealth())
@@ -1224,9 +1591,13 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     getStatus,
     AcceptTask,
     getGuardReason,
+    ObserveToolDispatch: (execution) => {
+      if (execution.agent !== undefined && childOwners.has(execution.agent.id)
+        && (WRITE_TOOL_NAMES.includes(execution.name) || ['bash', 'pwsh'].includes(execution.name))) agentControl.MarkSideEffectRisk(execution.agent.id)
+    },
     getRoleForAgent,
     isManagedAgent,
-    OnSubagentEnd: (info) => hub.Emit(info),
+    OnSubagentEnd: (info) => { agentControl.MarkRunSettled(info.id, info.stopReason); routeState.ReleaseAgent(info.id); hub.Emit(info) },
     FilterPreStep: (decision) => {
       if (decision.kind !== 'enter' || decision.messages.length === 0) return decision
       const isConsumedNotice = (message: InboxMessageLike): boolean =>
@@ -1235,18 +1606,30 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       return messages.length === decision.messages.length ? decision : { ...decision, messages }
     },
     getDiagnostics
-    ,ReviewPlan, Calculate, ReadContext, MessageSend, MessageRead, MessageAck, Experience
+    ,ReviewPlan, Calculate, ReadContext, ProjectFiles, MessageSend, MessageRead, MessageAck, Experience
     ,getTaskViewForRpc: (sessionId, taskId) => {
       const session = sessions.get(sessionId)
       if (session === undefined || session.rootAgent === undefined || !isRootTianShu(session.rootAgent)) throw new SwarmError('PERMISSION_DENIED', '该会话不是已登记的百工根会话')
       const task = getTaskOrThrow(session, taskId)
       return getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session))
     }
-    ,dispose: async () => { for (const session of sessions.values()) if (session.featuresPromise) await (await session.featuresPromise).dispose() }
+    ,dispose: async () => {
+      for (const { controller } of manualRuns.values()) controller.abort()
+      await Promise.allSettled([...manualRuns.values()].map(({ run }) => run))
+      for (const session of sessions.values()) if (session.featuresPromise) await (await session.featuresPromise).dispose()
+    }
     ,WaitAgentReady: async (agent) => {
       const pending = childReady.get(agent.id)
       if (pending !== undefined) await pending
-      else if (deps.getConfig().persistence.enabled && isRootTianShu(agent)) await ensureFeatures(getSession(agent.id), agent)
+      else if (isRootTianShu(agent)) {
+        const session = getSession(agent.id)
+        if (deps.getConfig().persistence.enabled) await ensureFeatures(session, agent)
+        if (routeState.getRootPreference(agent.id) === undefined) {
+          const preference = await deps.inspectRootPreference?.(agent.id)
+          if (preference !== undefined) routeState.RestoreRootPreference(agent.id, preference)
+        }
+        PruneRootUpgrade(agent, session)
+      }
     }
   }
 }

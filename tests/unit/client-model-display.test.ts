@@ -23,7 +23,7 @@ const loadModule = (): any => {
 }
 
 const display = loadModule()
-const { markerDefinition, headerDefinition, modelCallDefinition, ModelCallRow, ModelBadge, getModelCallModeHook } = display.__test__
+const { markerDefinition, headerDefinition, modelCallDefinition, ModelCallRow, ModelBadge, AgentModelController, getModelCallModeHook } = display.__test__
 
 const t = (key: string) => key
 const textOf = (node: unknown): string => {
@@ -71,6 +71,14 @@ describe('「调用模型」行', () => {
     }))
     expect(state).toMatchObject({ ...opus, turn: 2, reasoningEffort: 'xhigh', repeat: false, switched: false, swarm: true, anchorSeq: 19 })
     expect(modelCallDefinition.match({ type: 'assistant/message', seq: 5, data: { message: { source: { kind: 'user' } } } })).toBeNull()
+  })
+
+  it('失败/取消而无消息的真实assistant/attempt也显示对应请求路由，不从下一次选择猜实际模型', () => {
+    const event = { type: 'assistant/attempt', seq: 99, time: 99, data: { turn: 2, step: 1, stream: [] } }
+    expect(modelCallDefinition.match(event)).toEqual({ id: '99', role: 'start' })
+    const state = modelCallDefinition.start(undefined, { event }, reader({ 'swarm-request-route': { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max' }, 'swarm-session-marker': { swarm: true } }))
+    expect(state).toMatchObject({ provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max', source: 'request-header-attempt', failedAttempt: true })
+    expect(modelCallDefinition.start(undefined, { event }, reader({}))).toBeUndefined()
   })
 
   it('同一轮同一模型标为 repeat；同一轮换了模型显示「切换模型」；新一轮不算重复', () => {
@@ -125,11 +133,15 @@ describe('会话头部徽标', () => {
   it('只在百工会话显示最近一次请求的模型与供应商', () => {
     const projections = (preset: unknown, selection: unknown) => (key: string) => (key === 'agentPreset' ? preset : selection)
     const badge = ModelBadge({ t, useProjection: projections('tian-shu', { lastUsed: { provider: 'codex', model: 'gpt-6-sol', reasoningEffort: 'high' }, next: null }) })
-    expect(textOf(badge)).toBe('gpt-6-sol · ChatGPT 订阅')
+    expect(textOf(badge)).toBe('badge：gpt-6-sol · ChatGPT 订阅（codex） · effort high')
     expect((badge as ElementInfo).props.title).toBe('badge：gpt-6-sol · ChatGPT 订阅（codex） · effort high')
     expect(ModelBadge({ t, useProjection: projections('standard', { lastUsed: { provider: 'codex', model: 'gpt-6-sol' } }) })).toBeNull()
     expect(ModelBadge({ t, useProjection: projections('tian-shu', { lastUsed: null, next: null }) })).toBeNull()
     expect(ModelBadge({ t })).toBeNull()
+    expect(textOf(ModelBadge({ t, useProjection: projections(undefined, { lastUsed: null, next: null }), useSession: () => ({ address: { mode: 'one-shot' } }) }))).toBe('unknownModel')
+    const next = ModelBadge({ t, useProjection: projections('tian-shu', { lastUsed: null, next: { provider: 'codex', model: 'future' } }) })
+    expect(textOf(next)).toContain('next：future')
+    expect(textOf(next)).not.toContain('badge：')
   })
 })
 
@@ -148,11 +160,45 @@ describe('client 入口', () => {
       }
     }
     display.apply(ctx)
-    expect(display.inject).toEqual(['slots', 'locale', 'uiConversation'])
+    expect(display.inject).toEqual(['slots', 'locale', 'uiConversation', 'connection', 'remote.session'])
     expect(definitions).toEqual(['swarm-session-marker', 'swarm-request-route', 'swarm-model-call'])
     expect(slots).toEqual([
       { name: 'conversation.chat.node', key: 'swarm-model-call', locale: 'swarmModelCalls', inject: expect.any(Function) },
       { name: 'conversation.session.header.actions', id: 'swarm-model-badge', order: -4, locale: 'swarmModelCalls' }
+      , { name: 'conversation.session.header.actions', id: 'swarm-agent-model-controls', order: -3, locale: 'swarmModelCalls', inject: expect.any(Function) }
     ])
+  })
+})
+
+describe('persistent child model controls', () => {
+  it('CAS commands go to the real control plane; selection receipt never replaces actual attempt evidence', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    let view = { ...address, revision: 3, persistent: true, phase: 'running', actual: { route: { provider: 'codex', model: 'old', reasoningEffort: 'high' }, attemptId: 'attempt-old' } }
+    const command = vi.fn(async (input: any) => { view = { ...view, revision: 4, phase: 'stopping', selectedNext: input.route } as typeof view; return view })
+    const controller = new AgentModelController(address, { view: async () => view, command, catalog: async () => ({ ok: true, value: { groups: [] } }) })
+    await controller.load()
+    controller.setDraft({ provider: 'qwen-token-plan-cn' })
+    controller.setDraft({ model: 'deepseek-v4.1-flash' })
+    controller.setDraft({ reasoningEffort: 'max' })
+    await controller.command('select')
+    expect(command).toHaveBeenCalledWith({ ...address, expectedRevision: 3, action: 'select', interruptRunning: true, route: { provider: 'qwen-token-plan-cn', model: 'deepseek-v4.1-flash', reasoningEffort: 'max' } })
+    expect(controller.getSnapshot().view).toMatchObject({ phase: 'stopping', actual: { route: { model: 'old' } }, selectedNext: { model: 'deepseek-v4.1-flash' } })
+    await controller.command('continue')
+    expect(command).toHaveBeenCalledTimes(1)
+    view = { ...view, revision: 5, phase: 'paused' }
+    await controller.load()
+    await controller.command('continue')
+    expect(command.mock.calls[1]?.[0]).toMatchObject({ action: 'continue', expectedRevision: 5 })
+  })
+
+  it('host denial remains visible after refresh, unknown child bindings never produce a fake ready state', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const controller = new AgentModelController(address, { view: async () => ({ ...address, revision: 1, persistent: true, phase: 'paused' }), command: async () => { throw new Error('stale task contract') } })
+    await controller.load()
+    await controller.command('continue')
+    expect(controller.getSnapshot().error).toBe('stale task contract')
+    const wrong = new AgentModelController(address, { view: async () => ({ ...address, childId: 'other', revision: 1, phase: 'idle' }) })
+    await wrong.load()
+    expect(wrong.getSnapshot()).toMatchObject({ status: 'error', view: undefined })
   })
 })

@@ -71,6 +71,9 @@ export interface DelegationRecord extends GateDelegationView {
   artifactAfter?: string
   staleReason?: string
   reviewPhase?: 'blind' | 'response'
+  /** Trusted original bounded arguments used only for an explicit, validated manual continuation. */
+  continuationInput?: import('./delegate.js').DelegateInput
+  evidenceAssessment?: import('./evidence-assessment.js').EvidenceAssessment
 }
 
 /** 一次委派的会话方式 */
@@ -139,6 +142,8 @@ export interface TaskRecord {
   workflowDigest?: string
   planningReview?: PlanningReviewRecord
   planningFixRounds?: number
+  /** Automatic review admission per human request revision; contract edits never consume execution budget. */
+  planningAutoReviewRuns?: number
   artifactSnapshot?: ArtifactSnapshot
   checkpoint?: CheckpointInfo
   workspaceId?: string
@@ -146,6 +151,7 @@ export interface TaskRecord {
   requestInputs?: Record<string, string>
   recovered?: boolean
   contextRefs?: Array<{ ref: string; digest: string; layer: string; kind: string }>
+  contextDelegations?: Record<string, string>
 }
 
 const TRANSITIONS: Readonly<Record<DelegationStatus, readonly DelegationStatus[]>> = {
@@ -174,6 +180,8 @@ export interface TaskStore {
   getDelegation: (delegationId: string) => DelegationRecord | undefined
   getTaskDelegations: (taskId: string) => DelegationRecord[]
   getTasks: () => TaskRecord[]
+  /** Internal card transaction rollback; preserves independently added delegation associations. */
+  RollbackTask?: (taskId: string, previous: TaskRecord | undefined, expected: { cardRevision: number; workflowRevision: number; requestRevision: number }) => boolean
 }
 
 /**
@@ -183,6 +191,18 @@ export interface TaskStore {
 export const intTaskStore = (): TaskStore => {
   const tasks = new Map<string, TaskRecord>()
   const delegations = new Map<string, DelegationRecord>()
+  const RollbackTask: NonNullable<TaskStore['RollbackTask']> = (taskId, previous, expected) => {
+    const current = tasks.get(taskId)
+    if (current === undefined || (current.cardRevision ?? 1) !== expected.cardRevision || (current.workflowRevision ?? 1) !== expected.workflowRevision
+      || (current.requestRevision ?? 1) !== expected.requestRevision) return false
+    if (previous === undefined) {
+      if (current.delegationIds.length > 0) return false
+      return tasks.delete(taskId)
+    }
+    if (previous.taskId !== taskId || previous.sessionId !== current.sessionId) return false
+    tasks.set(taskId, { ...structuredClone(previous), delegationIds: [...current.delegationIds] })
+    return true
+  }
 
   const UpdateTask = (taskId: string, patch: Partial<TaskRecord>): TaskRecord => {
     const current = tasks.get(taskId)
@@ -224,6 +244,7 @@ export const intTaskStore = (): TaskStore => {
     },
     getTask: (taskId) => tasks.get(taskId),
     UpdateTask,
+    RollbackTask,
     AddDelegation,
     UpdateDelegation,
     getDelegation: (delegationId) => delegations.get(delegationId),
@@ -240,8 +261,9 @@ export const intTaskStore = (): TaskStore => {
 }
 
 export type LedgerEventType =
+  | 'agent/manual-continue'
   | 'task/card' | 'delegation/queued' | 'delegation/running' | 'delegation/completed' | 'delegation/failed'
-  | 'delegation/blocked' | 'route/skipped' | 'route/fallback' | 'route/upgrade' | 'jev/call' | 'review/assessment' | 'native/call' | 'accept/decision'
+  | 'delegation/blocked' | 'route/skipped' | 'route/fallback' | 'route/upgrade' | 'route/recovery-probe' | 'route/recovered' | 'jev/call' | 'review/assessment' | 'native/call' | 'accept/decision'
   | 'session/plan' | 'delegation/retry'
   | 'workflow/review' | 'workflow/checkpoint' | 'workflow/stale' | 'math/computed'
   | 'message/send' | 'message/ack' | 'state/recovered' | 'experience/candidate'

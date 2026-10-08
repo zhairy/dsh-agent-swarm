@@ -74,6 +74,26 @@ describe('容灾升级：触发条件', () => {
     const b = { provider: 'claude', model: 'claude-opus-5-5' }
     expect(getUpgradedChain([a, b], [b, { provider: 'x', model: 'y' }])).toEqual([a, b, { provider: 'x', model: 'y' }])
   })
+
+  it('共享按量末级兜底留在Go等基础订阅之后，保留升级effort及基础次序', () => {
+    const codex = { provider: 'codex', model: 'gpt-6-astra' }
+    const claude = { provider: 'claude', model: 'claude-opus-5-5' }
+    const go = { provider: 'opencode-go', model: 'deepseek-v4.1-flash' }
+    const qwen = { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' }
+    const fallback = { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' }
+    expect(getUpgradedChain([codex, claude, fallback], [claude, qwen, go, { ...fallback, reasoningEffort: 'high' }])).toEqual([codex, claude, qwen, go, fallback])
+  })
+
+  it('显式API primary、非共享API与未知billing路由不被猜测重排', () => {
+    const api = { provider: 'deepseek-official', model: 'deepseek-flash' }
+    const sub = { provider: 'codex', model: 'gpt-6-astra' }
+    const go = { provider: 'opencode-go', model: 'deepseek-v4.1-flash' }
+    const unknown = { provider: 'custom', model: 'unknown-billing' }
+    expect(getUpgradedChain([api, sub], [go, api])).toEqual([api, sub, go])
+    expect(getUpgradedChain([api], [go, api])).toEqual([api, go])
+    expect(getUpgradedChain([sub, api], [go])).toEqual([sub, api, go])
+    expect(getUpgradedChain([sub, unknown], [go, unknown])).toEqual([sub, unknown, go])
+  })
 })
 
 describe('容灾升级：配置', () => {

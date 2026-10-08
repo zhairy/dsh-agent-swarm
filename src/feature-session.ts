@@ -7,7 +7,7 @@ import { createAgentBindingRegistry, validateBinding, bindingKey, type AgentBind
 import { createMessageBus, type MessageBus, type MessageState } from './message-bus.js'
 import { createExperienceRepository, ExperienceError, type ExperienceEntry, type ExperienceReview, type ExperienceState } from './experience.js'
 import { createExecutionBudget, ExecutionBudgetError, type ExecutionBudget, type ExecutionBudgetSnapshot } from './execution-budget.js'
-import { intContextStore, type ContextArtifactInfo, type ContextStore } from './context-store.js'
+import { intContextStore, type ContextArtifactInfo, type ContextStore, type PreparedTaskContextReplacement } from './context-store.js'
 import { getArtifactSnapshot, getWorkspaceId } from './artifacts.js'
 import { digest, getCurrentDelegations } from './task-model.js'
 import { getCanonicalJson, getValueDigest, getWorkflowDigest, ValidateWorkflow } from './workflow.js'
@@ -16,6 +16,10 @@ import { ValidateStructuredOutput } from './contracts.js'
 import { isDelegableRoleId } from './role-registry.js'
 import { createWorkspaceLeaseManager } from './util/workspace-lease.js'
 import type { RouteHealthEntry } from './route-health.js'
+import { partitionLegacyPlanningBudget } from './planning-recovery.js'
+import { validateAgentControlRecords, type AgentControlRecord } from './agent-control.js'
+import { validateEvidenceAssessment } from './evidence-assessment.js'
+import { ValidateDelegateInput } from './delegate.js'
 
 interface FeatureState extends MessageState, ExperienceState {
   schemaVersion: 1
@@ -23,6 +27,8 @@ interface FeatureState extends MessageState, ExperienceState {
   delegations: DelegationRecord[]
   threads: ThreadInfo[]
   budgets: Record<string, ExecutionBudgetSnapshot>
+  planningBudgets?: Record<string, ExecutionBudgetSnapshot>
+  agentControls?: AgentControlRecord[]
   contexts: ContextArtifactInfo[]
   routeHealth?: RouteHealthEntry[]
 }
@@ -35,10 +41,13 @@ export interface FeatureSession {
   contexts: ContextStore
   experiences: ReturnType<typeof createExperienceRepository<FeatureState>>
   budgetFor: (task: TaskRecord) => ExecutionBudget
+  planningBudgetFor: (task: TaskRecord) => ExecutionBudget
+  getRestoredAgentControls: () => AgentControlRecord[]
   /** Existing attempts and exempt Jev observations keep their original accounting handle during hot changes. */
   finishBudgetFor: (task: TaskRecord) => ExecutionBudget
   persist: (type: string, tasks: TaskStore, threads: ThreadRegistry, routeHealth?: RouteHealthEntry[]) => Promise<void>
   addContext: (input: Parameters<ContextStore['Add']>[0]) => ContextArtifactInfo
+  prepareTaskContexts: (...args: Parameters<ContextStore['PrepareTaskReplace']>) => PreparedTaskContextReplacement
   /** Trusted lifecycle API: all author/reviewer/verification facts are derived from current runtime evidence. */
   promoteCandidateWithEvidence: (id: string) => Promise<ExperienceEntry>
   dispose: () => Promise<void>
@@ -58,7 +67,8 @@ export const validatePersistedRouteHealth = (raw: unknown): raw is RouteHealthEn
   const keys = new Set<string>()
   const healthKey = (value: unknown): value is string => typeof value === 'string' && value.length <= 2048 && /^(?:route|domain|pool):.+$/.test(value) && !/[\u0000-\u001f]/.test(value)
   for (const entry of raw) {
-    if (!object(entry) || Object.keys(entry).some((key) => !['key', 'aliases', 'kind', 'failedAt', 'resetAt', 'route'].includes(key)) || !healthKey(entry.key) || keys.has(entry.key) || (entry.aliases !== undefined && (!Array.isArray(entry.aliases) || entry.aliases.length > 4096 || entry.aliases.some((alias) => !healthKey(alias)) || new Set(entry.aliases).size !== entry.aliases.length)) || !['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable', 'rate_limited', 'network_transient', 'service_transient', 'unknown'].includes(String(entry.kind)) || typeof entry.failedAt !== 'number' || !Number.isFinite(entry.failedAt) || entry.failedAt < 0 || (entry.resetAt !== undefined && (typeof entry.resetAt !== 'number' || !Number.isFinite(entry.resetAt) || entry.resetAt < 0)) || !object(entry.route) || !identifier(entry.route.provider) || !identifier(entry.route.model) || (entry.route.reasoningEffort !== undefined && !identifier(entry.route.reasoningEffort))) return false
+    if (!object(entry) || Object.keys(entry).some((key) => !['key', 'aliases', 'kind', 'failedAt', 'resetAt', 'retryAt', 'retryCount', 'route'].includes(key)) || !healthKey(entry.key) || keys.has(entry.key) || (entry.aliases !== undefined && (!Array.isArray(entry.aliases) || entry.aliases.length > 4096 || entry.aliases.some((alias) => !healthKey(alias)) || new Set(entry.aliases).size !== entry.aliases.length)) || !['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable', 'rate_limited', 'network_transient', 'service_transient', 'context_exceeded', 'capability_mismatch', 'unknown'].includes(String(entry.kind)) || typeof entry.failedAt !== 'number' || !Number.isFinite(entry.failedAt) || entry.failedAt < 0 || (entry.resetAt !== undefined && (typeof entry.resetAt !== 'number' || !Number.isFinite(entry.resetAt) || entry.resetAt < 0)) || !object(entry.route) || !identifier(entry.route.provider) || !identifier(entry.route.model) || (entry.route.reasoningEffort !== undefined && !identifier(entry.route.reasoningEffort))) return false
+    if ((entry.retryAt !== undefined && (typeof entry.retryAt !== 'number' || !Number.isFinite(entry.retryAt) || entry.retryAt < 0)) || (entry.retryCount !== undefined && (!Number.isSafeInteger(entry.retryCount) || Number(entry.retryCount) < 0 || Number(entry.retryCount) > 32))) return false
     const policy = entry.route.policy
     if (policy !== undefined) {
       if (!object(policy) || (policy.accessMode !== undefined && !['subscription', 'metered_api', 'judgment_api', 'unknown'].includes(String(policy.accessMode))) || (policy.quotaScope !== undefined && !['account', 'plan', 'model', 'pool', 'unknown'].includes(String(policy.quotaScope))) || (policy.quotaDomainId !== undefined && !identifier(policy.quotaDomainId)) || (policy.poolId !== undefined && !identifier(policy.poolId)) || (policy.capabilities !== undefined && (!object(policy.capabilities) || Object.values(policy.capabilities).some((value) => typeof value !== 'boolean')))) return false
@@ -73,6 +83,7 @@ export const validateFeatureState = (raw: unknown, expected: { rootSessionId: st
   try {
     if (!object(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.tasks) || !Array.isArray(raw.delegations) || !Array.isArray(raw.threads) || !Array.isArray(raw.contexts) || !['bindings', 'bindingHistory', 'messages', 'messageAcks', 'experiences', 'budgets'].every((key) => object(raw[key]))) return false
     const state = raw as unknown as FeatureState
+    if (state.agentControls !== undefined && !validateAgentControlRecords(state.agentControls)) return false
     if (state.routeHealth !== undefined && !validatePersistedRouteHealth(state.routeHealth)) return false
     const tasks = new Map<string, TaskRecord>()
     for (const task of state.tasks) {
@@ -94,14 +105,30 @@ export const validateFeatureState = (raw: unknown, expected: { rootSessionId: st
         const artifact = task.artifactSnapshot
         if (!object(artifact) || artifact.workspaceId !== expected.workspaceId || !Array.isArray(artifact.entries) || typeof artifact.complete !== 'boolean' || artifact.entries.some((entry) => !object(entry) || typeof entry.path !== 'string' || !['file', 'missing', 'unknown'].includes(entry.state) || (entry.state === 'file' && (!hashPattern.test(entry.digest ?? '') || !Number.isSafeInteger(entry.bytes) || Number(entry.bytes) < 0))) || artifact.digest !== getValueDigest({ workspaceId: artifact.workspaceId, entries: artifact.entries }) || (artifact.complete && artifact.entries.some((entry) => entry.state === 'unknown'))) return false
       }
+      if ([task.planningFixRounds, task.planningAutoReviewRuns].some((value) => value !== undefined && (!Number.isSafeInteger(value) || value < 0))) return false
       tasks.set(task.taskId, task)
     }
     const recordIds = new Set<string>()
+    const recordsById = new Map<string, DelegationRecord>()
     const recordIdsByTask = new Map<string, Set<string>>()
     for (const record of state.delegations) {
       if (!object(record) || !identifier(record.delegationId) || recordIds.has(record.delegationId) || !tasks.has(record.taskId) || !isDelegableRoleId(record.role) || !['queued', 'running', 'completed', 'failed', 'blocked'].includes(record.status) || typeof record.summary !== 'string' || !strings(record.unresolved) || !Array.isArray(record.evidence) || record.evidence.some((e) => !object(e) || !['command', 'step', 'finding', 'source', 'observation', 'claim', 'file-change'].includes(e.kind) || typeof e.ref !== 'string') || ![record.cardRevision, record.workflowRevision, record.requestRevision].every(optionalRevision) || !Number.isFinite(record.startedAt)) return false
       if (record.status === 'completed' && ValidateStructuredOutput(record.role, record.structured, record.mode).length > 0) return false
+      if (record.continuationInput !== undefined) {
+        const parsed = ValidateDelegateInput(record.continuationInput).input
+        if (parsed === undefined || parsed.task_id !== record.taskId || parsed.role !== record.role
+          || (parsed.mode ?? (parsed.role === 'suan_heng' ? 'research' : undefined)) !== record.mode) return false
+      }
+      if (record.evidenceAssessment !== undefined) {
+        const assessment = record.evidenceAssessment
+        if (!validateEvidenceAssessment(assessment) || assessment.delegationId !== record.delegationId || assessment.role !== record.role
+          || assessment.rawDigest !== getValueDigest(record.structured ?? {}) || assessment.binding.rootSessionId !== expected.rootSessionId
+          || assessment.binding.workspaceId !== expected.workspaceId || assessment.binding.taskId !== record.taskId
+          || assessment.binding.cardRevision !== (record.cardRevision ?? 1) || assessment.binding.workflowRevision !== (record.workflowRevision ?? 1)
+          || (assessment.binding.requestRevision ?? 1) !== (record.requestRevision ?? 1) || assessment.binding.artifactDigest !== record.artifactAfter) return false
+      }
       recordIds.add(record.delegationId)
+      recordsById.set(record.delegationId, record)
       const ids = recordIdsByTask.get(record.taskId) ?? new Set<string>()
       ids.add(record.delegationId)
       recordIdsByTask.set(record.taskId, ids)
@@ -109,6 +136,15 @@ export const validateFeatureState = (raw: unknown, expected: { rootSessionId: st
     for (const task of state.tasks) {
       const owned = recordIdsByTask.get(task.taskId)
       if ((owned?.size ?? 0) !== task.delegationIds.length || task.delegationIds.some((id) => !owned?.has(id))) return false
+    }
+    for (const control of state.agentControls ?? []) {
+      const task = tasks.get(control.taskId)
+      if (!control.persistent || control.parentSessionId !== expected.rootSessionId || task === undefined
+        || !recordIds.has(control.delegationId) || ![control.cardRevision, control.workflowRevision, control.requestRevision].every(optionalRevision)
+        || (control.cardRevision ?? 1) > (task.cardRevision ?? 1) || (control.workflowRevision ?? 1) > (task.workflowRevision ?? 1)
+        || (control.requestRevision ?? 1) > (task.requestRevision ?? 1)) return false
+      const delegation = recordsById.get(control.delegationId)
+      if (delegation?.taskId !== control.taskId) return false
     }
     const threadIds = new Set<string>()
     for (const thread of state.threads) {
@@ -130,7 +166,21 @@ export const validateFeatureState = (raw: unknown, expected: { rootSessionId: st
       const context = material.get(reference.ref)
       if (context === undefined || context.binding.taskId !== task.taskId || context.digest !== reference.digest || context.layer !== reference.layer || context.kind !== reference.kind) return false
     }
-    for (const [taskId, budget] of Object.entries(state.budgets)) { if (!tasks.has(taskId)) return false; createExecutionBudget(budget.limits, budget) }
+    for (const task of state.tasks) {
+      if (task.contextDelegations !== undefined && !object(task.contextDelegations)) return false
+      const exposedRefs = new Set((task.contextRefs ?? []).map((reference) => reference.ref))
+      for (const [ref, delegationId] of Object.entries(task.contextDelegations ?? {})) {
+        const context = material.get(ref), record = recordsById.get(delegationId)
+        if (context?.binding.taskId !== task.taskId || record?.taskId !== task.taskId || record.evidenceAssessment === undefined) return false
+        if (context.layer !== 'L2' || context.kind !== 'author-reasoning' || !exposedRefs.has(ref)
+          || context.binding.cardRevision !== (record.cardRevision ?? 1) || context.binding.workflowRevision !== (record.workflowRevision ?? 1)
+          || (context.binding.requestRevision ?? 1) !== (record.requestRevision ?? 1)
+          || getCanonicalJson(JSON.parse(context.text)) !== getCanonicalJson({ summary: record.summary, structured: record.structured,
+            evidence: record.evidence })) return false
+      }
+    }
+    if (state.planningBudgets !== undefined && !object(state.planningBudgets)) return false
+    for (const collection of [state.budgets, state.planningBudgets ?? {}]) for (const [taskId, budget] of Object.entries(collection)) { if (!tasks.has(taskId)) return false; createExecutionBudget(budget.limits, budget) }
     for (const [id, message] of Object.entries(state.messages)) {
       if (!object(message) || id !== message.id || !uuidPattern.test(id) || message.schemaVersion !== 1 || message.rootSessionId !== expected.rootSessionId || message.workspaceId !== expected.workspaceId || !tasks.has(message.taskId) || !['question', 'answer', 'finding', 'review-response'].includes(message.kind) || typeof message.summary !== 'string' || !strings(message.artifactRefs) || ![message.cardRevision, message.workflowRevision, message.senderGeneration, message.senderLeaseEpoch, message.recipientGeneration, message.recipientLeaseEpoch].every(positive) || !optionalRevision(message.requestRevision) || !Number.isFinite(message.createdAt) || !Number.isFinite(message.expiresAt) || message.expiresAt <= message.createdAt) return false
       const { payloadDigest, ...payload } = message
@@ -152,6 +202,14 @@ export const validateFeatureState = (raw: unknown, expected: { rootSessionId: st
 
 const recover = (state: FeatureState): FeatureState => {
   const copy = structuredClone(state)
+  const recordsById = new Map(copy.delegations.map((record) => [record.delegationId, record]))
+  const uncertain = new Set(copy.delegations.filter((record) => ['queued', 'running'].includes(record.status)).map((record) => record.delegationId))
+  for (const control of copy.agentControls ?? []) if (uncertain.has(control.delegationId)) {
+    control.phase = 'recovery-required'; control.paused = true; control.reason = 'restart-requires-host-reconciliation'
+    if (control.actual !== undefined) control.actual.state = 'unknown'
+    const record = recordsById.get(control.delegationId)
+    if (record !== undefined && ['ji_feng', 'zhu_jian', 'xing_zhou', 'fu_he'].includes(record.role)) control.needsSideEffectReview = true
+  }
   for (const task of copy.tasks) {
     task.recovered = true
     for (const node of Object.values(task.workflowState?.nodes ?? {})) {
@@ -170,6 +228,7 @@ const recover = (state: FeatureState): FeatureState => {
 export const createFeatureSession = async (input: {
   rootSessionId: string; cwd: string; dshHome: string; config: SwarmConfigInfo;
   getConfig?: () => SwarmConfigInfo;
+  getAgentControls?: () => AgentControlRecord[];
   tasks: TaskStore; threads: ThreadRegistry; now: () => number
 }): Promise<FeatureSession> => {
   const workspaceId = await getWorkspaceId(input.cwd)
@@ -179,13 +238,26 @@ export const createFeatureSession = async (input: {
   const store = await createDurableStateStore({ directory, initialState, enabled: input.config.persistence.enabled,
     validate: (raw) => validateFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }), recover })
   const saved = store.read()
+  // Older versions charged planning review reservations against implementation calls.
+  // Preserve sent work and observation records, but classify these known reservations correctly.
+  saved.planningBudgets ??= {}
+  for (const [taskId, snapshot] of Object.entries(saved.budgets)) {
+    const partition = partitionLegacyPlanningBudget(snapshot)
+    saved.budgets[taskId] = partition.execution
+    if (partition.planning !== undefined) {
+      const previous = saved.planningBudgets[taskId]
+      const ids = new Set(previous?.reservations.map((record) => record.id) ?? [])
+      saved.planningBudgets[taskId] = previous === undefined ? partition.planning
+        : { ...previous, reservations: [...previous.reservations, ...partition.planning.reservations.filter((record) => !ids.has(record.id))] }
+    }
+  }
   if (input.tasks.getTasks().length === 0) {
     for (const task of saved.tasks) input.tasks.AddTask({ ...task, delegationIds: [] })
     for (const record of saved.delegations) input.tasks.AddDelegation(record)
     for (const thread of saved.threads) input.threads.Add(thread)
   }
   const contexts = intContextStore()
-  const contextArtifacts = [...saved.contexts]
+  const contextArtifacts = new Map(saved.contexts.map((artifact) => [artifact.ref, artifact]))
   for (const artifact of saved.contexts) contexts.Restore(artifact, artifact.binding)
   const bindings = createAgentBindingRegistry(store)
   const bus = !input.config.messageBus.enabled ? undefined : createMessageBus({ store, bindings, now: input.now, maxPendingPerTask: input.config.messageBus.maxPending,
@@ -193,6 +265,15 @@ export const createFeatureSession = async (input: {
       try { contexts.Read(binding, ref, { limit: 1 }); return true } catch { return false }
     } })
   const budgets = new Map<string, ExecutionBudget>()
+  const planningBudgets = new Map<string, ExecutionBudget>()
+  const planningBudgetFor = (task: TaskRecord): ExecutionBudget => {
+    let budget = planningBudgets.get(task.taskId)
+    if (budget === undefined) {
+      budget = createExecutionBudget({}, saved.planningBudgets?.[task.taskId], ['planning-review-control-plane'])
+      planningBudgets.set(task.taskId, budget)
+    }
+    return budget
+  }
   const budgetFor = (task: TaskRecord): ExecutionBudget => {
     const existing = budgets.get(task.taskId)
     const config = input.getConfig?.() ?? input.config
@@ -257,7 +338,8 @@ export const createFeatureSession = async (input: {
     }
   })
   return {
-    workspaceId, store, bindings, bus, contexts, budgetFor,
+    workspaceId, store, bindings, bus, contexts, budgetFor, planningBudgetFor,
+    getRestoredAgentControls: () => structuredClone(saved.agentControls ?? []),
     finishBudgetFor: (task) => budgets.get(task.taskId) ?? budgetFor(task),
     experiences,
     promoteCandidateWithEvidence: async (id) => {
@@ -274,8 +356,30 @@ export const createFeatureSession = async (input: {
     addContext: (material) => {
       const task = input.tasks.getTask(material.binding.taskId)
       const artifact = contexts.Add({ ...material, binding: { ...material.binding, requestRevision: material.binding.requestRevision ?? task?.requestRevision ?? 1 } })
-      if (!contextArtifacts.some((entry) => entry.ref === artifact.ref)) contextArtifacts.push(artifact)
+      contextArtifacts.set(artifact.ref, artifact)
       return artifact
+    },
+    prepareTaskContexts: (binding, materials) => {
+      const batch = contexts.PrepareTaskReplace(binding, materials)
+      const additions = structuredClone(batch.artifacts), removed = structuredClone(batch.replaced)
+      let committed = false
+      return { artifacts: structuredClone(additions), replaced: structuredClone(removed),
+        commit: () => {
+          batch.commit()
+          for (const artifact of removed) contextArtifacts.delete(artifact.ref)
+          for (const artifact of additions) contextArtifacts.set(artifact.ref, artifact)
+          committed = true
+        },
+        finalize: () => batch.finalize(),
+        rollback: () => {
+          batch.rollback()
+          if (committed) {
+            for (const artifact of additions) contextArtifacts.delete(artifact.ref)
+            for (const artifact of removed) contextArtifacts.set(artifact.ref, artifact)
+            committed = false
+          }
+        }
+      }
     },
     persist: async (type, tasks, threads, routeHealth) => {
       const taskSnapshot = tasks.getTasks()
@@ -287,8 +391,10 @@ export const createFeatureSession = async (input: {
         draft.tasks = JSON.parse(getCanonicalJson(taskSnapshot)) as TaskRecord[]
         draft.delegations = JSON.parse(getCanonicalJson(delegationSnapshot)) as DelegationRecord[]
         draft.threads = JSON.parse(getCanonicalJson(threads.list())) as ThreadInfo[]
-        draft.contexts = JSON.parse(getCanonicalJson(contextArtifacts)) as ContextArtifactInfo[]
-        draft.budgets = Object.fromEntries([...budgets].map(([key, value]) => [key, value.getSnapshot()]))
+        draft.contexts = JSON.parse(getCanonicalJson([...contextArtifacts.values()])) as ContextArtifactInfo[]
+        draft.budgets = { ...saved.budgets, ...Object.fromEntries([...budgets].map(([key, value]) => [key, value.getSnapshot()])) }
+        draft.planningBudgets = { ...saved.planningBudgets, ...Object.fromEntries([...planningBudgets].map(([key, value]) => [key, value.getSnapshot()])) }
+        if (input.getAgentControls !== undefined) draft.agentControls = input.getAgentControls()
         if (healthSnapshot !== undefined) draft.routeHealth = healthSnapshot
       })
     },

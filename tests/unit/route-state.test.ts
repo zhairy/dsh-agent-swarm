@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { getSwarmConfig } from '../../src/config.js'
 import { intRouteStateRegistry, type FallbackEventInfo } from '../../src/route-state.js'
+import type { PreferredRecoveryEventInfo } from '../../src/route-state.js'
 import { DEFAULT_ROUTE_CHAINS } from '../../src/routes.js'
 import { nativeRecoveryCoverage, getNativeRecoverySupport } from '../../src/provider-policy.js'
 import type { RouteInfo } from '../../src/routes.js'
@@ -14,6 +15,328 @@ const config = getSwarmConfig({})
 const child = { id: 'c1', session: { header: { parentSession: 'root' } } }
 const root = { id: 'root', session: { header: {} } }
 const chain = [{ provider: 'a', model: 'm1' }, { provider: 'b', model: 'm2', reasoningEffort: 'high' }, { provider: 'a', model: 'm3' }]
+
+describe('long-running preferred route recovery', () => {
+  const primary = { provider: 'preferred', model: 'primary' }
+  const backup = { provider: 'backup', model: 'fallback', reasoningEffort: 'high' }
+  const cfg = getSwarmConfig({ agents: { rootRecoverMs: 1 }, routes: { tian_shu: { chain: [primary, backup] } } })
+
+  it('automatic SDK header drift never becomes a persistent user override; an eligible preferred route recovers at a new step', async () => {
+    let clock = 0
+    const events: PreferredRecoveryEventInfo[] = []
+    const probe = vi.fn(async () => ({ ok: true as const, vision: false }))
+    const registry = intRouteStateRegistry(undefined, probe, { now: () => clock, onPreferredRecovery: (event) => events.push(event) })
+    registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true, logicalRequestId: 'D-long' })
+    registry.BeginRequestStep(child.id, 0, 0)
+    await registry.PreparePreferredRecovery(child, primary, undefined, cfg)
+    expect(registry.getRequestOverride(child, primary, undefined, cfg, true)).toMatchObject(primary)
+    expect(await registry.recover({ agent: child, provider: primary.provider, failure: { code: 'QUOTA', resetAt: new Date(1000).toISOString() } }, vi.fn(), undefined, cfg)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(child, primary, undefined, cfg, true)).toMatchObject(backup)
+    registry.MarkRequestSucceeded(child.id)
+    clock = 6000
+    registry.BeginRequestStep(child.id, 0, 1)
+    // The real Host seeds the following tool step from the last fallback header.
+    await registry.PreparePreferredRecovery(child, backup, undefined, cfg)
+    expect(registry.getRequestOverride(child, backup, undefined, cfg, true)).toMatchObject(primary)
+    expect(registry.getChildOverride(child.id)).toBeUndefined()
+    expect(probe.mock.calls).toEqual([[backup], [primary]])
+    expect(events).toMatchObject([{ from: backup, to: primary, confirmed: false }])
+    expect(registry.getHealth()[0]?.halfOpenAgent).toBe(child.id)
+    registry.MarkRequestSucceeded(child.id)
+    expect(registry.getHealth()).toEqual([])
+    expect(events.at(-1)).toMatchObject({ to: primary, confirmed: true, logicalRequestId: 'D-long:0:1' })
+  })
+
+  it('same logical retries cannot rewind to the preferred route and a failed probe backs off across new steps', async () => {
+    let clock = 0
+    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }), { now: () => clock, sleep: async () => undefined })
+    registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true, logicalRequestId: 'D-no-flap' })
+    registry.BeginRequestStep(child.id, 0, 0)
+    await registry.PreparePreferredRecovery(child, primary, undefined, cfg)
+    registry.getRequestOverride(child, primary, undefined, cfg, true)
+    await registry.recover({ agent: child, provider: primary.provider, failure: { status: 400 } }, vi.fn(), undefined, cfg)
+    clock = 10000
+    registry.BeginRequestStep(child.id, 0, 0)
+    await registry.PreparePreferredRecovery(child, backup, undefined, cfg)
+    expect(registry.getRequestOverride(child, backup, undefined, cfg, true)).toMatchObject(backup)
+    registry.MarkRequestSucceeded(child.id)
+    registry.BeginRequestStep(child.id, 0, 1)
+    await registry.PreparePreferredRecovery(child, backup, undefined, cfg)
+    expect(registry.getRequestOverride(child, backup, undefined, cfg, true)).toMatchObject(primary)
+    await registry.recover({ agent: child, provider: primary.provider, failure: { status: 400 } }, vi.fn(), undefined, cfg)
+    expect(registry.getRequestOverride(child, primary, undefined, cfg, true)).toMatchObject(backup)
+    registry.MarkRequestSucceeded(child.id)
+    clock += 1000
+    registry.BeginRequestStep(child.id, 0, 2)
+    await registry.PreparePreferredRecovery(child, backup, undefined, cfg)
+    expect(registry.getRequestOverride(child, backup, undefined, cfg, true)).toMatchObject(backup)
+    expect(registry.getRecovery(child.id)?.attemptedRoutes).toEqual(['backup/fallback'])
+  })
+
+  it('only an explicit selection event pins the fallback, including selection of the same current model', async () => {
+    let clock = 0
+    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
+    registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true, initialRoute: backup })
+    registry.BeginRequestStep(child.id, 0, 0)
+    registry.getRequestOverride(child, primary, undefined, cfg, true)
+    registry.RecordUserSelection(child.id, backup, 10)
+    registry.RecordUserSelection(child.id, primary, 9) // stale replay cannot replace the human choice.
+    registry.MarkRequestSucceeded(child.id)
+    clock = 1000000
+    registry.BeginRequestStep(child.id, 0, 1)
+    await registry.PreparePreferredRecovery(child, backup, undefined, cfg)
+    expect(registry.getRequestOverride(child, backup, undefined, cfg, true)).toMatchObject(backup)
+    expect(registry.getChildOverride(child.id)).toEqual(backup)
+  })
+
+  it('fresh capability checks preserve vision requirements and unavailable metadata is retried only at later safe boundaries', async () => {
+    let clock = 10000
+    let vision = false
+    const probe = vi.fn(async () => ({ ok: true as const, vision }))
+    const registry = intRouteStateRegistry(undefined, probe, { now: () => clock })
+    registry.AddChild(child.id, { chain: [primary, backup], initialRoute: backup, role: 'guan_xiang', persistent: true, requireVision: true })
+    registry.BeginRequestStep(child.id, 0, 0)
+    await registry.PreparePreferredRecovery(child, backup, undefined, cfg)
+    expect(registry.getRequestOverride(child, backup, undefined, cfg, true)).toMatchObject(backup)
+    registry.MarkRequestSucceeded(child.id)
+    vision = true
+    registry.BeginRequestStep(child.id, 0, 1)
+    await registry.PreparePreferredRecovery(child, backup, undefined, cfg)
+    expect(registry.getRequestOverride(child, backup, undefined, cfg, true)).toMatchObject(backup)
+    expect(probe).toHaveBeenCalledTimes(1)
+    registry.MarkRequestSucceeded(child.id)
+    clock += 5000
+    registry.BeginRequestStep(child.id, 0, 2)
+    await registry.PreparePreferredRecovery(child, backup, undefined, cfg)
+    expect(registry.getRequestOverride(child, backup, undefined, cfg, true)).toMatchObject(primary)
+    expect(probe).toHaveBeenCalledTimes(2)
+  })
+
+  it('full candidate chains never blindly dispatch an unconfigured or text-only fallback', async () => {
+    const missing = { provider: 'missing', model: 'not-configured' }
+    const textOnly = { provider: 'text', model: 'text-only' }
+    const probe = vi.fn(async (route: RouteInfo) => route.provider === missing.provider ? { ok: false as const, reason: 'provider-not-configured' } : { ok: true as const, vision: route.provider === backup.provider })
+    const registry = intRouteStateRegistry(undefined, probe)
+    registry.AddChild(child.id, { chain: [primary, missing, textOnly, backup], role: 'guan_xiang', requireVision: true })
+    registry.getRequestOverride(child, primary, undefined, cfg, true)
+    expect(await registry.recover({ agent: child, provider: primary.provider, failure: { status: 400 } }, vi.fn(), undefined, cfg)).toEqual({ kind: 'retry' })
+    expect(probe.mock.calls).toEqual([[missing], [textOnly], [backup]])
+    expect(registry.getRequestOverride(child, primary, undefined, cfg, true)).toMatchObject(backup)
+    expect(registry.getRecovery(child.id)?.attemptedRoutes).toEqual(['preferred/primary', 'backup/fallback'])
+  })
+
+  it('an upgrade preserves unavailable preferred candidates, starts at the preflight choice and later restores the user picker', async () => {
+    let clock = 0
+    let configured = false
+    const upgraded = { provider: 'strong', model: 'expert' }
+    const probe = vi.fn(async (route: RouteInfo) => route.model === upgraded.model && !configured ? { ok: false as const, reason: 'provider-unavailable' } : { ok: true as const, vision: false })
+    const registry = intRouteStateRegistry(undefined, probe, { now: () => clock })
+    registry.RestoreRootPreference(root.id, primary)
+    registry.SetRootUpgrade(root.id, [upgraded, backup], backup)
+    registry.BeginRequestStep(root.id, 0, 0)
+    await registry.PreparePreferredRecovery(root, backup, 'tian_shu', cfg)
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', cfg, true)).toMatchObject(backup)
+    expect(registry.getRootUpgrade(root.id)).toEqual([upgraded, backup])
+    registry.MarkRequestSucceeded(root.id)
+    configured = true; clock = 6000
+    registry.BeginRequestStep(root.id, 0, 1)
+    await registry.PreparePreferredRecovery(root, backup, 'tian_shu', cfg)
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', cfg, true)).toMatchObject(upgraded)
+    registry.MarkRequestSucceeded(root.id)
+    registry.SetRootUpgrade(root.id, undefined)
+    registry.BeginRequestStep(root.id, 0, 2)
+    expect(registry.getRequestOverride(root, upgraded, 'tian_shu', cfg, true)).toMatchObject(primary)
+    registry.RestoreRootPreference(root.id, backup)
+    expect(registry.getRootPreference(root.id)).toEqual(primary)
+  })
+
+  it('ending an upgrade clears its automatic fallback even outside the old upgrade chain; explicit user choices survive', async () => {
+    const upgraded = { provider: 'strong', model: 'expert' }
+    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }))
+    registry.RestoreRootPreference(root.id, primary)
+    registry.SetRootUpgrade(root.id, [upgraded])
+    registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)
+    await registry.recover({ agent: root, provider: upgraded.provider, failure: { code: 'QUOTA' } }, vi.fn(), 'tian_shu', cfg)
+    expect(registry.getRequestOverride(root, upgraded, 'tian_shu', cfg, true)).toMatchObject(primary)
+    await registry.recover({ agent: root, provider: primary.provider, failure: { status: 400 } }, vi.fn(), 'tian_shu', cfg)
+    expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(backup)
+    registry.SetRootUpgrade(root.id, undefined)
+    registry.BeginRequestStep(root.id, 0, 1)
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', cfg, true)).toMatchObject(primary)
+    registry.RecordUserSelection(root.id, backup, 20)
+    expect(registry.getRootUpgrade(root.id)).toBeUndefined()
+    registry.SetRootUpgrade(root.id, undefined)
+    expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(backup)
+  })
+
+  it('root recovery honors the configured interval and zero disables automatic restoration even during an upgrade', async () => {
+    for (const upgraded of [false, true]) for (const recoverMs of [180000, 0]) {
+      let clock = 0
+      const selected = getSwarmConfig({ agents: { rootRecoverMs: recoverMs }, routes: { tian_shu: { chain: [primary, backup] } } })
+      const probe = vi.fn(async () => ({ ok: true as const, vision: false }))
+      const registry = intRouteStateRegistry(undefined, probe, { now: () => clock })
+      registry.RestoreRootPreference(root.id, primary)
+      if (upgraded) registry.SetRootUpgrade(root.id, [primary, backup], primary)
+      registry.BeginRequestStep(root.id, 0, 0)
+      registry.getRequestOverride(root, primary, 'tian_shu', selected, true)
+      await registry.recover({ agent: root, provider: primary.provider, failure: { status: 400 } }, vi.fn(), 'tian_shu', selected)
+      registry.getRequestOverride(root, primary, 'tian_shu', selected, true)
+      registry.MarkRequestSucceeded(root.id)
+      clock = 6000
+      registry.BeginRequestStep(root.id, 0, 1)
+      await registry.PreparePreferredRecovery(root, backup, 'tian_shu', selected)
+      expect(registry.getRequestOverride(root, backup, 'tian_shu', selected, true)).toMatchObject(backup)
+      registry.MarkRequestSucceeded(root.id)
+      clock = 180000
+      registry.BeginRequestStep(root.id, 0, 2)
+      await registry.PreparePreferredRecovery(root, backup, 'tian_shu', selected)
+      expect(registry.getRequestOverride(root, backup, 'tian_shu', selected, true)).toMatchObject(recoverMs === 0 ? backup : primary)
+    }
+  })
+
+  it('legacy hosts also distinguish the last actual fallback header from a new user choice', async () => {
+    const registry = intRouteStateRegistry()
+    registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true })
+    registry.getRequestOverride(child, primary, undefined, cfg)
+    await registry.recover({ agent: child, provider: primary.provider, failure: { status: 400 } }, vi.fn(), undefined, cfg)
+    registry.getRequestOverride(child, primary, undefined, cfg)
+    registry.MarkRequestStarted(child.id, 'actual-with-default', { ...backup, reasoningEffort: 'high' })
+    registry.MarkRequestSucceeded(child.id)
+    expect(registry.getRequestOverride(child, { provider: backup.provider, model: backup.model }, undefined, cfg)).toMatchObject(backup)
+    expect(registry.getChildOverride(child.id)).toBeUndefined()
+  })
+
+  it('a root timer expiring inside the same logical retry never replays the failed preferred route', async () => {
+    let clock = 0
+    const registry = intRouteStateRegistry(undefined, undefined, { now: () => clock })
+    registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)
+    await registry.recover({ agent: root, provider: primary.provider, failure: { status: 400 } }, vi.fn(), 'tian_shu', cfg)
+    clock = 10000
+    expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(backup)
+    registry.BeginLogicalRequest(root.id, 'safe-new-request')
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', cfg, true)).toMatchObject(primary)
+  })
+
+  it('root restoration rebinds the selected provider quota domain, never the SDK fallback header domain', async () => {
+    const preferred = { ...primary, policy: { quotaDomainId: 'preferred-account', quotaScope: 'account' as const } }
+    const fallback = { ...backup, policy: { quotaDomainId: 'fallback-account', quotaScope: 'account' as const } }
+    const selected = getSwarmConfig({ routes: { tian_shu: { chain: [preferred, fallback] } } })
+    const registry = intRouteStateRegistry()
+    registry.RestoreRootPreference(root.id, primary)
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', selected, true)).toMatchObject(primary)
+    await registry.recover({ agent: root, provider: primary.provider, failure: { code: 'QUOTA' } }, vi.fn(), 'tian_shu', selected)
+    expect(registry.getHealth().map((entry) => entry.key)).toEqual(['domain:preferred-account'])
+    expect(registry.isRouteAvailable(fallback)).toBe(true)
+  })
+
+  it('idempotent upgrade refresh preserves the active fallback and root recovery clock; removed routes alone require reselection', async () => {
+    for (const interval of [0, 180000]) {
+      let clock = 0
+      const selected = getSwarmConfig({ agents: { rootRecoverMs: interval }, routes: { tian_shu: { chain: [primary, backup] } } })
+      const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
+      registry.RestoreRootPreference(root.id, primary)
+      registry.SetRootUpgrade(root.id, [primary, backup], primary)
+      registry.BeginRequestStep(root.id, 0, 0)
+      registry.getRequestOverride(root, primary, 'tian_shu', selected, true)
+      await registry.recover({ agent: root, provider: primary.provider, failure: { status: 400 } }, vi.fn(), 'tian_shu', selected)
+      registry.getRequestOverride(root, primary, 'tian_shu', selected, true)
+      registry.MarkRequestSucceeded(root.id)
+      clock = 6000
+      registry.SetRootUpgrade(root.id, [{ ...primary }, { ...backup }], primary)
+      registry.BeginRequestStep(root.id, 0, 1)
+      await registry.PreparePreferredRecovery(root, backup, 'tian_shu', selected)
+      expect(registry.getRequestOverride(root, backup, 'tian_shu', selected, true)).toMatchObject(backup)
+      registry.MarkRequestSucceeded(root.id)
+      // A changed declaration still containing the actual current route cannot
+      // reset its original recovery clock or silently choose another model.
+      const added = { provider: 'added', model: 'higher' }
+      registry.SetRootUpgrade(root.id, [added, primary, backup], added)
+      clock = 180000
+      registry.BeginRequestStep(root.id, 0, 2)
+      await registry.PreparePreferredRecovery(root, backup, 'tian_shu', selected)
+      expect(registry.getRequestOverride(root, backup, 'tian_shu', selected, true)).toMatchObject(interval === 0 ? backup : added)
+      registry.MarkRequestSucceeded(root.id)
+      const only = { provider: 'remaining', model: 'only-compatible' }
+      registry.SetRootUpgrade(root.id, [only], only)
+      registry.BeginRequestStep(root.id, 0, 3)
+      expect(registry.getRequestOverride(root, backup, 'tian_shu', selected, true)).toMatchObject(only)
+    }
+  })
+})
+
+describe('manual child routing and bounded context recovery', () => {
+  it('manual public selections retain trusted declared quota domains and cannot bypass shared quarantine', () => {
+    const domain = { accessMode: 'subscription' as const, quotaDomainId: 'trusted-account', quotaScope: 'account' as const }
+    const first = { provider: 'codex', model: 'first', policy: domain }
+    const alias = { provider: 'codex', model: 'alias', policy: domain }
+    const independent = { provider: 'qwen-token-plan-cn', model: 'backup' }
+    const registry = intRouteStateRegistry(undefined, undefined, { now: () => 1000 })
+    registry.AddChild(child.id, { chain: [first, alias, independent], role: 'tan_wei', persistent: true })
+    registry.getRequestOverride(child, first, undefined)
+    registry.getErrorAction({ agent: child, provider: 'codex', failure: { kind: 'quota_exhausted', quotaDomainId: 'trusted-account', quotaScope: 'account' } }, undefined, undefined, config)
+    registry.BeginLogicalRequest(child.id, 'new-logical')
+    registry.SetChildOverride(child.id, { provider: 'codex', model: 'alias', reasoningEffort: 'max' })
+    expect(registry.getRequestOverride(child, first, undefined)).toMatchObject(independent)
+    registry.BeginLogicalRequest(child.id, 'manual-probe')
+    expect(registry.RequestRouteRetry({ provider: 'codex', model: 'alias' }, child.id, { force: true })).toMatchObject({ ok: true, keys: ['domain:trusted-account'] })
+    expect(registry.getHealth()[0]?.halfOpenAgent).toBeUndefined()
+    expect(registry.isRouteAvailableFor(alias, child.id)).toBe(true)
+    expect(registry.isRouteAvailableFor(alias, 'different-child')).toBe(false)
+    // Cancellation/idle releases an actual trial, while the explicit next-request
+    // intent remains queued until this same persistent child really dispatches it.
+    registry.ReleaseAgent(child.id)
+    expect(registry.getHealth()[0]?.halfOpenAgent).toBeUndefined()
+    registry.SetChildOverride(child.id, { provider: 'codex', model: 'alias', reasoningEffort: 'max' })
+    expect(registry.getRequestOverride(child, first, undefined)).toMatchObject({ provider: 'codex', model: 'alias', reasoningEffort: 'max' })
+  })
+  it('persistent overrides survive new logical rounds; real host-resolved changes including effort take priority', () => {
+    const registry = intRouteStateRegistry()
+    registry.AddChild(child.id, { chain, role: 'tan_wei', persistent: true, logicalRequestId: 'D-1' })
+    registry.getRequestOverride(child, chain[0]!, undefined)
+    const chosen = { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
+    registry.SetChildOverride(child.id, chosen)
+    expect(registry.getRequestOverride(child, chain[0]!, undefined)).toEqual(chosen)
+    registry.ReleaseAgent(child.id)
+    registry.AddChild(child.id, { chain, role: 'tan_wei', persistent: true, logicalRequestId: 'D-2' })
+    expect(registry.getRequestOverride(child, chain[0]!, undefined)).toEqual(chosen)
+    const nativeChoice = { ...chain[0]!, reasoningEffort: 'high' }
+    expect(registry.getRequestOverride(child, nativeChoice, undefined)).toEqual(nativeChoice)
+    expect(registry.getChildOverride(child.id)).toEqual(nativeChoice)
+    registry.SetManualPause(child.id, true)
+    expect(() => registry.getRequestOverride(child, nativeChoice, undefined)).toThrow('人工暂停')
+    expect(registry.getErrorAction({ agent: child, provider: nativeChoice.provider, failure: { code: 'SERVER_ERROR' } }, undefined, undefined, config)).toBeUndefined()
+  })
+
+  it('context overflow calls the real compaction seam once; only measured surface replacement authorizes a retry', async () => {
+    const registry = intRouteStateRegistry()
+    const agent = { id: 'context-child', session: { header: { parentSession: 'root' }, surface: { replaceGeneration: 4 } } }
+    registry.AddChild(agent.id, { chain, role: 'tan_wei', persistent: true, logicalRequestId: 'context-request' })
+    registry.getRequestOverride(agent, chain[0]!, undefined)
+    const next = vi.fn(async () => ({ kind: 'retry' }))
+    const compactIfNeeded = vi.fn(async () => { agent.session.surface.replaceGeneration += 1; return { summarySeq: 100 } })
+    const payload = { agent, provider: 'a', failure: { code: 'CONTEXT_WINDOW_EXCEEDED', message: 'context limit exceeded' }, signal: new AbortController().signal }
+    expect(await registry.recover(payload, next, undefined, config, { compactIfNeeded })).toEqual({ kind: 'retry' })
+    expect(compactIfNeeded).toHaveBeenCalledWith(agent, 'context-overflow', payload.signal)
+    expect(next).not.toHaveBeenCalled()
+    registry.getRequestOverride(agent, chain[0]!, undefined)
+    expect(await registry.recover(payload, next, undefined, config, { compactIfNeeded })).toBeUndefined()
+    expect(compactIfNeeded).toHaveBeenCalledTimes(1)
+    expect(registry.getTerminal(agent.id)).toBe('context_recovery_required')
+    expect(registry.getHealth()).toEqual([])
+    expect(registry.getRecovery(agent.id)?.attemptedRoutes).toEqual(['a/m1', 'a/m1'])
+  })
+
+  it('a compact callback returning success without actual shrink cannot retry or poison the route', async () => {
+    const registry = intRouteStateRegistry()
+    const agent = { id: 'context-no-shrink', session: { header: { parentSession: 'root' }, surface: { replaceGeneration: 4 } } }
+    registry.AddChild(agent.id, { chain, role: 'tan_wei' })
+    const next = vi.fn(async () => ({ kind: 'retry' }))
+    expect(await registry.recover({ agent, provider: 'a', failure: { code: 'CONTEXT_WINDOW_EXCEEDED' }, signal: new AbortController().signal }, next, undefined, config, { compactIfNeeded: async () => ({ summarySeq: 1 }) })).toBeUndefined()
+    expect(registry.getTerminal(agent.id)).toBe('context_recovery_required')
+    expect(registry.getHealth()).toEqual([])
+    expect(next).not.toHaveBeenCalled()
+  })
+})
 
 describe('子智能体路由', () => {
   it('请求时套用当前路由并去掉继承的推理强度', () => {
@@ -185,14 +508,20 @@ describe('故障恢复', () => {
     expect(other.getRequestOverride(root, picked, 'tian_shu', config).model).not.toBe('deepseek-flash')
   })
 
-  it('NO_ADAPTER仅说No eligible account时保留断网刷新恢复；明确pool/quota仍走零等待', async () => {
+  it('NO_ADAPTER仅说No eligible account不冒充断网；明确transport失败才走网络恢复', async () => {
     const offline = makeNetwork([false])
     const registry = intRouteStateRegistry(undefined, undefined, { network: offline.network })
     const picked = { provider: 'codex', model: 'gpt-6-sol' }
     registry.getRequestOverride(root, picked, 'tian_shu', config)
     expect(await registry.recover({ agent: root, provider: 'codex', failure: { code: 'NO_ADAPTER', message: 'No eligible account for codex/gpt-6-sol' } }, vi.fn(), 'tian_shu', config)).toEqual({ kind: 'retry' })
-    expect(offline.calls.waitOnline).toBe(1)
-    expect(registry.getRequestOverride(root, picked, 'tian_shu', config)).toEqual(picked)
+    expect(offline.calls.waitOnline).toBe(0)
+    expect(registry.getRequestOverride(root, picked, 'tian_shu', config)).not.toEqual(picked)
+    const transport = makeNetwork([false])
+    const networkFailure = intRouteStateRegistry(undefined, undefined, { network: transport.network })
+    networkFailure.getRequestOverride(root, picked, 'tian_shu', config)
+    expect(await networkFailure.recover({ agent: root, provider: 'codex', failure: { code: 'NO_ADAPTER', message: 'No eligible account: token refresh transport failed' } }, vi.fn(), 'tian_shu', config)).toEqual({ kind: 'retry' })
+    expect(transport.calls.waitOnline).toBe(1)
+    expect(networkFailure.getRequestOverride(root, picked, 'tian_shu', config)).toEqual(picked)
   })
 
   it('断网等待超时按常规回退；额度类失败不探测网络；networkWaitMs=0 关闭等待', async () => {

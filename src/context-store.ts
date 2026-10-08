@@ -35,19 +35,67 @@ export interface ContextPageInfo {
   workflowRevision: number
   requestRevision?: number
 }
+export interface PreparedTaskContextReplacement {
+  /** Detached snapshots; the live store is unchanged until commit succeeds. */
+  readonly artifacts: ContextArtifactInfo[]
+  readonly replaced: ContextArtifactInfo[]
+  commit: () => void
+  /** Release rollback capacity after the caller's durable transaction succeeds. */
+  finalize: () => void
+  /** Refuses to overwrite changes made to the same task after this commit. */
+  rollback: () => void
+}
 export interface ContextStore {
   Add: (input: Omit<ContextArtifactInfo, 'ref' | 'digest'>) => ContextArtifactInfo
+  PrepareTaskReplace: (binding: ContextBindingInfo, inputs: Array<Omit<ContextArtifactInfo, 'ref' | 'digest' | 'binding'>>) => PreparedTaskContextReplacement
   Restore: (artifact: unknown, expectedBinding?: ContextBindingInfo) => ContextArtifactInfo
   Read: (binding: ContextBindingInfo, ref: string, options?: { cursor?: string; limit?: number; expectedDigest?: string }) => ContextPageInfo
+  List: (binding: ContextBindingInfo) => Array<Pick<ContextPageInfo, 'ref' | 'digest' | 'layer' | 'kind' | 'totalBytes' | 'cardRevision' | 'workflowRevision' | 'requestRevision'>>
   DelTask: (rootSessionId: string, taskId: string) => void
 }
 
 /** 受控引用读取；ID 不是授权，始终检查根、工作区、任务、版本与盲审权限。 */
 export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactBytes?: number; maxPageChars?: number } = {}): ContextStore => {
   const store = new Map<string, ContextArtifactInfo>()
+  const byTask = new Map<string, { refs: Set<string>; version: number }>()
+  const replacements = new Map<string, symbol>()
+  let rollbackSlots = 0
   const maxArtifacts = limits.maxArtifacts ?? 512
   const maxArtifactBytes = limits.maxArtifactBytes ?? 1024 * 1024
   const maxPageChars = limits.maxPageChars ?? 8000
+  const taskKey = (owner: Pick<ContextBindingInfo, 'rootSessionId' | 'taskId'>) => JSON.stringify([owner.rootSessionId, owner.taskId])
+  const sameRevision = (a: ContextBindingInfo, b: ContextBindingInfo) => a.rootSessionId === b.rootSessionId && a.workspaceId === b.workspaceId && a.taskId === b.taskId
+    && a.cardRevision === b.cardRevision && a.workflowRevision === b.workflowRevision && (a.requestRevision ?? 1) === (b.requestRevision ?? 1)
+  const mutable = (key: string, token?: symbol) => {
+    if (replacements.has(key) && replacements.get(key) !== token) throw new SwarmError('INVALID_ARGS', '当前任务上下文正在提交，请等待本轮合同事务完成')
+  }
+  const put = (artifact: ContextArtifactInfo) => {
+    store.set(artifact.ref, artifact)
+    const key = taskKey(artifact.binding)
+    let group = byTask.get(key)
+    if (!group) { group = { refs: new Set(), version: 0 }; byTask.set(key, group) }
+    group.refs.add(artifact.ref); group.version++
+  }
+  const remove = (artifact: ContextArtifactInfo) => {
+    store.delete(artifact.ref)
+    const key = taskKey(artifact.binding), group = byTask.get(key)
+    if (group) { group.refs.delete(artifact.ref); group.version++; if (group.refs.size === 0) byTask.delete(key) }
+  }
+  const fits = (removed: number, added: number) => {
+    if (store.size + rollbackSlots - removed + added > maxArtifacts) throw new SwarmError('INVALID_ARGS', '上下文材料超过容量上限')
+  }
+  const requireArtifact = (binding: ContextBindingInfo, ref: string, expectedDigest?: string): ContextArtifactInfo => {
+    const artifact = store.get(ref)
+    if (artifact === undefined) throw new SwarmError('INVALID_ARGS', '上下文引用不存在')
+    const owner = artifact.binding
+    if (owner.rootSessionId !== binding.rootSessionId || owner.workspaceId !== binding.workspaceId || owner.taskId !== binding.taskId) throw new SwarmError('INVALID_ARGS', '无权读取其他会话、工作区或任务的材料')
+    if (owner.cardRevision !== binding.cardRevision || owner.workflowRevision !== binding.workflowRevision) throw new SwarmError('INVALID_ARGS', '材料版本过期')
+    if ((owner.requestRevision ?? 1) !== (binding.requestRevision ?? 1)) throw new SwarmError('INVALID_ARGS', '材料需求版本过期')
+    if (artifact.allowThreads !== undefined && (binding.threadId === undefined || !artifact.allowThreads.includes(binding.threadId))) throw new SwarmError('INVALID_ARGS', '当前专家没有材料读取权限')
+    if (binding.blindReview === true && ['author-reasoning', 'history', 'experience'].includes(artifact.kind)) throw new SwarmError('INVALID_ARGS', '独立盲审不能读取作者过程或历史结论')
+    if (expectedDigest !== undefined && expectedDigest !== artifact.digest) throw new SwarmError('INVALID_ARGS', '材料摘要已改变')
+    return artifact
+  }
   const ValidateArtifact = (raw: unknown): ContextArtifactInfo => {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new SwarmError('INVALID_ARGS', '恢复材料必须为对象')
     const input = raw as Record<string, unknown>
@@ -61,13 +109,55 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
     if (Buffer.byteLength(input.text, 'utf8') > maxArtifactBytes) throw new SwarmError('INVALID_ARGS', '恢复材料超过容量上限')
     return { ...structuredClone(input), binding: { ...structuredClone(binding), requestRevision: binding.requestRevision ?? 1 } } as unknown as ContextArtifactInfo
   }
+  const makeArtifact = (input: Omit<ContextArtifactInfo, 'ref' | 'digest'>) => ValidateArtifact({ ...input, ref: `ctx-${randomUUID()}`, digest: getValueDigest(input.text) })
   return {
     Add: (input) => {
-      if (store.size >= maxArtifacts || Buffer.byteLength(input.text, 'utf8') > maxArtifactBytes) throw new SwarmError('INVALID_ARGS', '上下文材料超过容量上限')
-      if (input.binding.requestRevision !== undefined && (!Number.isSafeInteger(input.binding.requestRevision) || input.binding.requestRevision < 1)) throw new SwarmError('INVALID_ARGS', '材料需求版本不合法')
-      const artifact: ContextArtifactInfo = { ...structuredClone(input), binding: { ...structuredClone(input.binding), requestRevision: input.binding.requestRevision ?? 1 }, ref: `ctx-${randomUUID()}`, digest: getValueDigest(input.text) }
-      store.set(artifact.ref, artifact)
+      mutable(taskKey(input.binding)); fits(0, 1)
+      const artifact = makeArtifact(input)
+      put(artifact)
       return structuredClone(artifact)
+    },
+    PrepareTaskReplace: (binding, inputs) => {
+      const key = taskKey(binding)
+      mutable(key)
+      if (!Array.isArray(inputs) || inputs.length === 0) throw new SwarmError('INVALID_ARGS', '合同替换必须包含新材料')
+      const artifacts = inputs.map((input) => makeArtifact({ ...input, binding }))
+      const group = byTask.get(key), version = group?.version
+      const replaced = [...(group?.refs ?? [])].flatMap((ref) => { const entry = store.get(ref)!; return sameRevision(entry.binding, binding) ? [] : [entry] })
+      fits(replaced.length, artifacts.length)
+      const token = Symbol('context-replacement')
+      const reserved = Math.max(0, replaced.length - artifacts.length)
+      let state: 'prepared' | 'committed' | 'finalized' | 'rolled-back' = 'prepared'
+      const release = () => { rollbackSlots -= reserved; replacements.delete(key) }
+      return {
+        get artifacts () { return structuredClone(artifacts) },
+        get replaced () { return structuredClone(replaced) },
+        commit: () => {
+          if (state === 'committed' || state === 'finalized') return
+          if (state !== 'prepared') throw new SwarmError('INVALID_ARGS', '已回滚的上下文事务不能重新提交')
+          mutable(key)
+          if (byTask.get(key) !== group || group?.version !== version) throw new SwarmError('STALE_EVIDENCE', '任务材料在预检后改变，请重新准备合同替换')
+          fits(replaced.length, artifacts.length)
+          // Every capacity and schema check precedes this synchronous, task-scoped map mutation.
+          for (const artifact of replaced) remove(artifact)
+          for (const artifact of artifacts) put(artifact)
+          rollbackSlots += reserved; replacements.set(key, token); state = 'committed'
+        },
+        finalize: () => {
+          if (state === 'finalized' || state === 'rolled-back') return
+          if (state !== 'committed') throw new SwarmError('INVALID_ARGS', '上下文替换尚未提交')
+          release(); state = 'finalized'
+        },
+        rollback: () => {
+          if (state === 'rolled-back') return
+          if (state === 'prepared') { state = 'rolled-back'; return }
+          if (state !== 'committed' || replacements.get(key) !== token) throw new SwarmError('STALE_EVIDENCE', '已确认的上下文事务不能回滚')
+          // Same-task mutators are fenced until finalize/rollback; other tasks keep their own materials.
+          for (const artifact of artifacts) remove(artifact)
+          for (const artifact of replaced) put(artifact)
+          release(); state = 'rolled-back'
+        }
+      }
     },
     Restore: (raw, expectedBinding) => {
       const artifact = ValidateArtifact(raw)
@@ -78,20 +168,13 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
         if (getValueDigest(existing) !== getValueDigest(artifact)) throw new SwarmError('INVALID_ARGS', '恢复材料同 ID 存在内容或权限冲突')
         return structuredClone(existing)
       }
-      if (store.size >= maxArtifacts) throw new SwarmError('INVALID_ARGS', '恢复材料超过容量上限')
-      store.set(artifact.ref, artifact)
+      mutable(taskKey(artifact.binding)); fits(0, 1)
+      put(artifact)
       return structuredClone(artifact)
     },
     Read: (binding, ref, options = {}) => {
-      const artifact = store.get(ref)
-      if (artifact === undefined) throw new SwarmError('INVALID_ARGS', '上下文引用不存在')
+      const artifact = requireArtifact(binding, ref, options.expectedDigest)
       const owner = artifact.binding
-      if (owner.rootSessionId !== binding.rootSessionId || owner.workspaceId !== binding.workspaceId || owner.taskId !== binding.taskId) throw new SwarmError('INVALID_ARGS', '无权读取其他会话、工作区或任务的材料')
-      if (owner.cardRevision !== binding.cardRevision || owner.workflowRevision !== binding.workflowRevision) throw new SwarmError('INVALID_ARGS', '材料版本过期')
-      if ((owner.requestRevision ?? 1) !== (binding.requestRevision ?? 1)) throw new SwarmError('INVALID_ARGS', '材料需求版本过期')
-      if (artifact.allowThreads !== undefined && (binding.threadId === undefined || !artifact.allowThreads.includes(binding.threadId))) throw new SwarmError('INVALID_ARGS', '当前专家没有材料读取权限')
-      if (binding.blindReview === true && ['author-reasoning', 'history', 'experience'].includes(artifact.kind)) throw new SwarmError('INVALID_ARGS', '独立盲审不能读取作者过程或历史结论')
-      if (options.expectedDigest !== undefined && options.expectedDigest !== artifact.digest) throw new SwarmError('INVALID_ARGS', '材料摘要已改变')
       const cursor = options.cursor ?? '0'
       if (!/^\d+$/.test(cursor) || !Number.isSafeInteger(Number(cursor))) throw new SwarmError('INVALID_ARGS', 'cursor 必须是合法偏移')
       let start = Number(cursor)
@@ -104,7 +187,18 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
       if (end < artifact.text.length && /[\uD800-\uDBFF]/.test(artifact.text[end - 1] ?? '') && /[\uDC00-\uDFFF]/.test(artifact.text[end] ?? '')) end += 1
       return { ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind, text: artifact.text.slice(start, end), cursor: String(start), nextCursor: end < artifact.text.length ? String(end) : null, truncated: start > 0 || end < artifact.text.length, totalBytes: Buffer.byteLength(artifact.text, 'utf8'), cardRevision: owner.cardRevision, workflowRevision: owner.workflowRevision, requestRevision: owner.requestRevision ?? 1 }
     },
-    DelTask: (rootSessionId, taskId) => { for (const [ref, artifact] of store) if (artifact.binding.rootSessionId === rootSessionId && artifact.binding.taskId === taskId) store.delete(ref) }
+    List: (binding) => [...(byTask.get(taskKey(binding))?.refs ?? [])].flatMap((ref) => {
+      try {
+        const artifact = requireArtifact(binding, ref)
+        return [{ ref: artifact.ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind,
+          totalBytes: Buffer.byteLength(artifact.text, 'utf8'), cardRevision: artifact.binding.cardRevision,
+          workflowRevision: artifact.binding.workflowRevision, requestRevision: artifact.binding.requestRevision ?? 1 }]
+      } catch { return [] }
+    }),
+    DelTask: (rootSessionId, taskId) => {
+      const key = taskKey({ rootSessionId, taskId }); mutable(key)
+      for (const ref of [...(byTask.get(key)?.refs ?? [])]) remove(store.get(ref)!)
+    }
   }
 }
 

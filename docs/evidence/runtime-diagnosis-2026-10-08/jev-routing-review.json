@@ -1,0 +1,269 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-08T15:55:00Z",
+  "scope": "Independent routing source and SDK-lifecycle evidence review before final production deployment",
+  "limitations": [
+    "Initial partial ask insufficient and safe_recovery check uncertain; supplementary source and concrete Host assertions were supplied.",
+    "Confidence means distribution concentration, not correctness.",
+    "These are actual MCP calls; none bypassed outer approval policy.",
+    "No release-complete judgment is claimed; deployment/publication remain pending.",
+    "The later idempotent upgrade-refresh defect was independently reproduced, repaired, and reviewed by finalRefreshCheck."
+  ],
+  "calls": {
+    "health": {
+      "ok": true,
+      "model": "jev-latest",
+      "answers": {
+        "models": [
+          {
+            "name": "jev-latest",
+            "description": "The latest iteration of TypeSafe's System One Model: Jev",
+            "release_date": "2026-09-10T18:38:01.391457+00:00"
+          },
+          {
+            "name": "jev-preview",
+            "description": "A preview version of `jev-latest`: should be better in most ways",
+            "release_date": "2026-09-10T18:39:06.057655+00:00"
+          }
+        ],
+        "round_trip_latency_ms": 5703.198
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "est_cost_usd": 0
+      },
+      "latency_ms": 5703.225
+    },
+    "ask": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "architecture": {
+          "type": "choice",
+          "choice": "insufficient",
+          "confidence": 0.72,
+          "probabilities": {
+            "supported": 0.17,
+            "contradicted": 0.02,
+            "insufficient": 0.81
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 8403,
+        "output_tokens": 47,
+        "est_cost_usd": 0.00035292600000000004
+      },
+      "latency_ms": 2520.601
+    },
+    "check": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "probabilities": {
+          "no_permanent_unknown_reset": 0.84,
+          "manual_priority": 0.81,
+          "safe_recovery": 0.59,
+          "scope_honesty": 0.91
+        },
+        "flags": [
+          "no_permanent_unknown_reset",
+          "manual_priority",
+          "scope_honesty"
+        ],
+        "uncertain": [
+          "safe_recovery"
+        ]
+      },
+      "usage": {
+        "input_tokens": 8391,
+        "output_tokens": 80,
+        "est_cost_usd": 0.000352422
+      },
+      "latency_ms": 818.498
+    },
+    "score": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "score": 2.2,
+        "confidence": 0.67,
+        "probabilities": {
+          "0": 0.01,
+          "1": 0.05,
+          "2": 0.67,
+          "3": 0.27
+        },
+        "legend": {
+          "0": "Directly contradicted by supplied source",
+          "1": "Large material gap",
+          "2": "Mostly supported with verification limits",
+          "3": "Well supported by explicit source paths and regression evidence, within tested scope"
+        },
+        "normalized": 0.7333333333333334
+      },
+      "usage": {
+        "input_tokens": 8371,
+        "output_tokens": 17,
+        "est_cost_usd": 0.00035158199999999997
+      },
+      "latency_ms": 493.188
+    },
+    "classify": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "choice": "ready_for_final_verification",
+        "confidence": 0.94,
+        "probabilities": {
+          "ready_for_final_verification": 0.96,
+          "requires_design_rework": 0.03,
+          "insufficient_source": 0.01
+        },
+        "band": "act",
+        "agreement": true,
+        "alternate_choice": "ready_for_final_verification"
+      },
+      "usage": {
+        "input_tokens": 16774,
+        "output_tokens": 110,
+        "est_cost_usd": 0.0007045080000000001
+      },
+      "latency_ms": 871.922
+    },
+    "screen": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "verdict": "pass",
+        "risk": 0.11,
+        "risk_confidence": 0.9,
+        "reasons": {}
+      },
+      "usage": {
+        "input_tokens": 892,
+        "output_tokens": 129,
+        "est_cost_usd": 0.000037464000000000006
+      },
+      "latency_ms": 357.746
+    },
+    "match": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "best_id": "header_drift",
+        "confidence": 0.6,
+        "abstain_probability": 0.04,
+        "exists": 0.75,
+        "windows": 1,
+        "exists_by_window": [
+          0.75
+        ]
+      },
+      "note": "Summary of actual corrected window20 MCP result; initial window8 input validation failed."
+    },
+    "supplementalAsk": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "safe_recovery": {
+          "type": "choice",
+          "choice": "supported",
+          "confidence": 0.98,
+          "probabilities": {
+            "insufficient": 0.01,
+            "contradicted": 0,
+            "supported": 0.99
+          }
+        },
+        "complete_release": {
+          "type": "choice",
+          "choice": "not_complete",
+          "confidence": 1,
+          "probabilities": {
+            "complete": 0,
+            "not_complete": 1
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 19089,
+        "output_tokens": 78,
+        "est_cost_usd": 0.0008017380000000001
+      },
+      "latency_ms": 3577.277
+    },
+    "finalRefreshCheck": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "probabilities": {
+          "refresh_preserves": 0.9,
+          "zero_respected": 0.9,
+          "not_all_backends": 0.84
+        },
+        "flags": [
+          "refresh_preserves",
+          "zero_respected",
+          "not_all_backends"
+        ],
+        "uncertain": []
+      },
+      "usage": {
+        "input_tokens": 2302,
+        "output_tokens": 62,
+        "est_cost_usd": 0.00009668400000000001
+      },
+      "latency_ms": 1409.061
+    },
+    "finalIdentityCheck": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "probabilities": {
+          "honest_model_metadata": 0.87,
+          "scope_appropriate": 0.83,
+          "not_finished_yet": 0.88
+        },
+        "flags": [
+          "honest_model_metadata",
+          "scope_appropriate",
+          "not_finished_yet"
+        ],
+        "uncertain": []
+      },
+      "usage": {
+        "input_tokens": 579,
+        "output_tokens": 62,
+        "est_cost_usd": 0.000024318
+      },
+      "latency_ms": 2266.818
+    },
+    "finalHealth": {
+      "ok": true,
+      "model": "jev-latest",
+      "answers": {
+        "models": [
+          {
+            "name": "jev-latest",
+            "description": "The latest iteration of TypeSafe's System One Model: Jev",
+            "release_date": "2026-09-10T18:38:01.391457+00:00"
+          },
+          {
+            "name": "jev-preview",
+            "description": "A preview version of `jev-latest`: should be better in most ways",
+            "release_date": "2026-09-10T18:39:06.057655+00:00"
+          }
+        ],
+        "round_trip_latency_ms": 864.083
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "est_cost_usd": 0
+      },
+      "latency_ms": 864.098
+    }
+  }
+}

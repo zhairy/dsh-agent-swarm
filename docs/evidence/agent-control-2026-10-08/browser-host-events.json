@@ -1,0 +1,31 @@
+{
+  "recordedAt": "2026-10-08T14:53:19.624387+00:00",
+  "source": "Real isolated DSH 0.2.0-rc.2 Host bridge; only vendor responses are mocked",
+  "parentSessionId": "agent-control-it-2e9b6c82-f53a-4cb8-9a4b-b3fd8149b2bc",
+  "childId": "e43dafb6-d15b-4728-b43b-de785a1fabe8",
+  "requests": [
+    {
+      "provider": "swarm-control-mock",
+      "model": "hang",
+      "sessionId": "e43dafb6-d15b-4728-b43b-de785a1fabe8",
+      "reasoningEffort": "high"
+    },
+    {
+      "provider": "swarm-control-mock",
+      "model": "recovered",
+      "sessionId": "e43dafb6-d15b-4728-b43b-de785a1fabe8",
+      "reasoningEffort": "max"
+    }
+  ],
+  "ends": [
+    {
+      "id": "e43dafb6-d15b-4728-b43b-de785a1fabe8",
+      "stopReason": "aborted"
+    },
+    {
+      "id": "e43dafb6-d15b-4728-b43b-de785a1fabe8",
+      "stopReason": "completed"
+    }
+  ],
+  "agentErrors": []
+}

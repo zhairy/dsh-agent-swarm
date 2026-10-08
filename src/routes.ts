@@ -1,7 +1,7 @@
 import type { LlmFailureLike, LlmLike } from './host-contract.js'
 import type { RoleId, SuanHengMode } from './role-registry.js'
 import { getErrorText } from './util/errors.js'
-import { normalizeRouteFailure, getRouteFailure, type RouteResourcePolicy } from './provider-policy.js'
+import { normalizeRouteFailure, getRouteFailure, getRouteResourcePolicy, getWireReasoningEffort, type RouteResourcePolicy } from './provider-policy.js'
 
 export const PROVIDER_QWEN = 'qwen-token-plan-cn'
 export const PROVIDER_GO = 'opencode-go'
@@ -318,6 +318,9 @@ export const getFailureClass = (failure: LlmFailureLike | undefined): FailureCla
   const code = String(failure.code ?? '').toUpperCase()
   const status = failure.status ?? 0
   const normalized = normalizeRouteFailure(failure, { provider: '', model: '' })
+  if (normalized.kind === 'auth_invalid') return 'auth'
+  if (normalized.kind === 'context_exceeded') return 'other'
+  if (normalized.kind === 'capability_mismatch') return 'route-fatal'
   if (['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'model_unavailable'].includes(normalized.kind)) return 'route-fatal'
   if (UNPURCHASED_MESSAGE.test(failure.message ?? '')) return 'route-fatal'
   if (AUTH_CODES.has(code) || status === 401 || status === 403) return 'auth'
@@ -360,18 +363,27 @@ export const intRouteProbe = (getLlm: () => LlmLike | undefined, options: {
     if (llm === undefined) return { ok: false, reason: 'llm-service-unavailable' }
     if (!llm.listProviders().some((provider) => provider.id === route.provider)) return { ok: false, reason: 'provider-not-configured' }
     try {
+      const resource = getRouteResourcePolicy(route)
+      if (resource.accessMode === 'judgment_api' || resource.capabilities?.generation === false || resource.capabilities?.tools === false) return { ok: false, reason: 'capability-incompatible: generation-tools-unavailable' }
       const info = await llm.resolveModelInfo(route.provider, route.model)
-      const vision = info.inputModalities === undefined ? (getCatalogVision(route) ?? false) : info.inputModalities.includes('image')
+      const effort = getWireReasoningEffort(route)
+      if (llm.resolveCallConfig !== undefined) await llm.resolveCallConfig({ provider: route.provider, model: route.model, ...(effort === undefined ? {} : { reasoningEffort: effort }) })
+      else if (effort !== undefined && !info.reasoning?.efforts.some((item) => item.id === effort)) return { ok: false, reason: 'capability-incompatible: unsupported-reasoning-effort' }
+      const observedVision = info.inputModalities === undefined ? (getCatalogVision(route) ?? false) : info.inputModalities.includes('image')
+      const vision = observedVision && resource.capabilities?.vision !== false
       return { ok: true, vision }
     } catch (error) {
-      await options.onFailure?.(route, getRouteFailure(error))
+      const failure = getRouteFailure(error)
+      if (normalizeRouteFailure(failure, route).kind === 'capability_mismatch') return { ok: false, reason: `capability-incompatible: ${getErrorText(error)}` }
+      await options.onFailure?.(route, failure)
       if (options.isRouteAvailable?.(route) === false) return { ok: false, reason: 'route-isolated' }
       return { ok: false, reason: `model-unavailable: ${getErrorText(error)}` }
     }
   }
   return async (route) => {
     if (options.isRouteAvailable?.(route) === false) return { ok: false, reason: 'route-isolated' }
-    const key = `${getRouteLabel(route)}:${route.policy?.quotaDomainId ?? ''}:${route.policy?.poolId ?? ''}`
+    const key = JSON.stringify([route.provider, route.model, getWireReasoningEffort(route) ?? null,
+      route.policy?.quotaDomainId ?? null, route.policy?.poolId ?? null, route.policy?.capabilities ?? null])
     const hit = cache.get(key)
     if (hit !== undefined && now() - hit.at < (hit.result.ok ? PROBE_OK_TTL_MS : PROBE_FAIL_TTL_MS)) return hit.result
     const running = pending.get(key)
