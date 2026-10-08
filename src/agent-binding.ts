@@ -50,7 +50,7 @@ export interface AgentBindingRegistry {
 
 /** Only host/service lifecycle code calls bind; tool parameters never create identities. */
 export const createAgentBindingRegistry = <T extends BindingState>(store: DurableStateStore<T>): AgentBindingRegistry => {
-  const get = (agentId: string) => store.read().bindings[agentId]
+  const get = (agentId: string) => store.readPath === undefined ? store.read().bindings[agentId] : store.readPath<AgentBinding>(['bindings', agentId])
   const requireActive: AgentBindingRegistry['requireActive'] = (agentId, permission) => {
     const binding = get(agentId)
     if (binding === undefined || binding.state !== 'active') throw new BindingError('BINDING_INACTIVE', 'No active host-bound attempt for this agent')
@@ -74,7 +74,7 @@ export const createAgentBindingRegistry = <T extends BindingState>(store: Durabl
       })
       return structuredClone(binding)
     },
-    getHistorical: (binding) => store.read().bindingHistory[bindingKey(binding)],
+    getHistorical: (binding) => store.readPath === undefined ? store.read().bindingHistory[bindingKey(binding)] : store.readPath<AgentBinding>(['bindingHistory', bindingKey(binding)]),
     revoke: async (agentId, reason = 'untrusted') => {
       await store.commit('binding/revoke', (draft) => {
         const old = draft.bindings[agentId]

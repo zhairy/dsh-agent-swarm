@@ -96,13 +96,20 @@ export const validateFeatureState = (raw: unknown, expected: { rootSessionId: st
       }
       tasks.set(task.taskId, task)
     }
-    const records = new Map<string, DelegationRecord>()
+    const recordIds = new Set<string>()
+    const recordIdsByTask = new Map<string, Set<string>>()
     for (const record of state.delegations) {
-      if (!object(record) || !identifier(record.delegationId) || records.has(record.delegationId) || !tasks.has(record.taskId) || !isDelegableRoleId(record.role) || !['queued', 'running', 'completed', 'failed', 'blocked'].includes(record.status) || typeof record.summary !== 'string' || !strings(record.unresolved) || !Array.isArray(record.evidence) || record.evidence.some((e) => !object(e) || !['command', 'step', 'finding', 'source', 'observation', 'claim', 'file-change'].includes(e.kind) || typeof e.ref !== 'string') || ![record.cardRevision, record.workflowRevision, record.requestRevision].every(optionalRevision) || !Number.isFinite(record.startedAt)) return false
+      if (!object(record) || !identifier(record.delegationId) || recordIds.has(record.delegationId) || !tasks.has(record.taskId) || !isDelegableRoleId(record.role) || !['queued', 'running', 'completed', 'failed', 'blocked'].includes(record.status) || typeof record.summary !== 'string' || !strings(record.unresolved) || !Array.isArray(record.evidence) || record.evidence.some((e) => !object(e) || !['command', 'step', 'finding', 'source', 'observation', 'claim', 'file-change'].includes(e.kind) || typeof e.ref !== 'string') || ![record.cardRevision, record.workflowRevision, record.requestRevision].every(optionalRevision) || !Number.isFinite(record.startedAt)) return false
       if (record.status === 'completed' && ValidateStructuredOutput(record.role, record.structured, record.mode).length > 0) return false
-      records.set(record.delegationId, record)
+      recordIds.add(record.delegationId)
+      const ids = recordIdsByTask.get(record.taskId) ?? new Set<string>()
+      ids.add(record.delegationId)
+      recordIdsByTask.set(record.taskId, ids)
     }
-    for (const task of state.tasks) if (task.delegationIds.some((id) => records.get(id)?.taskId !== task.taskId) || [...records.values()].some((record) => record.taskId === task.taskId && !task.delegationIds.includes(record.delegationId))) return false
+    for (const task of state.tasks) {
+      const owned = recordIdsByTask.get(task.taskId)
+      if ((owned?.size ?? 0) !== task.delegationIds.length || task.delegationIds.some((id) => !owned?.has(id))) return false
+    }
     const threadIds = new Set<string>()
     for (const thread of state.threads) {
       if (!object(thread) || !identifier(thread.threadId) || threadIds.has(thread.threadId) || !isDelegableRoleId(thread.role) || typeof thread.busy !== 'boolean' || typeof thread.closed !== 'boolean' || typeof thread.allowWeb !== 'boolean' || !strings(thread.taskIds) || thread.taskIds.some((id) => !tasks.has(id)) || !Number.isSafeInteger(thread.rounds) || thread.rounds < 0 || !Array.isArray(thread.history) || thread.history.some((entry) => !object(entry) || !identifier(entry.delegationId) || !tasks.has(entry.taskId) || typeof entry.request !== 'string' || typeof entry.summary !== 'string' || typeof entry.status !== 'string')) return false

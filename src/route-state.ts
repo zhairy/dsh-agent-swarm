@@ -204,7 +204,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
   /** 断网等待次数（按会话） */
   const networkWaits = new Map<string, { count: number; last: number }>()
 
-  const getChildFallback = (agentId: string, state: ChildStateInfo, failure: LlmFailureLike, failureClass: FailureClass, action: RequestErrorActionLike): RequestErrorActionLike => {
+  const getChildFallback = (agentId: string, state: ChildStateInfo, failure: LlmFailureLike, failureClass: FailureClass, _action: RequestErrorActionLike): RequestErrorActionLike => {
     const current = state.chain[state.index] as RouteInfo
     const tried = new Set([...state.tried, getRouteLabel(current)])
     const next = FindNextIndex(state.chain, state.index + 1, tried, current, failureClass, health)
@@ -218,7 +218,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     return { kind: 'retry' }
   }
 
-  const getRootFallback = (payload: RequestErrorPayloadLike, presetRole: RoleId, failureClass: FailureClass, action: RequestErrorActionLike, config: SwarmConfigInfo): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
+  const getRootFallback = (payload: RequestErrorPayloadLike, presetRole: RoleId, failureClass: FailureClass, _action: RequestErrorActionLike, config: SwarmConfigInfo): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
     const agentId = payload.agent.id
     const failed = lastRoutes.get(agentId) ?? { provider: payload.provider, model: '' }
     const previous = roots.get(agentId)

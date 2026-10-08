@@ -11,6 +11,7 @@ import {
   WRITE_TOOL_NAMES,
   getAgentHeader,
   type AgentLike,
+  type ApprovalServiceLike,
   type AttachmentsLike,
   type CredentialsLike,
   type InboxMessageLike,
@@ -22,7 +23,7 @@ import {
   type ToolExecutionLike,
   type ToolsLike
 } from './host-contract.js'
-import type { JevOutcome } from './jev.js'
+import { isJevAvailabilityFailure, getJevFailureKind, type JevOutcome } from './jev.js'
 import { intJevHub, type JevHub } from './jev-hub.js'
 import { SleepWithSignal, type NetworkMonitorInfo } from './network.js'
 import {
@@ -47,10 +48,11 @@ import { ACCEPTANCE_QUESTIONS, ParseAssessment, VERDICT_LABELS, getAcceptanceSta
 import { SwarmError } from './util/errors.js'
 import { getGitStatus, type GitStatusInfo } from './util/git.js'
 import { intMutex } from './util/mutex.js'
-import { getTaskIntent, getSemanticCardDigest, getCurrentDelegations, digest } from './task-model.js'
-import { getDefaultWorkflow, ValidateWorkflow, getWorkflowDigest, getWorkflowMermaid, getTaskCardMarkdown, intWorkflowState, ReconcileWorkflow, getReadyNodes, getMatchingNode, UpdateWorkflowNode } from './workflow.js'
+import { getTaskIntent, getSemanticCardDigest, getCurrentDelegations, digest, getTaskBinding, getTaskContextBinding, isTaskVersionCurrent } from './task-model.js'
+import { getDefaultWorkflow, ValidateWorkflow, getWorkflowDigest, getWorkflowMermaid, getTaskCardMarkdown, intWorkflowState, ReconcileWorkflow, getReadyNodes, getMatchingNode, UpdateWorkflowNode, getValueDigest } from './workflow.js'
 import { RunPlanningReview, getReviewSnapshot, isPlanningReviewCurrent, type PlanningAgentAssessmentInfo, type ReviewSnapshot } from './planning-review.js'
-import { getArtifactSnapshot, getWorkspaceId } from './artifacts.js'
+import { getArtifactSnapshot } from './artifacts.js'
+import { getToolApprovalDenial, getHostApprovalPolicy, getApprovalPolicyDiagnostics } from './approval-policy.js'
 import { getCheckpoint } from './checkpoint.js'
 import { createFeatureSession, type FeatureSession } from './feature-session.js'
 import { calculate } from './math/operators.js'
@@ -70,6 +72,7 @@ export interface SwarmServiceDepsInfo {
   getTools: () => ToolsLike | undefined
   getAttachments: () => AttachmentsLike | undefined
   getCredentials: () => CredentialsLike | undefined
+  getApproval?: () => ApprovalServiceLike | undefined
   /** 可选：读取会话当前预设（切换过预设的会话，会话头里仍是创建时的预设） */
   getSessionProjections?: () => SessionProjectionsLike | undefined
   dshHome: string
@@ -178,7 +181,7 @@ export interface SwarmService {
   OnSubagentEnd: (info: SubagentEndInfoLike) => void
   /** 天枢进入下一步前：滤掉已由 swarm_delegate 取走结果的连续会话结束通知，避免同一结果进上下文两次 */
   FilterPreStep: (decision: PreStepDecisionLike) => PreStepDecisionLike
-  getDiagnostics: () => string[]
+  getDiagnostics: (agent?: AgentLike) => string[]
   ReviewPlan: (raw: unknown, exec: DelegateExecInfo) => Promise<unknown>
   Calculate: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   ReadContext: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
@@ -374,16 +377,14 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (task === undefined) throw new SwarmError('UNKNOWN_TASK', '必须指定当前任务 task_id；多任务不能默认选取')
     if (owner === undefined && !isRootTianShu(exec.agent)) throw new SwarmError('INVALID_ARGS', '工具只服务百工管理的根会话或已绑定专家')
     task = refreshIntent(session, task, session.rootAgent ?? exec.agent)
-    if (binding !== undefined && ((binding.requestRevision ?? 1) !== (task.requestRevision ?? 1)
-      || binding.cardRevision !== (task.cardRevision ?? 1) || binding.workflowRevision !== (task.workflowRevision ?? 1))) throw new SwarmError('STALE_EVIDENCE', '专家绑定的是旧任务需求或合同版本')
+    if (binding !== undefined && !isTaskVersionCurrent(task, binding)) throw new SwarmError('STALE_EVIDENCE', '专家绑定的是旧任务需求或合同版本')
     return { session, features, task, binding, agent: exec.agent }
   }
   const reviewSnapshot = (task: TaskRecord): ReviewSnapshot => getReviewSnapshot({
     rootSessionId: task.sessionId, workspaceId: task.workspaceId ?? '',
-    taskId: task.taskId, requestRevision: task.requestRevision ?? 1,
+    ...getTaskBinding(task),
     requestText: task.intentText ?? task.card.goal, requestSource: task.intentSource ?? 'declared',
     requestRefs: [{ source: task.intentSourceRef ?? 'declared', text: task.intentText ?? task.card.goal }],
-    cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1,
     card: task.card, workflow: task.workflowDefinition ?? getDefaultWorkflow(task.card, task.gates), gates: task.gates,
     parserVersion: '11.12.0',
     reviewPolicy: { requireJev: deps.getConfig().planningReview.requireJev, reviewAbove: deps.getConfig().planningReview.reviewAbove }
@@ -394,8 +395,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const refreshContractContexts = (session: SessionStateInfo, task: TaskRecord): TaskRecord => {
     const features = session.features
     if (features === undefined) return task
-    const binding = { rootSessionId: session.sessionId, workspaceId: features.workspaceId, taskId: task.taskId,
-      cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1 }
+    const binding = getTaskContextBinding(task, features.workspaceId)
     const contract = features.addContext({ binding, layer: 'L0', kind: 'contract', text: JSON.stringify({
       goal: task.card.goal, acceptance: task.card.acceptance, scope: task.card.scope, flags: task.card.flags,
       perf: task.card.perf, gates: task.gates, workflowRevision: task.workflowRevision
@@ -516,10 +516,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       childSignals.set(agentId, signal)
       const features = await ensureFeatures(session, session.rootAgent ?? { id: task.sessionId })
       const ready = features.bindings.bind({
-        agentId, rootSessionId: task.sessionId, workspaceId: features.workspaceId, taskId: task.taskId,
+        agentId, ...getTaskContextBinding(task, features.workspaceId),
         nodeId: record.nodeId ?? 'legacy', attemptId: record.attemptId ?? record.delegationId, threadId: agentId, role,
-        cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1,
-        requestRevision: task.requestRevision ?? 1,
         permissions: [
           ...(getRoleInfo(role).capabilities.includes('calculate') ? ['pure-calc'] : []),
           ...(getRoleInfo(role).capabilities.includes('context') ? ['context-read'] : []),
@@ -564,7 +562,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (!config.review.enabled || !config.jev.enabled) return undefined
     session.counters.review += 1
     const outcome = await jev.getClient().ask(state, questions, signal)
-    return outcome.ok ? ParseAssessment(outcome.answers, config.review, outcome.model) : { status: 'unavailable', reason: outcome.reason }
+    return outcome.ok ? ParseAssessment(outcome.answers, config.review, outcome.model) : { status: 'unavailable', reason: outcome.reason, failureKind: getJevFailureKind(outcome) }
   }
 
   /** 专家交付完成后复评；存疑时写入未解决事项，提醒天枢核实或重新委派 */
@@ -755,10 +753,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
             childOwners.set(run.id, session.sessionId)
             childSignals.set(run.id, exec.signal)
             routeState.AddChild(run.id, { chain: candidates, role: 'yu_shi', logicalRequestId: reservationId })
-            const ready = features.bindings.bind({ agentId: run.id, rootSessionId: session.sessionId,
-              workspaceId: features.workspaceId, taskId: task.taskId, nodeId: 'planning-review', attemptId: reservationId, threadId: run.id,
-              role: 'yu_shi', cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1,
-              requestRevision: task.requestRevision ?? 1,
+            const ready = features.bindings.bind({ agentId: run.id, ...getTaskContextBinding(task, features.workspaceId),
+              nodeId: 'planning-review', attemptId: reservationId, threadId: run.id,
+              role: 'yu_shi',
               permissions: ['pure-calc', 'context-read'], blindReview: true })
               .then(async () => { await features.persist('workflow/review-start', session.store, session.threads, routeState.getHealth()) })
             childReady.set(run.id, ready)
@@ -781,7 +778,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           session.counters.review += 1
           const outcome = await jev.getClient().ask(state, questions, exec.signal)
           features.finishBudgetFor(task).observeJev(outcome.ok ? outcome.usage : undefined, outcome.attempts)
-          return outcome.ok ? { status: 'ok', answers: outcome.answers, model: outcome.model } : { status: 'unavailable', reason: outcome.reason }
+          return outcome.ok ? { status: 'ok', answers: outcome.answers, model: outcome.model }
+            : { status: isJevAvailabilityFailure(outcome) ? 'unavailable' : 'unknown', reason: outcome.reason }
         }
       })
       return session.taskLock.run(async () => {
@@ -812,7 +810,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       ...(remaining === undefined ? {} : { limits: { maxWorkUnits: Math.max(0, remaining) } }) })
     budget.settle(id, { workUnits: result.workUnits })
     const artifact = features.addContext({
-      binding: { rootSessionId: session.sessionId, workspaceId: features.workspaceId, taskId: task.taskId, cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1 },
+      binding: getTaskContextBinding(task, features.workspaceId),
       layer: 'L2', kind: 'evidence', text: JSON.stringify({ input: request, result })
     })
     session.store.UpdateTask(task.taskId, { contextRefs: [...(task.contextRefs ?? []), { ref: artifact.ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind }] })
@@ -822,11 +820,11 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   }
 
   const ReadContext: SwarmService['ReadContext'] = async (raw, exec) => {
-    const { session, features, task, binding } = await getToolTask(raw, exec)
+    const { features, task, binding } = await getToolTask(raw, exec)
     const args = raw as { ref?: string; cursor?: string; limit?: number; expectedDigest?: string }
     if (typeof args.ref !== 'string') throw new SwarmError('INVALID_ARGS', '需要上下文 ref')
     if (binding !== undefined) features.bindings.requireActive(binding.agentId, 'context-read')
-    return features.contexts.Read(binding ?? { rootSessionId: session.sessionId, workspaceId: features.workspaceId, taskId: task.taskId, cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1 }, args.ref, args)
+    return features.contexts.Read(binding ?? getTaskContextBinding(task, features.workspaceId), args.ref, args)
   }
 
   const requireMailbox = async (raw: unknown, exec: ToolExecLike) => {
@@ -854,8 +852,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     return features.experiences.list(args.problemClass, args.includeCandidates === true).slice(0, 3)
   }
 
-  const getDiagnostics = (): string[] => {
-    const out: string[] = []
+  const getDiagnostics = (agent?: AgentLike): string[] => {
+    const out: string[] = getApprovalPolicyDiagnostics(deps.getConfig().approvals, getHostApprovalPolicy(deps.getApproval?.(), agent))
     if (deps.getLlm() === undefined) out.push('ctx.llm 不可用：无法做路由预检')
     if (deps.getTools() === undefined) out.push('ctx.tools 不可用：无法计算子智能体工具白名单')
     const spawn = deps.getSubagents()?.getProvider(SPAWN_PROVIDER)
@@ -876,7 +874,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       .map((task) => reconcileTask(session, refreshIntent(session, task, exec.agent)))
     const views = tasks.map((task) =>
       getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session)))
-    return { ...getStatusResult(views, session, getDiagnostics()),
+    return { ...getStatusResult(views, session, getDiagnostics(exec.agent)),
       persistence: { durable: session.features?.store.durable ?? false, recovery: '已审计状态可恢复；不自动恢复旧 live thread' },
       recovery: { isolatedRoutes: routeState.getHealth(), current: routeState.getRecovery(exec.agent.id) ?? null, nativeInternalRetryCoverage: 'unverified' },
       executionBudgets: session.features === undefined ? [] : tasks.map((task) => ({ task_id: task.taskId, ...session.features!.budgetFor(task).getSnapshot() }))
@@ -993,6 +991,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const getGuardReason = (execution: ToolExecutionLike): string | undefined => {
     const writer = WRITE_TOOL_NAMES.includes(execution.name) || ['bash', 'pwsh'].includes(execution.name)
     const role = getRoleForAgent(execution.agent)
+    if (isManagedAgent(execution.agent)) {
+      const denied = getToolApprovalDenial(execution, deps.getConfig().approvals)
+      if (denied !== undefined) return denied
+    }
     const owner = execution.agent === undefined ? undefined : childOwners.get(execution.agent.id)
     if (owner !== undefined && execution.agent !== undefined) {
       const session = getSession(owner)
@@ -1003,7 +1005,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         if (binding.state !== 'active') return '专家执行身份已经撤销，请重新委派'
         const currentTask = session.store.getTask(binding.taskId)
         const task = currentTask === undefined ? undefined : refreshIntent(session, currentTask, session.rootAgent ?? execution.agent)
-        if (task === undefined || (task.cardRevision ?? 1) !== binding.cardRevision || (task.workflowRevision ?? 1) !== binding.workflowRevision || (task.requestRevision ?? 1) !== (binding.requestRevision ?? 1)) return '专家绑定的是旧任务版本，不能继续执行工具'
+        if (task === undefined || !isTaskVersionCurrent(task, binding)) return '专家绑定的是旧任务版本，不能继续执行工具'
       }
       if (['read', 'read_image', 'glob', 'grep', 'write', 'edit'].includes(execution.name)) {
         const canonical = (path: string): string => {
@@ -1077,11 +1079,14 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const attemptId = randomUUID()
       const reservationId = `delegation-${attemptId}`
       const requestTask = reconcileTask(session, refreshIntent(session, getTaskOrThrow(session, args.task_id), exec.agent))
-      const requestDigest = digest({ ...args, cardRevision: requestTask.cardRevision ?? 1,
-        workflowRevision: requestTask.workflowRevision ?? 1, requestRevision: requestTask.requestRevision ?? 1 })
+      const requestInput = { ...args, cardRevision: requestTask.cardRevision ?? 1,
+        workflowRevision: requestTask.workflowRevision ?? 1, requestRevision: requestTask.requestRevision ?? 1 }
+      const requestDigest = getValueDigest(requestInput)
+      const legacyRequestDigest = digest(requestInput)
+      const matchesRequest = (saved: string | undefined): boolean => saved === requestDigest || saved === legacyRequestDigest
       const previousRequest = args.request_id === undefined ? undefined : getTaskOrThrow(session, args.task_id).requestIds?.[args.request_id]
       if (previousRequest !== undefined) {
-        if (requestTask.requestInputs?.[args.request_id!] !== requestDigest) throw new SwarmError('INVALID_ARGS', '相同 request_id 的输入或任务版本已改变')
+        if (!matchesRequest(requestTask.requestInputs?.[args.request_id!])) throw new SwarmError('INVALID_ARGS', '相同 request_id 的输入或任务版本已改变')
         const previous = session.store.getDelegation(previousRequest)
         if (previous !== undefined) return previous
         throw new SwarmError('RECOVERY_REQUIRED', '此请求正在执行或需要恢复核对，不能重复启动')
@@ -1089,11 +1094,12 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       let replay: DelegationRecord | undefined
       await session.taskLock.run(async () => {
         prepared = reconcileTask(session, refreshIntent(session, getTaskOrThrow(session, args.task_id), exec.agent))
+        if (!isTaskVersionCurrent(prepared, requestTask)) throw new SwarmError('STALE_EVIDENCE', '等待预约期间任务版本已改变，请读取新合同')
         if (args.request_id !== undefined) {
           if (typeof args.request_id !== 'string' || !args.request_id || args.request_id.length > 128 || ['__proto__', 'constructor', 'prototype'].includes(args.request_id)) throw new SwarmError('INVALID_ARGS', 'request_id 必须是有界合法标识')
           const existing = prepared.requestIds?.[args.request_id]
           if (existing !== undefined) {
-            if (prepared.requestInputs?.[args.request_id] !== requestDigest) throw new SwarmError('INVALID_ARGS', '相同 request_id 的输入或任务版本已改变')
+            if (!matchesRequest(prepared.requestInputs?.[args.request_id])) throw new SwarmError('INVALID_ARGS', '相同 request_id 的输入或任务版本已改变')
             replay = session.store.getDelegation(existing)
             if (replay !== undefined) return
             throw new SwarmError('RECOVERY_REQUIRED', '同一请求已有正在执行的 attempt，拒绝重复启动')
@@ -1138,7 +1144,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       try {
         lease = kind === undefined ? undefined : await leases.acquire(cwd, `${exec.agent.id}:${attemptId}`, kind, exec.signal)
         const current = refreshIntent(session, getTaskOrThrow(session, args.task_id), exec.agent)
-        if ((current.cardRevision ?? 1) !== (captured.cardRevision ?? 1) || (current.workflowRevision ?? 1) !== (captured.workflowRevision ?? 1) || (current.requestRevision ?? 1) !== (captured.requestRevision ?? 1)) {
+        if (!isTaskVersionCurrent(current, captured)) {
           executionBudget!.cancel(reservationId)
           throw new SwarmError('STALE_EVIDENCE', '等待执行期间任务版本已改变')
         }
@@ -1181,7 +1187,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
             task = session.store.UpdateTask(task.taskId, { checkpoint, artifactSnapshot: after })
             session.ledger.AddLedgerEvent({ type: 'workflow/checkpoint', taskId: task.taskId, delegationId: updated.delegationId, data: { ...checkpoint } })
             const material = features.addContext({
-              binding: { rootSessionId: task.sessionId, workspaceId: features.workspaceId, taskId: task.taskId, cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1 },
+              binding: getTaskContextBinding(task, features.workspaceId),
               layer: 'L2', kind: verifier ? 'evidence' : 'author-reasoning', text: JSON.stringify({ summary: updated.summary, structured: updated.structured, evidence: updated.evidence })
             })
             session.store.UpdateTask(task.taskId, { contextRefs: [...(task.contextRefs ?? []), { ref: material.ref, digest: material.digest, layer: material.layer, kind: material.kind }] })

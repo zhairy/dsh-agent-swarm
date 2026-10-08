@@ -57,6 +57,19 @@ const make = (options: { jevAvailable?: boolean; requireJev?: boolean; reviewVer
 }
 
 describe('automatic planning review through the service', () => {
+  it.each([
+    { name: 'malformed JSON', response: () => new Response('broken JSON', { status: 200 }) },
+    { name: 'empty answers', response: () => new Response('{"answers":{}}', { status: 200 }) },
+    { name: 'permission denied', response: () => new Response('{"error":{"code":"PERMISSION_DENIED"}}', { status: 403 }) }
+  ])('never degrades $name into approval when Jev is optional', async ({ response }) => {
+    const runtime = make({ requireJev: false })
+    runtime.fetchMock.mockImplementation(async () => response())
+    const task = await runtime.service.AddTaskCard(runtime.card(), runtime.exec())
+    expect(task.planningReview?.status).toBe('review_required')
+    expect(task.planningReview?.jev.status).toBe('unknown')
+    expect(runtime.fetchMock).toHaveBeenCalledTimes(1)
+    await expect(runtime.service.delegate({ task_id: task.task_id, role: 'mou_ding', prompt: '不得使用坏判断放行' }, runtime.exec())).rejects.toThrow(/审核/)
+  })
   it('generates a valid flow, runs fresh readonly Agent and Jev, then permits only ready nodes', async () => {
     const runtime = make()
     const task = await runtime.service.AddTaskCard(runtime.card(), runtime.exec())

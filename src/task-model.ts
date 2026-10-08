@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { AgentLike } from './host-contract.js'
 import type { DelegationRecord, TaskRecord } from './evidence.js'
 import type { TaskCard } from './policy.js'
+import type { ContextBindingInfo } from './context-store.js'
 
 export interface TaskIntent { text: string; source: 'host' | 'declared'; sourceRef: string; digest: string }
 export const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -36,12 +37,19 @@ export const getTaskBinding = (task: TaskRecord) => ({
   requestRevision: task.requestRevision ?? 1
 })
 
+/** Every task-scoped capability shares the same version comparison; missing legacy versions mean 1. */
+export const isTaskVersionCurrent = (task: TaskRecord, binding: { cardRevision?: number; workflowRevision?: number; requestRevision?: number }): boolean =>
+  (task.cardRevision ?? 1) === (binding.cardRevision ?? 1)
+  && (task.workflowRevision ?? 1) === (binding.workflowRevision ?? 1)
+  && (task.requestRevision ?? 1) === (binding.requestRevision ?? 1)
+
+export const getTaskContextBinding = (task: TaskRecord, workspaceId: string): ContextBindingInfo => ({
+  rootSessionId: task.sessionId, workspaceId, ...getTaskBinding(task)
+})
+
 export const getCurrentDelegations = (task: TaskRecord, records: DelegationRecord[], artifactDigest?: string): DelegationRecord[] =>
   records.filter((record) => {
-    const revision = task.cardRevision ?? 1
-    if ((record.cardRevision ?? 1) !== revision || record.staleReason) return false
-    if ((record.requestRevision ?? 1) !== (task.requestRevision ?? 1)) return false
-    if (record.workflowRevision !== undefined && record.workflowRevision !== (task.workflowRevision ?? 1)) return false
+    if (!isTaskVersionCurrent(task, record) || record.staleReason) return false
     // 成功验证必须绑定当前产物；旧输入兼容仅限尚未引入版本绑定的第一版任务。
     if (artifactDigest && (['fu_he', 'yu_shi'].includes(record.role) || (record.role === 'suan_heng' && record.mode === 'verify'))
       && record.artifactAfter !== undefined && record.artifactAfter !== artifactDigest) return false

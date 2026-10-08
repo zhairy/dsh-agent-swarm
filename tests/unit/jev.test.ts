@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DEFAULT_JEV_CONFIG, JEV_PATH, JEV_QUESTIONS, ParseJevAnswers, getJevState, getRedactedText, intJevClient, intRequestLimiter } from '../../src/jev.js'
+import { DEFAULT_JEV_CONFIG, JEV_PATH, JEV_QUESTIONS, ParseJevAnswers, getJevState, getRedactedText, intJevClient, intRequestLimiter, getJevFailureKind, isJevAvailabilityFailure } from '../../src/jev.js'
 import { ValidateTaskCard, type TaskCard } from '../../src/policy.js'
 
 const card = ValidateTaskCard({
@@ -59,6 +59,13 @@ describe('脱敏与请求体', () => {
     expect(ParseJevAnswers(okBody)).toEqual({ mathTask: { choice: 'equivalence', confidence: 0.82 }, needBenchmark: 0.91, novelty: { score: 1.2, confidence: 0.7 } })
     expect(ParseJevAnswers({})).toEqual({})
     expect(ParseJevAnswers(null)).toEqual({})
+  })
+
+  it('非法概率、非有限数与超出数学分流选项/档位的答案不能进入判断', () => {
+    for (const value of [-0.1, 1.1, NaN, Infinity]) {
+      expect(ParseJevAnswers({ answers: { math_task: { choice: 'equivalence', confidence: value }, need_benchmark: { noul: value }, novelty: { score: 1, confidence: value } } })).toEqual({})
+    }
+    expect(ParseJevAnswers({ answers: { math_task: { choice: 'invented', confidence: 0.9 }, novelty: { score: 3, confidence: 0.9 } } })).toEqual({})
   })
 })
 
@@ -156,6 +163,79 @@ describe('intJevClient', () => {
     const malformed = vi.fn(async () => jsonResponse(200, { answers: {} }))
     const bad = intJevClient(DEFAULT_JEV_CONFIG, { fetch: malformed as unknown as typeof fetch, getApiKey: async () => 'k', sleep })
     expect(await bad.triage(card)).toEqual({ ok: false, reason: 'malformed-response', attempts: 1 })
+  })
+
+  it('HTTP成功但JSON损坏是响应错误，ask和health均不执行网络重试', async () => {
+    const fetchMock = vi.fn(async () => new Response('not valid JSON', { status: 200 }))
+    const wait = vi.fn(async () => undefined)
+    const client = intJevClient(DEFAULT_JEV_CONFIG, { fetch: fetchMock as typeof fetch, getApiKey: async () => 'k', sleep: wait })
+    expect(await client.ask({}, {})).toEqual({ ok: false, reason: 'malformed-response', attempts: 1, status: 502 })
+    expect(await client.listModels()).toEqual({ ok: false, reason: 'malformed-response', status: 502 })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(wait).not.toHaveBeenCalled()
+  })
+
+  it('取消Retry-After等待立即结束；不会等待注入sleep完成或发第二次请求', async () => {
+    const controller = new AbortController()
+    let entered!: () => void
+    const waiting = new Promise<void>((resolve) => { entered = resolve })
+    const wait = vi.fn(async () => { entered(); await new Promise<void>(() => undefined) })
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 429, headers: { 'retry-after': '30' } }))
+    const client = intJevClient(DEFAULT_JEV_CONFIG, { fetch: fetchMock as typeof fetch, getApiKey: async () => 'k', sleep: wait })
+    const pending = client.ask({}, {}, controller.signal)
+    await waiting
+    controller.abort()
+    expect(await pending).toEqual({ ok: false, reason: 'aborted', attempts: 1, status: 499 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('默认backoff取消会清理定时器；取消后不等30秒', async () => {
+    vi.useFakeTimers()
+    try {
+      const controller = new AbortController()
+      const fetchMock = vi.fn(async () => new Response('{}', { status: 429, headers: { 'retry-after': '30' } }))
+      const client = intJevClient(DEFAULT_JEV_CONFIG, { fetch: fetchMock as typeof fetch, getApiKey: async () => 'k' })
+      const pending = client.ask({}, {}, controller.signal)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+      controller.abort()
+      expect(await pending).toMatchObject({ ok: false, reason: 'aborted', attempts: 1 })
+      expect(vi.getTimerCount()).toBe(0)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('权限/取消/坏响应/余额终态与可降级服务不可用保持不同分类', async () => {
+    for (const [failure, kind] of [
+      [{ reason: 'malformed-response', status: 502 }, 'invalid-response'],
+      [{ reason: 'credential-permission-denied', status: 403 }, 'permission'],
+      [{ reason: 'credential-unavailable', status: 503 }, 'unknown'],
+      [{ reason: 'aborted', status: 499 }, 'cancelled'],
+      [{ reason: 'http-401', status: 401 }, 'authentication'],
+      [{ reason: 'http-402', status: 402 }, 'billing'],
+      [{ reason: 'request-too-large', status: 400 }, 'invalid-request']
+    ] as const) {
+      expect(getJevFailureKind(failure)).toBe(kind)
+      expect(isJevAvailabilityFailure(failure)).toBe(false)
+    }
+    expect(isJevAvailabilityFailure({ reason: 'network', status: 503 })).toBe(true)
+    expect(isJevAvailabilityFailure({ reason: 'disabled' })).toBe(true)
+    expect(isJevAvailabilityFailure({ reason: 'missing-api-key', status: 401 })).toBe(true)
+    const client = intJevClient(DEFAULT_JEV_CONFIG, { fetch: (async () => jsonResponse(429, { error: { code: 'insufficient_quota' } })) as typeof fetch, getApiKey: async () => 'k' })
+    const outcome = await client.ask({}, {})
+    expect(outcome).toMatchObject({ ok: false, failureKind: 'billing', attempts: 1 })
+    if (!outcome.ok) expect(isJevAvailabilityFailure(outcome)).toBe(false)
+  })
+
+  it('非标准HTTP状态中的明确认证/权限/模型错误也不误降级为临时不可用', async () => {
+    for (const [code, kind] of [['UNAUTHORIZED', 'authentication'], ['FORBIDDEN', 'permission'], ['UNKNOWN_MODEL', 'invalid-request']] as const) {
+      const fetchMock = vi.fn(async () => jsonResponse(429, { error: { code } }))
+      const client = intJevClient(DEFAULT_JEV_CONFIG, { fetch: fetchMock as typeof fetch, getApiKey: async () => 'k' })
+      const outcome = await client.ask({}, {})
+      expect(outcome).toMatchObject({ ok: false, failureKind: kind, attempts: 1 })
+      if (!outcome.ok) expect(isJevAvailabilityFailure(outcome)).toBe(false)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    }
   })
 
   it('调用方取消后不再请求、不再重试', async () => {

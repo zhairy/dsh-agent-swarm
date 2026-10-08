@@ -1,0 +1,131 @@
+{
+  "recordedAt": "2026-10-08T01:59:41.855187+00:00",
+  "scope": "Jev transport/error validation and approval settings component QA; source hashes cover owned files only and are not a whole-release freeze claim",
+  "realExternalJevCallsByThisReviewer": 0,
+  "externalMcpApprovalBoundary": "No external Jev MCP was retried or bypassed by this reviewer. Parent-agent real MCP evidence is separate.",
+  "machineChecks": {
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "targetedTests": {
+      "command": "npx vitest run tests/unit/jev.test.ts tests/unit/jev-hub.test.ts tests/unit/jev-tools.test.ts tests/unit/client-settings.test.ts tests/unit/rpc-task-view.test.ts tests/unit/review.test.ts tests/unit/threads.test.ts tests/unit/service.test.ts",
+      "filesPassed": 8,
+      "testsPassed": 107,
+      "note": "After this run, review output values were changed from rounded storage to raw values; a focused review/threads rerun verifies that final small change."
+    },
+    "finalReviewThreadsRerun": {
+      "command": "npx vitest run tests/unit/review.test.ts tests/unit/threads.test.ts",
+      "filesPassed": 2,
+      "testsPassed": 13,
+      "exitCode": 0
+    }
+  },
+  "browser": {
+    "tool": "agent-browser",
+    "browserPlugin": "not listed; mandatory agent-browser skill used",
+    "url": "http://127.0.0.1:4184/",
+    "title": "百工审批设置组件 QA",
+    "harness": "/tmp/swarm-approvals-preview.mjs",
+    "runtime": "existing DSH 0.2.0-rc.2 sandbox React modules, actual settings-page source and SwarmAgentsController",
+    "data": "isolated in-memory form fixture; no real DSH configuration writes and no evidence that host approval was granted",
+    "viewports": [
+      [
+        1280,
+        633
+      ],
+      [
+        390,
+        844
+      ]
+    ],
+    "checks": {
+      "identity": "pass",
+      "meaningfulContent": "pass",
+      "frameworkOverlay": "none",
+      "consoleMessages": [],
+      "uncaughtErrors": [],
+      "horizontalOverflow": false
+    },
+    "interactions": [
+      {
+        "action": "inherit -> ask; uncheck external_mcp; save",
+        "observed": {
+          "approvals": {
+            "mode": "ask",
+            "scope": [
+              "write",
+              "shell",
+              "jev"
+            ],
+            "futurePolicy": {
+              "version": 2
+            }
+          },
+          "jev": {
+            "enabled": true
+          },
+          "workflow": {
+            "mode": "enforced"
+          }
+        },
+        "assertion": "only approvals changed; other configuration and opaque existing approval field preserved; save/discard become disabled"
+      },
+      {
+        "action": "mobile: ask -> deny -> discard",
+        "observed": "mode restored to ask; no dirty draft; no horizontal overflow"
+      }
+    ],
+    "permissionFixture": "renders swarm/permission-denied and explanation that plugin settings cannot override host permission policy",
+    "screenshots": [
+      "approvals-desktop.png",
+      "approvals-mobile.png"
+    ]
+  },
+  "changes": [
+    {
+      "problem": "successful HTTP response with invalid JSON treated as network and retried",
+      "resolution": "malformed-response is terminal for transport retry and classified invalid-response"
+    },
+    {
+      "problem": "cancellation during retry backoff waited for sleep/Retry-After",
+      "resolution": "AbortSignal ends both default timer wait and injected-sleep wait immediately; default timer cleaned up"
+    },
+    {
+      "problem": "invalid Jev probabilities/score or prethreshold rounding could produce a judgment",
+      "resolution": "shared finite/range guards used by seven tools, triage, session planning and advisory review; invalid expected answers produce no conclusion; raw values used for comparisons"
+    },
+    {
+      "problem": "credential resolution denial silently tried environment fallback and RPC errors lost code",
+      "resolution": "credential read/describe failures are classified and fail closed; known RPC plugin errors preserve stable code; settings fallback only on explicit method-not-found"
+    },
+    {
+      "problem": "stale health request could validate a changed credential",
+      "resolution": "generation and credential-ref checks discard stale result"
+    },
+    {
+      "problem": "no plugin-local tool approval controls",
+      "resolution": "inherit/ask/deny with four scopes; UI explicitly separates tools, internal Jev HTTP, and host-level never policy"
+    }
+  ],
+  "remainingBoundaries": [
+    "This component browser QA does not certify a full DSH settings round trip, host user approval UI, or actual external MCP approval grant.",
+    "Jev answers are model judgments; local fixtures and machine regression tests are not independent model certification.",
+    "Public intRequestLimiter remains deprecated for compatibility and is not called by production client; production-unwired planning-review store is reported to parent rather than deleted."
+  ],
+  "sourceSha256": {
+    "src/jev.ts": "24228e830b92dd615fcf9842cc0117c9e3a318695666283d06776f3e66ddba0b",
+    "src/jev-hub.ts": "96c496508ae579d14f139c9ca7cf2d8115e6b521894497776129bf463dd48b49",
+    "src/jev-tools.ts": "59c6de205711854e3206799e7b9c76c264a7773ed6bc422b8f5c0aa8eaff8428",
+    "src/rpc.ts": "c065e10f4d68e4ede8663cef0f3055ed21ba5c09ccb2d404b9a0583c6d690d7e",
+    "src/review.ts": "9c005d58dc3115d3036261ab9a02c8735193889eb2efc50b97b867de9dfbea05",
+    "src/threads.ts": "90e9718e53a2c21c0b4015483bc2e6bbe6e7e885d58ce19f4dbf46f63a714367",
+    "client/settings-page.js": "21e9acc7324c17a64940278eb58573abc756300238794a281b595a309689bc07",
+    "tests/unit/jev.test.ts": "84bce1c3df37c18e4beeb1f2cfe8826f2cc9d2804c5fe63bf5d8aaddc934b05a",
+    "tests/unit/jev-hub.test.ts": "cb8247ddb124bd38560b29a1d8ee6ba48f606e564e7829b3a428ab85fc502b1e",
+    "tests/unit/jev-tools.test.ts": "2762419e89bccfe7c1066413ae26c36b450f6048e6f71c70470c1755286e8c8c",
+    "tests/unit/review.test.ts": "414aba35c84444972f92cfc73dcc64962cd553ea032694e39f5dc1b36ba10745",
+    "tests/unit/threads.test.ts": "3c94604d5e39dac5740f853298c0ae5028c10fbb6891bcea495b823724097b93",
+    "tests/unit/client-settings.test.ts": "e58d44d06e36b091b5c365d7b6fea80558642a925a003d8366c317cfc1c373ed"
+  }
+}

@@ -4,6 +4,10 @@
   config:
     # 主会话模型遇到致命失败（额度耗尽、模型不可用、认证失败）时，按天枢链回退
     rootFallback: true
+    approvals:
+      mode: inherit               # inherit继承宿主；ask额外请求审批；deny额外拒绝，不能覆盖宿主never
+      scope: [write, shell, external_mcp, jev]
+      # 只针对工具调用；内部规划/复评的Jev HTTP及native私有工具仍由各自接口管理
     # manual：只在 swarm_delegate 显式传 backend: codex/claude 时使用原生后端
     # auto：任务带 G_MATH_VERIFY / G_REVIEW / G_DIFF_TEST 或涉及安全时，按角色的升级通道自动使用
     nativeEscalation: manual

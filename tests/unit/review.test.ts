@@ -61,8 +61,21 @@ describe('衡鉴复评：判定', () => {
 
   it('复评文本', () => {
     expect(getAssessmentText(undefined)).toBeUndefined()
-    expect(getAssessmentText({ status: 'unavailable', reason: 'missing-api-key' })).toBe('衡鉴复评：未执行（missing-api-key）')
+    expect(getAssessmentText({ status: 'unavailable', reason: 'missing-api-key' })).toBe('衡鉴复评：无有效结论（missing-api-key）')
     expect(getAssessmentText(ParseAssessment(answers(3, 0.9), DEFAULT_REVIEW_THRESHOLDS))).toBe('衡鉴复评：可信（可信度 1.00；证据支撑 0.90；完整性 0.80；角色专项 0.70）')
+  })
+
+  it('越界/非有限评分与概率不夹值通过，缺少支撑判断不能退成高评分可信', () => {
+    for (const score of [-1, 3.1, NaN, Infinity]) expect(ParseAssessment(answers(score, 0.9), DEFAULT_REVIEW_THRESHOLDS)).toEqual({ status: 'unavailable', reason: 'malformed-response' })
+    for (const value of [-0.1, 1.1, NaN, Infinity]) {
+      expect(ParseAssessment(answers(3, value), DEFAULT_REVIEW_THRESHOLDS).status).toBe('unavailable')
+      expect(ParseAssessment({ ...answers(3, 0.9), reliability: { score: 3, confidence: value } }, DEFAULT_REVIEW_THRESHOLDS).status).toBe('unavailable')
+      expect(ParseAssessment({ ...answers(3, 0.9), role_check: { noul: value } }, DEFAULT_REVIEW_THRESHOLDS).status).toBe('unavailable')
+    }
+    expect(ParseAssessment({ reliability: { score: 3, confidence: 0.9 }, complete: { noul: 0.9 } }, DEFAULT_REVIEW_THRESHOLDS).status).toBe('unavailable')
+    expect(ParseAssessment(answers(2, 0.9), DEFAULT_REVIEW_THRESHOLDS)).toMatchObject({ verdict: 'review' })
+    expect(ParseAssessment(answers(2, 0.9), DEFAULT_REVIEW_THRESHOLDS).reliability).toBeCloseTo(2 / 3)
+    expect(ParseAssessment(answers(3, 0.599), DEFAULT_REVIEW_THRESHOLDS).verdict).toBe('review')
   })
 
   it('复评存疑触发同角色（算衡按模式）的容灾升级', () => {

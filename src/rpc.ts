@@ -2,6 +2,8 @@ import type { FetchRouteLike } from './host-contract.js'
 import type { JevHub } from './jev-hub.js'
 import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
+import { JevCredentialError } from './jev.js'
+import { SwarmError } from './util/errors.js'
 
 /**
  * 设置页使用的宿主 RPC：沿用 DSH 浏览器端 rpc.call('/api', method, payload) 的线格式
@@ -47,6 +49,8 @@ export const RunRpcMethod = async (jev: JevHub, method: RpcMethod, signal: Abort
     if (deps === undefined) return failure('swarm/unavailable', 'taskView service unavailable')
     return { ok: true, value: await deps.taskView(input.sessionId, input.taskId) }
   } catch (error) {
+    if (error instanceof JevCredentialError) return failure(error.reason === 'credential-permission-denied' ? 'swarm/permission-denied' : 'swarm/credential-unavailable', error.reason)
+    if (error instanceof SwarmError) return failure(`swarm/${error.code.toLowerCase().replaceAll('_', '-')}`, error.message)
     return failure('swarm/internal', error instanceof Error ? error.message : String(error))
   }
 }

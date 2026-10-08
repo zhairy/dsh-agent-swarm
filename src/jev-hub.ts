@@ -1,10 +1,10 @@
 import type { CredentialsLike } from './host-contract.js'
-import { intJevClient, type JevClient, type JevConfigInfo } from './jev.js'
+import { getJevCredentialError, intJevClient, type JevClient, type JevConfigInfo } from './jev.js'
 import { intJevTools, type JevToolResult, type JevTools } from './jev-tools.js'
 
 /**
  * Jev 接入点：衡鉴（分流、会话判断、复评）、7 个 jev_* 工具与设置页共用同一个客户端，
- * 这样进程内限流（maxRequestsPerSecond）对所有调用统一生效；配置变化时重建客户端。
+ * 所有入口共用凭据解析、取消与错误重试；无本地限流/调用额度，配置变化时重建客户端。
  */
 
 export interface JevHubDepsInfo {
@@ -46,14 +46,16 @@ export interface JevHealthInfo {
 export const intJevHub = (deps: JevHubDepsInfo) => {
   let memo: { fingerprint: string; client: JevClient } | undefined
 
-  /** 读取密钥：先走宿主凭据服务（设置页写入的值、secrets 文件、环境变量），再退回进程环境变量；只在本模块内使用 */
+  /** 读取密钥：宿主没有值时兼容进程环境变量；宿主读取失败或拒绝时保持失败，不改走另一来源。 */
   const getKey = async (ref: string): Promise<string | undefined> => {
     if (!isCredentialRefName(ref)) return undefined
     try {
       const hit = await deps.getCredentials()?.resolve(ref)
       if (hit?.value) return hit.value
     } catch (error) {
-      deps.logger?.warn(`读取 Jev 凭据引用 ${ref} 失败：${String(error)}`)
+      const failure = getJevCredentialError(error)
+      deps.logger?.warn(`读取 Jev 凭据引用 ${ref} 失败：${failure.reason}`)
+      throw failure
     }
     const value = process.env[ref]
     return value === undefined || value === '' ? undefined : value
@@ -91,7 +93,9 @@ export const intJevHub = (deps: JevHubDepsInfo) => {
         if (hit?.value) return { ref, configured: true, ...(hit.source === undefined ? {} : { source: hit.source }) }
       }
     } catch (error) {
-      deps.logger?.warn(`查询 Jev 凭据引用 ${ref} 失败：${String(error)}`)
+      const failure = getJevCredentialError(error)
+      deps.logger?.warn(`查询 Jev 凭据引用 ${ref} 失败：${failure.reason}`)
+      throw failure
     }
     if (inEnv) return { ref, configured: true, source: 'process-env', writable: false }
     return { ref, configured: false }
@@ -99,7 +103,9 @@ export const intJevHub = (deps: JevHubDepsInfo) => {
 
   const getHealth = async (signal?: AbortSignal): Promise<JevHealthInfo> => {
     const config = deps.getConfig()
-    const [key, result] = await Promise.all([describeKey(), tools.health(signal)])
+    // 凭据元数据被宿主拒绝时，不应已经在并行分支启动 HTTP 检查。
+    const key = await describeKey()
+    const result = await tools.health(signal)
     return { key, enabled: config.enabled, model: config.model, baseUrl: config.baseUrl, result }
   }
 

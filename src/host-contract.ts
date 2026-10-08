@@ -169,6 +169,23 @@ export interface ToolExecutionLike {
   name: string
   arguments?: unknown
   agent?: AgentLike
+  callId?: string
+  signal?: AbortSignal
+}
+
+/** DSH 0.2 ToolRuntime pre-dispatch waterfall; an ask is resolved by ctx.approval. */
+export type PreToolDecisionLike =
+  | { kind: 'allow' }
+  | { kind: 'deny'; reason: string; info?: { name: string; code: string; reason?: string } }
+  | { kind: 'cancel' }
+  | { kind: 'ask'; reason?: string; displayReason?: { en: string; [locale: string]: string } }
+
+export type ApprovalOutcomeLike = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+/** Public approval capability. Policy mutation is intentionally not part of the plugin contract. */
+export interface ApprovalServiceLike {
+  config?: { policy?: 'ask' | 'never' }
+  overrideOf?: (session: NonNullable<AgentLike['session']>) => 'ask' | 'never' | undefined
+  request: (request: { agent: AgentLike; toolName: string; callId?: string; reason?: string; signal?: AbortSignal }) => Promise<ApprovalOutcomeLike>
 }
 
 /** ctx.tools 的最小形状 */

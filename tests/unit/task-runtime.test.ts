@@ -264,6 +264,30 @@ describe('task execution through the public service', () => {
     }
   })
 
+  it('replays the same request when JSON object keys are reordered and rejects changed input', async () => {
+    const runtime = await makeRuntime()
+    const created = await runtime.service.AddTaskCard(card(), runtime.exec())
+    const args = { task_id: created.task_id, role: 'mou_ding', node_id: 'analysis', request_id: 'canonical-request', prompt: '一份结果', backend: 'api', session: 'oneshot' }
+    const first = await runtime.service.delegate(args, runtime.exec())
+    const reordered = Object.fromEntries(Object.entries(args).reverse())
+    const replay = await runtime.service.delegate(reordered, runtime.exec())
+    expect(replay.delegationId).toBe(first.delegationId)
+    expect(runtime.subagents.start).toHaveBeenCalledTimes(1)
+    await expect(runtime.service.delegate({ ...reordered, prompt: '不同任务输入' }, runtime.exec())).rejects.toThrow('输入或任务版本已改变')
+  })
+
+  it('rejects a contract that changes while delegation waits for its reservation lock', async () => {
+    const runtime = await makeRuntime()
+    const created = await runtime.service.AddTaskCard(card(), runtime.exec())
+    const update = runtime.service.AddTaskCard({ ...card(), task_id: created.task_id, goal: '更新后的任务目标' }, runtime.exec())
+    const execution = runtime.service.delegate({ task_id: created.task_id, role: 'mou_ding', prompt: '旧合同请求', backend: 'api', session: 'oneshot' }, runtime.exec())
+    const [updated, result] = await Promise.allSettled([update, execution])
+    expect(updated.status).toBe('fulfilled')
+    expect(result.status).toBe('rejected')
+    if (result.status === 'rejected') expect(result.reason).toMatchObject({ code: 'STALE_EVIDENCE' })
+    expect(runtime.subagents.start).not.toHaveBeenCalled()
+  })
+
   it('starts at most one expert for concurrent submissions of the same request_id', async () => {
     const runtime = await makeRuntime()
     const created = await runtime.service.AddTaskCard(card(), runtime.exec())

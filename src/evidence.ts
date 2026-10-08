@@ -24,6 +24,7 @@ export interface RouteAttempt {
 /** 衡鉴复评：交付完成后由 Jev 给出的置信度评分；它衡量判断的集中程度，不等于正确性，不作为硬门槛 */
 export interface AssessmentInfo {
   status: 'ok' | 'unavailable'
+  failureKind?: import('./jev.js').JevFailureKind
   /** 未执行的原因（例如 missing-api-key、disabled、http-503） */
   reason?: string
   /** 可信 / 需核实 / 存疑 */
@@ -186,6 +187,8 @@ export const intTaskStore = (): TaskStore => {
   const UpdateTask = (taskId: string, patch: Partial<TaskRecord>): TaskRecord => {
     const current = tasks.get(taskId)
     if (current === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${taskId}`)
+    if ((patch.taskId !== undefined && patch.taskId !== taskId) || (patch.sessionId !== undefined && patch.sessionId !== current.sessionId)) throw new SwarmError('INVALID_ARGS', '任务身份不能通过更新迁移')
+    if (patch.delegationIds !== undefined && (patch.delegationIds.length !== current.delegationIds.length || patch.delegationIds.some((id, index) => id !== current.delegationIds[index]))) throw new SwarmError('INVALID_ARGS', '委派关联只能由 AddDelegation 原子更新')
     const next = { ...current, ...patch, updatedAt: Date.now() }
     tasks.set(taskId, next)
     return next
@@ -194,13 +197,17 @@ export const intTaskStore = (): TaskStore => {
   const AddDelegation = (record: DelegationRecord): void => {
     const task = tasks.get(record.taskId)
     if (task === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${record.taskId}`)
+    if (delegations.has(record.delegationId) || task.delegationIds.includes(record.delegationId)) throw new SwarmError('INVALID_ARGS', `重复委派：${record.delegationId}`)
+    // Prepare both records before either Map changes; one synchronous commit cannot expose an orphan.
+    const nextTask = { ...task, delegationIds: [...task.delegationIds, record.delegationId], updatedAt: Date.now() }
     delegations.set(record.delegationId, record)
-    UpdateTask(record.taskId, { delegationIds: [...task.delegationIds, record.delegationId] })
+    tasks.set(record.taskId, nextTask)
   }
 
   const UpdateDelegation = (delegationId: string, patch: Partial<DelegationRecord>): DelegationRecord => {
     const current = delegations.get(delegationId)
     if (current === undefined) throw new SwarmError('UNKNOWN_TASK', `未知委派：${delegationId}`)
+    if ((patch.delegationId !== undefined && patch.delegationId !== delegationId) || (patch.taskId !== undefined && patch.taskId !== current.taskId)) throw new SwarmError('INVALID_ARGS', '委派身份与所属任务不能通过更新迁移')
     if (patch.status !== undefined && patch.status !== current.status && !ValidateTransition(current.status, patch.status)) {
       throw new SwarmError('INVALID_TRANSITION', `委派 ${delegationId} 不允许从 ${current.status} 变为 ${patch.status}`)
     }
@@ -210,14 +217,24 @@ export const intTaskStore = (): TaskStore => {
   }
 
   return {
-    AddTask: (task) => { tasks.set(task.taskId, task) },
+    AddTask: (task) => {
+      if (tasks.has(task.taskId)) throw new SwarmError('INVALID_ARGS', `重复任务：${task.taskId}`)
+      if (task.delegationIds.length > 0) throw new SwarmError('INVALID_ARGS', '新任务不能包含尚未提交的委派关联')
+      tasks.set(task.taskId, task)
+    },
     getTask: (taskId) => tasks.get(taskId),
     UpdateTask,
     AddDelegation,
     UpdateDelegation,
     getDelegation: (delegationId) => delegations.get(delegationId),
-    getTaskDelegations: (taskId) =>
-      (tasks.get(taskId)?.delegationIds ?? []).map((id) => delegations.get(id)).filter((d): d is DelegationRecord => d !== undefined),
+    getTaskDelegations: (taskId) => {
+      const records: DelegationRecord[] = []
+      for (const id of tasks.get(taskId)?.delegationIds ?? []) {
+        const record = delegations.get(id)
+        if (record !== undefined) records.push(record)
+      }
+      return records
+    },
     getTasks: () => [...tasks.values()]
   }
 }
