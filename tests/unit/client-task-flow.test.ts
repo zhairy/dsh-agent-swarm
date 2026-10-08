@@ -110,7 +110,7 @@ describe('真实任务流程客户端投影', () => {
     const second = loadMermaid(document)
     expect(first).toBe(second)
     await first
-    expect(script.src).toBe('/swarm-assets/mermaid.min.js')
+    expect(script.src).toBe('/api/swarm-assets/mermaid.min.js')
     expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ securityLevel: 'strict', flowchart: { htmlLabels: false } }))
   })
 })
