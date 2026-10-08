@@ -7,6 +7,10 @@ import { DEFAULT_UPGRADES, UPGRADE_TRIGGERS, UPGRADEABLE_KEYS, isUpgradeTrigger,
 import { DEFAULT_REVIEW_THRESHOLDS, type ReviewThresholdsInfo } from './review.js'
 import { readLiveObject } from './util/live.js'
 
+export const APPROVAL_SCOPES = ['write', 'shell', 'external_mcp', 'jev'] as const
+export interface ApprovalsConfigInfo { mode: 'inherit' | 'ask' | 'deny'; scope: readonly typeof APPROVAL_SCOPES[number][] }
+export const DEFAULT_APPROVALS_CONFIG: ApprovalsConfigInfo = { mode: 'inherit', scope: [...APPROVAL_SCOPES] }
+
 const RouteSchema = Schema.object({
   provider: Schema.string().required().description('provider 路由名，例如 qwen-token-plan-cn'),
   model: Schema.string().required().description('模型 ID'),
@@ -37,6 +41,10 @@ export const Config = Schema.object({
   routes: Schema.dict(RoleRouteSchema).default({})
     .description('按角色覆盖路由链；键为角色 ID（算衡用 suan_heng:research / suan_heng:verify）；留空使用内置默认').volatile(),
   rootFallback: Schema.boolean().default(true).description('主会话模型致命失败时按角色链回退').volatile(),
+  approvals: Schema.object({
+    mode: Schema.union(['inherit', 'ask', 'deny']).default('inherit'),
+    scope: Schema.array(Schema.union([...APPROVAL_SCOPES])).default([...APPROVAL_SCOPES])
+  }).default({}).description('工具审批：继承宿主、额外申请或拒绝；不能覆盖宿主 never，不控制内部 Jev HTTP 判断').volatile(),
   nativeEscalation: Schema.union(['manual', 'auto']).default('manual')
     .description('原生 Codex/Claude 升级：manual 仅在显式要求时使用；auto 在高风险任务上自动使用').volatile(),
   native: Schema.object({
@@ -202,6 +210,7 @@ export const DEFAULT_AGENTS_CONFIG: AgentsConfigInfo = {
 
 /** 合并默认值后的完整配置 */
 export interface SwarmConfigInfo {
+  approvals: ApprovalsConfigInfo
   routes: Partial<Record<RouteKey, RoleRouteInfo>>
   rootFallback: boolean
   nativeEscalation: 'manual' | 'auto'
@@ -305,6 +314,12 @@ export const getSwarmConfig = (raw: unknown): SwarmConfigInfo => {
   return {
     routes: getRouteOverrides(plain.routes),
     rootFallback: typeof plain.rootFallback === 'boolean' ? plain.rootFallback : true,
+    approvals: (() => {
+      const raw = readLiveObject(plain.approvals)
+      const mode = raw.mode === 'ask' || raw.mode === 'deny' ? raw.mode : 'inherit'
+      const scope = Array.isArray(raw.scope) ? [...new Set(raw.scope.filter((value): value is typeof APPROVAL_SCOPES[number] => (APPROVAL_SCOPES as readonly unknown[]).includes(value)))] : [...DEFAULT_APPROVALS_CONFIG.scope]
+      return { mode, scope }
+    })(),
     nativeEscalation: plain.nativeEscalation === 'auto' ? 'auto' : 'manual',
     native: getMerged(DEFAULT_NATIVE_CONFIG, plain.native),
     jev: { ...getMerged(DEFAULT_JEV_CONFIG, plain.jev), maxRequestsPerSecond: 0 },

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { getIntegerBits, getMathLimits, type MathLimits } from './limits.js'
-import { CALC_OPERATORS, canonicalMathJson, isRecord, type CalcErrorCode, type CalcOperator, type CalcRequest, type CalcResult, type NumericMode, type RationalValue } from './schema.js'
+import { CALC_OPERATORS, canonicalMathJson, isRecord, type CalcErrorCode, type CalcOperator, type CalcRequest, type CalcResult, type RationalValue } from './schema.js'
 
 export interface CalculateOptions { limits?: Partial<MathLimits>; enableExtended?: boolean }
 class CalcFailure extends Error {

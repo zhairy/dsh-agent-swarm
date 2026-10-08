@@ -27,6 +27,25 @@ const makeClient = (answers: Array<Answers | JevAskOutcome>, models?: Awaited<Re
 const choice = (picked: string, confidence: number, probabilities: Record<string, number> = { [picked]: confidence }) => ({ choice: picked, confidence, probabilities })
 
 describe('jev_ask', () => {
+  it('用户题目/标签/候选ID即使是__proto__也保留为普通自有键，不被对象原型吞掉', async () => {
+    const answers = Object.fromEntries([['__proto__', { noul: 0.8 }]])
+    const arbitrary = makeClient([answers])
+    expect(await arbitrary.tools.ask({ state: 's', questions: Object.fromEntries([['__proto__', { type: 'noul' }]]) })).toMatchObject({ ok: true })
+    expect(Object.hasOwn(arbitrary.asked[0]!.questions, '__proto__')).toBe(true)
+    const check = makeClient([answers])
+    expect(await check.tools.check({ state: 's', propositions: Object.fromEntries([['__proto__', 'present?']]) })).toMatchObject({ ok: true, answers: { flags: ['__proto__'] } })
+    const classify = makeClient([{ choice: choice('__proto__', 0.9) }])
+    expect(await classify.tools.classify({ state: 's', labels: Object.fromEntries([['__proto__', 'label']]), add_other: false })).toMatchObject({ ok: true, answers: { choice: '__proto__' } })
+    const candidates = Object.fromEntries([['__proto__', 'special candidate'], ...Array.from({ length: 20 }, (_, index) => [`c${index}`, `candidate ${index}`])])
+    const match = makeClient([
+      { choice: choice('__proto__', 0.9), exists: { noul: 0.9 } },
+      { choice: choice('none', 0.9), exists: { noul: 0.1 } },
+      { choice: choice('__proto__', 0.9) }
+    ])
+    expect(await match.tools.match({ query: 'q', candidates, window: 20 })).toMatchObject({ ok: true, answers: { best_id: '__proto__', best_text: 'special candidate' } })
+    expect(Object.hasOwn((match.asked[2]!.questions.choice as { criteria: object }).criteria, '__proto__')).toBe(true)
+  })
+
   it('unknown用量不冒充零，不估算虚假费用；混合有效/缺失窗口也明确unknown', async () => {
     for (const usage of [{}, { inputTokens: -1, outputTokens: Infinity }, { inputTokens: 12 }]) {
       const { tools } = makeClient([{ ok: true, answers: { q: { noul: 0.9 } }, attempts: 1, model: 'jev', usage, latencyMs: 1 }])
@@ -61,7 +80,7 @@ describe('jev_ask', () => {
     const missing = makeClient([{ ok: false, reason: 'missing-api-key', attempts: 0, status: 401 }])
     expect(await missing.tools.ask({ state: 'x', questions: { q: { type: 'noul' } } })).toMatchObject({ ok: false, status: 401, error: expect.stringContaining('百工 Agent') })
     const limited = makeClient([{ ok: false, reason: 'http-429', attempts: 5, status: 429, retryAfterMs: 2000 }])
-    expect(await limited.tools.ask({ state: 'x', questions: { q: { type: 'noul' } } })).toEqual({ ok: false, status: 429, error: 'TypeSafe API request failed', retry_after_ms: 2000 })
+    expect(await limited.tools.ask({ state: 'x', questions: { q: { type: 'noul' } } })).toEqual({ ok: false, status: 429, error: 'TypeSafe API request failed', reason: 'http-429', failure_kind: 'availability', retry_after_ms: 2000 })
   })
 })
 
@@ -92,6 +111,24 @@ describe('jev_classify', () => {
 })
 
 describe('jev_score / jev_check / jev_screen', () => {
+  it('拒绝缺失/越界/非有限概率、置信度及score，合法小数score仍可用', async () => {
+    for (const noul of [-0.1, 1.5, NaN, Infinity]) {
+      const direct = makeClient([{ q: { noul } }])
+      expect(await direct.tools.ask({ state: 's', questions: { q: { type: 'noul' } } })).toMatchObject({ ok: false, status: 502 })
+      const check = makeClient([{ q: { noul } }])
+      expect(await check.tools.check({ state: 's', propositions: { q: 'valid?' } })).toMatchObject({ ok: false, status: 502 })
+    }
+    expect(await makeClient([{ other: { noul: 0.9 } }]).tools.ask({ state: 's', questions: { q: { type: 'noul' } } })).toMatchObject({ ok: false, status: 502 })
+    for (const answer of [choice('a', 1.2), choice('a', 0.9, { a: NaN }), choice('a', 0.9, { z: 0.1 })]) {
+      expect(await makeClient([{ choice: answer }]).tools.classify({ state: 's', labels: { a: 'A', b: 'B' } })).toMatchObject({ ok: false, status: 502 })
+    }
+    for (const score of [-1, 3, NaN, Infinity]) {
+      expect(await makeClient([{ score: { score, confidence: 0.9 } }]).tools.score({ state: 's', levels: ['low', 'medium', 'high'], question: 'risk?' })).toMatchObject({ ok: false, status: 502 })
+    }
+    for (const metadata of [{ probabilities: null }, { legend: [] }]) {
+      expect(await makeClient([{ score: { score: 1.5, confidence: 0.9, ...metadata } }]).tools.score({ state: 's', levels: ['low', 'medium', 'high'], question: 'risk?' })).toMatchObject({ ok: false, status: 502 })
+    }
+  })
   it('score：normalized 按档位数归一；档位与题干必填', async () => {
     const { tools } = makeClient([{ score: { score: 1.5, confidence: 0.7, legend: { 0: '低', 1: '中', 2: '高', 3: '极高' } } }])
     expect(await tools.score({ state: 's', levels: ['低', '中', '高', '极高'], question: '风险多大？' })).toMatchObject({ ok: true, answers: { score: 1.5, normalized: 0.5 } })
@@ -150,7 +187,7 @@ describe('jev_health 与工具定义', () => {
     const { tools } = makeClient([])
     expect(await tools.health()).toMatchObject({ ok: true, model: 'jev-latest', answers: { models: [{ name: 'jev-1.13.0', release_date: '2026-09-01' }], round_trip_latency_ms: 120 }, usage: { est_cost_usd: 0 } })
     const down = makeClient([], { ok: false, reason: 'network', status: 503 })
-    expect(await down.tools.health()).toEqual({ ok: false, status: 503, error: 'TypeSafe service unavailable' })
+    expect(await down.tools.health()).toEqual({ ok: false, status: 503, error: 'TypeSafe service unavailable', reason: 'network', failure_kind: 'availability' })
   })
 
   it('7 个工具按固定顺序注册，参数先按 schema 校验，结果渲染为中文摘要 + JSON', async () => {

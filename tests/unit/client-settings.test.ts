@@ -35,7 +35,7 @@ const loadPage = (): any => {
 }
 
 const page = loadPage()
-const { getSlots, getSlotErrors, buildRoutes, getOverride, getUpgradeView, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, SwarmAgentsController, JevKeyController, getResourceAccessMode } = page.__test__
+const { getSlots, getSlotErrors, buildRoutes, getOverride, getUpgradeView, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, SwarmAgentsController, JevKeyController, getResourceAccessMode, getApprovals, buildApprovals } = page.__test__
 
 const slot = (provider: string, model: string, reasoningEffort = ''): SlotInfo => ({ provider, model, reasoningEffort })
 
@@ -129,6 +129,43 @@ describe('settings page pure helpers', () => {
 })
 
 describe('SwarmAgentsController', () => {
+  it('工具审批默认inherit，三态/作用域保存往返保留其它配置及未知审批字段', async () => {
+    expect(getApprovals(undefined)).toEqual({ mode: 'inherit', scope: ['write', 'shell', 'external_mcp', 'jev'] })
+    const value = { routes: {}, jev: { enabled: true, apiKeyEnv: 'CUSTOM_KEY' }, workflow: { mode: 'enforced' }, approvals: { mode: 'inherit', scope: ['shell', 'jev'], futurePolicy: { version: 2 } } }
+    const form = createForm(value)
+    const controller = new SwarmAgentsController(createCtx(form))
+    controller.setApprovals({ mode: 'ask' })
+    controller.toggleApprovalScope('write')
+    expect(controller.getSnapshot()).toMatchObject({ dirty: true, invalid: false, approvals: { dirty: true, value: { mode: 'ask', scope: ['shell', 'jev', 'write'] } } })
+    await controller.save()
+    expect(form.mutate).toHaveBeenCalledWith([{ op: 'set', path: ['approvals'], value: { mode: 'ask', scope: ['write', 'shell', 'jev'], futurePolicy: { version: 2 } } }], 1)
+    expect(form.getSnapshot().value).toEqual({ ...value, approvals: { mode: 'ask', scope: ['write', 'shell', 'jev'], futurePolicy: { version: 2 } } })
+    controller.setApprovals({ mode: 'deny', scope: [] })
+    expect(controller.getSnapshot().invalid).toBe(false)
+    controller.discard()
+    expect(controller.getSnapshot()).toMatchObject({ dirty: false, approvals: { value: { mode: 'ask' } } })
+    controller.setApprovals({ mode: 'invalid' })
+    expect(controller.getSnapshot().invalid).toBe(true)
+    await controller.save()
+    expect(form.mutate).toHaveBeenCalledTimes(1)
+    expect(buildApprovals({ mode: 'ask', scope: ['not-a-scope'] }, {})).toBeUndefined()
+  })
+
+  it('审批草稿遵守现有revision冲突与只读保护，恢复成已保存配置时清理草稿', async () => {
+    const form = createForm({ approvals: { mode: 'deny', scope: ['shell'] } })
+    const controller = new SwarmAgentsController(createCtx(form))
+    controller.setApprovals({ mode: 'ask' })
+    controller.setApprovals({ mode: 'deny' })
+    expect(controller.getSnapshot().dirty).toBe(false)
+    controller.setApprovals({ mode: 'ask' })
+    form.replace({ revision: 2 })
+    await controller.save()
+    expect(controller.getSnapshot().conflicted).toBe(true)
+    expect(form.mutate).not.toHaveBeenCalled()
+    const readOnly = new SwarmAgentsController(createCtx(createForm({}, { writable: false })))
+    readOnly.setApprovals({ mode: 'deny' })
+    expect(readOnly.getSnapshot().dirty).toBe(false)
+  })
   it('保存常规与升级链往返保留不由页面编辑的额度域/资源 policy', async () => {
     const policy = { accessMode: 'subscription', quotaDomainId: 'account:shared', quotaScope: 'account', poolId: 'pool:known', capabilities: { tools: true }, futureMetadata: { version: 1 } }
     const upgradePolicy = { accessMode: 'metered_api', quotaDomainId: 'account:paid', quotaScope: 'account' }
@@ -361,7 +398,7 @@ describe('Jev API key 卡片', () => {
     }
     const ctx = {
       get: (name: string) => name === 'connection'
-        ? { rpc: { call: vi.fn(async (_channel: string, method: string) => { calls.push(method); return options.rpc === undefined ? { ok: false, error: { message: 'no route' } } : { ok: true, value: options.rpc(method) } }) } }
+        ? { rpc: { call: vi.fn(async (_channel: string, method: string) => { calls.push(method); return options.rpc === undefined ? { ok: false, error: { code: 'gateway/method-not-found', message: 'no route' } } : { ok: true, value: options.rpc(method) } }) } }
         : undefined,
       remote: { credentials }
     }
@@ -405,6 +442,35 @@ describe('Jev API key 卡片', () => {
     expect(jev.getSnapshot()).toMatchObject({ testing: false, test: { model: 'jev-latest' } })
     const broken = new JevKeyController(makeJevCtx().ctx, () => 'TYPESAFE_API_KEY')
     await broken.test()
-    expect(broken.getSnapshot().test).toEqual({ error: 'no route' })
+    expect(broken.getSnapshot().test).toEqual({ error: 'no route', code: 'gateway/method-not-found' })
+  })
+
+  it('权限拒绝保留code且不改走credentials.describe兼容路径', async () => {
+    const h = makeJevCtx()
+    const deniedCtx = { ...h.ctx, get: () => ({ rpc: { call: async () => ({ ok: false, error: { code: 'swarm/permission-denied', message: 'credential-permission-denied' } }) } }) }
+    const controller = new JevKeyController(deniedCtx, () => 'TYPESAFE_API_KEY')
+    await controller.load()
+    expect(controller.getSnapshot()).toMatchObject({ status: 'error', loadError: 'swarm/permission-denied: credential-permission-denied' })
+    expect(h.credentials.describe).not.toHaveBeenCalled()
+    await controller.test()
+    expect(controller.getSnapshot().test).toEqual({ error: 'credential-permission-denied', code: 'swarm/permission-denied' })
+  })
+
+  it('凭据刷新或引用变化后丢弃旧连接测试结果，不将旧key成功显示为新key已验证', async () => {
+    let finish!: (value: unknown) => void
+    let ref = 'OLD_KEY'
+    const ctx = { get: () => ({ rpc: { call: async (_channel: string, method: string) => method === 'swarm.jevHealth' ? await new Promise((resolve) => { finish = resolve }) : { ok: true, value: { ref, configured: true } } } }) }
+    const controller = new JevKeyController(ctx, () => ref)
+    const pending = controller.test()
+    ref = 'NEW_KEY'
+    await controller.load()
+    finish({ ok: true, value: { model: 'old-key-model', result: { ok: true } } })
+    await pending
+    expect(controller.getSnapshot()).toMatchObject({ testing: false, test: undefined, info: { ref: 'NEW_KEY' } })
+    const changedOnly = controller.test()
+    ref = 'THIRD_KEY'
+    finish({ ok: true, value: { model: 'new-key-model' } })
+    await changedOnly
+    expect(controller.getSnapshot()).toMatchObject({ testing: false, test: undefined })
   })
 })

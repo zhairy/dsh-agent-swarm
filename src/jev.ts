@@ -98,7 +98,47 @@ export const getJevState = (card: TaskCard) => ({
 })
 
 const asRecord = (value: unknown): Record<string, unknown> =>
-  value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+
+/** 所有 Jev 判断入口共用数值合同；非法值不能进入分流、分档或审核结论。 */
+export const isJevProbability = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+export const isJevScore = (value: unknown, levels: number): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= levels - 1
+
+export type JevFailureKind = 'disabled' | 'configuration' | 'permission' | 'authentication' | 'billing' | 'availability' | 'invalid-request' | 'invalid-response' | 'cancelled' | 'unknown'
+interface JevFailureLike { reason: string; status?: number; failureKind?: JevFailureKind }
+
+/** 根据稳定事实分类；不把权限、坏响应或取消伪装为可降级的服务不可用。 */
+export const getJevFailureKind = (failure: JevFailureLike): JevFailureKind => {
+  if (failure.failureKind !== undefined) return failure.failureKind
+  if (failure.reason === 'disabled') return 'disabled'
+  if (failure.reason === 'missing-api-key') return 'configuration'
+  if (failure.reason === 'credential-permission-denied' || failure.status === 403) return 'permission'
+  if (failure.reason === 'credential-unavailable') return 'unknown'
+  if (failure.status === 401) return 'authentication'
+  if (failure.status === 402) return 'billing'
+  if (failure.reason === 'aborted') return 'cancelled'
+  if (['malformed-response', 'no-models'].includes(failure.reason)) return 'invalid-response'
+  if (failure.reason === 'request-too-large' || [400, 404, 422].includes(failure.status ?? 0)) return 'invalid-request'
+  if (['network', 'timeout'].includes(failure.reason) || failure.status === 429 || (failure.status ?? 0) >= 500) return 'availability'
+  return 'unknown'
+}
+
+/** 可选 Jev 审核只允许有明确原因的关闭、缺少配置或上游临时不可用降级。 */
+export const isJevAvailabilityFailure = (failure: JevFailureLike): boolean => ['disabled', 'configuration', 'availability'].includes(getJevFailureKind(failure))
+
+/** 凭据错误只带受控原因；宿主拒绝后不尝试另一凭据来源。 */
+export class JevCredentialError extends Error {
+  constructor (readonly reason: 'credential-permission-denied' | 'credential-unavailable') { super(reason); this.name = 'JevCredentialError' }
+}
+
+export const getJevCredentialError = (error: unknown): JevCredentialError => {
+  if (error instanceof JevCredentialError) return error
+  const facts = asRecord(error)
+  const code = String(facts.code ?? '').toLowerCase()
+  const message = error instanceof Error ? error.message : String(facts.message ?? '')
+  const denied = facts.status === 403 || /permission|forbidden|approval|denied|eacces|eperm/.test(code) || /permission denied|access denied|requires approval|approval policy|not authorized|forbidden/i.test(message)
+  return new JevCredentialError(denied ? 'credential-permission-denied' : 'credential-unavailable')
+}
 
 /**
  * 只读取程序需要的字段：math_task.choice/confidence、need_benchmark.noul、novelty.score/confidence
@@ -111,11 +151,11 @@ export const ParseJevAnswers = (body: unknown): TriageAnswers => {
   const benchmark = asRecord(answers.need_benchmark)
   const novelty = asRecord(answers.novelty)
   return {
-    ...(typeof mathTask.choice === 'string' && typeof mathTask.confidence === 'number'
+    ...(typeof mathTask.choice === 'string' && Object.hasOwn(JEV_QUESTIONS.math_task.criteria, mathTask.choice) && isJevProbability(mathTask.confidence)
       ? { mathTask: { choice: mathTask.choice, confidence: mathTask.confidence } }
       : {}),
-    ...(typeof benchmark.noul === 'number' ? { needBenchmark: benchmark.noul } : {}),
-    ...(typeof novelty.score === 'number' && typeof novelty.confidence === 'number'
+    ...(isJevProbability(benchmark.noul) ? { needBenchmark: benchmark.noul } : {}),
+    ...(isJevScore(novelty.score, JEV_QUESTIONS.novelty.criteria.length) && isJevProbability(novelty.confidence)
       ? { novelty: { score: novelty.score, confidence: novelty.confidence } }
       : {})
   }
@@ -135,12 +175,12 @@ export interface JevUsageInfo {
 /** 通用提问的结果：answers 为 Jev 原始答案（按题目 ID） */
 export type JevAskOutcome =
   | { ok: true; answers: Record<string, unknown>; model?: string; attempts: number; usage: JevUsageInfo; latencyMs: number }
-  | { ok: false; reason: string; attempts: number; status?: number; retryAfterMs?: number }
+  | { ok: false; reason: string; attempts: number; status?: number; retryAfterMs?: number; failureKind?: JevFailureKind }
 
 /** 模型列表（健康检查） */
 export type JevModelsOutcome =
   | { ok: true; models: Array<{ name: string; description: string; releaseDate: string }>; latencyMs: number }
-  | { ok: false; reason: string; status?: number }
+  | { ok: false; reason: string; status?: number; failureKind?: JevFailureKind }
 
 /** Jev 客户端依赖 */
 export interface JevDepsInfo {
@@ -152,22 +192,21 @@ export interface JevDepsInfo {
 
 type PostResult =
   | { kind: 'ok'; body: unknown }
-  | { kind: 'http'; status: number; retryAfterMs?: number; terminal?: boolean }
+  | { kind: 'http'; status: number; retryAfterMs?: number; terminal?: boolean; failureKind?: JevFailureKind }
   | { kind: 'timeout' }
   | { kind: 'network' }
   | { kind: 'aborted' }
+  | { kind: 'malformed-response' }
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504, 529])
 const MAX_RETRY_AFTER_MS = 30_000
 
-const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
-
-const getRetryAfterMs = (value: string | null): number | undefined => {
+const getRetryAfterMs = (value: string | null, now: () => number): number | undefined => {
   if (value === null) return undefined
   const seconds = Number(value)
   if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000
   const at = Date.parse(value)
-  return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now())
+  return Number.isNaN(at) ? undefined : Math.max(0, at - now())
 }
 
 const getUsage = (record: Record<string, unknown>): JevUsageInfo => {
@@ -184,6 +223,7 @@ const isAborted = (signal?: AbortSignal): boolean => signal?.aborted === true
 
 /**
  * 进程内滑动窗口限流：每个窗口最多 max 个请求，超出的请求排队等待
+ * @deprecated 仅保留旧公开接口兼容；当前 Jev 客户端不调用它，也不建立本地限流队列。
  * @param {number} max - 每秒请求上限
  * @param {(ms: number) => Promise<void>} sleep - 等待函数
  * @param {() => number} now - 时钟
@@ -219,10 +259,23 @@ export const intRequestLimiter = (max: number, sleep: (ms: number) => Promise<vo
  * @returns 客户端：ask（任意题目）、triage（任务分流）、listModels（健康检查）
  */
 export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
-  const sleep = deps.sleep ?? defaultSleep
   const now = deps.now ?? Date.now
   // 用户明确选择 Jev 全入口不限流；旧非零 RPS 仅保留配置兼容，不建立队列。
   const baseUrl = config.baseUrl.replace(/\/$/, '')
+
+  // 默认定时器可清理；注入 sleep 的 Promise 也可被取消抢先结束，不必等待 Retry-After。
+  const waitForRetry = (ms: number, signal?: AbortSignal): Promise<boolean> => new Promise((resolve, reject) => {
+    if (isAborted(signal)) { resolve(false); return }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let settled = false
+    const cleanup = () => { if (timer !== undefined) clearTimeout(timer); signal?.removeEventListener('abort', onAbort) }
+    const finish = (ready: boolean) => { if (settled) return; settled = true; cleanup(); resolve(ready) }
+    const onAbort = () => finish(false)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (isAborted(signal)) { finish(false); return }
+    if (deps.sleep === undefined) timer = setTimeout(() => finish(true), ms)
+    else Promise.resolve().then(() => deps.sleep!(ms)).then(() => finish(true), (error: unknown) => { if (settled) return; settled = true; cleanup(); reject(error) })
+  })
 
   const send = async (path: string, init: { method: 'GET' | 'POST'; body?: string }, key: string, signal?: AbortSignal): Promise<PostResult> => {
     if (isAborted(signal)) return { kind: 'aborted' }
@@ -238,20 +291,28 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
         signal: controller.signal
       })
       if (!response.ok) {
-        const retryAfterMs = getRetryAfterMs(response.headers?.get?.('retry-after') ?? null)
+        const retryAfterMs = getRetryAfterMs(response.headers?.get?.('retry-after') ?? null, now)
         // 429 既可能是短限速也可能是账号终态；只读取错误类别，不回显服务正文。
         let terminal = response.status === 402 || response.status === 401 || response.status === 403
         if (terminal) return { kind: 'http', status: response.status, terminal, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }
+        let failureKind: JevFailureKind | undefined
         try {
           const body = asRecord(await response.json())
           const error = asRecord(body.error)
           const code = String(error.code ?? body.code ?? error.type ?? '')
           const message = String(error.message ?? body.message ?? '')
-          terminal ||= isTerminalRouteFailure(normalizeRouteFailure({ code, status: response.status, message }, { provider: 'jev', model: config.model }))
+          const failure = normalizeRouteFailure({ code, status: response.status, message }, { provider: 'jev', model: config.model })
+          terminal ||= isTerminalRouteFailure(failure)
+          if (['quota_exhausted', 'pool_exhausted', 'insufficient_balance'].includes(failure.kind)) failureKind = 'billing'
+          else if (failure.kind === 'auth_invalid') failureKind = code.toUpperCase() === 'FORBIDDEN' ? 'permission' : 'authentication'
+          else if (failure.kind === 'model_unavailable') failureKind = 'invalid-request'
         } catch { /* 没有结构化错误正文：按 HTTP 状态处理 */ }
-        return { kind: 'http', status: response.status, ...(terminal ? { terminal } : {}), ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }
+        return { kind: 'http', status: response.status, ...(terminal ? { terminal } : {}), ...(failureKind === undefined ? {} : { failureKind }), ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }
       }
-      return { kind: 'ok', body: await response.json() }
+      try { return { kind: 'ok', body: await response.json() } } catch {
+        if (isAborted(signal)) return { kind: 'aborted' }
+        return controller.signal.aborted ? { kind: 'timeout' } : { kind: 'malformed-response' }
+      }
     } catch {
       // 调用方取消优先于超时判断：取消后不应再重试
       if (isAborted(signal)) return { kind: 'aborted' }
@@ -268,13 +329,13 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
       if (signal?.aborted === true) return { result: { kind: 'aborted' } as PostResult, attempts: attempt - 1 }
       const result = await send(path, init, key, signal)
       if (result.kind === 'ok') return { result, attempts: attempt }
-      const retryable = result.kind === 'http' ? !result.terminal && RETRYABLE_STATUS.has(result.status) : result.kind !== 'aborted'
+      const retryable = result.kind === 'http' ? !result.terminal && RETRYABLE_STATUS.has(result.status) : result.kind === 'network' || result.kind === 'timeout'
       if (!retryable || attempt > config.maxRetries) return { result, attempts: attempt }
       const backoff = 500 * 2 ** (attempt - 1)
       // 长 Retry-After 不可截短再提前撞服务；返回 unavailable，等待由调用方管理。
       if (result.kind === 'http' && (result.retryAfterMs ?? 0) > MAX_RETRY_AFTER_MS) return { result, attempts: attempt }
       const wait = result.kind === 'http' && result.retryAfterMs !== undefined ? Math.max(backoff, result.retryAfterMs) : backoff
-      await sleep(wait)
+      if (!await waitForRetry(wait, signal)) return { result: { kind: 'aborted' } as PostResult, attempts: attempt }
     }
   }
 
@@ -292,7 +353,8 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
    */
   const ask = async (state: unknown, questions: Record<string, unknown>, signal?: AbortSignal): Promise<JevAskOutcome> => {
     if (!config.enabled) return { ok: false, reason: 'disabled', attempts: 0 }
-    const key = await getKey()
+    let key: string | undefined
+    try { key = await getKey() } catch (error) { const failure = getJevCredentialError(error); return { ok: false, reason: failure.reason, attempts: 0, status: failure.reason === 'credential-permission-denied' ? 403 : 503 } }
     if (key === undefined) return { ok: false, reason: 'missing-api-key', attempts: 0, status: 401 }
     const body = JSON.stringify({ model: config.model, state, questions })
     if (body.length > config.maxRequestChars) return { ok: false, reason: 'request-too-large', attempts: 0, status: 400 }
@@ -304,8 +366,8 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
       if (Object.keys(answers).length === 0) return { ok: false, reason: 'malformed-response', attempts, status: 502 }
       return { ok: true, answers, ...(typeof record.model === 'string' ? { model: record.model } : {}), attempts, usage: getUsage(record), latencyMs: now() - started }
     }
-    if (result.kind === 'http') return { ok: false, reason: `http-${result.status}`, attempts, status: result.status, ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }) }
-    return { ok: false, reason: result.kind, attempts, status: result.kind === 'timeout' ? 504 : result.kind === 'network' ? 503 : 499 }
+    if (result.kind === 'http') return { ok: false, reason: `http-${result.status}`, attempts, status: result.status, ...(result.failureKind === undefined ? {} : { failureKind: result.failureKind }), ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }) }
+    return { ok: false, reason: result.kind, attempts, status: result.kind === 'timeout' ? 504 : result.kind === 'network' ? 503 : result.kind === 'malformed-response' ? 502 : 499 }
   }
 
   /**
@@ -315,7 +377,8 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
    */
   const listModels = async (signal?: AbortSignal): Promise<JevModelsOutcome> => {
     if (!config.enabled) return { ok: false, reason: 'disabled' }
-    const key = await getKey()
+    let key: string | undefined
+    try { key = await getKey() } catch (error) { const failure = getJevCredentialError(error); return { ok: false, reason: failure.reason, status: failure.reason === 'credential-permission-denied' ? 403 : 503 } }
     if (key === undefined) return { ok: false, reason: 'missing-api-key', status: 401 }
     const started = now()
     const { result } = await sendWithRetry(JEV_MODELS_PATH, { method: 'GET' }, key, signal)
@@ -330,8 +393,8 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
       if (models.length === 0) return { ok: false, reason: 'no-models', status: 502 }
       return { ok: true, models, latencyMs: now() - started }
     }
-    if (result.kind === 'http') return { ok: false, reason: `http-${result.status}`, status: result.status }
-    return { ok: false, reason: result.kind, status: result.kind === 'timeout' ? 504 : 503 }
+    if (result.kind === 'http') return { ok: false, reason: `http-${result.status}`, status: result.status, ...(result.failureKind === undefined ? {} : { failureKind: result.failureKind }) }
+    return { ok: false, reason: result.kind, status: result.kind === 'timeout' ? 504 : result.kind === 'malformed-response' ? 502 : result.kind === 'aborted' ? 499 : 503 }
   }
 
   const triage = async (card: TaskCard, signal?: AbortSignal): Promise<JevOutcome> => {

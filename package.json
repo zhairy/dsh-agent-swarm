@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "DSH 中文多智能体插件：版本化 Mermaid 任务流程、独立规划审核、额度耗尽立即回退、Jev 判断、受限专家协作与纯函数数学验证",
   "keywords": [
     "dsh",
@@ -54,7 +54,8 @@
     "sandbox": "node scripts/sandbox.mjs",
     "doctor": "node scripts/doctor.mjs",
     "bench:workflow": "npm run build && node scripts/bench-workflow.mjs",
-    "sync-dsh": "node scripts/sync-dsh.mjs"
+    "sync-dsh": "node scripts/sync-dsh.mjs",
+    "bench:state": "npm run build && node --expose-gc scripts/bench-state-store.mjs"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "~3.18.4",

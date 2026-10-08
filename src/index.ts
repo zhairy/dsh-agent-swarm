@@ -8,6 +8,9 @@ import {
   type ConnectionLike,
   type ManagedAgentsInfo,
   type PreStepDecisionLike,
+  type PreToolDecisionLike,
+  type ApprovalServiceLike,
+  type ToolExecutionLike,
   type SubagentEndInfoLike,
   type AttachmentsLike,
   type CredentialsLike,
@@ -20,6 +23,7 @@ import {
 import { intNetworkMonitor } from './network.js'
 import { getRpcRoutes } from './rpc.js'
 import { intSwarmService, type LoggerLike } from './service.js'
+import { getHostApprovalPolicy, getToolApprovalDecision } from './approval-policy.js'
 
 /** 宿主行：提供 agentSwarm 服务、注册写操作守卫与设置页 RPC，本身不向模型注册工具 */
 export const name = 'dsh-agent-swarm'
@@ -83,6 +87,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     getTools: () => ctx.get('tools') as ToolsLike | undefined,
     getAttachments: () => ctx.get('attachments') as AttachmentsLike | undefined,
     getCredentials: () => ctx.get('credentials') as CredentialsLike | undefined,
+    getApproval: () => ctx.get('approval') as ApprovalServiceLike | undefined,
     getSessionProjections: () => ctx.get('sessionProjections') as SessionProjectionsLike | undefined,
     dshHome: getDshHome(ctx),
     fetch: fetchImpl,
@@ -98,6 +103,16 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   ctx.on('agent/pre-step', async (_payload: unknown, next: () => Promise<PreStepDecisionLike>) => service.FilterPreStep(await next()))
   const tools = ctx.get('tools') as ToolsLike | undefined
   if (tools !== undefined) ctx.effect(() => tools.guard((execution) => service.getGuardReason(execution)))
+  // Wrap the complete downstream policy, retaining its deny/cancel/ask. Host approval and
+  // monotonic role/revision/workspace guards remain authoritative after this seam.
+  ctx.on('tools/pre-execute', async (execution: ToolExecutionLike, next: () => Promise<PreToolDecisionLike>) => {
+    const decision = await next()
+    if (!service.isManagedAgent(execution.agent)) return decision
+    const approvals = getConfig().approvals
+    return getToolApprovalDecision(execution, decision, approvals, {
+      ...(approvals.mode === 'ask' && decision.kind === 'allow' ? { hostPolicy: getHostApprovalPolicy(ctx.get('approval') as ApprovalServiceLike | undefined, execution.agent) } : {})
+    })
+  }, { prepend: true })
   // 使用宿主 connection 同一 profile owner 的认证，任务只读并要求已登记根会话。
   // 本层不宣称跨租户 ACL；无界面的 profile 没有 connection，跳过。
   ctx.inject?.(['connection'], (scoped) => {

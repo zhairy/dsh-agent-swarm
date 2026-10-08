@@ -36,6 +36,16 @@ describe('会话方式：衡鉴判断', () => {
     expect(getSessionState({ roleName: '算衡', mode: 'verify', goal: 'g', request: 'r' })).not.toHaveProperty('existing_session')
   })
 
+  it('非法或缺失的概率不决定会话，阈值比较不提前舍入', () => {
+    for (const noul of [-0.1, 1.1, NaN, Infinity]) {
+      expect(ParseSessionPlan({ repeat: { noul } }, options)).toBeUndefined()
+      expect(ParseSessionPlan({ repeat: { noul: 0.9 }, same_category: { noul } }, { ...options, thread: thread() })).toBeUndefined()
+    }
+    expect(ParseSessionPlan({ repeat: { noul: 0.9 } }, { ...options, thread: thread() })).toBeUndefined()
+    expect(ParseSessionPlan({ repeat: { noul: 0.499 } }, options)).toMatchObject({ kind: 'oneshot', repeat: 0.499 })
+    expect(ParseSessionPlan({ repeat: { noul: 0.9 }, same_category: { noul: 0.499 } }, { ...options, thread: thread() })).toMatchObject({ kind: 'new', sameCategory: 0.499 })
+  })
+
   it('Jev 不可用时按规则：同一任务已有会话就追加；编辑、执行、验证、审查角色开连续会话；其余一次性', () => {
     expect(getRuleSessionPlan({ role: 'tan_wei', taskId: 'T-1', thread: thread({ role: 'tan_wei', key: 'tan_wei' }), reason: 'x' })).toMatchObject({ kind: 'continue', source: 'rules' })
     expect(getRuleSessionPlan({ role: 'zhu_jian', taskId: 'T-2', thread: thread(), reason: 'x' })).toMatchObject({ kind: 'new' })

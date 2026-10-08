@@ -4,13 +4,13 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_JEV_CONFIG, type JevConfigInfo } from '../../src/jev.js'
 import { intJevHub, isCredentialRefName } from '../../src/jev-hub.js'
-import { RPC_METHODS, getRpcRoutes } from '../../src/rpc.js'
+import { RPC_METHODS, RunRpcMethod, getRpcRoutes } from '../../src/rpc.js'
 import { EMBEDDED_SKILLS, ParseSkillFile, getEmbeddedSkills } from '../../src/skills.js'
 
 const modelsResponse = () => new Response(JSON.stringify({ models: [{ name: 'jev-1.13.0', description: 'System One', release_date: '2026-09-01' }] }), { status: 200, headers: { 'content-type': 'application/json' } })
 
 describe('intJevHub', () => {
-  it('同一配置共用一个客户端（限流统一生效）；配置变化时重建', () => {
+  it('同一配置共用取消与重试客户端（不主动限流）；配置变化时重建', () => {
     let config: JevConfigInfo = { ...DEFAULT_JEV_CONFIG }
     const hub = intJevHub({ getConfig: () => config, getCredentials: () => undefined, fetch: vi.fn() as unknown as typeof fetch })
     const first = hub.getClient()
@@ -68,6 +68,31 @@ describe('intJevHub', () => {
     const health = await hub.getHealth()
     expect(health).toMatchObject({ enabled: true, model: 'jev-latest', key: { configured: true }, result: { ok: true, answers: { models: [{ name: 'jev-1.13.0' }] } } })
     expect(fetch.mock.calls[0]?.[0]).toBe('https://api.typesafe.ai/v1/models')
+  })
+
+  it('凭据服务拒绝时保留权限诊断，不退回环境变量、不发HTTP、不回显异常秘密', async () => {
+    const ref = 'SWARM_TEST_JEV_DENIED'
+    process.env[ref] = 'tsk_alternate_secret'
+    try {
+      const denied = Object.assign(new Error('MCP tool call requires approval, but approval policy is never; tsk_sensitive'), { code: 'APPROVAL_REQUIRED' })
+      const fetchMock = vi.fn()
+      const warnings: string[] = []
+      const hub = intJevHub({ getConfig: () => ({ ...DEFAULT_JEV_CONFIG, apiKeyEnv: ref }), getCredentials: () => ({ resolve: async () => { throw denied }, describe: async () => { throw denied } }), fetch: fetchMock as typeof fetch, logger: { warn: (message) => warnings.push(message) } })
+      expect(await hub.getClient().ask({}, {})).toEqual({ ok: false, reason: 'credential-permission-denied', status: 403, attempts: 0 })
+      expect(await hub.getClient().listModels()).toEqual({ ok: false, reason: 'credential-permission-denied', status: 403 })
+      expect(await RunRpcMethod(hub, 'jevStatus', new AbortController().signal)).toMatchObject({ ok: false, error: { code: 'swarm/permission-denied', message: 'credential-permission-denied' } })
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(warnings.join(' ')).not.toContain('tsk_')
+    } finally { delete process.env[ref] }
+  })
+
+  it('凭据描述被拒绝时不提前启动并行HTTP健康检查', async () => {
+    const fetchMock = vi.fn(async () => modelsResponse())
+    const resolve = vi.fn(async () => ({ value: 'not-used' }))
+    const hub = intJevHub({ getConfig: () => DEFAULT_JEV_CONFIG, getCredentials: () => ({ resolve, describe: async () => { throw Object.assign(new Error('permission denied'), { code: 'FORBIDDEN' }) } }), fetch: fetchMock as typeof fetch })
+    expect(await RunRpcMethod(hub, 'jevHealth', new AbortController().signal)).toMatchObject({ ok: false, error: { code: 'swarm/permission-denied' } })
+    expect(resolve).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

@@ -4,7 +4,7 @@ import { ValidateJsonValue, type JsonSchemaObject } from './util/json-schema.js'
 import { SwarmError } from './util/errors.js'
 import { MERMAID_PARSER_VERSION, ParseWorkflowMermaid, ValidateWorkflow, WORKFLOW_GENERATOR_VERSION, getCanonicalWorkflow, getValueDigest, getWorkflowDigest, getWorkflowMermaid, type MermaidParserLike, type WorkflowDefinition, type WorkflowParserResultInfo } from './workflow.js'
 
-export const PLANNING_REVIEW_POLICY_VERSION = '1'
+export const PLANNING_REVIEW_POLICY_VERSION = '2'
 export const PLANNING_REVIEW_QUESTION_VERSION = '1'
 export type PlanningReviewVerdict = 'pass' | 'changes_requested' | 'unknown' | 'needs-clarification'
 export type PlanningReviewStatus = 'pending' | 'reviewing' | 'pass' | 'pass_with_degradation' | 'changes_requested' | 'unknown' | 'needs-clarification' | 'review_required' | 'unavailable' | 'stale'

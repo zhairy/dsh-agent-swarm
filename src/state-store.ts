@@ -11,6 +11,8 @@ export interface DurableStateStore<T> {
   readonly directory: string
   readonly durable: boolean
   read: () => T
+  readPath?: <R = unknown>(path: readonly (string | number)[]) => R | undefined
+  readFields?: <K extends keyof T>(keys: readonly K[]) => Pick<T, K>
   getSequence: () => number
   commit: (type: string, mutate: (draft: T) => T | void | Promise<T | void>) => Promise<T>
   dispose: () => Promise<void>
@@ -49,8 +51,11 @@ export const canonicalStateJson = (value: unknown): string => {
   }
   return encode(value, 0)
 }
-const checksum = (value: unknown): string => createHash('sha256').update(canonicalStateJson(value)).digest('hex')
-const copy = <T>(value: T): T => JSON.parse(canonicalStateJson(value)) as T
+const checksumText = (text: string): string => createHash('sha256').update(text).digest('hex')
+const checksum = (value: unknown): string => checksumText(canonicalStateJson(value))
+// Only already-validated private state reaches this copier. Validation remains at every commit boundary.
+const copy = <T>(value: T): T => structuredClone(value)
+const stateEnvelope = (fields: Record<string, unknown>, encodedState: string): string => '{' + [...Object.keys(fields), 'state'].sort().map((key) => JSON.stringify(key) + ':' + (key === 'state' ? encodedState : canonicalStateJson(fields[key]))).join(',') + '}'
 const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.code === 'ENOENT'
 const syncDirectory = async (directory: string): Promise<void> => {
   const handle = await open(directory, 'r')
@@ -112,35 +117,51 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
   const maxJournalBytes = options.maxJournalBytes ?? 64 * 1024 * 1024
   const snapshotEvery = options.snapshotEvery ?? 16
   if (![maxStateBytes, maxJournalBytes, snapshotEvery].every((n) => Number.isSafeInteger(n) && n > 0)) throw new StateStoreError('STATE_INVALID', 'Invalid state resource limits')
-  const validate = (value: unknown): T => {
+  const validate = (value: unknown): { value: T; encoded: string } => {
     const encoded = canonicalStateJson(value)
     if (Buffer.byteLength(encoded, 'utf8') > maxStateBytes) throw new StateStoreError('STATE_TOO_LARGE', 'State exceeds byte limit')
     if (options.validate !== undefined && !options.validate(value)) throw new StateStoreError('STATE_INVALID', 'State schema validation failed')
-    return JSON.parse(encoded) as T
+    return { value: JSON.parse(encoded) as T, encoded }
   }
-  let state = validate(options.initialState)
+  const initial = validate(options.initialState)
+  let state = initial.value
+  let stateEncoded = initial.encoded
   let sequence = 0
-  let stateChecksum = checksum(state)
+  let stateChecksum = checksumText(stateEncoded)
   let journalBytes = 0
   let closed = false
   let failed = false
   let directory = resolve(options.directory)
   let ownerPath: string | undefined
+  let ownerIdentity: { dev: bigint; ino: bigint } | undefined
+  const clearOwnOwner = async (): Promise<void> => {
+    if (ownerPath === undefined || ownerIdentity === undefined) return
+    try {
+      const metadata = await lstat(ownerPath, { bigint: true })
+      if (!metadata.isFile() || metadata.dev !== ownerIdentity.dev || metadata.ino !== ownerIdentity.ino) return
+      await unlink(ownerPath)
+      await syncDirectory(directory)
+    } catch (error) { if (!missing(error)) throw error }
+  }
   const mutex = intMutex()
   if (options.enabled !== false) {
     await mkdir(directory, { recursive: true, mode: 0o700 })
     if ((await lstat(directory)).isSymbolicLink()) throw new StateStoreError('STATE_INVALID', 'State directory cannot be a symlink')
     directory = await realpath(directory)
     ownerPath = join(directory, 'owner.json')
-    let owner
-    try { owner = await open(ownerPath, 'wx', 0o600) } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error
-      if (!await reconcileStoppedStateOwner(directory)) throw new StateStoreError('OWNER_ACTIVE', 'State owner exists; explicit stopped-owner reconciliation is required')
-      try { owner = await open(ownerPath, 'wx', 0o600) } catch { throw new StateStoreError('OWNER_ACTIVE', 'Another owner won stopped-owner reconciliation') }
-    }
-    try { await owner.writeFile(JSON.stringify({ schemaVersion: 1, pid: process.pid, host: hostname(), ownerId: randomUUID() })); await owner.sync() } finally { await owner.close() }
-    await syncDirectory(directory)
     try {
+      let owner
+      try { owner = await open(ownerPath, 'wx', 0o600) } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error
+        if (!await reconcileStoppedStateOwner(directory)) throw new StateStoreError('OWNER_ACTIVE', 'State owner exists; explicit stopped-owner reconciliation is required')
+        try { owner = await open(ownerPath, 'wx', 0o600) } catch { throw new StateStoreError('OWNER_ACTIVE', 'Another owner won stopped-owner reconciliation') }
+      }
+      try {
+        const identity = await owner.stat({ bigint: true })
+        ownerIdentity = { dev: identity.dev, ino: identity.ino }
+        await owner.writeFile(JSON.stringify({ schemaVersion: 1, pid: process.pid, host: hostname(), ownerId: randomUUID() })); await owner.sync()
+      } finally { await owner.close() }
+      await syncDirectory(directory)
       let snapshot: Snapshot<T> | undefined
       try {
         const snapshotPath = join(directory, 'snapshot.json')
@@ -151,14 +172,17 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
         const parsed: unknown = JSON.parse(raw)
         if (!snapshotValid(parsed)) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot checksum/schema mismatch')
         snapshot = parsed as Snapshot<T>
-        state = validate(snapshot.state); sequence = snapshot.sequence; stateChecksum = snapshot.checksum
+        const validated = validate(snapshot.state)
+        state = validated.value; stateEncoded = validated.encoded; sequence = snapshot.sequence; stateChecksum = snapshot.checksum
       } catch (error) { if (!missing(error)) throw error }
       let journal = ''
+      let journalPresent = false
       try {
         const journalPath = join(directory, 'journal.jsonl')
         const metadata = await lstat(journalPath)
         if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > maxJournalBytes) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal file is invalid')
         journal = await readFile(journalPath, 'utf8')
+        journalPresent = true
       } catch (error) { if (!missing(error)) throw error }
       journalBytes = Buffer.byteLength(journal)
       if (journalBytes > maxJournalBytes || (journal !== '' && !journal.endsWith('\n'))) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal is oversized or has an incomplete committed record')
@@ -171,14 +195,17 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
           continue
         }
         if (entry.sequence !== sequence + 1 || entry.previousChecksum !== stateChecksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal sequence or ancestry mismatch')
-        state = validate(entry.state); sequence = entry.sequence; stateChecksum = entry.checksum
+        const validated = validate(entry.state)
+        state = validated.value; stateEncoded = validated.encoded; sequence = entry.sequence; stateChecksum = entry.checksum
       }
       if (snapshot === undefined) {
         if (sequence !== 0) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal has no initial trusted snapshot')
-        await atomicStateFile(directory, 'snapshot.json', canonicalStateJson({ schemaVersion: 1, sequence, checksum: stateChecksum, state }))
+        await atomicStateFile(directory, 'snapshot.json', stateEnvelope({ schemaVersion: 1, sequence, checksum: stateChecksum }, stateEncoded))
       }
+      // The first journal directory entry must be durable before any committed append is acknowledged.
+      if (!journalPresent) await atomicStateFile(directory, 'journal.jsonl', '')
     } catch (error) {
-      await unlink(ownerPath).catch(() => undefined)
+      await clearOwnOwner().catch(() => undefined)
       if (error instanceof StateStoreError) throw error
       throw new StateStoreError('RECOVERY_REQUIRED', 'Cannot recover trusted state: ' + (error instanceof Error ? error.message : String(error)))
     }
@@ -186,6 +213,30 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
   const store: DurableStateStore<T> = {
     directory, durable: options.enabled !== false,
     read: () => { if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed'); return copy(state) },
+    readPath: <R = unknown>(path: readonly (string | number)[]): R | undefined => {
+      if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed')
+      if (path.length > 64) throw new StateStoreError('STATE_INVALID', 'State projection path exceeds nesting limit')
+      let selected: unknown = state
+      for (const key of path) {
+        if ((typeof key !== 'string' && (typeof key !== 'number' || !Number.isSafeInteger(key) || key < 0)) || ['__proto__', 'constructor', 'prototype'].includes(String(key))) throw new StateStoreError('STATE_INVALID', 'Unsafe state projection path')
+        if (selected === null || typeof selected !== 'object') return undefined
+        const descriptor = Object.getOwnPropertyDescriptor(selected, key)
+        if (descriptor === undefined) return undefined
+        selected = descriptor.value
+      }
+      return copy(selected) as R | undefined
+    },
+    readFields: <K extends keyof T>(keys: readonly K[]): Pick<T, K> => {
+      if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed')
+      const projected: Record<string, unknown> = {}
+      if (state === null || typeof state !== 'object') return projected as Pick<T, K>
+      for (const key of keys) {
+        if ((typeof key !== 'string' && typeof key !== 'number') || ['__proto__', 'constructor', 'prototype'].includes(String(key))) throw new StateStoreError('STATE_INVALID', 'Unsafe state projection field')
+        const descriptor = Object.getOwnPropertyDescriptor(state, key)
+        if (descriptor !== undefined) projected[String(key)] = descriptor.value
+      }
+      return copy(projected) as Pick<T, K>
+    },
     getSequence: () => sequence,
     commit: (type, mutate) => mutex.run(async () => {
       if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed')
@@ -194,14 +245,16 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       const draft = copy(state)
       const returned = await mutate(draft)
       const next = validate(returned === undefined ? draft : returned)
-      const nextChecksum = checksum(next)
-      const payload = { schemaVersion: 1 as const, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, state: next }
-      const line = canonicalStateJson({ ...payload, entryChecksum: checksum(payload) }) + '\n'
-      if (store.durable && Buffer.byteLength(line, 'utf8') > maxJournalBytes) throw new StateStoreError('STATE_TOO_LARGE', 'One committed state exceeds the journal capacity')
+      const nextChecksum = checksumText(next.encoded)
       if (store.durable) {
+        const fields = { schemaVersion: 1 as const, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type }
+        const payload = stateEnvelope(fields, next.encoded)
+        const line = stateEnvelope({ ...fields, entryChecksum: checksumText(payload) }, next.encoded) + '\n'
+        const lineBytes = Buffer.byteLength(line, 'utf8')
+        if (lineBytes > maxJournalBytes) throw new StateStoreError('STATE_TOO_LARGE', 'One committed state exceeds the journal capacity')
         try {
-          if (journalBytes + Buffer.byteLength(line) > maxJournalBytes) {
-            await atomicStateFile(directory, 'snapshot.json', canonicalStateJson({ schemaVersion: 1, sequence, checksum: stateChecksum, state }))
+          if (journalBytes + lineBytes > maxJournalBytes) {
+            await atomicStateFile(directory, 'snapshot.json', stateEnvelope({ schemaVersion: 1, sequence, checksum: stateChecksum }, stateEncoded))
             await atomicStateFile(directory, 'journal.jsonl', '')
             journalBytes = 0
           }
@@ -209,14 +262,14 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
           try { if ((await lstat(journalPath)).isSymbolicLink()) throw new StateStoreError('STATE_INVALID', 'Journal cannot be a symlink') } catch (error) { if (!missing(error)) throw error }
           const handle = await open(journalPath, 'a', 0o600)
           try { await handle.writeFile(line, 'utf8'); await handle.sync() } finally { await handle.close() }
-          journalBytes += Buffer.byteLength(line)
+          journalBytes += lineBytes
         } catch (error) { failed = true; throw new StateStoreError('RECOVERY_REQUIRED', 'Durable commit failed: ' + (error instanceof Error ? error.message : String(error))) }
       }
-      state = next; sequence++; stateChecksum = nextChecksum
+      state = next.value; stateEncoded = next.encoded; sequence++; stateChecksum = nextChecksum
       if (store.durable && sequence % snapshotEvery === 0) {
         // Journal is already durable. Compaction failure must not pretend the committed transaction was rolled back.
         try {
-          await atomicStateFile(directory, 'snapshot.json', canonicalStateJson({ schemaVersion: 1, sequence, checksum: stateChecksum, state }))
+          await atomicStateFile(directory, 'snapshot.json', stateEnvelope({ schemaVersion: 1, sequence, checksum: stateChecksum }, stateEncoded))
           await atomicStateFile(directory, 'journal.jsonl', '')
           journalBytes = 0
         } catch { failed = true }
@@ -226,12 +279,18 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
     dispose: () => mutex.run(async () => {
       if (closed) return
       closed = true
-      if (ownerPath !== undefined) { await unlink(ownerPath); await syncDirectory(directory) }
+      await clearOwnOwner()
     })
   }
   if (options.recover !== undefined && sequence > 0) {
-    const recovered = validate(options.recover(copy(state)))
-    if (checksum(recovered) !== stateChecksum) await store.commit('state/recovered', () => recovered)
+    try {
+      const recovered = validate(options.recover(copy(state)))
+      if (checksumText(recovered.encoded) !== stateChecksum) await store.commit('state/recovered', () => recovered.value)
+    } catch (error) {
+      closed = true
+      await clearOwnOwner().catch(() => undefined)
+      throw error
+    }
   }
   return store
 }

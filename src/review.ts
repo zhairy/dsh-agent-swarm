@@ -1,6 +1,6 @@
 import type { EvidenceItem } from './contracts.js'
 import type { AssessmentInfo, DelegationRecord, TaskRecord } from './evidence.js'
-import { getRedactedText } from './jev.js'
+import { getRedactedText, isJevProbability, isJevScore } from './jev.js'
 import type { DelegableRoleId, SuanHengMode } from './role-registry.js'
 
 /**
@@ -149,8 +149,6 @@ export const getAcceptanceState = (
 const asRecord = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 
-const round = (value: number): number => Math.round(value * 100) / 100
-
 /**
  * 解析复评答案并给出判定
  * @param {Record<string, unknown>} answers - Jev 原始答案
@@ -160,15 +158,19 @@ const round = (value: number): number => Math.round(value * 100) / 100
  */
 export const ParseAssessment = (answers: Record<string, unknown>, thresholds: ReviewThresholdsInfo, model?: string): AssessmentInfo => {
   const reliability = asRecord(answers.reliability)
-  if (typeof reliability.score !== 'number') return { status: 'unavailable', reason: 'malformed-response' }
+  if (!isJevScore(reliability.score, RELIABILITY_LEVELS.length) || (reliability.confidence !== undefined && !isJevProbability(reliability.confidence))
+    || !isJevProbability(asRecord(answers.supported).noul) || !isJevProbability(asRecord(answers.complete).noul)) return { status: 'unavailable', reason: 'malformed-response' }
   const levels = RELIABILITY_LEVELS.length - 1
-  const normalized = round(Math.min(Math.max(reliability.score / levels, 0), 1))
+  const normalized = reliability.score / levels
   const checks: Record<string, number> = {}
   for (const [id, value] of Object.entries(answers)) {
     const noul = asRecord(value).noul
-    if (typeof noul === 'number') checks[id] = round(noul)
+    if (noul !== undefined) {
+      if (!isJevProbability(noul)) return { status: 'unavailable', reason: 'malformed-response' }
+      checks[id] = noul
+    }
   }
-  const supported = checks.supported ?? normalized
+  const supported = asRecord(answers.supported).noul as number
   const verdict: AssessmentInfo['verdict'] = normalized < thresholds.doubtfulBelow || supported < SUPPORTED_DOUBTFUL
     ? 'doubtful'
     : normalized >= thresholds.trustedAbove && supported >= SUPPORTED_TRUSTED ? 'trusted' : 'review'
@@ -176,7 +178,7 @@ export const ParseAssessment = (answers: Record<string, unknown>, thresholds: Re
     status: 'ok',
     verdict,
     reliability: normalized,
-    ...(typeof reliability.confidence === 'number' ? { confidence: round(reliability.confidence) } : {}),
+    ...(isJevProbability(reliability.confidence) ? { confidence: reliability.confidence } : {}),
     checks,
     ...(model === undefined ? {} : { model })
   }
@@ -202,7 +204,7 @@ const CHECK_LABELS: Readonly<Record<string, string>> = {
  */
 export const getAssessmentText = (assessment: AssessmentInfo | undefined): string | undefined => {
   if (assessment === undefined) return undefined
-  if (assessment.status !== 'ok' || assessment.verdict === undefined) return `衡鉴复评：未执行（${assessment.reason ?? '未知原因'}）`
+  if (assessment.status !== 'ok' || assessment.verdict === undefined) return `衡鉴复评：无有效结论（${assessment.reason ?? '未知原因'}）`
   const checks = Object.entries(assessment.checks ?? {}).map(([id, value]) => `${CHECK_LABELS[id] ?? id} ${value.toFixed(2)}`)
   return `衡鉴复评：${VERDICT_LABELS[assessment.verdict]}（可信度 ${(assessment.reliability ?? 0).toFixed(2)}${checks.length > 0 ? `；${checks.join('；')}` : ''}）`
 }

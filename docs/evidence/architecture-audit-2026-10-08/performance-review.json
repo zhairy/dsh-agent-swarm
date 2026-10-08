@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-08T10:09:00+08:00",
+  "scope": "State serialization/projection and feature ownership-index audit; not a whole-release freeze or external Jev verdict",
+  "baselineCommit": "cab2c805a55cd8b16d80703e1bb36eca6dcacb79",
+  "checks": {
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "targetedTests": {
+      "command": "npm test -- tests/unit/state-store.test.ts tests/unit/feature-state-validation.test.ts tests/unit/agent-binding.test.ts tests/unit/message-bus.test.ts tests/unit/task-runtime.test.ts",
+      "filesPassed": 5,
+      "testsPassed": 58,
+      "exitCode": 0
+    },
+    "diffCheck": {
+      "exitCode": 0
+    }
+  },
+  "invariants": [
+    "Commit mutex and full canonical/schema validation retained before publication.",
+    "A successful durable commit is published only after journal write and fsync; failure blocks subsequent commits.",
+    "Compaction failure after journal durability retains the committed transaction, marks recovery required, and does not claim rollback.",
+    "Projected reads and returned commit states are detached copies; escaping mutation drafts cannot change private state.",
+    "Initial journal directory entry is fsynced through atomicStateFile before the first append.",
+    "Initialization and recovery-transform failures clean up this process-owned inode; replacement owner files are preserved.",
+    "Version-1 canonical snapshot/journal format and state/entry checksums remain compatible.",
+    "Feature task/delegation associations remain complete, unique, and same-task after replacing nested scans with Set lookups."
+  ],
+  "benchmark": "state-store-benchmark.json",
+  "limitations": [
+    "Synthetic memory-only store timings exclude the business schema validator; feature-state validation is measured separately.",
+    "No claims about durable NAS fsync latency, end-to-end agent/model latency, token savings, or OS adversarial filesystem isolation.",
+    "Caching canonical JSON adds O(B) retained memory for validated state size B; no peak-memory reduction was measured.",
+    "Projection reduces copied data but message pull still scans/sorts indexed messages and retains an overall state size cap."
+  ],
+  "sourceSha256": {
+    "src/state-store.ts": "b30308beb691d2e7732272fb0b507381b5eb7b0e39fdece94417b90a4f67a90f",
+    "src/feature-session.ts": "7d65142b5bca0376d936659bfb44fcc3844b4e2c29b34522f8da8aa303438aff",
+    "src/agent-binding.ts": "62fe7565e8cc320cafef2a934344c240e51653272a7987168d2da70828d7dd23",
+    "src/message-bus.ts": "32e0ab6ac25fa6fd8862cbaed27a69b37a714e6f475ec0f9a8348b508c1bf9e8",
+    "tests/unit/state-store.test.ts": "ff262be47dc67e217574e05294c8b98c70ae77773fca383c47271b8676ff18fd",
+    "tests/unit/feature-state-validation.test.ts": "e326a05874b714a839a744b25b858adb3b471b57757874b4d740b065194937f5",
+    "tests/unit/agent-binding.test.ts": "831c2e5ff47f7aed3d46ac1a0d9b30097580aa20fd144f988dad25cbebf41f65",
+    "tests/unit/message-bus.test.ts": "3c93bb74ea0a92e7f49b165655015586e1114b6808f8746c2075ee48a80aa704",
+    "tests/unit/task-runtime.test.ts": "4dd8d1a4a873d3f2bafe7fea345bc07352624c8583796e51f96b6d3072f2076c",
+    "scripts/bench-state-store.mjs": "709054f9d37915903bfb4763508ed17a286f70d67972edca789321cf87ba2267"
+  }
+}

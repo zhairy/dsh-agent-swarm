@@ -108,7 +108,7 @@ export const createMessageBus = <T extends MessageState>(options: MessageBusOpti
     const { payloadDigest, ...payload } = parsed
     if (payloadDigest !== hash(payload) || canonicalStateJson(parsed) !== canonicalStateJson(message)) throw new MessageBusError('MESSAGE_CORRUPT', 'Committed message digest or index mismatch')
   }
-  const isDeliverable = (state: T, message: ExpertMessage, recipient: AgentBinding): boolean => {
+  const isDeliverable = (state: Pick<MessageState, 'bindingHistory'>, message: ExpertMessage, recipient: AgentBinding): boolean => {
     if (message.toAgentId !== recipient.agentId || message.recipientGeneration !== recipient.generation || message.recipientLeaseEpoch !== recipient.leaseEpoch || message.taskId !== recipient.taskId || message.rootSessionId !== recipient.rootSessionId || message.workspaceId !== recipient.workspaceId || message.cardRevision !== recipient.cardRevision || message.workflowRevision !== recipient.workflowRevision || (message.requestRevision ?? 1) !== (recipient.requestRevision ?? 1) || message.expiresAt <= now()) return false
     const historical = state.bindingHistory[message.fromAgentId + ':' + message.senderGeneration + ':' + message.senderLeaseEpoch]
     return historical !== undefined && historical.attemptId === message.senderAttemptId && matchingScope(historical, recipient) && historical.revocationReason !== 'untrusted' && historical.revocationReason !== 'cancelled'
@@ -163,7 +163,7 @@ export const createMessageBus = <T extends MessageState>(options: MessageBusOpti
     },
     pull: async (agentId, input = {}) => {
       if (input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 32)) throw new MessageBusError('MESSAGE_INVALID', 'Pull limit must be 1..32')
-      const state = options.store.read()
+      const state = options.store.readFields?.(['bindings', 'bindingHistory', 'messages', 'messageAcks']) ?? options.store.read()
       const recipient = current(state, agentId, 'message-read')
       const acks = state.messageAcks[bindingKey(recipient)] ?? {}
       const candidates = Object.values(state.messages).filter((message) => message.toAgentId === agentId && acks[message.id] === undefined).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
@@ -177,7 +177,7 @@ export const createMessageBus = <T extends MessageState>(options: MessageBusOpti
       // Do not expose messages if an attempt was revoked while files were being read.
       const latest = options.bindings.requireActive(agentId, 'message-read')
       if (bindingKey(latest) !== bindingKey(recipient)) throw new MessageBusError('IDENTITY_DENIED', 'Recipient attempt changed during pull')
-      const latestState = options.store.read()
+      const latestState = options.store.readFields?.(['bindings', 'bindingHistory']) ?? options.store.read()
       current(latestState, agentId, 'message-read')
       const stillValid = messages.filter((message) => isDeliverable(latestState, message, latest))
       for (const message of messages) if (!stillValid.includes(message) && stale.length < 32) stale.push(message.id)

@@ -33,6 +33,9 @@ const MODEL_CALL_DISPLAYS = ['every', 'turn']
 const POLICY_KEYS = ['session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffMs', 'promptStyle', 'networkWaitMs', 'rootRecoverMs', 'modelCallDisplay']
 /** Jev 密钥的默认凭据引用名（swarm-core 的 jev.apiKeyEnv） */
 const DEFAULT_JEV_REF = 'TYPESAFE_API_KEY'
+const APPROVAL_MODES = ['inherit', 'ask', 'deny']
+const APPROVAL_SCOPES = ['write', 'shell', 'external_mcp', 'jev']
+const APPROVAL_DEFAULTS = Object.freeze({ mode: 'inherit', scope: Object.freeze([...APPROVAL_SCOPES]) })
 
 const zh = {
   nav: '百工 Agent',
@@ -242,10 +245,30 @@ const en = {
 
 Object.assign(zh, { errRoutePolicy: '路由额度域配置不合法或超限，请在配置中修正后保存', resource_subscription: '订阅', resource_metered_api: '按量 API', resource_judgment_api: '判断 API', resource_unknown: '资源类型未声明' })
 Object.assign(en, { errRoutePolicy: 'Route quota policy is invalid or exceeds limits; repair its configuration before saving', resource_subscription: 'Subscription', resource_metered_api: 'Metered API', resource_judgment_api: 'Judgment API', resource_unknown: 'Resource type unspecified' })
+Object.assign(zh, {
+  approvalsTitle: '百工工具审批', approvalsDescription: '为百工会话中所选类别的工具调用增加审批要求。继承沿用宿主策略；请求审批需要宿主提供审批能力；拒绝会阻止这些调用。插件不能覆盖宿主的 never 策略，也不能开启被宿主禁用的 MCP。',
+  approvalsBoundary: '作用域只覆盖工具调用。shell 包含 run_code；jev 指显式 jev_* 工具。衡鉴分流、会话判断、交付复评与规划审核的内部 Jev HTTP 调用不受此开关控制。',
+  approvalsMode: '审批策略', approvalsInherit: '继承宿主', approvalsAsk: '请求审批', approvalsDeny: '拒绝调用', approvalsScope: '作用域', approvalsWrite: '文件写入', approvalsShell: 'Shell / run_code', approvalsMcp: '外部 MCP', approvalsJev: '显式 Jev 工具', approvalsEmpty: '未选择作用域：此设置不会增加工具审批限制。', errApprovals: '请选择有效的审批策略和作用域',
+  jevPermissionDenied: '宿主或服务拒绝访问。请检查对应权限；插件设置不能覆盖宿主审批策略。', jevInvalidResponse: '服务返回了不完整或非法数据，未作为有效判断接受。', jevCancelled: '连接测试已取消。'
+})
+Object.assign(en, {
+  approvalsTitle: 'Swarm tool approvals', approvalsDescription: 'Add approval requirements for selected tool categories in swarm sessions. Inherit uses the host policy; Ask requires host approval support; Deny blocks selected calls. This plugin cannot override a host never policy or enable MCPs disabled by the host.',
+  approvalsBoundary: 'These settings apply to tool calls only. Shell includes run_code; Jev means explicit jev_* tools. Internal Jev HTTP calls for triage, session planning, delivery review and planning review are unaffected.',
+  approvalsMode: 'Approval policy', approvalsInherit: 'Inherit host', approvalsAsk: 'Ask for approval', approvalsDeny: 'Deny calls', approvalsScope: 'Scope', approvalsWrite: 'File writes', approvalsShell: 'Shell / run_code', approvalsMcp: 'External MCP', approvalsJev: 'Explicit Jev tools', approvalsEmpty: 'No scope selected: this setting adds no tool approval restrictions.', errApprovals: 'Select a valid approval policy and scope',
+  jevPermissionDenied: 'The host or service denied access. Check its permissions; plugin settings cannot override host approval policy.', jevInvalidResponse: 'The service returned incomplete or invalid data; it was not accepted as a valid judgment.', jevCancelled: 'Connection test cancelled.'
+})
 
 // ───────────────────────── 纯逻辑（单元测试覆盖） ─────────────────────────
 
 const asRecord = (value) => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {})
+
+const getApprovals = (raw) => {
+  const value = asRecord(raw)
+  return { mode: APPROVAL_MODES.includes(value.mode) ? value.mode : APPROVAL_DEFAULTS.mode, scope: Array.isArray(value.scope) ? APPROVAL_SCOPES.filter((scope) => value.scope.includes(scope)) : [...APPROVAL_DEFAULTS.scope] }
+}
+const getApprovalErrors = (draft) => !APPROVAL_MODES.includes(draft.mode) || !Array.isArray(draft.scope) || draft.scope.some((scope) => !APPROVAL_SCOPES.includes(scope)) ? 'errApprovals' : undefined
+const sameApprovals = (a, b) => a.mode === b.mode && a.scope.length === b.scope.length && a.scope.every((scope) => b.scope.includes(scope))
+const buildApprovals = (draft, saved) => getApprovalErrors(draft) === undefined ? { ...asRecord(saved), mode: draft.mode, scope: APPROVAL_SCOPES.filter((scope) => draft.scope.includes(scope)) } : undefined
 
 /** 保留页面不编辑的额度域等 JSON 元数据；容量或形状异常时阻止保存，不静默清掉隔离配置。 */
 const cloneResourcePolicy = (raw) => {
@@ -500,6 +523,7 @@ class SwarmAgentsController {
     this.drafts = new Map()
     /** 会话与重试策略的草稿；undefined 表示没有修改 */
     this.policyDraft = undefined
+    this.approvalsDraft = undefined
     this.draftRevision = undefined
     this.catalog = { status: 'idle', groups: [], failures: [] }
     this.saving = false
@@ -546,7 +570,25 @@ class SwarmAgentsController {
 
   savedPolicy () { return getPolicy(asRecord(this.form.getSnapshot().value).agents) }
 
-  hasDrafts () { return this.drafts.size > 0 || this.policyDraft !== undefined }
+  savedApprovals () { return getApprovals(asRecord(this.form.getSnapshot().value).approvals) }
+
+  hasDrafts () { return this.drafts.size > 0 || this.policyDraft !== undefined || this.approvalsDraft !== undefined }
+
+  setApprovals (patch) {
+    if (!this.canEdit()) return
+    if (!this.hasDrafts()) this.draftRevision = this.form.getSnapshot().revision
+    this.approvalsDraft = { ...(this.approvalsDraft ?? this.savedApprovals()), ...patch }
+    if (getApprovalErrors(this.approvalsDraft) === undefined && sameApprovals(this.approvalsDraft, this.savedApprovals())) this.approvalsDraft = undefined
+    if (!this.hasDrafts()) this.draftRevision = undefined
+    this.notice = undefined
+    this.publish()
+  }
+
+  toggleApprovalScope (scope) {
+    if (!APPROVAL_SCOPES.includes(scope)) return
+    const value = this.approvalsDraft ?? this.savedApprovals()
+    this.setApprovals({ scope: value.scope.includes(scope) ? value.scope.filter((item) => item !== scope) : [...value.scope, scope] })
+  }
 
   /** 修改会话与重试策略的一个字段 */
   setPolicy (patch) {
@@ -682,6 +724,7 @@ class SwarmAgentsController {
     if (this.saving) return
     this.drafts.clear()
     this.policyDraft = undefined
+    this.approvalsDraft = undefined
     this.draftRevision = undefined
     this.conflicted = false
     this.notice = undefined
@@ -713,6 +756,11 @@ class SwarmAgentsController {
       }
       ops.push({ op: 'set', path: ['agents'], value: agents })
     }
+    if (this.approvalsDraft !== undefined) {
+      const approvals = buildApprovals(this.approvalsDraft, asRecord(snapshot.value).approvals)
+      if (approvals === undefined) { this.publish(); return }
+      ops.push({ op: 'set', path: ['approvals'], value: approvals })
+    }
     this.saving = true
     this.notice = undefined
     this.publish()
@@ -727,6 +775,7 @@ class SwarmAgentsController {
     if (accepted) {
       this.drafts.clear()
       this.policyDraft = undefined
+      this.approvalsDraft = undefined
       this.draftRevision = undefined
       this.conflicted = false
       this.notice = 'saved'
@@ -771,6 +820,7 @@ class SwarmAgentsController {
     this.saving = false
     this.drafts.clear()
     this.policyDraft = undefined
+    this.approvalsDraft = undefined
     this.draftRevision = undefined
     this.conflicted = false
     this.refreshCatalog()
@@ -808,15 +858,17 @@ class SwarmAgentsController {
       dirty: this.policyDraft !== undefined,
       errors: policyErrors
     }
+    const approvals = { value: this.approvalsDraft ?? this.savedApprovals(), dirty: this.approvalsDraft !== undefined, error: this.approvalsDraft === undefined ? undefined : getApprovalErrors(this.approvalsDraft) }
     return {
       status: snapshot.status,
       writable: snapshot.writable,
       rows,
       policy,
+      approvals,
       catalog: this.catalog,
       saving: this.saving,
       dirty: this.hasDrafts(),
-      invalid: rows.some((row) => row.dirty && hasErrors(row.errors)) || Object.values(policyErrors).some((error) => error !== undefined),
+      invalid: rows.some((row) => row.dirty && hasErrors(row.errors)) || Object.values(policyErrors).some((error) => error !== undefined) || approvals.error !== undefined,
       conflicted: this.conflicted,
       notice: this.notice
     }
@@ -839,10 +891,11 @@ class JevKeyController {
   constructor (ctx, getRef) {
     this.ctx = ctx
     this.getRef = getRef
-    this.state = { status: 'idle', info: undefined, draft: '', saving: false, testing: false, test: undefined, notice: undefined, error: undefined }
+    this.state = { status: 'idle', info: undefined, draft: '', saving: false, testing: false, test: undefined, notice: undefined, error: undefined, loadError: undefined }
     this.listeners = new Set()
     this.disposed = false
     this.generation = 0
+    this.testGeneration = 0
     this.subscribe = this.subscribe.bind(this)
     this.getSnapshot = this.getSnapshot.bind(this)
   }
@@ -857,6 +910,7 @@ class JevKeyController {
   dispose () {
     this.disposed = true
     this.generation += 1
+    this.testGeneration += 1
     this.listeners.clear()
   }
 
@@ -869,29 +923,34 @@ class JevKeyController {
   /** 调用本插件的宿主 RPC（POST /api/swarm.<method>） */
   async rpc (method) {
     const connection = this.ctx.get('connection')
+    if (typeof connection?.rpc?.call !== 'function') throw Object.assign(new Error('rpc method unavailable'), { code: 'gateway/method-not-found' })
     const result = await connection.rpc.call('/api', `swarm.${method}`, {})
-    if (result?.ok !== true) throw new Error(result?.error?.message ?? 'rpc failed')
+    if (result?.ok !== true) throw Object.assign(new Error(result?.error?.message ?? 'rpc failed'), { code: result?.error?.code, details: result?.error?.details })
     return result.value
   }
 
   async load () {
     const generation = ++this.generation
-    this.update({ status: 'loading' })
+    this.testGeneration += 1
+    this.update({ status: 'loading', test: undefined, testing: false, loadError: undefined })
     let info
+    let error
     try {
       info = await this.rpc('jevStatus')
-    } catch {
-      // 宿主侧插件较旧或 RPC 不可用：直接查询凭据描述
-      try {
+    } catch (failure) {
+      // 仅旧宿主明确不存在此方法时兼容；权限拒绝或未知故障不能改走另一操作。
+      if (['gateway/method-not-found', 'rpc/method-not-found', 'swarm/method-not-found'].includes(failure?.code)) try {
         const ref = this.getRef()
         const response = await this.ctx.remote.credentials.describe([ref])
         info = response.ok && response.value[ref] !== undefined ? { ref, ...response.value[ref] } : undefined
-      } catch {
+      } catch (fallbackFailure) {
         info = undefined
+        error = fallbackFailure instanceof Error ? fallbackFailure.message : String(fallbackFailure)
       }
+      else error = `${failure?.code === undefined ? '' : `${failure.code}: `}${failure instanceof Error ? failure.message : String(failure)}`
     }
     if (generation !== this.generation) return
-    this.update(info === undefined ? { status: 'error', info: undefined } : { status: 'ready', info })
+    this.update(info === undefined ? { status: 'error', info: undefined, loadError: error } : { status: 'ready', info })
   }
 
   setDraft (draft) {
@@ -902,7 +961,8 @@ class JevKeyController {
     const ref = this.state.info?.ref ?? this.getRef()
     const value = this.state.draft.trim()
     if (this.state.saving || (operation === 'set' && value === '')) return
-    this.update({ saving: true, notice: undefined, error: undefined })
+    this.testGeneration += 1
+    this.update({ saving: true, notice: undefined, error: undefined, testing: false, test: undefined })
     let error
     try {
       const response = operation === 'set' ? await this.ctx.remote.credentials.set(ref, value) : await this.ctx.remote.credentials.unset(ref)
@@ -919,14 +979,18 @@ class JevKeyController {
   clear () { return this.write('unset') }
 
   async test () {
-    if (this.state.testing) return
+    if (this.state.testing || this.state.saving || this.disposed) return
+    const generation = ++this.testGeneration
+    const ref = this.getRef()
     this.update({ testing: true, test: undefined })
     let test
     try {
       test = await this.rpc('jevHealth')
     } catch (failure) {
-      test = { error: failure instanceof Error ? failure.message : String(failure) }
+      test = { error: failure instanceof Error ? failure.message : String(failure), ...(failure?.code === undefined ? {} : { code: failure.code }) }
     }
+    if (this.disposed || generation !== this.testGeneration) return
+    if (ref !== this.getRef()) { this.update({ testing: false, test: undefined }); return }
     this.update({ testing: false, test })
   }
 }
@@ -1109,10 +1173,13 @@ function PolicyNumber ({ t, name, label, hint, value, error, step, disabled, con
 /** Jev 测试连接的结果行 */
 function JevTestLine ({ t, test }) {
   if (test === undefined) return null
-  if (test.error !== undefined) return h('span', { style: style.statusBad, role: 'alert' }, `${t('jevFailed')}：${test.error}`)
+  if (test.error !== undefined) return h('span', { style: style.statusBad, role: 'alert' }, `${t('jevFailed')}：${test.code === undefined ? '' : `[${test.code}] `}${test.error}${test.code === 'swarm/permission-denied' ? ` ${t('jevPermissionDenied')}` : ''}`)
   if (test.enabled === false) return h('span', { style: style.statusBad, role: 'alert' }, t('jevDisabled'))
   const result = test.result ?? {}
-  if (result.ok !== true) return h('span', { style: style.statusBad, role: 'alert' }, `${t('jevFailed')}（${result.status ?? '?'}）：${result.error ?? ''}`)
+  if (result.ok !== true) {
+    const hint = result.failure_kind === 'permission' ? t('jevPermissionDenied') : result.failure_kind === 'invalid-response' ? t('jevInvalidResponse') : result.failure_kind === 'cancelled' ? t('jevCancelled') : ''
+    return h('span', { style: style.statusBad, role: 'alert' }, `${t('jevFailed')}（${result.status ?? '?'}${result.reason === undefined ? '' : ` / ${result.reason}`}）：${result.error ?? ''}${hint === '' ? '' : ` ${hint}`}`)
+  }
   const models = Array.isArray(result.answers?.models) ? result.answers.models.map((model) => model.name).filter(Boolean) : []
   const latency = Math.round(result.answers?.round_trip_latency_ms ?? result.latency_ms ?? 0)
   return h('span', { style: style.statusOk, role: 'status' }, `${t('jevOk')}：${test.model}；${t('jevModels')} ${models.join('、') || '—'}；${t('jevLatency')} ${latency} ms`)
@@ -1140,6 +1207,7 @@ function JevKeyCard ({ t, jev }) {
       h('button', { type: 'button', style: style.btnSmall, disabled: state.testing, onClick: () => { jev.test() } }, state.testing ? t('jevTesting') : t('jevTest'))
     ),
     h('p', { style: style.note }, t('jevDescription')),
+    state.loadError === undefined ? null : h('p', { style: style.statusBad, role: 'alert' }, state.loadError),
     h('span', { style: style.hint }, `${t('jevRef')}：${info?.ref ?? jev.getRef()}`),
     h('div', { style: style.keyRow },
       h('input', {
@@ -1163,6 +1231,23 @@ function JevKeyCard ({ t, jev }) {
     state.notice === undefined ? null : h('span', { style: style.statusOk, role: 'status' }, t(state.notice)),
     state.error === undefined ? null : h('span', { style: style.statusBad, role: 'alert' }, state.error),
     h(JevTestLine, { t, test: state.test })
+  )
+}
+
+function ApprovalsCard ({ t, approvals, editable, controller }) {
+  const value = approvals.value
+  const labels = { write: 'approvalsWrite', shell: 'approvalsShell', external_mcp: 'approvalsMcp', jev: 'approvalsJev' }
+  return h('div', { style: style.card, 'data-swarm-approvals': 'tools' },
+    h('div', { style: style.cardHead }, h('span', { style: style.name }, t('approvalsTitle')), approvals.dirty ? h('span', { style: style.tag }, t('pending')) : null),
+    h('p', { style: style.note }, t('approvalsDescription')),
+    h('label', { style: style.field }, h('span', { style: style.fieldLabel }, t('approvalsMode')),
+      h('select', { style: style.select, value: value.mode, disabled: !editable, 'aria-label': t('approvalsMode'), onChange: (event) => controller.setApprovals({ mode: event.target.value }) },
+        h('option', { value: 'inherit' }, t('approvalsInherit')), h('option', { value: 'ask' }, t('approvalsAsk')), h('option', { value: 'deny' }, t('approvalsDeny')))),
+    h('div', { style: style.chips, role: 'group', 'aria-label': t('approvalsScope') }, ...APPROVAL_SCOPES.map((scope) => h('label', { key: scope, style: style.chip },
+      h('input', { type: 'checkbox', checked: value.scope.includes(scope), disabled: !editable, onChange: () => controller.toggleApprovalScope(scope) }), t(labels[scope])))),
+    value.scope.length === 0 ? h('p', { style: style.note }, t('approvalsEmpty')) : null,
+    h('p', { style: style.note }, t('approvalsBoundary')),
+    approvals.error === undefined ? null : h('p', { style: style.fieldError, role: 'alert' }, t(approvals.error))
   )
 }
 
@@ -1283,6 +1368,7 @@ function SwarmAgentsSection ({ controller, jev }) {
     jev === undefined ? null : h(JevKeyCard, { key: 'jev', t, jev }),
     ...banner.map((text, index) => h('div', { key: `b${index}`, style: style.banner }, text)),
     catalogLine,
+    h(ApprovalsCard, { key: 'approvals', t, approvals: state.approvals, editable, controller }),
     h(PolicyCard, { key: 'policy', t, policy: state.policy, editable, controller }),
     ...state.rows.map((row) => h(AgentCard, { key: row.key, t, row, groups, editable, controller })),
     h('div', { style: style.footer },
@@ -1335,4 +1421,4 @@ function apply (ctx) {
 exports.inject = inject
 exports.apply = apply
 exports.NS = NS
-exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, LayerGrid, SwarmAgentsController, JevKeyController, DATA }
+exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, ApprovalsCard, JevTestLine, LayerGrid, SwarmAgentsController, JevKeyController, DATA }

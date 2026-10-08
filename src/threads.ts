@@ -1,5 +1,5 @@
 import type { SubagentEndInfoLike } from './host-contract.js'
-import { getRedactedText } from './jev.js'
+import { getRedactedText, isJevProbability } from './jev.js'
 import type { DelegableRoleId, SuanHengMode } from './role-registry.js'
 import type { RouteKey } from './routes.js'
 import type { PromptStyle } from './model-family.js'
@@ -195,8 +195,8 @@ export const getSessionQuestions = (hasThread: boolean): Record<string, unknown>
 
 const getNoul = (answers: Record<string, unknown>, id: string): number | undefined => {
   const value = answers[id]
-  const noul = value !== null && typeof value === 'object' ? (value as { noul?: unknown }).noul : undefined
-  return typeof noul === 'number' ? Math.round(noul * 100) / 100 : undefined
+  const noul = value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as { noul?: unknown }).noul : undefined
+  return isJevProbability(noul) ? noul : undefined
 }
 
 /**
@@ -208,7 +208,7 @@ const getNoul = (answers: Record<string, unknown>, id: string): number | undefin
 export const ParseSessionPlan = (answers: Record<string, unknown>, options: { thread?: ThreadInfo; repeatAbove: number; sameCategoryAbove: number }): SessionPlan | undefined => {
   const repeat = getNoul(answers, 'repeat')
   const sameCategory = getNoul(answers, 'same_category')
-  if (repeat === undefined) return undefined
+  if (repeat === undefined || (options.thread !== undefined && sameCategory === undefined) || (Object.hasOwn(answers, 'same_category') && sameCategory === undefined)) return undefined
   if (options.thread !== undefined && sameCategory !== undefined && sameCategory >= options.sameCategoryAbove) {
     return { kind: 'continue', threadId: options.thread.threadId, source: 'jev', reason: `同一大类任务（${sameCategory.toFixed(2)}），追加到已有会话`, sameCategory }
   }

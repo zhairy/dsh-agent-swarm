@@ -1,4 +1,4 @@
-import type { JevAskOutcome, JevClient } from './jev.js'
+import { getJevFailureKind, isJevProbability, isJevScore, type JevAskOutcome, type JevClient } from './jev.js'
 import {
   CHECK_FLAG_THRESHOLD,
   CHECK_UNCERTAIN_MAX,
@@ -117,15 +117,20 @@ const getAnswer = (answers: Record<string, unknown>, id: string): Record<string,
   return raw
 }
 
-const getChoice = (answers: Record<string, unknown>, id: string) => {
+const getChoice = (answers: Record<string, unknown>, id: string, allowed?: readonly string[]) => {
   const raw = getAnswer(answers, id)
-  if (typeof raw.choice !== 'string' || typeof raw.confidence !== 'number' || !isRecord(raw.probabilities)) throw new Error(`malformed choice answer ${id}`)
+  if (typeof raw.choice !== 'string' || !isJevProbability(raw.confidence) || !isRecord(raw.probabilities) || !Object.values(raw.probabilities).every(isJevProbability)) throw new Error(`malformed choice answer ${id}`)
+  if (allowed !== undefined && (!allowed.includes(raw.choice) || !Object.keys(raw.probabilities).every((key) => allowed.includes(key)))) throw new OutOfOptions()
   return { choice: raw.choice, confidence: raw.confidence, probabilities: raw.probabilities as Record<string, number> }
 }
 
-const getScore = (answers: Record<string, unknown>, id: string) => {
+const getScore = (answers: Record<string, unknown>, id: string, levels: number) => {
   const raw = getAnswer(answers, id)
-  if (typeof raw.score !== 'number' || typeof raw.confidence !== 'number') throw new Error(`malformed score answer ${id}`)
+  if (!isJevScore(raw.score, levels) || !isJevProbability(raw.confidence)) throw new Error(`malformed score answer ${id}`)
+  if ([raw.probabilities, raw.legend].some((value) => value !== undefined && !isRecord(value))) throw new Error(`malformed score metadata ${id}`)
+  const allowed = new Set(Array.from({ length: levels }, (_, index) => String(index)))
+  if (isRecord(raw.probabilities) && !Object.values(raw.probabilities).every(isJevProbability)) throw new Error(`malformed score probabilities ${id}`)
+  if ([raw.probabilities, raw.legend].some((value) => isRecord(value) && !Object.keys(value).every((key) => allowed.has(key)))) throw new OutOfOptions()
   return {
     score: raw.score,
     confidence: raw.confidence,
@@ -136,7 +141,7 @@ const getScore = (answers: Record<string, unknown>, id: string) => {
 
 const getNoul = (answers: Record<string, unknown>, id: string): number => {
   const raw = getAnswer(answers, id)
-  if (typeof raw.noul !== 'number') throw new Error(`malformed noul answer ${id}`)
+  if (!isJevProbability(raw.noul)) throw new Error(`malformed noul answer ${id}`)
   return raw.noul
 }
 
@@ -147,6 +152,7 @@ const getBand = (confidence: number): 'act' | 'verify' | 'review' =>
 export const getShuffledCriteria = <T>(criteria: Record<string, T>): Record<string, T> => {
   const items = Object.entries(criteria)
   if (items.length < 2) return { ...criteria }
+  const originalKeys = items.map(([key]) => key)
   let seed = items.length
   const random = (): number => {
     seed = (seed * 1103515245 + 12345) % 2147483648
@@ -156,22 +162,24 @@ export const getShuffledCriteria = <T>(criteria: Record<string, T>): Record<stri
     const swap = Math.floor(random() * (index + 1))
     ;[items[index], items[swap]] = [items[swap] as [string, T], items[index] as [string, T]]
   }
-  if (items.every(([key], index) => key === Object.keys(criteria)[index])) items.reverse()
+  if (items.every(([key], index) => key === originalKeys[index])) items.reverse()
   return Object.fromEntries(items)
 }
 
 /** 把 Jev 调用失败映射为工具信封（不含任何调用方传入的内容） */
 const getFailure = (outcome: Extract<JevAskOutcome, { ok: false }>): JevToolResult => {
   const status = outcome.status ?? 500
-  const error = outcome.reason === 'missing-api-key' ? 'TYPESAFE_API_KEY is not set（请在「设置 → 百工 Agent」顶部填写 Jev API key）'
+  const error = outcome.reason === 'missing-api-key' ? 'Jev credential is not set（请在「设置 → 百工 Agent」顶部填写 Jev API key）'
     : outcome.reason === 'disabled' ? 'Jev is disabled in swarm-core config'
       : outcome.reason === 'request-too-large' ? 'request exceeds the configured maxRequestChars limit'
         : outcome.reason === 'timeout' ? 'TypeSafe request timed out'
           : outcome.reason === 'network' ? 'TypeSafe service unavailable'
             : outcome.reason === 'malformed-response' ? 'TypeSafe API response invalid'
               : outcome.reason === 'aborted' ? 'request aborted'
-                : 'TypeSafe API request failed'
-  return { ok: false, status, error, ...(outcome.retryAfterMs === undefined ? {} : { retry_after_ms: outcome.retryAfterMs }) }
+                : outcome.reason === 'credential-permission-denied' || outcome.status === 403 ? 'Jev credential or API access denied; plugin settings cannot override host permission policy'
+                  : outcome.reason === 'credential-unavailable' ? 'Jev credential service unavailable; no alternate credential source was used'
+                    : 'TypeSafe API request failed'
+  return { ok: false, status, error, reason: outcome.reason, failure_kind: getJevFailureKind(outcome), ...(outcome.retryAfterMs === undefined ? {} : { retry_after_ms: outcome.retryAfterMs }) }
 }
 
 const getErrorResult = (error: unknown): JevToolResult => {
@@ -217,6 +225,13 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
   const askOnce = async (state: unknown, questions: Record<string, unknown>, signal?: AbortSignal) => {
     const outcome = await deps.getClient().ask(state, questions, signal)
     if (!outcome.ok) throw Object.assign(new Error('jev failed'), { envelope: getFailure(outcome) })
+    // 组合工具和任意提问共用完整性/范围校验，防止各入口对同一坏答案得出不同结论。
+    for (const [id, raw] of Object.entries(questions)) {
+      const question = raw as { type: string; criteria?: unknown }
+      if (question.type === 'noul') getNoul(outcome.answers, id)
+      else if (question.type === 'choice') getChoice(outcome.answers, id, Object.keys(question.criteria as object))
+      else if (question.type === 'score') getScore(outcome.answers, id, (question.criteria as unknown[]).length)
+    }
     return outcome
   }
 
@@ -230,21 +245,16 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
     }
   }
 
-  /** jev_ask：任意 noul / choice / score 题，答案原样返回（choice 答案须在给定选项内） */
+  /** jev_ask：任意 noul / choice / score 题；完整、合法的答案原样返回。 */
   const ask = (args: { state?: unknown; questions?: unknown }, signal?: AbortSignal) => run(async (started) => {
     const state = getState(args.state)
     if (!isRecord(args.questions) || Object.keys(args.questions).length === 0) fail('at least one question is required', 'questions')
-    const questions: Record<string, unknown> = {}
+    const questions: Record<string, unknown> = Object.create(null)
     for (const [name, raw] of Object.entries(args.questions as Record<string, unknown>)) {
       if (name.trim() === '') fail('question names must not be empty', 'questions')
       questions[name] = getQuestion(name, raw)
     }
     const outcome = await askOnce(state, questions, signal)
-    for (const [name, question] of Object.entries(questions)) {
-      if ((question as { type: string }).type !== 'choice') continue
-      const choice = getChoice(outcome.answers, name)
-      if (!Object.keys((question as { criteria: object }).criteria).includes(choice.choice)) throw new OutOfOptions()
-    }
     return success([outcome], outcome.answers, started)
   })
 
@@ -253,7 +263,7 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
     const state = getState(args.state)
     if (!isRecord(args.labels) || Object.keys(args.labels).length === 0) fail('at least one label is required', 'labels')
     const labels = args.labels as Record<string, unknown>
-    const criteria: Record<string, unknown> = {}
+    const criteria: Record<string, unknown> = Object.create(null)
     for (const [label, description] of Object.entries(labels)) {
       if (label.trim() === '') fail('label names must not be empty', 'labels')
       if (typeof description === 'string') criteria[label] = description
@@ -262,19 +272,16 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
       } else fail('label description must be a string or { what, not_for, examples }', 'labels', label)
     }
     const addOther = args.add_other !== false
-    if (addOther && !('other' in labels)) criteria.other = CLASSIFY_OTHER_DESCRIPTION
+    if (addOther && !Object.hasOwn(labels, 'other')) criteria.other = CLASSIFY_OTHER_DESCRIPTION
     if (Object.keys(criteria).length > CHOICE_MAX_OPTIONS) fail(`labels plus other may contain at most ${CHOICE_MAX_OPTIONS} entries`, 'labels')
     const instructions = typeof args.question === 'string' && args.question.trim() !== '' ? args.question : CLASSIFY_DEFAULT_INSTRUCTIONS
-    const allowed = Object.keys(criteria)
     const first = await askOnce(state, { choice: { type: 'choice', instructions, criteria } }, signal)
     const primary = getChoice(first.answers, 'choice')
-    if (!allowed.includes(primary.choice)) throw new OutOfOptions()
     if (args.ensemble !== true) {
       return success([first], { ...primary, band: getBand(primary.confidence) }, started)
     }
     const second = await askOnce(state, { choice: { type: 'choice', instructions, criteria: getShuffledCriteria(criteria) } }, signal)
     const alternate = getChoice(second.answers, 'choice')
-    if (!allowed.includes(alternate.choice)) throw new OutOfOptions()
     const agreement = primary.choice === alternate.choice
     return success([first, second], { ...primary, band: agreement ? getBand(primary.confidence) : 'review', agreement, alternate_choice: alternate.choice }, started)
   })
@@ -288,9 +295,7 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
     }
     if (typeof args.question !== 'string' || args.question.trim() === '') fail('question is required', 'question')
     const outcome = await askOnce(state, { score: { type: 'score', instructions: args.question, criteria: levels } }, signal)
-    const answer = getScore(outcome.answers, 'score')
-    const allowed = new Set((levels as string[]).map((_, index) => String(index)))
-    if (!Object.keys(answer.legend).every((key) => allowed.has(key))) throw new OutOfOptions()
+    const answer = getScore(outcome.answers, 'score', (levels as string[]).length)
     return success([outcome], { ...answer, normalized: round(answer.score / ((levels as string[]).length - 1)) }, started)
   })
 
@@ -298,7 +303,7 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
   const check = (args: { state?: unknown; propositions?: unknown }, signal?: AbortSignal) => run(async (started) => {
     const state = getState(args.state)
     if (!isRecord(args.propositions) || Object.keys(args.propositions).length === 0) fail('at least one proposition is required', 'propositions')
-    const questions: Record<string, unknown> = {}
+    const questions: Record<string, unknown> = Object.create(null)
     for (const [id, proposition] of Object.entries(args.propositions as Record<string, unknown>)) {
       if (id.trim() === '') fail('proposition ids must not be empty', 'propositions')
       if (typeof proposition === 'string') questions[id] = { type: 'noul', instructions: proposition }
@@ -322,7 +327,7 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
     questions.risk = { type: 'score', instructions: SCREEN_RISK_INSTRUCTIONS, criteria: [...SCREEN_RISK_LEVELS] }
     const outcome = await askOnce(state, questions, signal)
     const nouls = Object.fromEntries(Object.keys(SCREEN_NOULS).map((id) => [id, getNoul(outcome.answers, id)]))
-    const risk = getScore(outcome.answers, 'risk')
+    const risk = getScore(outcome.answers, 'risk', SCREEN_RISK_LEVELS.length)
     const verdict = risk.score >= SCREEN_VERDICT_THRESHOLDS.blockRisk ? 'block'
       : risk.score >= SCREEN_VERDICT_THRESHOLDS.reviewRisk || Object.values(nouls).some((p) => p >= SCREEN_VERDICT_THRESHOLDS.reviewNoul) ? 'review' : 'pass'
     const reasons = Object.fromEntries(Object.entries(nouls).filter(([, p]) => p >= SCREEN_VERDICT_THRESHOLDS.reviewNoul))
@@ -371,7 +376,7 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
       windows.push({ candidates: chunk, choice, exists: getNoul(outcome.answers, 'exists') })
       checkDeadline()
     }
-    const finalists: Record<string, string> = {}
+    const finalists: Record<string, string> = Object.create(null)
     for (const item of windows) {
       const id = selected(item.choice, item.candidates)
       if (id !== undefined) finalists[id] = item.candidates[id] as string
@@ -382,7 +387,7 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
       // 多窗口：各窗口胜出者再比一轮（超过选项上限时分组淘汰）
       let current = finalists
       while (Object.keys(current).length > CHOICE_MAX_OPTIONS - 1) {
-        const reduced: Record<string, string> = {}
+        const reduced: Record<string, string> = Object.create(null)
         const entries = Object.entries(current)
         for (let index = 0; index < entries.length; index += CHOICE_MAX_OPTIONS - 1) {
           const group = Object.fromEntries(entries.slice(index, index + CHOICE_MAX_OPTIONS - 1))
@@ -439,7 +444,7 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
     const client = deps.getClient()
     const outcome = await client.listModels(signal)
     if (!outcome.ok) {
-      return getFailure({ ok: false, reason: outcome.reason, attempts: 0, ...(outcome.status === undefined ? {} : { status: outcome.status }) })
+      return getFailure({ ok: false, reason: outcome.reason, attempts: 0, ...(outcome.failureKind === undefined ? {} : { failureKind: outcome.failureKind }), ...(outcome.status === undefined ? {} : { status: outcome.status }) })
     }
     return {
       ok: true,

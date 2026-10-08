@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm, readFile, writeFile, mkdir, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createDurableStateStore, markInterruptedOnRecovery, type DurableStateStore } from '../../src/state-store.js'
+import { createHash } from 'node:crypto'
+import { canonicalStateJson, createDurableStateStore, markInterruptedOnRecovery, type DurableStateStore } from '../../src/state-store.js'
 
 const directories: string[] = []
 const stores: DurableStateStore<unknown>[] = []
@@ -53,12 +54,14 @@ describe('durable snapshot and committed journal', () => {
         await writeFile(join(path, 'snapshot.json'), JSON.stringify(snapshot))
       }
       await expect(createDurableStateStore({ directory: path, initialState: { n: 0 } })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+      await expect(readFile(join(path, 'owner.json'))).rejects.toMatchObject({ code: 'ENOENT' })
     }
   })
 
   it('retains the last durable state and rejects subsequent writes after I/O failure', async () => {
     const path = await directory()
     const store = track(await createDurableStateStore({ directory: path, initialState: { n: 0 } }))
+    await rm(join(path, 'journal.jsonl'))
     await mkdir(join(path, 'journal.jsonl'))
     await expect(store.commit('change', (draft) => { draft.n = 1 })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
     expect(store.read()).toEqual({ n: 0 })
@@ -83,5 +86,88 @@ describe('durable snapshot and committed journal', () => {
     expect(store.durable).toBe(false)
     await store.commit('change', (draft) => { draft.n = 1 })
     expect(store.read().n).toBe(1)
+  })
+
+  it('keeps selected-path/field reads detached and commit drafts private after publication', async () => {
+    const store = track(await createDurableStateStore({ directory: '/unused', enabled: false, initialState: { small: { n: 1 }, payload: 'x'.repeat(1024 * 1024), list: [{ n: 2 }] } }))
+    const selected = store.readPath!<{ n: number }>(['small'])!
+    selected.n = 99
+    const fields = store.readFields!(['small', 'list'])
+    fields.small.n = 88; fields.list[0]!.n = 77
+    expect(Object.keys(fields)).toEqual(['small', 'list'])
+    expect(store.readPath!(['small', 'n'])).toBe(1)
+    expect(store.readPath!(['missing'])).toBeUndefined()
+    expect(() => store.readPath!(['__proto__'])).toThrow('Unsafe')
+    expect(() => store.readFields!(['constructor' as 'small'])).toThrow('Unsafe')
+    let escaped!: ReturnType<typeof store.read>
+    const committed = await store.commit('detached', (draft) => { escaped = draft; draft.small.n = 3 })
+    escaped.small.n = 55; committed.small.n = 66
+    expect(store.readPath!(['small', 'n'])).toBe(3)
+    expect(store.getSequence()).toBe(1)
+  })
+
+  it('creates the journal before first commit and keeps the canonical version-1 checksums unchanged', async () => {
+    const path = await directory()
+    const store = track(await createDurableStateStore({ directory: path, initialState: { z: '\nquote"', a: { n: 1 } } }))
+    expect(await readFile(join(path, 'journal.jsonl'), 'utf8')).toBe('')
+    await store.commit('quoted/event\n', (draft) => { draft.a.n = 2 })
+    const raw = await readFile(join(path, 'journal.jsonl'), 'utf8')
+    const entry = JSON.parse(raw) as { entryChecksum: string; checksum: string; state: unknown }
+    const { entryChecksum, ...payload } = entry
+    const hash = (value: unknown) => createHash('sha256').update(canonicalStateJson(value)).digest('hex')
+    expect(entry.checksum).toBe(hash(entry.state))
+    expect(entryChecksum).toBe(hash(payload))
+    expect(raw).toBe(canonicalStateJson(entry) + '\n')
+  })
+
+  it('cleans its owner when a recovery transform fails so the live process can retry safely', async () => {
+    const path = await directory()
+    const store = track(await createDurableStateStore({ directory: path, initialState: { n: 0 } }))
+    await store.commit('save', (draft) => { draft.n = 1 }); await store.dispose()
+    await expect(createDurableStateStore({ directory: path, initialState: { n: 0 }, recover: () => { throw new Error('bad recovery transform') } })).rejects.toThrow('bad recovery transform')
+    await expect(readFile(join(path, 'owner.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    const reopened = track(await createDurableStateStore({ directory: path, initialState: { n: 0 } }))
+    expect(reopened.read()).toEqual({ n: 1 })
+  })
+
+  it('releases a newly acquired owner when journal initialization fails', async () => {
+    const path = await directory()
+    await mkdir(join(path, 'journal.jsonl'))
+    await expect(createDurableStateStore({ directory: path, initialState: { n: 0 } })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    await expect(readFile(join(path, 'owner.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await rm(join(path, 'journal.jsonl'), { recursive: true })
+    const reopened = track(await createDurableStateStore({ directory: path, initialState: { n: 0 } }))
+    await reopened.commit('retry', (draft) => { draft.n = 1 })
+    expect(reopened.read().n).toBe(1)
+  })
+
+  it('never deletes a different owner file during disposal', async () => {
+    const path = await directory()
+    const store = track(await createDurableStateStore({ directory: path, initialState: { n: 0 } }))
+    const replacement = JSON.stringify({ schemaVersion: 1, pid: process.pid, ownerId: 'another-owner' })
+    // Create the replacement inode before unlinking the original, so inode reuse cannot mask the guard.
+    const replacementPath = join(path, 'replacement.json')
+    await writeFile(replacementPath, replacement)
+    const { rename } = await import('node:fs/promises')
+    await rename(replacementPath, join(path, 'owner.json'))
+    await store.dispose()
+    expect(await readFile(join(path, 'owner.json'), 'utf8')).toBe(replacement)
+  })
+
+  it('keeps a journal-committed transaction visible when compaction fails and stops further writes', async () => {
+    const path = await directory()
+    const store = track(await createDurableStateStore({ directory: path, initialState: { n: 0 }, snapshotEvery: 1 }))
+    const trustedInitialSnapshot = await readFile(join(path, 'snapshot.json'), 'utf8')
+    await rm(join(path, 'snapshot.json'))
+    await mkdir(join(path, 'snapshot.json'))
+    await expect(store.commit('committed-before-compaction', (draft) => { draft.n = 1 })).resolves.toEqual({ n: 1 })
+    expect(store.getSequence()).toBe(1)
+    expect(store.read()).toEqual({ n: 1 })
+    await expect(store.commit('cannot-continue', (draft) => { draft.n = 2 })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    await store.dispose()
+    await rm(join(path, 'snapshot.json'), { recursive: true })
+    await writeFile(join(path, 'snapshot.json'), trustedInitialSnapshot)
+    const reopened = track(await createDurableStateStore({ directory: path, initialState: { n: 0 } }))
+    expect(reopened.read()).toEqual({ n: 1 })
   })
 })
