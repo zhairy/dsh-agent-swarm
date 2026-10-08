@@ -1,0 +1,96 @@
+{
+  "checkedAt": "2026-10-08T02:47:04.220Z",
+  "pid": 1931740,
+  "settings": {
+    "httpStatus": 200,
+    "ok": true,
+    "present": true,
+    "schemaHasApprovals": true,
+    "approvals": {
+      "mode": "inherit",
+      "scope": [
+        "write",
+        "shell",
+        "external_mcp",
+        "jev"
+      ]
+    }
+  },
+  "plugin": {
+    "httpStatus": 200,
+    "ok": true,
+    "rows": [
+      {
+        "entryId": "include:swarm-core",
+        "enabled": true,
+        "fiberPhase": "active"
+      }
+    ]
+  },
+  "bundle": {
+    "httpStatus": 200,
+    "ok": true,
+    "rows": [
+      {
+        "name": "dsh-agent-swarm",
+        "version": "2.2.1",
+        "enabled": true,
+        "installed": true
+      }
+    ]
+  },
+  "presets": {
+    "httpStatus": 200,
+    "ok": true,
+    "swarmIds": [
+      "tian-shu"
+    ],
+    "swarmCount": 1,
+    "defaults": [
+      "tian-shu"
+    ],
+    "brokenSwarmCount": 0
+  },
+  "activity": {
+    "sessions": {
+      "httpStatus": 200,
+      "ok": true,
+      "totalCount": 420,
+      "liveAgentCount": 1,
+      "runningAgentCount": 0
+    },
+    "jobs": {
+      "checked": false,
+      "reason": "job/list requires per-session streaming; no job request was sent"
+    }
+  },
+  "rpcRoutes": {
+    "jevStatus": {
+      "httpStatus": 200,
+      "ok": true
+    },
+    "taskViewInvalidInput": {
+      "httpStatus": 200,
+      "ok": false,
+      "errorCode": "gateway/bad-request"
+    },
+    "jevHealthInvalidEnvelope": {
+      "httpStatus": 200,
+      "ok": false,
+      "errorCode": "gateway/bad-request"
+    }
+  },
+  "mermaid": {
+    "httpStatus": 200,
+    "unauthenticatedHttpStatus": 401,
+    "contentType": "text/javascript; charset=utf-8",
+    "bytes": 2748992,
+    "sha256": "07e37dfa97b337ccc85365d57eddf99b9706f09db3b59b260d0333b23b343c4b"
+  },
+  "previousConfiguration": {
+    "saved": false,
+    "compared": true,
+    "unchanged": true,
+    "changedKeys": []
+  }
+}

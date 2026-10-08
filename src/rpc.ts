@@ -15,7 +15,7 @@ export const RPC_PREFIX = 'swarm.'
 export const RPC_METHODS = ['jevStatus', 'jevHealth'] as const
 export type RpcMethod = typeof RPC_METHODS[number] | 'taskView'
 export interface TaskRpcDepsInfo { taskView: (sessionId: string, taskId: string) => unknown | Promise<unknown> }
-export const MERMAID_ASSET_PATH = '/swarm-assets/mermaid.min.js'
+export const MERMAID_ASSET_PATH = '/api/swarm-assets/mermaid.min.js'
 const RPC_BODY_LIMIT = 16384
 
 type RpcResult = { ok: true; value: unknown } | { ok: false; error: { code: string; message: string; details: { issues: unknown[] } } }

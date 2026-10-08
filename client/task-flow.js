@@ -6,7 +6,7 @@ try { MarkdownText = require('@deepseek-ai/dsh-client-ui-primitives').MarkdownTe
 
 const NS = 'swarmTaskFlow'
 const KIND = 'swarm-task-flow'
-const ASSET_URL = '/swarm-assets/mermaid.min.js'
+const ASSET_URL = '/api/swarm-assets/mermaid.min.js'
 const EMPTY_LABELS = Object.freeze({ code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' })
 const zh = { title: '任务流程', refresh: '刷新状态', source: 'Mermaid 源码', loading: '读取任务状态…', unavailable: '任务状态暂不可用', renderError: '图形展示不可用，仍可读取源码与步骤', pending: '流程已生成，等待审核', nodePending: '待执行', reviewing: '审核中', pass: '已审核', pass_with_degradation: '降级审核', changes_requested: '需修正', unknown: '审核未确定', 'needs-clarification': '待澄清', review_required: '需独立复核', stale: '审核失效', ready: '可执行', running: '执行中', succeeded: '已完成', failed: '失败', blocked: '阻塞', skipped: '跳过', generated: '流程已生成', workflowMode: '流程模式' }
 const en = { title: 'Task flow', refresh: 'Refresh status', source: 'Mermaid source', loading: 'Loading task state…', unavailable: 'Task state unavailable', renderError: 'Diagram unavailable; source and steps remain readable', pending: 'Generated, awaiting review', nodePending: 'Pending', reviewing: 'Reviewing', pass: 'Reviewed', pass_with_degradation: 'Reviewed with degradation', changes_requested: 'Changes requested', unknown: 'Review undetermined', 'needs-clarification': 'Needs clarification', review_required: 'Independent review required', stale: 'Review stale', ready: 'Ready', running: 'Running', succeeded: 'Completed', failed: 'Failed', blocked: 'Blocked', skipped: 'Skipped', generated: 'Flow generated', workflowMode: 'Flow mode' }

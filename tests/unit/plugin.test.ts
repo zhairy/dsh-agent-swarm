@@ -101,7 +101,7 @@ describe('宿主插件', () => {
     const connection = { fetch: { register: (route: { path: string; fetch: (request: Request) => Promise<Response> }) => { routes.push(route); return () => undefined } } }
     const scoped = makeContext({ connection })
     host.apply({ ...ctx, inject: (deps, callback) => { expect(deps).toEqual(['connection']); callback(scoped.ctx) } }, { jev: { enabled: false } })
-    expect(routes.map((route) => route.path)).toEqual(['/api/swarm.jevStatus', '/api/swarm.jevHealth', '/api/swarm.taskView', '/swarm-assets/mermaid.min.js'])
+    expect(routes.map((route) => route.path)).toEqual(['/api/swarm.jevStatus', '/api/swarm.jevHealth', '/api/swarm.taskView', '/api/swarm-assets/mermaid.min.js'])
     const response = await routes[1]!.fetch(new Request('http://h/api/swarm.jevHealth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'x', method: 'swarm.jevHealth' }) }))
     expect(await response.json()).toMatchObject({ rpcId: 'x', result: { ok: true, value: { enabled: false, result: { ok: false, error: 'Jev is disabled in swarm-core config' } } } })
   })
