@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "scope": "Auxiliary typed review of 2.3.1 state consistency; confidence is not correctness",
+  "health": {
+    "ok": true,
+    "model": "jev-latest",
+    "answers": {
+      "models": [
+        {
+          "name": "jev-latest",
+          "description": "The latest iteration of TypeSafe's System One Model: Jev",
+          "release_date": "2026-09-10T18:38:01.391457+00:00"
+        },
+        {
+          "name": "jev-preview",
+          "description": "A preview version of `jev-latest`: should be better in most ways",
+          "release_date": "2026-09-10T18:39:06.057655+00:00"
+        }
+      ],
+      "round_trip_latency_ms": 2893.861
+    },
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "est_cost_usd": 0
+    },
+    "latency_ms": 2893.873
+  },
+  "initialCheck": {
+    "ok": true,
+    "model": "jev-1.13.0",
+    "answers": {
+      "probabilities": {
+        "cause_matches": 0.28,
+        "snapshot_atomic": 0.89,
+        "rollback_safe": 0.79,
+        "history_not_promoted": 0.88,
+        "scope_honest": 0.96
+      },
+      "flags": [
+        "snapshot_atomic",
+        "rollback_safe",
+        "history_not_promoted",
+        "scope_honest"
+      ],
+      "uncertain": []
+    },
+    "usage": {
+      "input_tokens": 6069,
+      "output_tokens": 93,
+      "est_cost_usd": 0.00025489800000000004
+    },
+    "latency_ms": 1034.74
+  },
+  "initialAsk": {
+    "ok": true,
+    "model": "jev-1.13.0",
+    "answers": {
+      "release_readiness": {
+        "type": "choice",
+        "choice": "ready_for_final_host_and_artifact_verification",
+        "confidence": 0.13,
+        "probabilities": {
+          "ready_for_final_host_and_artifact_verification": 0.42,
+          "contradiction": 0.26,
+          "insufficient": 0.32
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 6044,
+      "output_tokens": 66,
+      "est_cost_usd": 0.00025384800000000004
+    },
+    "latency_ms": 918.227
+  },
+  "causalSupplement": {
+    "ok": true,
+    "model": "jev-1.13.0",
+    "answers": {
+      "probabilities": {
+        "specific_causal_rule": 0.74,
+        "repair_preserves_truth": 0.79,
+        "earlier_scope_gap": 0.69
+      },
+      "flags": [
+        "specific_causal_rule",
+        "repair_preserves_truth"
+      ],
+      "uncertain": [
+        "earlier_scope_gap"
+      ]
+    },
+    "usage": {
+      "input_tokens": 2219,
+      "output_tokens": 63,
+      "est_cost_usd": 0.00009319800000000001
+    },
+    "latency_ms": 2191.562
+  },
+  "notes": [
+    "Initial causal judgment was low because legacy mutation/validator seams were omitted; the original 2.3.0 source and deterministic regression were then supplied.",
+    "All original judgments, including low confidence and uncertainty, are retained. No blanket future-correctness or production-planning approval is claimed."
+  ]
+}

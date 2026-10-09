@@ -483,12 +483,12 @@ const JEV_TOOL_SPECS: ReadonlyArray<{ name: (typeof JEV_TOOL_NAMES)[number]; des
   },
   {
     name: 'jev_check',
-    description: '用 Jev 对 state 做一组互相独立的是/否检查（例如结论是否有证据、是否违反约束）。返回每条命题为真的概率；≥0.7 列入 flags，0.3–0.7 列入 uncertain。概率是证据强度，不是正确性证明。',
+    description: '用 Jev 对 state 做一组互相独立的是/否检查（例如结论是否有证据、是否违反约束）。参数必须为 { state: 事实, propositions: 命题表 }，两个字段在顶级并列，不把 propositions 嵌入 state。返回每条命题为真的概率；≥0.7 列入 flags，0.3–0.7 列入 uncertain。概率是证据强度，不是正确性证明。',
     parameters: {
       type: 'object',
       properties: {
         state: { description: STATE_DESCRIPTION },
-        propositions: { type: 'object', description: '命题表：{ 命题ID: "陈述" } 或 { 命题ID: { statement, true: "为真时的情形", false: "为假时的情形" } }。' }
+        propositions: { type: 'object', description: '顶级必填命题表，与 state 并列：{ 命题ID: "陈述" } 或 { 命题ID: { statement, true: "为真时的情形", false: "为假时的情形" } }。state 内的同名字段只是事实，不会作为此参数。' }
       },
       required: ['state', 'propositions'],
       additionalProperties: false

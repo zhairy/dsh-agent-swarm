@@ -1,0 +1,20 @@
+{
+  "isolatedOnly": true,
+  "productionTouched": false,
+  "modelCalls": 0,
+  "ok": true,
+  "method": "actual profile patch HMR append unique trusted static maintenance row then exact restore",
+  "actualHmrService": true,
+  "coreServiceIdentityPreserved": true,
+  "coreFiberIdentityPreserved": true,
+  "originalProfileBytesRestored": true,
+  "temporaryRowRemoved": true,
+  "lastValidTaskCount": 1,
+  "currentTaskCount": 1,
+  "inspectorNetworkListener": false,
+  "composedCacheBytesRestored": true,
+  "maintenanceProfileFilesUnchanged": true,
+  "maintenanceChangedFiles": [],
+  "profileContentUnchanged": true,
+  "profileChangedFiles": []
+}
