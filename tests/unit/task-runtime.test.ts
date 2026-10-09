@@ -623,3 +623,53 @@ it('重启时模型已完成但证据仍processing的记录不能变成可验收
     expect(getCurrentDelegations(recoveredTasks.getTask('T-1')!, [record])).toEqual([])
   } finally { await feature.dispose(); await restored?.dispose() }
 })
+
+it('math settings enforce group/operator/mode controls before spending task calls or work', async () => {
+  const runtime = await makeRuntime({ config: { math: { groups: { matrix: false }, maxCallsPerTask: 1, maxWorkUnitsPerTask: 10 } } })
+  const created = await runtime.service.AddTaskCard(card(), runtime.exec())
+  const request = { task_id: created.task_id, op: 'matmul', mode: 'float64', args: { a: [[2]], b: [[3]] } }
+  expect(await runtime.service.Calculate(request, runtime.exec())).toMatchObject({ ok: false, code: 'UNSUPPORTED', workUnits: 0 })
+  expect(runtime.service.getStatus({}, runtime.exec()).executionBudgets[0]!.reservations).toEqual([])
+  runtime.config.math.groups.matrix = true
+  runtime.config.math.operators.matmul = false
+  expect(await runtime.service.Calculate(request, runtime.exec())).toMatchObject({ ok: false, code: 'UNSUPPORTED' })
+  runtime.config.math.operators.matmul = true
+  runtime.config.math.numericModes.float64 = false
+  expect(await runtime.service.Calculate(request, runtime.exec())).toMatchObject({ ok: false, code: 'UNSUPPORTED' })
+  runtime.config.math.numericModes.float64 = true
+  expect(await runtime.service.Calculate(request, runtime.exec())).toMatchObject({ ok: true, value: [[6]], operatorVersion: '2' })
+  const spent = runtime.service.getStatus({}, runtime.exec()).executionBudgets[0]!.reservations[0]!
+  expect(spent.estimatedWorkUnits).toBe(10)
+  expect(spent.usage!.workUnits).toBeLessThanOrEqual(spent.estimatedWorkUnits)
+  await expect(runtime.service.Calculate(request, runtime.exec())).rejects.toThrow(/maxMathCalls/)
+})
+it('cumulative math work remains charged across cold recovery and exhausted work fails before reserving again', async () => {
+  const runtime = await makeRuntime({ config: { persistence: { enabled: true }, math: { maxWorkUnitsPerTask: 1, maxCallsPerTask: 0 } } })
+  const created = await runtime.service.AddTaskCard(card(), runtime.exec())
+  const request = { task_id: created.task_id, op: 'add', mode: 'float64', args: { a: 2, b: 3 } }
+  expect(await runtime.service.Calculate(request, runtime.exec())).toMatchObject({ ok: true, value: 5, workUnits: 1 })
+  await runtime.service.dispose()
+  const restored = await makeRuntime({ home: runtime.home, config: { persistence: { enabled: true }, math: { maxWorkUnitsPerTask: 1, maxCallsPerTask: 0 } } })
+  await restored.service.WaitAgentReady(restored.root)
+  await expect(restored.service.Calculate(request, restored.exec())).rejects.toMatchObject({ code: 'BUDGET_EXHAUSTED' })
+  expect(restored.service.getStatus({}, restored.exec()).executionBudgets[0]!.reservations).toHaveLength(1)
+})
+it('pre-cancelled math neither spends budget nor publishes a context artifact', async () => {
+  const runtime = await makeRuntime()
+  const task = await runtime.service.AddTaskCard(card(), runtime.exec())
+  const controller = new AbortController(); controller.abort()
+  const before = taskView(runtime, task.task_id).contextRefs
+  await expect(runtime.service.Calculate({ task_id: task.task_id, op: 'add', mode: 'float64', args: { a: 2, b: 3 } }, { ...runtime.exec(), signal: controller.signal })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+  expect(taskView(runtime, task.task_id).contextRefs).toEqual(before)
+  expect(runtime.service.getStatus({}, runtime.exec()).executionBudgets[0]!.reservations).toEqual([])
+})
+it('rejected oversized math input leaves bounded failure evidence instead of poisoning full-state writes', async () => {
+  const runtime = await makeRuntime()
+  const task = await runtime.service.AddTaskCard(card(), runtime.exec())
+  const result = await runtime.service.Calculate({ task_id: task.task_id, op: 'sum', mode: 'float64', args: { values: Array(100_000).fill(1) } }, runtime.exec()) as { ok: boolean; code: string; artifactRef: string }
+  expect(result).toMatchObject({ ok: false, code: 'INPUT_LIMIT' })
+  const artifact = await runtime.service.ReadContext({ task_id: task.task_id, ref: result.artifactRef }, runtime.exec()) as { text: string }
+  expect(artifact.text.length).toBeLessThan(1000)
+  expect(artifact.text).toContain('Rejected input is not persisted')
+  expect(await runtime.service.Calculate({ task_id: task.task_id, op: 'add', mode: 'float64', args: { a: 2, b: 3 } }, runtime.exec())).toMatchObject({ ok: true, value: 5 })
+})

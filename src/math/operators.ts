@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { getIntegerBits, getMathLimits, type MathLimits } from './limits.js'
 import { CALC_OPERATORS, canonicalMathJson, isRecord, type CalcErrorCode, type CalcOperator, type CalcRequest, type CalcResult, type RationalValue } from './schema.js'
+import { getMathAvailability, type MathConfigInfo } from './config.js'
 
-export interface CalculateOptions { limits?: Partial<MathLimits>; enableExtended?: boolean }
+export interface CalculateOptions { limits?: Partial<MathLimits>; enableExtended?: boolean; policy?: MathConfigInfo }
 class CalcFailure extends Error {
   constructor (readonly code: CalcErrorCode, message: string) { super(message) }
 }
@@ -129,32 +130,57 @@ const matrix = (value: unknown, ctx: Context): number[][] => {
 }
 
 /** Neumaier summation also handles the large-small-large cancellation case. */
-const sum = (values: number[], ctx: Context): number => {
+const sum = (values: number[], ctx: Context, charge = true): number => {
   let total = 0
   let compensation = 0
   for (const x of values) {
-    ctx.charge(1)
+    if (charge) ctx.charge(1)
     const next = finite(total + x)
     compensation = finite(compensation + (Math.abs(total) >= Math.abs(x) ? (total - next) + x : (x - next) + total))
     total = next
   }
   return finite(total + compensation)
 }
-const dot = (a: number[], b: number[], ctx: Context): number => {
+const dot = (a: number[], b: number[], ctx: Context, charge = true): number => {
   if (a.length !== b.length) return fail('DIMENSION', 'Vector lengths differ')
-  ctx.charge(a.length)
-  return sum(a.map((x, i) => finite(x * (b[i] as number))), ctx)
+  if (charge) ctx.charge(a.length)
+  return sum(a.map((x, i) => finite(x * (b[i] as number))), ctx, charge)
 }
-const norm = (values: number[], ctx: Context): number => {
+const norm = (values: number[], ctx: Context, charge = true): number => {
   let scale = 0
   let squares = 1
   for (const x of values) {
-    ctx.charge(1)
+    if (charge) ctx.charge(1)
     const a = Math.abs(x)
     if (a === 0) continue
     if (a > scale) { squares = 1 + squares * (scale / a) ** 2; scale = a } else squares += (a / scale) ** 2
   }
   return finite(scale === 0 ? 0 : scale * Math.sqrt(squares))
+}
+/** Compensated sum with a scaled fallback when a finite mean's sum overflows. */
+const mean = (values: number[], ctx: Context): number => {
+  // Preserve tiny cancellation terms whenever the unscaled compensated sum is finite.
+  try { return finite(sum(values, ctx) / values.length) } catch (error) {
+    if (!(error instanceof CalcFailure) || error.code !== 'NON_FINITE') throw error
+  }
+  let scale = 0
+  for (const value of values) { ctx.charge(1); scale = Math.max(scale, Math.abs(value)) }
+  if (scale === 0) return 0
+  return finite((sum(values.map((value) => value / scale), ctx) / values.length) * scale)
+}
+/** Shift first for nearby large values; fall back to whole-value scaling for opposite extremes. */
+const variance = (values: number[], ddof: number, ctx: Context): number => {
+  ctx.charge(values.length)
+  let shifted = values.map((value) => value - (values[0] as number))
+  if (shifted.some((value) => !Number.isFinite(value))) shifted = values
+  let scale = 0
+  for (const value of shifted) { ctx.charge(1); scale = Math.max(scale, Math.abs(value)) }
+  if (scale === 0) return 0
+  const normalized = shifted.map((value) => value / scale)
+  const center = sum(normalized, ctx) / values.length
+  const squares = normalized.map((value) => (value - center) ** 2)
+  const standardDeviation = finite(scale * Math.sqrt(sum(squares, ctx) / (values.length - ddof)))
+  return finite(standardDeviation * standardDeviation)
 }
 
 /** Compare a dyadic binary64 number exactly, avoiding Infinity <= Infinity bugs. */
@@ -254,14 +280,11 @@ const operate = (request: CalcRequest, ctx: Context): OperationOutput => {
     if (op === 'sum') return { value: sum(values, ctx), args: { values } }
     if (op === 'norm2') return { value: norm(values, ctx), args: { values } }
     if (values.length === 0) return fail('DOMAIN', 'Mean and variance require nonempty arrays')
-    if (op === 'mean') return { value: finite(sum(values, ctx) / values.length), args: { values } }
+    if (op === 'mean') return { value: mean(values, ctx), args: { values } }
     const ddof = args.ddof ?? 0
     if (ddof !== 0 && ddof !== 1) return fail('INVALID_INPUT', 'variance requires explicit ddof 0 or 1')
     if (values.length <= ddof) return fail('DOMAIN', 'variance requires n > ddof')
-    let mean = 0; let m2 = 0; let n = 0
-    for (const x of values) { ctx.charge(1); n++; const delta = finite(x - mean); mean = finite(mean + delta / n); m2 = finite(m2 + finite(delta * finite(x - mean))) }
-    if (m2 < 0) fail('NON_FINITE', 'Negative variance from rounding is unsupported')
-    return { value: finite(m2 / (n - ddof)), args: { values, ddof } }
+    return { value: variance(values, ddof, ctx), args: { values, ddof } }
   }
   if (op === 'dot') {
     only(args, ['a', 'b'])
@@ -283,8 +306,9 @@ const operate = (request: CalcRequest, ctx: Context): OperationOutput => {
     if (k !== b.length) fail('DIMENSION', 'Matrix dimensions do not match')
     const work = m * k * n
     if (work > ctx.limits.maxMultiplyAdds || m * n > ctx.limits.maxArrayElements) fail('OPERATION_LIMIT', 'Matrix output or multiply-add limit exceeded')
-    ctx.charge(work)
-    const result = a.map((row) => Array.from({ length: n }, (_v, column) => sum(row.map((x, index) => finite(x * (b[index]?.[column] as number))), ctx)))
+    // Charge every product and compensated addition before computing output cells.
+    ctx.charge(work * 2)
+    const result = a.map((row) => Array.from({ length: n }, (_v, column) => sum(row.map((x, index) => finite(x * (b[index]?.[column] as number))), ctx, false)))
     return { value: result, args: { a, b }, shape: [m, n] }
   }
   if (op === 'residual_norm') {
@@ -299,7 +323,8 @@ const operate = (request: CalcRequest, ctx: Context): OperationOutput => {
     const a = matrix(args.a, ctx); const x = array(args.x, ctx); const b = array(args.b, ctx)
     if (a.length !== b.length || a[0]?.length !== x.length) fail('DIMENSION', 'Residual dimensions do not match')
     if (a.length * x.length > ctx.limits.maxMultiplyAdds) fail('OPERATION_LIMIT', 'Residual work limit exceeded')
-    return { value: norm(a.map((row, index) => finite(dot(row, x, ctx) - (b[index] as number))), ctx), args: { a, x, b } }
+    ctx.charge(2 * a.length * x.length + 2 * a.length)
+    return { value: norm(a.map((row, index) => finite(dot(row, x, ctx, false) - (b[index] as number))), ctx, false), args: { a, x, b } }
   }
   return fail('UNSUPPORTED', 'Unsupported operator')
 }
@@ -308,17 +333,21 @@ const operate = (request: CalcRequest, ctx: Context): OperationOutput => {
 export const calculate = (raw: unknown, options: CalculateOptions = {}): CalcResult => {
   let ctx: Context | undefined
   try {
+    if (options.policy !== undefined) {
+      const unavailable = getMathAvailability(raw, options.policy)
+      if (unavailable !== undefined) return unavailable
+    }
     const limits = getMathLimits(options.limits)
-    validateTree(raw, limits)
+    const scalarCount = validateTree(raw, limits)
     if (!isRecord(raw)) return fail('INVALID_INPUT', 'Calculation must be an object')
     only(raw, ['op', 'version', 'mode', 'args', 'tolerance'])
     if (!(CALC_OPERATORS as readonly unknown[]).includes(raw.op) || !['float64', 'bigint', 'rational'].includes(String(raw.mode)) || !isRecord(raw.args)) return fail('INVALID_INPUT', 'Unknown operator, numeric mode, or arguments')
     if (raw.version !== undefined && raw.version !== 1) return fail('UNSUPPORTED', 'Unsupported calculation version')
     if (raw.tolerance !== undefined && raw.op !== 'compare_close') fail('INVALID_INPUT', 'Tolerances only apply to compare_close')
     const request = raw as unknown as CalcRequest
-    if (EXTENDED.includes(request.op) && options.enableExtended !== true) fail('UNSUPPORTED', 'Extended operators are disabled')
+    if (EXTENDED.includes(request.op) && options.policy === undefined && options.enableExtended !== true) fail('UNSUPPORTED', 'Extended operators are disabled')
     ctx = makeContext(limits)
-    ctx.extended = options.enableExtended === true
+    ctx.extended = options.policy?.groups.matrix ?? options.enableExtended === true
     const output = operate(request, ctx)
     const normalized = { op: request.op, version: 1, mode: request.mode, args: output.args, ...(request.tolerance === undefined ? {} : { tolerance: request.tolerance }) }
     const inputDigest = digest(canonicalMathJson(normalized))
@@ -326,9 +355,9 @@ export const calculate = (raw: unknown, options: CalculateOptions = {}): CalcRes
     return {
       ok: true, value: output.value, exact, evidenceKind: 'computed', numericMode: request.mode,
       semantics: request.op === 'compare_close' ? 'Exact comparison of represented binary64 values and explicit tolerances; not a proof about pre-rounding values' : 'Computed result for supplied inputs; not a general proof',
-      operatorVersion: '1', inputDigest,
-      reproducibleDigest: digest(canonicalMathJson({ inputDigest, operatorVersion: '1', value: output.value })),
-      inputSummary: { scalarCount: validateTree(output.args, limits), ...(output.shape === undefined ? {} : { shape: output.shape }) },
+      operatorVersion: '2', inputDigest,
+      reproducibleDigest: digest(canonicalMathJson({ inputDigest, operatorVersion: '2', value: output.value })),
+      inputSummary: { scalarCount, ...(output.shape === undefined ? {} : { shape: output.shape }) },
       diagnostics: request.mode === 'float64' ? ['binary64 inputs and arithmetic are approximate; replay requires the same numeric implementation, not cross-engine bit identity'] : [],
       workUnits: ctx.work
     }

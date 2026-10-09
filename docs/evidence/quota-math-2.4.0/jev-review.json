@@ -1,0 +1,54 @@
+{
+  "scope": "Auxiliary judgments over public implementation contracts only, not a correctness certificate; no private quota values supplied.",
+  "initial": {
+    "ok": true,
+    "model": "jev-1.13.0",
+    "answers": {
+      "probabilities": {
+        "percent_to_tokens_exact": 0.08,
+        "read_at_equals_sampled_at": 0.51,
+        "reported_view_is_truthful": 0.79,
+        "quota_view_confirms_call_allowed": 0.1,
+        "math_and_budget_separation_correct": 0.79,
+        "ready_to_claim_all_quotas_live": 0.03
+      },
+      "flags": [
+        "reported_view_is_truthful",
+        "math_and_budget_separation_correct"
+      ],
+      "uncertain": [
+        "read_at_equals_sampled_at"
+      ]
+    },
+    "usage": {
+      "input_tokens": 872,
+      "output_tokens": 132,
+      "est_cost_usd": 0.000036624
+    },
+    "latency_ms": 1622.91
+  },
+  "timestampCounterexample": {
+    "ok": true,
+    "model": "jev-1.13.0",
+    "answers": {
+      "probabilities": {
+        "relabeling_is_supported": 0.04,
+        "unknown_sample_is_correct": 0.92,
+        "force_implies_fresh": 0.05,
+        "read_stamp_and_sample_are_distinct": 0.94
+      },
+      "flags": [
+        "unknown_sample_is_correct",
+        "read_stamp_and_sample_are_distinct"
+      ],
+      "uncertain": []
+    },
+    "usage": {
+      "input_tokens": 591,
+      "output_tokens": 85,
+      "est_cost_usd": 0.000024822000000000004
+    },
+    "latency_ms": 731.504
+  },
+  "resolution": "Initial broad sampling-time judgment was uncertain (0.51). The documented stale-cache counterexample and deterministic tests establish that readAt cannot substitute for sampledAt. Targeted Jev review is retained as auxiliary evidence, never as the data source."
+}

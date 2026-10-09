@@ -55,6 +55,16 @@ describe('Config schema', () => {
     expect(getSwarmConfig({ agents: { promptStyle: 'claude', networkProbeUrls: ['http://127.0.0.1:9'] } }).agents)
       .toMatchObject({ promptStyle: 'claude', networkProbeUrls: ['http://127.0.0.1:9'] })
   })
+
+  it('数学配置保持旧扩展授权兼容且显式组权限优先，限制在宿主schema验证', () => {
+    expect(getSwarmConfig(Config({ math: { enableExtended: true } })).math.groups).toMatchObject({ matrix: true, polynomial: true })
+    const config = getSwarmConfig(Config({ math: { enableExtended: true, groups: { matrix: false }, operators: { add: false }, numericModes: { rational: false }, limits: { maxArrayElements: 100 }, maxWorkUnitsPerTask: 2000 } }))
+    expect(config.math).toMatchObject({ groups: { matrix: false, polynomial: true }, operators: { add: false }, numericModes: { rational: false }, limits: { maxArrayElements: 100 }, maxWorkUnitsPerTask: 2000 })
+    expect(config.math.configurationError).toBeUndefined()
+    expect(() => Config({ math: { maxWorkUnitsPerTask: 0 } })).toThrow()
+    expect(() => Config({ math: { limits: { maxMatrixDimension: 10000 } } })).toThrow()
+    expect(getSwarmConfig({ math: { groups: { unknown: true } } }).math.configurationError).toBeDefined()
+  })
 })
 
 describe('getSwarmConfig', () => {

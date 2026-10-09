@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getSwarmConfig, type SwarmConfigInfo } from '../../src/config.js'
+import { getRoleRoute, getSwarmConfig, type SwarmConfigInfo } from '../../src/config.js'
 import {
   DispatchAdmissionError,
   ParseNativeOutput,
@@ -20,7 +20,7 @@ import type { SubagentResultLike, SubagentStartRequestLike } from '../../src/hos
 import { ValidateTaskCard, type TaskCard } from '../../src/policy.js'
 import { intRouteStateRegistry } from '../../src/route-state.js'
 import { intChildEndHub, intThreadRegistry } from '../../src/threads.js'
-import type { RouteProbe } from '../../src/routes.js'
+import type { RouteInfo, RouteProbe } from '../../src/routes.js'
 import { intMutex } from '../../src/util/mutex.js'
 import { VALID_OUTPUTS } from '../fixtures/valid-outputs.js'
 
@@ -720,6 +720,52 @@ describe('连续会话的断网等待', () => {
 })
 
 describe('trusted dispatch admission', () => {
+  it('automatically orders the declared subscription chain before preflight and keeps deferred routes in child state', async () => {
+    const primary = { provider: 'codex', model: 'gpt-6-sol' }
+    const fallback = { provider: 'qwen-token-plan-cn', model: 'qwen3.8-flash' }
+    const api = { provider: 'deepseek-official', model: 'deepseek-flash' }
+    const orderQuotaRoutes = vi.fn(async (routes: readonly RouteInfo[]) => [routes[1]!, routes[0]!, routes[2]!])
+    let snapshot: ReturnType<ReturnType<typeof intRouteStateRegistry>['getChild']>
+    const h = track(makeHarness({ config: getSwarmConfig({ agents: { session: 'oneshot' }, routes: { fu_he: { chain: [primary, fallback, api] } } }), orderQuotaRoutes,
+      plans: [{ result: { output: [], structured: VALID_OUTPUTS.fu_he, stopReason: 'completed' }, onStarted: (id) => { snapshot = h.routeState.getChild(id) } }]
+    }))
+    const record = await h.delegator.delegate({ task_id: 'T-1', role: 'fu_he', prompt: 'verify', backend: 'api', session: 'oneshot' }, exec(), h.session)
+    expect(record.status).toBe('completed')
+    expect(h.requests[0]?.request.agentOptions).toMatchObject(fallback)
+    expect(snapshot).toMatchObject({ route: fallback, switches: 0 })
+    expect(orderQuotaRoutes).toHaveBeenCalledTimes(1)
+    expect(h.routeState.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
+  })
+
+  it('quota source I/O finishes before trusted dispatch and a cancelled wait never publishes or retries a child', async () => {
+    let release!: (routes: readonly RouteInfo[]) => void
+    const orderQuotaRoutes = vi.fn((routes: readonly RouteInfo[]) => new Promise<readonly RouteInfo[]>((resolve) => { release = () => resolve(routes) }))
+    const h = track(makeHarness({ orderQuotaRoutes }))
+    const controller = new AbortController()
+    const dispatch = vi.fn()
+    const pending = h.delegator.delegate({ task_id: 'T-1', role: 'fu_he', prompt: 'verify', backend: 'api', session: 'oneshot' }, {
+      ...exec(), signal: controller.signal, admission: { task: structuredClone(h.session.store.getTask('T-1')!), dispatch: async (publish) => { dispatch(); return publish() } }
+    }, h.session)
+    await vi.waitFor(() => expect(orderQuotaRoutes).toHaveBeenCalledTimes(1))
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(h.requests).toHaveLength(0)
+    controller.abort()
+    release([])
+    expect(await pending).toMatchObject({ status: 'failed' })
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(h.requests).toHaveLength(0)
+    expect(h.routeState.getRecoveryDiagnostics().logicalRequests).toBe(0)
+  })
+
+  it('a quota-adapter failure is unknown and still proceeds through normal preflight and publication', async () => {
+    const orderQuotaRoutes = vi.fn(async () => { throw new Error('source unavailable') })
+    const h = track(makeHarness({ orderQuotaRoutes }))
+    const record = await h.delegator.delegate({ task_id: 'T-1', role: 'fu_he', prompt: 'verify', backend: 'api', session: 'oneshot' }, exec(), h.session)
+    expect(record.status).toBe('completed')
+    expect(h.requests).toHaveLength(1)
+    expect(h.requests[0]?.request.agentOptions).toMatchObject(getRoleRoute(getSwarmConfig({}), 'fu_he').chain[0]!)
+  })
+
   it.each(['api', 'codex'] as const)('rechecks after preflight for %s and never retries a refused publication', async (backend) => {
     const h = track(makeHarness({ providers: ['codex'] }))
     const task = structuredClone(h.session.store.getTask('T-1')!)

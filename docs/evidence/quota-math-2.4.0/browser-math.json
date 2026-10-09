@@ -1,0 +1,115 @@
+{
+  "scope": "controlled QA compiled 2.4.0 candidate and real SwarmService; no production credentials or upstream generation",
+  "checks": [
+    {
+      "lifecycle": {
+        "effectiveLaunch": {
+          "browserLaunched": true,
+          "engine": "chrome",
+          "launchHash": 11677035664275010974
+        },
+        "launched": false,
+        "relaunchedBrowser": false,
+        "restartedBackground": false,
+        "restoreStatus": "not_configured",
+        "reused": true,
+        "saveStatus": "not_attempted"
+      },
+      "origin": "http://127.0.0.1:4184/",
+      "result": {
+        "matrix": true,
+        "quotaUI": false,
+        "save": {
+          "background": "rgb(24, 38, 53)",
+          "color": "rgb(255, 255, 255)"
+        }
+      }
+    },
+    {
+      "lifecycle": {
+        "effectiveLaunch": {
+          "browserLaunched": true,
+          "engine": "chrome",
+          "launchHash": 11677035664275010974
+        },
+        "launched": false,
+        "relaunchedBrowser": false,
+        "restartedBackground": false,
+        "restoreStatus": "not_configured",
+        "reused": true,
+        "saveStatus": "not_attempted"
+      },
+      "origin": "http://127.0.0.1:4184/",
+      "result": {
+        "artifactRef": "ctx-eda6f9d8-bc05-49c8-8468-01c1f039d5dd",
+        "diagnostics": [
+          "binary64 inputs and arithmetic are approximate; replay requires the same numeric implementation, not cross-engine bit identity"
+        ],
+        "evidenceKind": "computed",
+        "exact": false,
+        "inputDigest": "3550c0fcd9089cae0a914b7ce74584cd64d674c4fb21f130bb4bb4a90c0f1515",
+        "inputSummary": {
+          "scalarCount": 8,
+          "shape": [
+            2,
+            2
+          ]
+        },
+        "numericMode": "float64",
+        "ok": true,
+        "operatorVersion": "2",
+        "reproducibleDigest": "dbdce1881f42c8106ffc125c2bb048c315027e3f838dab009b47e459feed62aa",
+        "semantics": "Computed result for supplied inputs; not a general proof",
+        "task_id": "T-1",
+        "value": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "workUnits": 24
+      }
+    },
+    {
+      "lifecycle": {
+        "effectiveLaunch": {
+          "browserLaunched": true,
+          "engine": "chrome",
+          "launchHash": 11677035664275010974
+        },
+        "launched": false,
+        "relaunchedBrowser": false,
+        "restartedBackground": false,
+        "restoreStatus": "not_configured",
+        "reused": true,
+        "saveStatus": "not_attempted"
+      },
+      "origin": "http://127.0.0.1:4184/",
+      "result": {
+        "math": 370,
+        "page": 390,
+        "width": 390
+      }
+    },
+    {
+      "errors": [],
+      "lifecycle": {
+        "effectiveLaunch": {
+          "browserLaunched": true,
+          "engine": "chrome",
+          "launchHash": 11677035664275010974
+        },
+        "launched": false,
+        "relaunchedBrowser": false,
+        "restartedBackground": false,
+        "restoreStatus": "not_configured",
+        "reused": true,
+        "saveStatus": "not_attempted"
+      }
+    }
+  ]
+}

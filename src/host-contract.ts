@@ -237,6 +237,8 @@ export interface FetchRouteLike {
 
 /** ctx.connection 的最小形状 */
 export interface ConnectionLike {
+  /** Public Host carrier for trusted, already-authenticated internal calls. */
+  createSharedFetchHandler?: (channel: '/api') => { fetch: (request: Request) => Promise<Response> }
   fetch: { register: (route: FetchRouteLike) => () => void }
 }
 

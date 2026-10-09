@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { DEFAULT_MATH_CONFIG, MATH_GROUP_OPERATORS, MATH_LIMIT_MAXIMA, MAX_MATH_WORK_PER_TASK, MAX_MATH_CALLS_PER_TASK } from '../../src/math/config.js'
 
 interface SlotInfo { provider: string; model: string; reasoningEffort: string }
 interface FormSnapshot { status: string; writable: boolean; value: unknown; revision: number | undefined }
@@ -8,6 +9,7 @@ interface FormSnapshot { status: string; writable: boolean; value: unknown; revi
 const route = (provider: string, model: string) => ({ provider, model })
 const DATA = {
   namespace: 'swarm-core',
+  math: { defaults: DEFAULT_MATH_CONFIG, groups: MATH_GROUP_OPERATORS, limitMaxima: MATH_LIMIT_MAXIMA, maxWorkPerTask: MAX_MATH_WORK_PER_TASK, maxCallsPerTask: MAX_MATH_CALLS_PER_TASK },
   agents: [
     {
       key: 'tian_shu', name: '天枢', title: '主持与验收', upgradeable: true,
@@ -385,6 +387,59 @@ describe('client entry', () => {
     expect(registered).toHaveLength(1)
     expect(registered[0]).toMatchObject({ name: 'settings.section', id: 'swarm-agents' })
     expect((registered[0] as { label: () => string }).label()).toBe('nav')
+  })
+})
+
+describe('mathematical operator settings', () => {
+  it('saves real backend group/operator/mode/limit fields atomically with unknown top-level fields retained', async () => {
+    const form = createForm({ routes: {}, math: { futureSetting: { retained: true }, enableExtended: true, maxCallsPerTask: 0 } })
+    const controller = new SwarmAgentsController(createCtx(form))
+    expect(controller.getSnapshot().math.value.groups).toMatchObject({ matrix: true, polynomial: true })
+    controller.setMath({ groups: { matrix: false }, operators: { add: false }, numericModes: { bigint: false }, limits: { maxArrayElements: '128' }, maxWorkUnitsPerTask: '2000' })
+    controller.setApprovals({ mode: 'deny' })
+    expect(controller.getSnapshot()).toMatchObject({ dirty: true, invalid: false, math: { dirty: true } })
+    await controller.save()
+    const ops = form.mutate.mock.calls.at(-1)![0]
+    expect(ops.map((op: { path: string[] }) => op.path[0])).toEqual(['approvals', 'math'])
+    expect(ops[1]!.value).toMatchObject({ enableExtended: false, maxCallsPerTask: 0, maxWorkUnitsPerTask: 2000, futureSetting: { retained: true }, groups: { matrix: false, polynomial: true }, operators: { add: false }, numericModes: { bigint: false }, limits: { maxArrayElements: 128 } })
+    expect(form.mutate.mock.calls.at(-1)![1]).toBe(1)
+    expect(controller.getSnapshot().dirty).toBe(false)
+  })
+
+  it('rejects unsafe numeric limits, protects CAS and resets authorization without losing unrelated settings', async () => {
+    const form = createForm({ routes: {}, math: { futureSetting: 'keep', operators: { unknown: true } } })
+    const controller = new SwarmAgentsController(createCtx(form))
+    expect(controller.getSnapshot().math.errors.operators).toBe('errMath')
+    controller.resetMath()
+    expect(controller.getSnapshot()).toMatchObject({ dirty: true, invalid: false, math: { value: { groups: { matrix: false, polynomial: false } } } })
+    await controller.save()
+    const result = form.mutate.mock.calls.at(-1)![0][0]!.value as any
+    expect(result.futureSetting).toBe('keep')
+    expect(result.operators.unknown).toBeUndefined()
+    controller.setMath({ limits: { maxWorkUnits: '0' } })
+    expect(controller.getSnapshot().invalid).toBe(true)
+    await controller.save()
+    expect(form.mutate).toHaveBeenCalledTimes(1)
+    controller.setMath({ limits: { maxWorkUnits: '20' } })
+    form.replace({ revision: 100 })
+    await controller.save()
+    expect(controller.getSnapshot().conflicted).toBe(true)
+    expect(form.mutate).toHaveBeenCalledTimes(1)
+    controller.discard()
+    expect(controller.getSnapshot()).toMatchObject({ dirty: false, conflicted: false })
+  })
+
+  it('ignores read-only changes and drops drafts when all values return to the saved state', () => {
+    const readOnly = new SwarmAgentsController(createCtx(createForm({ routes: {} }, { writable: false })))
+    readOnly.setMath({ enabled: false })
+    expect(readOnly.getSnapshot().dirty).toBe(false)
+    const controller = new SwarmAgentsController(createCtx(createForm({ routes: {} })))
+    controller.setMath({ groups: { matrix: true } })
+    expect(controller.getSnapshot().dirty).toBe(true)
+    controller.setMath({ groups: { matrix: false } })
+    expect(controller.getSnapshot().dirty).toBe(false)
+    controller.setMath({ limits: { maxInputBytes: '  ' } })
+    expect(controller.getSnapshot().invalid).toBe(true)
   })
 })
 

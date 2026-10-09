@@ -1,0 +1,62 @@
+{
+  "node": "v24.21.0",
+  "samples": 30,
+  "warmups": 5,
+  "kind": "synthetic-cpu-only",
+  "results": [
+    {
+      "name": "small",
+      "accounts": 2,
+      "models": 64,
+      "routes": 13,
+      "members": 2,
+      "sourceBytes": 4753,
+      "fitsCurrentRpcByteLimit": true,
+      "unscoped": {
+        "medianMs": 1.405606000000006,
+        "p95Ms": 1.9418759999999935
+      },
+      "scoped": {
+        "medianMs": 0.6436560000000071,
+        "p95Ms": 1.7371140000000054
+      },
+      "outputsEqual": true
+    },
+    {
+      "name": "bounded-catalog-tier",
+      "accounts": 32,
+      "models": 256,
+      "routes": 32,
+      "members": 16,
+      "sourceBytes": 305393,
+      "fitsCurrentRpcByteLimit": true,
+      "unscoped": {
+        "medianMs": 357.09119699999974,
+        "p95Ms": 438.55756500000007
+      },
+      "scoped": {
+        "medianMs": 5.434468000000038,
+        "p95Ms": 7.230535000000032
+      },
+      "outputsEqual": true
+    },
+    {
+      "name": "catalog-tier-stress",
+      "accounts": 32,
+      "models": 512,
+      "routes": 32,
+      "members": 16,
+      "sourceBytes": 616689,
+      "fitsCurrentRpcByteLimit": false,
+      "unscoped": {
+        "medianMs": 820.7256400000042,
+        "p95Ms": 1065.7502410000016
+      },
+      "scoped": {
+        "medianMs": 5.855524000000514,
+        "p95Ms": 11.97557599999891
+      },
+      "outputsEqual": true
+    }
+  ]
+}

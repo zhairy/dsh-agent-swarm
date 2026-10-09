@@ -167,3 +167,19 @@ it('an explicit incomplete decision fences an admitted child still awaiting fing
   await expect(work).rejects.toThrow('任务已停止')
   expect(runtime.subagents.start).not.toHaveBeenCalled()
 })
+it('math cancelled while another operation holds taskLock never enters the kernel or publishes evidence', async () => {
+  const runtime = await makeRuntime({ jev: 'disabled' })
+  const task = await createTask(runtime)
+  const gate = pauseSnapshot()
+  const holding = track(runtime.service.AcceptTask({ task_id: task.task_id, decision: 'incomplete', summary: 'stop fixture', stopReason: 'fixture' }, runtime.exec()))
+  await gate.entered
+  const controller = new AbortController()
+  const calculation = track(runtime.service.Calculate({ task_id: task.task_id, op: 'add', mode: 'float64', args: { a: 2, b: 3 } }, { agent: runtime.root, signal: controller.signal }))
+  await Promise.resolve(); await Promise.resolve()
+  controller.abort(); gate.release()
+  await holding
+  await expect(calculation).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+  const status = runtime.service.getStatus({ task_id: task.task_id }, runtime.exec())
+  expect(status.executionBudgets[0]!.reservations).toEqual([])
+  expect(status.tasks[0]!.contextRefs).toHaveLength(2)
+})

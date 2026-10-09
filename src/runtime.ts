@@ -51,6 +51,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     const projection = (ctx.get('sessionProjections') as SessionProjectionsLike | undefined)?.stateOf(payload.agent.session, 'modelSelection')
     const explicitSelectionAvailable = projection !== null && typeof projection === 'object' && 'pending' in projection
     await service.routeState.PreparePreferredRecovery(payload.agent, resolved, presetRole, service.getConfig())
+    await service.routeState.PrepareQuotaRouting(payload.agent, resolved, presetRole, service.getConfig(), payload.signal)
     if (isTracked(payload.agent)) await service.routeState.WaitHealthReady(payload.agent.id, payload.signal)
     const result = service.routeState.getRequestOverride(payload.agent, resolved, presetRole, service.getConfig(), explicitSelectionAvailable)
     service.agentControl?.ObserveRequest(payload.agent.id, result)

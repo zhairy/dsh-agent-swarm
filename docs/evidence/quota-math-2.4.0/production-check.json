@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "version": "2.4.0",
+  "pid": 238573,
+  "soleService": "dsh-web.service",
+  "expertPresetFileCount": 46,
+  "expertPresetsBytesAndModesPreserved": true,
+  "legacyMathPreserved": true,
+  "mathGroups": {
+    "arithmetic": true,
+    "integer": true,
+    "statistics": true,
+    "vector": true,
+    "matrix": false,
+    "polynomial": false,
+    "verification": true
+  },
+  "quota": {
+    "authenticatedDiagnostic": true,
+    "anonymousStatus": 401,
+    "reportedProviderCount": 3,
+    "accountCount": 3,
+    "comparedWindows": 30,
+    "exactSourceMatches": 30,
+    "sampledAt": null,
+    "authoritativeQuota": false
+  },
+  "modelGeneration": "not-called",
+  "runningAgents": 0,
+  "browserSettingsReadonly": {
+    "mathVisible": true,
+    "matrix": false,
+    "polynomial": false,
+    "quotaUI": false
+  }
+}

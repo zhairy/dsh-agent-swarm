@@ -6,6 +6,8 @@ import { DEFAULT_ESCALATION, DEFAULT_ROUTE_CHAINS, type EscalationKind, type Rou
 import { DEFAULT_UPGRADES, UPGRADE_TRIGGERS, UPGRADEABLE_KEYS, isUpgradeTrigger, type UpgradeInfo } from './upgrade.js'
 import { DEFAULT_REVIEW_THRESHOLDS, type ReviewThresholdsInfo } from './review.js'
 import { readLiveObject } from './util/live.js'
+import { DEFAULT_MATH_CONFIG, getMathConfig, MATH_GROUP_OPERATORS, MATH_LIMIT_MAXIMA, MATH_NUMERIC_MODES, MAX_MATH_CALLS_PER_TASK, MAX_MATH_WORK_PER_TASK, type MathConfigInfo } from './math/config.js'
+import { CALC_OPERATORS } from './math/schema.js'
 
 export const APPROVAL_SCOPES = ['write', 'shell', 'external_mcp', 'jev'] as const
 export interface ApprovalsConfigInfo { mode: 'inherit' | 'ask' | 'deny'; scope: readonly typeof APPROVAL_SCOPES[number][] }
@@ -130,7 +132,12 @@ export const Config = Schema.object({
   math: Schema.object({
     enabled: Schema.boolean().default(true),
     enableExtended: Schema.boolean().default(false),
-    maxCallsPerTask: Schema.natural().default(64)
+    maxCallsPerTask: Schema.natural().max(MAX_MATH_CALLS_PER_TASK).default(DEFAULT_MATH_CONFIG.maxCallsPerTask),
+    maxWorkUnitsPerTask: Schema.natural().min(1).max(MAX_MATH_WORK_PER_TASK).default(DEFAULT_MATH_CONFIG.maxWorkUnitsPerTask),
+    groups: Schema.object(Object.fromEntries(Object.keys(MATH_GROUP_OPERATORS).map((key) => [key, Schema.boolean()]))).default({}),
+    operators: Schema.object(Object.fromEntries(CALC_OPERATORS.map((key) => [key, Schema.boolean()]))).default({}),
+    numericModes: Schema.object(Object.fromEntries(MATH_NUMERIC_MODES.map((key) => [key, Schema.boolean()]))).default({}),
+    limits: Schema.object(Object.fromEntries(Object.entries(DEFAULT_MATH_CONFIG.limits).map(([key, value]) => [key, Schema.natural().min(1).max(MATH_LIMIT_MAXIMA[key as keyof typeof MATH_LIMIT_MAXIMA]).default(value)]))).default({})
   }).default({}).description('有界纯函数数学计算；计算结果不等于数学证明').volatile(),
   experience: Schema.object({
     enabled: Schema.boolean().default(false)
@@ -227,7 +234,7 @@ export interface SwarmConfigInfo {
   recovery: { maxTransientRetries: number; maxLogicalAttempts: number; maxShortRetryDelayMs: number; maxTransientWaitMs: number }
   persistence: { enabled: boolean; directory: string }
   messageBus: { enabled: boolean; maxPending: number }
-  math: { enabled: boolean; enableExtended: boolean; maxCallsPerTask: number }
+  math: MathConfigInfo
   experience: { enabled: boolean }
 }
 
@@ -334,7 +341,7 @@ export const getSwarmConfig = (raw: unknown): SwarmConfigInfo => {
     recovery: getMerged(DEFAULT_RECOVERY_CONFIG, plain.recovery),
     persistence: getMerged({ enabled: false, directory: '' }, plain.persistence),
     messageBus: getMerged({ enabled: false, maxPending: 128 }, plain.messageBus),
-    math: getMerged({ enabled: true, enableExtended: false, maxCallsPerTask: 64 }, plain.math),
+    math: getMathConfig(plain.math),
     experience: getMerged({ enabled: false }, plain.experience)
   }
 }

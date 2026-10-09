@@ -13,7 +13,7 @@ import { SwarmError } from './util/errors.js'
 
 export const RPC_PREFIX = 'swarm.'
 export const RPC_METHODS = ['jevStatus', 'jevHealth'] as const
-export type RpcMethod = typeof RPC_METHODS[number] | 'taskView' | 'agentView' | 'agentControl'
+export type RpcMethod = typeof RPC_METHODS[number] | 'taskView' | 'agentView' | 'agentControl' | 'quotaView'
 export interface AgentControlRpcInput {
   parentSessionId: string
   childId: string
@@ -27,6 +27,7 @@ export interface AgentControlRpcInput {
   steering?: string
 }
 export interface TaskRpcDepsInfo {
+  quotaView?: (force: boolean, signal: AbortSignal) => unknown | Promise<unknown>
   taskView?: (sessionId: string, taskId: string) => unknown | Promise<unknown>
   agentView?: (parentSessionId: string, childId: string) => unknown | Promise<unknown>
   agentControl?: (input: AgentControlRpcInput) => unknown | Promise<unknown>
@@ -56,6 +57,14 @@ const readEnvelope = (body: unknown): { rpcId: string; method: string; payload: 
  */
 export const RunRpcMethod = async (jev: JevHub, method: RpcMethod, signal: AbortSignal, payload?: unknown, deps?: TaskRpcDepsInfo): Promise<RpcResult> => {
   try {
+    if (method === 'quotaView') {
+      const input = payload === undefined ? {} : payload
+      if (input === null || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => key !== 'force') || ('force' in input && typeof input.force !== 'boolean')) return failure('gateway/bad-request', 'quotaView accepts only an optional boolean force')
+      if (signal.aborted) return failure('gateway/cancelled', 'Quota read cancelled before admission')
+      if (deps?.quotaView === undefined) return failure('swarm/unavailable', 'Quota source unavailable')
+      try { return { ok: true, value: await deps.quotaView((input as { force?: boolean }).force === true, signal) } }
+      catch { return failure(signal.aborted ? 'gateway/cancelled' : 'swarm/quota-unavailable', signal.aborted ? 'Quota read cancelled' : 'Quota source unavailable') }
+    }
     if (method === 'jevStatus') return { ok: true, value: await jev.describeKey() }
     if (method === 'jevHealth') return { ok: true, value: await jev.getHealth(signal) }
     if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return failure('gateway/bad-request', 'taskView payload must contain sessionId and taskId')
@@ -93,7 +102,7 @@ export const RunRpcMethod = async (jev: JevHub, method: RpcMethod, signal: Abort
  * @returns {FetchRouteLike[]} 路由
  */
 export const getRpcRoutes = (getJev: () => JevHub, deps?: TaskRpcDepsInfo): FetchRouteLike[] => {
-  const methods: RpcMethod[] = [...RPC_METHODS, ...(deps?.taskView === undefined ? [] : ['taskView' as const]), ...(deps?.agentView === undefined ? [] : ['agentView' as const]), ...(deps?.agentControl === undefined ? [] : ['agentControl' as const])]
+  const methods: RpcMethod[] = [...RPC_METHODS, ...(deps?.quotaView === undefined ? [] : ['quotaView' as const]), ...(deps?.taskView === undefined ? [] : ['taskView' as const]), ...(deps?.agentView === undefined ? [] : ['agentView' as const]), ...(deps?.agentControl === undefined ? [] : ['agentControl' as const])]
   const routes = methods.map((method): FetchRouteLike => {
     const full = `${RPC_PREFIX}${method}`
     return {

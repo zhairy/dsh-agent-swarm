@@ -360,7 +360,7 @@ export const createFeatureSession = async (input: {
     const mode = task.workflowDefinition?.mode ?? 'standard'
     const limits = {
       maxDelegations: config.execution.maxCalls || (bounded ? ({ quick: 6, standard: 16, algorithm: 20 })[mode] : 0),
-      maxMathCalls: config.math.maxCallsPerTask, maxMathWorkUnits: 1_000_000,
+      maxMathCalls: config.math.maxCallsPerTask, maxMathWorkUnits: config.math.maxWorkUnitsPerTask,
       maxTokens: config.execution.maxTokens, maxCostUsd: config.execution.maxCostUsd
     }
     const signature = getCanonicalJson(limits)

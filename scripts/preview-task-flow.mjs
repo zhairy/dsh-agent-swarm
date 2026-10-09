@@ -23,6 +23,7 @@ const { getTaskCardText } = await import(pathToFileURL(join(root, 'lib/tools.js'
 const { getRpcRoutes } = await import(pathToFileURL(join(root, 'lib/rpc.js')).href)
 const { PROVIDER_LABELS } = await import(pathToFileURL(join(root, 'lib/routes.js')).href)
 const { getRouteResourcePolicy } = await import(pathToFileURL(join(root, 'lib/provider-policy.js')).href)
+const { DEFAULT_MATH_CONFIG, MATH_GROUP_OPERATORS, MATH_LIMIT_MAXIMA, MAX_MATH_WORK_PER_TASK, MAX_MATH_CALLS_PER_TASK } = await import(pathToFileURL(join(root, 'lib/math/config.js')).href)
 const debug = (message) => { if (process.env.SWARM_PREVIEW_DEBUG === '1') console.log(`[preview] ${message}`) }
 debug('service modules loaded')
 const scratch = await mkdtemp(join(tmpdir(), 'swarm-flow-preview-'))
@@ -52,7 +53,7 @@ const settingsScript=document.createElement('script');settingsScript.src='/setti
 
 const clientSource = readFileSync(join(root, 'client/task-flow.js'), 'utf8')
 const clientModule = `;(function(){const module={exports:{}};const exports=module.exports;const require=(id)=>{const value=window.__SWARM_QA_MODULES__[id];if(value===undefined)throw new Error('QA static module missing: '+id);return value};\n${clientSource}\nwindow.__SWARM_QA_FLOW__=module.exports})()`
-const settingsData = { namespace: 'swarm-core', agents: [], triggers: [], resourceTypes: Object.fromEntries(Object.keys(PROVIDER_LABELS).map((provider) => [provider, getRouteResourcePolicy({ provider, model: '' }).accessMode ?? 'unknown'])) }
+const settingsData = { namespace: 'swarm-core', agents: [], triggers: [], resourceTypes: Object.fromEntries(Object.keys(PROVIDER_LABELS).map((provider) => [provider, getRouteResourcePolicy({ provider, model: '' }).accessMode ?? 'unknown'])), math: { defaults: DEFAULT_MATH_CONFIG, groups: MATH_GROUP_OPERATORS, limitMaxima: MATH_LIMIT_MAXIMA, maxWorkPerTask: MAX_MATH_WORK_PER_TASK, maxCallsPerTask: MAX_MATH_CALLS_PER_TASK } }
 const settingsSource = readFileSync(join(root, 'client/settings-page.js'), 'utf8').replace('const DATA = __SWARM_DATA__', () => `const DATA = ${JSON.stringify(settingsData)}`)
 const settingsModule = `;(function(){const module={exports:{}};const exports=module.exports;const require=(id)=>{const value=window.__SWARM_QA_MODULES__[id];if(value===undefined)throw new Error('QA static module missing: '+id);return value};\n${settingsSource}\nwindow.__SWARM_QA_SETTINGS__=module.exports})()`
 const respond = (response, code, type, body) => { response.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); response.end(body) }
