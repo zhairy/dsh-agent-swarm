@@ -257,7 +257,7 @@ export const getCatalogVision = (route: RouteInfo): boolean | undefined =>
   CATALOG_BY_PROVIDER[route.provider]?.[route.model]?.vision
 
 export type RouteProbeResult = { ok: true; vision: boolean } | { ok: false; reason: string }
-export type RouteProbe = (route: RouteInfo) => Promise<RouteProbeResult>
+export type RouteProbe = (route: RouteInfo, signal?: AbortSignal) => Promise<RouteProbeResult>
 
 /** 路由选择结果 */
 export interface RouteSelection {
@@ -274,12 +274,12 @@ export interface RouteSelection {
  */
 export const FindUsableRoutes = async (
   chain: readonly RouteInfo[],
-  options: { probe: RouteProbe; requireVision?: boolean; avoidFamilies?: readonly ModelFamily[] }
+  options: { probe: RouteProbe; requireVision?: boolean; avoidFamilies?: readonly ModelFamily[]; signal?: AbortSignal }
 ): Promise<RouteSelection> => {
   const skipped: RouteSelection['skipped'] = []
   const available: RouteInfo[] = []
   // 各层预检互不依赖：并行执行，按链的顺序取结果
-  const results = await Promise.all(chain.map((route) => options.probe(route)))
+  const results = await Promise.all(chain.map((route) => options.probe(route, options.signal)))
   for (const [index, route] of chain.entries()) {
     const result = results[index] as RouteProbeResult
     if (!result.ok) {
@@ -342,6 +342,133 @@ export const isSwitchWorthy = (failureClass: FailureClass, exhausted: boolean): 
 /** 预检结果缓存：可用结果缓存较久，失败结果很快过期，故障恢复后能及时重新启用 */
 export const PROBE_OK_TTL_MS = 120_000
 export const PROBE_FAIL_TTL_MS = 15_000
+export const PROBE_CACHE_MAX_ENTRIES = 512
+export const PROBE_PENDING_WAIT_MS = 30_000
+
+/** Cordis creates a fresh caller-context proxy per get(); identity alone uses its public original symbol. */
+const getMetadataIdentity = (llm: LlmLike | undefined): object | undefined => {
+  if (llm === undefined) return undefined
+  const original: unknown = Reflect.get(llm, Symbol.for('cordis.original'))
+  return original !== null && (typeof original === 'object' || typeof original === 'function') ? original : llm
+}
+
+type RouteFailureObserver = (route: RouteInfo, failure: LlmFailureLike) => void | Promise<void>
+/** One service/health registry observes each shared metadata failure once, including durable rejection. */
+export const createRouteFailureObserver = (observer: RouteFailureObserver): RouteFailureObserver => {
+  const observations = new WeakMap<LlmFailureLike, Promise<void>>()
+  return (route, failure) => {
+    let observation = observations.get(failure)
+    if (observation === undefined) {
+      observation = Promise.resolve().then(() => observer(route, failure))
+      observations.set(failure, observation)
+    }
+    return observation
+  }
+}
+
+type RouteMetadataResult = RouteProbeResult & { failure?: LlmFailureLike }
+export interface RouteMetadataCache {
+  /** Metadata only. Callers must check their own current health/admission on every use. */
+  probe: (llm: LlmLike, route: RouteInfo) => Promise<RouteMetadataResult>
+}
+const probeKey = (route: RouteInfo): string => {
+  const resource = getRouteResourcePolicy(route)
+  return JSON.stringify([route.provider, route.model, getWireReasoningEffort(route) ?? null,
+    resource.accessMode ?? null, resource.quotaScope ?? null, resource.quotaDomainId ?? null, resource.poolId ?? null,
+    ...(['generation', 'tools', 'vision', 'structuredOutput'] as const).map((capability) => resource.capabilities?.[capability] ?? null)])
+}
+const cancelledMetadata = (error: unknown): boolean => {
+  const failure = getRouteFailure(error)
+  return (error instanceof Error && error.name === 'AbortError')
+    || ['ABORT_ERR', 'ABORTED', 'CANCELLED', 'CANCELED'].includes(String(failure.code ?? '').toUpperCase())
+}
+
+/** Share successful metadata and in-flight lookups, never owner permissions or failure isolation. */
+export const createRouteMetadataCache = (options: { now?: () => number; maxEntries?: number; pendingWaitMs?: number } = {}): RouteMetadataCache => {
+  const now = options.now ?? Date.now
+  const maximum = options.maxEntries ?? PROBE_CACHE_MAX_ENTRIES
+  const pendingWaitMs = options.pendingWaitMs ?? PROBE_PENDING_WAIT_MS
+  if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 4096) throw new Error('Invalid metadata cache capacity')
+  if (!Number.isSafeInteger(pendingWaitMs) || pendingWaitMs < 1 || pendingWaitMs > PROBE_PENDING_WAIT_MS) throw new Error('Invalid metadata wait bound')
+  type PendingEntry = { pending: Promise<RouteMetadataResult>; timedOut: boolean }
+  type Entry = { at: number; result: RouteMetadataResult } | PendingEntry
+  const entries = new Map<string, Entry>()
+  let owner: object | undefined
+  const resolveMetadata = async (llm: LlmLike, route: RouteInfo): Promise<RouteMetadataResult> => {
+    try {
+      const resource = getRouteResourcePolicy(route)
+      if (resource.accessMode === 'judgment_api' || resource.capabilities?.generation === false || resource.capabilities?.tools === false) return { ok: false, reason: 'capability-incompatible: generation-tools-unavailable' }
+      const info = await llm.resolveModelInfo(route.provider, route.model)
+      const effort = getWireReasoningEffort(route)
+      if (llm.resolveCallConfig !== undefined) await llm.resolveCallConfig({ provider: route.provider, model: route.model, ...(effort === undefined ? {} : { reasoningEffort: effort }) })
+      else if (effort !== undefined && !info.reasoning?.efforts.some((item) => item.id === effort)) return { ok: false, reason: 'capability-incompatible: unsupported-reasoning-effort' }
+      const observedVision = info.inputModalities === undefined ? (getCatalogVision(route) ?? false) : info.inputModalities.includes('image')
+      return { ok: true, vision: observedVision && resource.capabilities?.vision !== false }
+    } catch (error) {
+      if (cancelledMetadata(error)) return { ok: false, reason: 'metadata-cancelled' }
+      const failure = getRouteFailure(error)
+      if (normalizeRouteFailure(failure, route).kind === 'capability_mismatch') return { ok: false, reason: `capability-incompatible: ${getErrorText(error)}` }
+      return { ok: false, reason: `model-unavailable: ${getErrorText(error)}`, failure }
+    }
+  }
+  return { probe: async (llm, route) => {
+    const identity = getMetadataIdentity(llm)
+    if (owner !== identity) { entries.clear(); owner = identity }
+    const key = probeKey(route), hit = entries.get(key)
+    if (hit !== undefined) {
+      if ('pending' in hit) return hit.timedOut ? { ok: false, reason: 'metadata-pending-timeout' } : hit.pending
+      if (now() - hit.at < PROBE_OK_TTL_MS) {
+        entries.delete(key); entries.set(key, hit)
+        return hit.result
+      }
+      entries.delete(key)
+    }
+    if (entries.size >= maximum) {
+      let removable: string | undefined
+      for (const [key, entry] of entries) if (!('pending' in entry)) { removable = key; break }
+      if (removable === undefined) return { ok: false, reason: 'metadata-capacity-busy' }
+      entries.delete(removable)
+    }
+    let entry!: PendingEntry
+    let timer!: ReturnType<typeof setTimeout>
+    const timeout = new Promise<RouteMetadataResult>((resolve) => {
+      timer = setTimeout(() => {
+        // Stop this wait, not the SDK request. Keep its slot to prevent overlapping
+        // requests to a hung service; later callers can immediately try another route.
+        entry.timedOut = true
+        resolve({ ok: false, reason: 'metadata-pending-timeout' })
+      }, pendingWaitMs)
+      timer.unref?.()
+    })
+    const sdkResult = resolveMetadata(llm, route).then((result) => {
+      clearTimeout(timer)
+      // A replaced service or evicted old lookup cannot publish into the new cache.
+      if (owner === identity && entries.get(key) === entry) {
+        if (result.ok) entries.set(key, { at: now(), result: Object.freeze(result) })
+        else entries.delete(key)
+      }
+      return result
+    }, (error) => {
+      clearTimeout(timer)
+      if (entries.get(key) === entry) entries.delete(key)
+      throw error
+    })
+    entry = { pending: Promise.race([sdkResult, timeout]), timedOut: false }
+    entries.set(key, entry)
+    return entry.pending
+  } }
+}
+
+/** Aborting one waiter does not cancel the shared SDK lookup or other waiters. */
+const waitForMetadata = (pending: Promise<RouteMetadataResult>, signal?: AbortSignal): Promise<RouteMetadataResult> => {
+  if (signal === undefined) return pending
+  if (signal.aborted) return Promise.resolve({ ok: false, reason: 'metadata-cancelled' })
+  return new Promise((resolve, reject) => {
+    const onAbort = () => { signal.removeEventListener('abort', onAbort); resolve({ ok: false, reason: 'metadata-cancelled' }) }
+    signal.addEventListener('abort', onAbort, { once: true })
+    pending.then((result) => { signal.removeEventListener('abort', onAbort); resolve(result) }, (error) => { signal.removeEventListener('abort', onAbort); reject(error) })
+  })
+}
 
 /**
  * 基于 ctx.llm 的路由预检：provider 已注册且模型可解析。
@@ -352,48 +479,42 @@ export const PROBE_FAIL_TTL_MS = 15_000
  */
 export const intRouteProbe = (getLlm: () => LlmLike | undefined, options: {
   now?: () => number
+  metadataCache?: RouteMetadataCache
   isRouteAvailable?: (route: RouteInfo) => boolean
-  onFailure?: (route: RouteInfo, failure: LlmFailureLike) => void | Promise<void>
+  onFailure?: RouteFailureObserver
 } = {}): RouteProbe => {
   const now = options.now ?? Date.now
-  const cache = new Map<string, { at: number; result: RouteProbeResult }>()
-  const pending = new Map<string, Promise<RouteProbeResult>>()
-  const ProbeRoute = async (route: RouteInfo): Promise<RouteProbeResult> => {
+  const metadataCache = options.metadataCache ?? createRouteMetadataCache({ now })
+  // Failures stay local: a freshly created owner/manual-retry probe must perform
+  // new metadata lookup rather than replay another owner's old failed result.
+  const failures = new Map<string, { at: number; result: RouteProbeResult }>()
+  const observeFailure = options.onFailure === undefined ? undefined : createRouteFailureObserver(options.onFailure)
+  let owner: object | undefined
+  return async (route, signal) => {
+    if (signal?.aborted) return { ok: false, reason: 'metadata-cancelled' }
+    if (options.isRouteAvailable?.(route) === false) return { ok: false, reason: 'route-isolated' }
     const llm = getLlm()
+    const identity = getMetadataIdentity(llm)
+    if (owner !== identity) { failures.clear(); owner = identity }
     if (llm === undefined) return { ok: false, reason: 'llm-service-unavailable' }
     if (!llm.listProviders().some((provider) => provider.id === route.provider)) return { ok: false, reason: 'provider-not-configured' }
-    try {
-      const resource = getRouteResourcePolicy(route)
-      if (resource.accessMode === 'judgment_api' || resource.capabilities?.generation === false || resource.capabilities?.tools === false) return { ok: false, reason: 'capability-incompatible: generation-tools-unavailable' }
-      const info = await llm.resolveModelInfo(route.provider, route.model)
-      const effort = getWireReasoningEffort(route)
-      if (llm.resolveCallConfig !== undefined) await llm.resolveCallConfig({ provider: route.provider, model: route.model, ...(effort === undefined ? {} : { reasoningEffort: effort }) })
-      else if (effort !== undefined && !info.reasoning?.efforts.some((item) => item.id === effort)) return { ok: false, reason: 'capability-incompatible: unsupported-reasoning-effort' }
-      const observedVision = info.inputModalities === undefined ? (getCatalogVision(route) ?? false) : info.inputModalities.includes('image')
-      const vision = observedVision && resource.capabilities?.vision !== false
-      return { ok: true, vision }
-    } catch (error) {
-      const failure = getRouteFailure(error)
-      if (normalizeRouteFailure(failure, route).kind === 'capability_mismatch') return { ok: false, reason: `capability-incompatible: ${getErrorText(error)}` }
-      await options.onFailure?.(route, failure)
-      if (options.isRouteAvailable?.(route) === false) return { ok: false, reason: 'route-isolated' }
-      return { ok: false, reason: `model-unavailable: ${getErrorText(error)}` }
-    }
-  }
-  return async (route) => {
+    const key = probeKey(route), hit = failures.get(key)
+    if (hit !== undefined && now() - hit.at < PROBE_FAIL_TTL_MS) return hit.result
+    failures.delete(key)
+    const result = await waitForMetadata(metadataCache.probe(llm, route), signal)
+    if (signal?.aborted || (!result.ok && result.reason === 'metadata-cancelled')) return { ok: false, reason: 'metadata-cancelled' }
+    if (getMetadataIdentity(getLlm()) !== identity) return { ok: false, reason: 'llm-service-changed' }
+    if (!llm.listProviders().some((provider) => provider.id === route.provider)) return { ok: false, reason: 'provider-not-configured' }
     if (options.isRouteAvailable?.(route) === false) return { ok: false, reason: 'route-isolated' }
-    const key = JSON.stringify([route.provider, route.model, getWireReasoningEffort(route) ?? null,
-      route.policy?.quotaDomainId ?? null, route.policy?.poolId ?? null, route.policy?.capabilities ?? null])
-    const hit = cache.get(key)
-    if (hit !== undefined && now() - hit.at < (hit.result.ok ? PROBE_OK_TTL_MS : PROBE_FAIL_TTL_MS)) return hit.result
-    const running = pending.get(key)
-    if (running !== undefined) return running
-    const next = ProbeRoute(route).then((result) => {
-      // 服务暂不可用（宿主刚启动）不缓存
-      if (result.ok || result.reason !== 'llm-service-unavailable') cache.set(key, { at: now(), result })
-      return result
-    }).finally(() => pending.delete(key))
-    pending.set(key, next)
-    return next
+    if (result.ok) return { ok: true, vision: result.vision }
+    if (result.failure !== undefined) await observeFailure?.(route, result.failure)
+    if (signal?.aborted) return { ok: false, reason: 'metadata-cancelled' }
+    if (options.isRouteAvailable?.(route) === false) return { ok: false, reason: 'route-isolated' }
+    const failed = { ok: false as const, reason: result.reason }
+    if (result.reason !== 'metadata-capacity-busy' && result.reason !== 'metadata-pending-timeout') {
+      if (failures.size >= PROBE_CACHE_MAX_ENTRIES) failures.delete(failures.keys().next().value!)
+      failures.set(key, { at: now(), result: failed })
+    }
+    return failed
   }
 }

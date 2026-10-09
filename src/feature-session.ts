@@ -15,7 +15,7 @@ import { GATE_IDS, GATE_ROLE, ValidateTaskCard, getAcceptanceCheck, getEffective
 import { ValidateStructuredOutput } from './contracts.js'
 import { isDelegableRoleId } from './role-registry.js'
 import { createWorkspaceLeaseManager } from './util/workspace-lease.js'
-import type { RouteHealthEntry } from './route-health.js'
+import { validateRouteHealthSnapshot, type RouteHealthEntry, type RouteHealthSnapshot } from './route-health.js'
 import { partitionLegacyPlanningBudget } from './planning-recovery.js'
 import { validateAgentControlRecords, type AgentControlRecord } from './agent-control.js'
 import { validateEvidenceAssessment } from './evidence-assessment.js'
@@ -39,7 +39,7 @@ interface FeatureState extends MessageState, ExperienceState {
   planningBudgets?: Record<string, ExecutionBudgetSnapshot>
   agentControls?: AgentControlRecord[]
   contexts: ContextArtifactInfo[]
-  routeHealth?: RouteHealthEntry[]
+  routeHealth?: RouteHealthEntry[] | RouteHealthSnapshot
 }
 
 export interface FeatureSession {
@@ -56,7 +56,7 @@ export interface FeatureSession {
   commitRecovery: () => Promise<void>
   /** Existing attempts and exempt Jev observations keep their original accounting handle during hot changes. */
   finishBudgetFor: (task: TaskRecord) => ExecutionBudget
-  persist: (type: string, tasks: TaskStore, threads: ThreadRegistry, routeHealth?: RouteHealthEntry[]) => Promise<void>
+  persist: (type: string, tasks: TaskStore, threads: ThreadRegistry, routeHealth?: RouteHealthEntry[] | RouteHealthSnapshot) => Promise<void>
   addContext: (input: Parameters<ContextStore['Add']>[0]) => ContextArtifactInfo
   prepareTaskContexts: (...args: Parameters<ContextStore['PrepareTaskReplace']>) => PreparedTaskContextReplacement
   /** Trusted lifecycle API: all author/reviewer/verification facts are derived from current runtime evidence. */
@@ -73,21 +73,7 @@ const hashPattern = /^[a-f0-9]{64}$/i
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Only stable quarantine facts are durable. A process-local half-open claimant is never resumed. */
-export const validatePersistedRouteHealth = (raw: unknown): raw is RouteHealthEntry[] => {
-  if (!Array.isArray(raw) || raw.length > 4096) return false
-  const keys = new Set<string>()
-  const healthKey = (value: unknown): value is string => typeof value === 'string' && value.length <= 2048 && /^(?:route|domain|pool):.+$/.test(value) && !/[\u0000-\u001f]/.test(value)
-  for (const entry of raw) {
-    if (!object(entry) || Object.keys(entry).some((key) => !['key', 'aliases', 'kind', 'failedAt', 'resetAt', 'retryAt', 'retryCount', 'route'].includes(key)) || !healthKey(entry.key) || keys.has(entry.key) || (entry.aliases !== undefined && (!Array.isArray(entry.aliases) || entry.aliases.length > 4096 || entry.aliases.some((alias) => !healthKey(alias)) || new Set(entry.aliases).size !== entry.aliases.length)) || !['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable', 'rate_limited', 'network_transient', 'service_transient', 'context_exceeded', 'capability_mismatch', 'unknown'].includes(String(entry.kind)) || typeof entry.failedAt !== 'number' || !Number.isFinite(entry.failedAt) || entry.failedAt < 0 || (entry.resetAt !== undefined && (typeof entry.resetAt !== 'number' || !Number.isFinite(entry.resetAt) || entry.resetAt < 0)) || !object(entry.route) || !identifier(entry.route.provider) || !identifier(entry.route.model) || (entry.route.reasoningEffort !== undefined && !identifier(entry.route.reasoningEffort))) return false
-    if ((entry.retryAt !== undefined && (typeof entry.retryAt !== 'number' || !Number.isFinite(entry.retryAt) || entry.retryAt < 0)) || (entry.retryCount !== undefined && (!Number.isSafeInteger(entry.retryCount) || Number(entry.retryCount) < 0 || Number(entry.retryCount) > 32))) return false
-    const policy = entry.route.policy
-    if (policy !== undefined) {
-      if (!object(policy) || (policy.accessMode !== undefined && !['subscription', 'metered_api', 'judgment_api', 'unknown'].includes(String(policy.accessMode))) || (policy.quotaScope !== undefined && !['account', 'plan', 'model', 'pool', 'unknown'].includes(String(policy.quotaScope))) || (policy.quotaDomainId !== undefined && !identifier(policy.quotaDomainId)) || (policy.poolId !== undefined && !identifier(policy.poolId)) || (policy.capabilities !== undefined && (!object(policy.capabilities) || Object.values(policy.capabilities).some((value) => typeof value !== 'boolean')))) return false
-    }
-    keys.add(entry.key)
-  }
-  return true
-}
+export const validatePersistedRouteHealth = validateRouteHealthSnapshot
 
 /** Verify complete runtime contracts before exposing or replaying any saved state. */
 export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: string; workspaceId: string }): StateValidationReport => {
@@ -146,7 +132,7 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
     const recordIdsByTask = new Map<string, Set<string>>()
     for (const [index, record] of state.delegations.entries()) {
       at(`$.delegations[${index}]`, 'DELEGATION_FORMAT')
-      if (!object(record) || !identifier(record.delegationId) || recordIds.has(record.delegationId) || !tasks.has(record.taskId) || !isDelegableRoleId(record.role) || !['queued', 'running', 'completed', 'failed', 'blocked'].includes(record.status) || typeof record.summary !== 'string' || !strings(record.unresolved) || !Array.isArray(record.evidence) || record.evidence.some((e) => !object(e) || !['command', 'step', 'finding', 'source', 'observation', 'claim', 'file-change'].includes(e.kind) || typeof e.ref !== 'string') || ![record.cardRevision, record.workflowRevision, record.requestRevision].every(optionalRevision) || !Number.isFinite(record.startedAt)) return invalid()
+      if (!object(record) || !identifier(record.delegationId) || recordIds.has(record.delegationId) || !tasks.has(record.taskId) || !isDelegableRoleId(record.role) || !['queued', 'running', 'completed', 'failed', 'blocked'].includes(record.status) || (record.finalization !== undefined && !['processing', 'ready', 'cancelled', 'failed'].includes(record.finalization)) || typeof record.summary !== 'string' || !strings(record.unresolved) || !Array.isArray(record.evidence) || record.evidence.some((e) => !object(e) || !['command', 'step', 'finding', 'source', 'observation', 'claim', 'file-change'].includes(e.kind) || typeof e.ref !== 'string') || ![record.cardRevision, record.workflowRevision, record.requestRevision].every(optionalRevision) || !Number.isFinite(record.startedAt)) return invalid()
       at(`$.delegations[${index}].structured`, 'STRUCTURED_OUTPUT_FORMAT')
       if (record.status === 'completed' && ValidateStructuredOutput(record.role, record.structured, record.mode).length > 0) return invalid()
       at(`$.delegations[${index}].continuationInput`, 'CONTINUATION_BINDING')
@@ -290,7 +276,7 @@ export const validateFeatureState = (raw: unknown, expected: { rootSessionId: st
 const recover = (state: FeatureState): FeatureState => {
   const copy = structuredClone(state)
   const recordsById = new Map(copy.delegations.map((record) => [record.delegationId, record]))
-  const uncertain = new Set(copy.delegations.filter((record) => ['queued', 'running'].includes(record.status)).map((record) => record.delegationId))
+  const uncertain = new Set(copy.delegations.filter((record) => (['queued', 'running'].includes(record.status) || record.finalization === 'processing')).map((record) => record.delegationId))
   for (const control of copy.agentControls ?? []) if (uncertain.has(control.delegationId)) {
     control.phase = 'recovery-required'; control.paused = true; control.reason = 'restart-requires-host-reconciliation'
     if (control.actual !== undefined) control.actual.state = 'unknown'
@@ -303,12 +289,13 @@ const recover = (state: FeatureState): FeatureState => {
       if (node.status === 'running') { node.status = 'blocked'; node.reason = '重启恢复：运行状态未知，需核对已产生的副作用' }
     }
   }
-  for (const record of copy.delegations) if (record.status === 'running' || record.status === 'queued') {
+  for (const record of copy.delegations) if (record.status === 'running' || record.status === 'queued' || record.finalization === 'processing') {
+    if (record.finalization !== undefined) record.finalization = 'failed'
     record.status = 'failed'; record.error = 'recovery_required'; record.staleReason = '重启时委派尚未确认结束'
   }
   for (const thread of copy.threads) { thread.busy = false; thread.closed = true }
   for (const binding of Object.values(copy.bindings)) if (binding.state === 'active') binding.state = 'suspended'
-  for (const entry of copy.routeHealth ?? []) delete entry.halfOpenAgent
+  for (const entry of (Array.isArray(copy.routeHealth) ? copy.routeHealth : copy.routeHealth?.entries) ?? []) delete entry.halfOpenAgent
   return copy
 }
 
@@ -365,6 +352,7 @@ export const createFeatureSession = async (input: {
     }
     return budget
   }
+  const budgetLimits = new Map<string, string>()
   const budgetFor = (task: TaskRecord): ExecutionBudget => {
     const existing = budgets.get(task.taskId)
     const config = input.getConfig?.() ?? input.config
@@ -375,6 +363,8 @@ export const createFeatureSession = async (input: {
       maxMathCalls: config.math.maxCallsPerTask, maxMathWorkUnits: 1_000_000,
       maxTokens: config.execution.maxTokens, maxCostUsd: config.execution.maxCostUsd
     }
+    const signature = getCanonicalJson(limits)
+    if (existing !== undefined && budgetLimits.get(task.taskId) === signature) return existing
     const snapshot = existing?.getSnapshot() ?? saved.budgets[task.taskId]
     if (existing !== undefined) {
       if (getCanonicalJson(snapshot?.limits) === getCanonicalJson(limits)) return existing
@@ -382,6 +372,7 @@ export const createFeatureSession = async (input: {
     }
     const budget = createExecutionBudget(limits, snapshot)
     budgets.set(task.taskId, budget)
+    budgetLimits.set(task.taskId, signature)
     return budget
   }
   const deriveExperienceReview = async (entry: ExperienceEntry): Promise<ExperienceReview | undefined> => {
@@ -392,7 +383,7 @@ export const createFeatureSession = async (input: {
     // Source review validates this recorded result in its original contract, never an arbitrary new generalization.
     if (entry.conclusion !== task.acceptance.summary || getCanonicalJson(entry.appliesWhen) !== getCanonicalJson(task.card.acceptance) || getCanonicalJson(entry.doesNotApplyWhen) !== getCanonicalJson(task.acceptance.unresolved)) return undefined
     const all = input.tasks.getTaskDelegations(task.taskId)
-    if (all.some((record) => record.status === 'running' || record.status === 'queued')) return undefined
+    if (all.some((record) => record.status === 'running' || record.status === 'queued' || record.finalization === 'processing')) return undefined
     const artifact = await getArtifactSnapshot(input.cwd, [...new Set([...task.card.scope, ...all.flatMap((record) => record.changedFiles ?? [])])])
     if (!artifact.complete || artifact.digest !== entry.source.artifactDigest) return undefined
     const current = getCurrentDelegations(task, all, artifact.digest).filter((record) => record.status === 'completed')
@@ -481,7 +472,9 @@ export const createFeatureSession = async (input: {
       // operation's uncommitted task revision before its own commit succeeds.
       const detach = <T>(value: T): T => JSON.parse(getCanonicalJson(value)) as T
       const taskSnapshot = tasks.getTasks()
-      const stableHealth = routeHealth?.map(({ halfOpenAgent: _claimant, ...entry }) => entry)
+      const stableHealth = routeHealth === undefined ? undefined : Array.isArray(routeHealth)
+        ? routeHealth.map(({ halfOpenAgent: _claimant, ...entry }) => entry)
+        : { ...routeHealth, entries: routeHealth.entries.map(({ halfOpenAgent: _claimant, ...entry }) => entry) }
       if (stableHealth !== undefined && !validatePersistedRouteHealth(stableHealth)) throw new StateStoreError('STATE_INVALID', 'Invalid durable route health snapshot')
       const snapshot = detach({
         tasks: taskSnapshot,

@@ -76,8 +76,9 @@ const makeRuntime = async (options: { home?: string; jev?: 'known' | 'disabled' 
       confidence: { type: 'score', score: 3, confidence: 0.9, probabilities: { '0': 0, '1': 0, '2': 0, '3': 1 } }
     }, usage: { input_tokens: 100, output_tokens: 20 } }), { status: 200, headers: { 'content-type': 'application/json' } })
   })
+  const fixtureLlm = { listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'opencode-go' }, { id: 'deepseek-official' }], resolveModelInfo: async () => ({ inputModalities: ['text', 'image'] }) }
   const service = intSwarmService({ getConfig: () => config,
-    getLlm: () => ({ listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'opencode-go' }, { id: 'deepseek-official' }], resolveModelInfo: async () => ({ inputModalities: ['text', 'image'] }) }),
+    getLlm: () => fixtureLlm,
     getSubagents: () => subagents,
     getTools: () => ({ register: () => () => undefined, guard: () => () => undefined, schemas: () => ['read', 'glob', 'grep', 'swarm_context_read', 'swarm_message_send', 'swarm_message_read', 'swarm_message_ack'].map((name) => ({ name })) }),
     getCredentials: () => ({ resolve: async () => ({ value: 'fixture-only-no-live-credential' }) }), getAttachments: () => undefined,

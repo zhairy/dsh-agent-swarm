@@ -6,10 +6,12 @@ import { canonicalStateJson, StateStoreError, type StateValidationResult } from 
 import { digest } from './task-model.js'
 
 const MAX_BYTES = 4 * 1024 * 1024
-const SOURCE_VERSION = '2.3.0' as const
+const SOURCE_VERSIONS = ['2.3.0', '2.3.1'] as const
+export type MemoryHandoffSourceVersion = typeof SOURCE_VERSIONS[number]
+const sourceVersionValid = (raw: unknown): raw is MemoryHandoffSourceVersion => SOURCE_VERSIONS.some(version => version === raw)
 export interface MemoryHandoffEnvelope<T> {
   schemaVersion: 1
-  sourceVersion: typeof SOURCE_VERSION
+  sourceVersion: MemoryHandoffSourceVersion
   rootSessionId: string
   workspaceId: string
   checksum: string
@@ -17,7 +19,7 @@ export interface MemoryHandoffEnvelope<T> {
 }
 export interface LoadedMemoryHandoff<T> {
   state: T
-  sourceVersion: typeof SOURCE_VERSION
+  sourceVersion: MemoryHandoffSourceVersion
   /** Call only after the feature session and host recovery initialize successfully. */
   commitConsumption: () => Promise<string>
 }
@@ -36,9 +38,10 @@ const scopeValid = (input: Pick<MemoryHandoffInput, 'rootSessionId' | 'workspace
 const checksum = (state: unknown) => createHash('sha256').update(canonicalStateJson(state)).digest('hex')
 
 /** Trusted maintenance code can use the exact envelope format without exposing a new tool/RPC. */
-export const createMemoryHandoffEnvelope = <T>(input: Pick<MemoryHandoffInput, 'rootSessionId' | 'workspaceId'> & { state: T }): MemoryHandoffEnvelope<T> => {
+export const createMemoryHandoffEnvelope = <T>(input: Pick<MemoryHandoffInput, 'rootSessionId' | 'workspaceId'> & { state: T; sourceVersion: MemoryHandoffSourceVersion }): MemoryHandoffEnvelope<T> => {
   if (!scopeValid(input)) fail('SCOPE_FORMAT')
-  const envelope: MemoryHandoffEnvelope<T> = { schemaVersion: 1, sourceVersion: SOURCE_VERSION,
+  if (!sourceVersionValid(input.sourceVersion)) fail('ENVELOPE_VERSION')
+  const envelope: MemoryHandoffEnvelope<T> = { schemaVersion: 1, sourceVersion: input.sourceVersion,
     rootSessionId: input.rootSessionId, workspaceId: input.workspaceId, checksum: checksum(input.state), state: structuredClone(input.state) }
   if (Buffer.byteLength(canonicalStateJson(envelope)) > MAX_BYTES) fail('SIZE_LIMIT')
   return envelope
@@ -68,7 +71,7 @@ const readTrustedFile = async (path: string, original: BigIntStats, uid: bigint)
 }
 const rawChecksum = (value: string) => createHash('sha256').update(value).digest('hex')
 
-/** A deliberately narrow, one-time bridge for an explicitly staged 2.3.0 in-memory session.
+/** A deliberately narrow, one-time bridge for an explicitly staged supported in-memory source session.
  * No caller-controlled filename, automatic normalization or durable-state replacement is accepted. */
 export const loadMemoryHandoff = async <T>(input: MemoryHandoffInput): Promise<LoadedMemoryHandoff<T> | undefined> => {
   if (input.persistenceEnabled) return undefined
@@ -102,7 +105,7 @@ export const loadMemoryHandoff = async <T>(input: MemoryHandoffInput): Promise<L
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) fail('ENVELOPE_FORMAT')
     const candidate = parsed as MemoryHandoffEnvelope<T>
     if (Object.keys(candidate).some((key) => !['schemaVersion', 'sourceVersion', 'rootSessionId', 'workspaceId', 'checksum', 'state'].includes(key))
-      || candidate.schemaVersion !== 1 || candidate.sourceVersion !== SOURCE_VERSION) fail('ENVELOPE_VERSION')
+      || candidate.schemaVersion !== 1 || !sourceVersionValid(candidate.sourceVersion)) fail('ENVELOPE_VERSION')
     if (candidate.rootSessionId !== input.rootSessionId || candidate.workspaceId !== input.workspaceId) fail('SCOPE_MISMATCH')
     if (typeof candidate.checksum !== 'string' || !/^[a-f0-9]{64}$/.test(candidate.checksum) || candidate.checksum !== checksum(candidate.state)) fail('CHECKSUM_MISMATCH')
     const result = input.validate(candidate.state)
@@ -112,7 +115,7 @@ export const loadMemoryHandoff = async <T>(input: MemoryHandoffInput): Promise<L
 
   const encodedChecksum = rawChecksum(raw)
   let consumption: Promise<string> | undefined
-  return { state: structuredClone(envelope.state), sourceVersion: SOURCE_VERSION,
+  return { state: structuredClone(envelope.state), sourceVersion: envelope.sourceVersion,
     commitConsumption: () => consumption ??= (async () => {
       try {
         const current = await lstat(pending, { bigint: true })

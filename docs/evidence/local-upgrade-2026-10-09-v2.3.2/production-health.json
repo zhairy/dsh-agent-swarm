@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-10-09T05:10:33.892Z",
+  "pid": 17566,
+  "version": "2.3.2",
+  "jev": {
+    "httpStatus": 200,
+    "rpcOk": true,
+    "configured": true,
+    "enabled": true,
+    "ok": true,
+    "model": "jev-latest"
+  },
+  "task": {
+    "httpStatus": 200,
+    "ok": true,
+    "versions": [
+      2,
+      4,
+      1
+    ],
+    "planningStatus": "unavailable"
+  },
+  "businessGenerationRequested": false
+}

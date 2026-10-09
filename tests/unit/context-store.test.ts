@@ -26,6 +26,36 @@ describe('渐进披露与受控材料引用', () => {
     expect(second.text).toBe('abcd')
     expect(second.digest).toBe(first.digest)
   })
+  it('多页字节计数随私有材料保持稳定，预热读取不复用权限或改变持久格式', () => {
+    const store = intContextStore({ maxPageChars: 7 })
+    const text = '中文🙂éabc'.repeat(20)
+    const artifact = store.Add({ binding, layer: 'L2', kind: 'author-reasoning', text, allowThreads: ['expert'] })
+    artifact.text = '返回副本不能修改私有材料'
+    const pieces: string[] = []
+    let cursor: string | null = '0'
+    while (cursor !== null) {
+      const page = store.Read(binding, artifact.ref, { cursor })
+      expect(page.totalBytes).toBe(Buffer.byteLength(text))
+      pieces.push(page.text); cursor = page.nextCursor
+    }
+    expect(pieces.join('')).toBe(text)
+    expect(store.List(binding)[0]!.totalBytes).toBe(Buffer.byteLength(text))
+    for (const changed of [{ blindReview: true }, { threadId: 'other' }, { requestRevision: 2 }, { workflowRevision: 2 }, { cardRevision: 2 }]) {
+      expect(() => store.Read({ ...binding, ...changed }, artifact.ref)).toThrow()
+      expect(store.List({ ...binding, ...changed })).toEqual([])
+    }
+    const saved = { ...artifact, text }
+    expect(Object.keys(saved).sort()).toEqual(['allowThreads', 'binding', 'digest', 'kind', 'layer', 'ref', 'text'])
+    const restored = intContextStore()
+    restored.Restore(saved)
+    expect(restored.Read(binding, artifact.ref).totalBytes).toBe(Buffer.byteLength(text))
+    const next = { ...binding, cardRevision: 2 }
+    const batch = store.PrepareTaskReplace(next, [{ layer: 'L0', kind: 'contract', text: '新🙂合同' }])
+    batch.commit()
+    expect(store.Read(next, batch.artifacts[0]!.ref).totalBytes).toBe(Buffer.byteLength('新🙂合同'))
+    batch.rollback()
+    expect(store.Read(binding, artifact.ref).totalBytes).toBe(Buffer.byteLength(text))
+  })
   it('引用猜测不能越过根、工作区、任务、版本与盲审权限', () => {
     const store = intContextStore()
     const artifact = store.Add({ binding, layer: 'L2', kind: 'author-reasoning', text: '作者证明', allowThreads: ['expert'] })

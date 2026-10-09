@@ -7,6 +7,7 @@ import { intRouteStateRegistry, type FallbackEventInfo } from '../../src/route-s
 import type { PreferredRecoveryEventInfo } from '../../src/route-state.js'
 import { DEFAULT_ROUTE_CHAINS } from '../../src/routes.js'
 import { nativeRecoveryCoverage, getNativeRecoverySupport } from '../../src/provider-policy.js'
+import { intRouteHealth } from '../../src/route-health.js'
 import type { RouteInfo } from '../../src/routes.js'
 import { apply as applyRuntime } from '../../src/runtime.js'
 import type { PluginContextLike } from '../../src/host-contract.js'
@@ -15,6 +16,269 @@ const config = getSwarmConfig({})
 const child = { id: 'c1', session: { header: { parentSession: 'root' } } }
 const root = { id: 'root', session: { header: {} } }
 const chain = [{ provider: 'a', model: 'm1' }, { provider: 'b', model: 'm2', reasoningEffort: 'high' }, { provider: 'a', model: 'm3' }]
+
+describe('request recovery lifetime', () => {
+  const route = { provider: 'fixture', model: 'fixture' }
+  const cfg = getSwarmConfig({ routes: { tian_shu: { chain: [route] } } })
+
+  it('failed and cancelled one-shot delegations release all scoped state after terminal consumption', () => {
+    const registry = intRouteStateRegistry()
+    for (let index = 0; index < 2500; index++) {
+      const id = `disposed-${index}`
+      const requestId = `D-finished-${index}`
+      registry.AddChild(id, { chain: [route], role: 'tan_wei', logicalRequestId: requestId })
+      registry.BeginRequestStep(id, 0, 0)
+      registry.getRequestOverride({ id }, route, undefined)
+      if (index % 2 === 0) registry.getErrorAction({ agent: { id }, provider: route.provider, failure: { status: 400 } }, undefined, undefined, cfg)
+      // Real host end/dispose events precede the outer delegate result check.
+      registry.ReleaseAgent(id)
+      registry.DelAgent(id)
+      expect(registry.getTerminal(id)).toBe(index % 2 === 0 ? 'route_chain_exhausted' : undefined)
+      registry.FinishLogicalRequest(requestId)
+      expect(registry.getRecovery(id)).toBeUndefined()
+      expect(registry.getTerminal(id)).toBeUndefined()
+    }
+    expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
+  })
+
+  it('disposing and restarting a child within the same delegation does not reset the eight-admission ceiling', () => {
+    const registry = intRouteStateRegistry()
+    registry.AddChild('first', { chain: [route], role: 'tan_wei', logicalRequestId: 'D-restart' })
+    registry.BeginRequestStep('first', 0, 0)
+    for (let index = 0; index < 8; index++) registry.getRequestOverride({ id: 'first' }, route, undefined)
+    registry.ReleaseAgent('first')
+    registry.DelAgent('first')
+    registry.AddChild('second', { chain: [route], role: 'tan_wei', logicalRequestId: 'D-restart' })
+    registry.BeginRequestStep('second', 0, 0)
+    registry.BeginRequestStep('second', 0, 0)
+    expect(() => registry.getRequestOverride({ id: 'second' }, route, undefined)).toThrow('recovery_attempts_exhausted')
+    registry.DelAgent('second')
+    expect(registry.getTerminal('second')).toBe('recovery_attempts_exhausted')
+    registry.FinishLogicalRequest('D-restart')
+    registry.FinishLogicalRequest('D-restart')
+    expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
+  })
+
+  it('finishing a persistent delegation preserves its current recovery, selected model and pause fence', () => {
+    const registry = intRouteStateRegistry()
+    const chosen = { provider: 'manual', model: 'chosen' }
+    registry.AddChild(child.id, { chain: [route, chosen], role: 'tan_wei', persistent: true, logicalRequestId: 'D-persistent-1' })
+    registry.RecordUserSelection(child.id, chosen, 1)
+    registry.BeginRequestStep(child.id, 0, 0)
+    expect(registry.getRequestOverride(child, route, undefined)).toMatchObject(chosen)
+    registry.MarkRequestSucceeded(child.id)
+    registry.SetManualPause(child.id, true)
+    registry.ReleaseAgent(child.id)
+    registry.FinishLogicalRequest('D-persistent-1')
+    expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 1, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
+    expect(registry.getRecovery(child.id)?.completed).toBe(true)
+    expect(registry.getChildOverride(child.id)).toEqual(chosen)
+    expect(registry.isManualPaused(child.id)).toBe(true)
+    registry.AddChild(child.id, { chain: [route, chosen], role: 'tan_wei', persistent: true, logicalRequestId: 'D-persistent-2' })
+    registry.BeginRequestStep(child.id, 1, 0)
+    expect(() => registry.getRequestOverride(child, route, undefined)).toThrow('子会话已人工暂停')
+    registry.SetManualPause(child.id, false)
+    expect(registry.getRequestOverride(child, route, undefined)).toMatchObject(chosen)
+    registry.FinishLogicalRequest('D-persistent-2')
+    registry.DelAgent(child.id)
+    expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
+  })
+
+  it('new root steps discard old failed state while repeated current step ids retain the counter', () => {
+    const registry = intRouteStateRegistry()
+    for (let step = 0; step < 2500; step++) {
+      registry.BeginRequestStep(root.id, 0, step)
+      registry.getRequestOverride(root, route, 'tian_shu', cfg, true)
+      registry.BeginRequestStep(root.id, 0, step)
+      expect(registry.getRecovery(root.id)?.attempts).toBe(1)
+      registry.getErrorAction({ agent: root, provider: route.provider, failure: { status: 400 } }, undefined, 'tian_shu', cfg)
+    }
+    expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 1, logicalRequests: 1, logicalStates: 1, disposedTerminals: 0 })
+    registry.ReleaseAgent(root.id)
+    expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
+  })
+
+  it('a late duplicate persistent-child step after owner cleanup retains its exhausted admission counter', () => {
+    const registry = intRouteStateRegistry()
+    registry.AddChild(child.id, { chain: [route], role: 'tan_wei', persistent: true, logicalRequestId: 'D-late' })
+    registry.BeginRequestStep(child.id, 0, 0)
+    for (let index = 0; index < 8; index++) registry.getRequestOverride(child, route, undefined)
+    registry.FinishLogicalRequest('D-late')
+    registry.BeginRequestStep(child.id, 0, 0)
+    expect(() => registry.getRequestOverride(child, route, undefined)).toThrow('recovery_attempts_exhausted')
+    registry.FinishLogicalRequest('D-late')
+    expect(registry.getRecoveryDiagnostics()).toMatchObject({ agents: 1, logicalRequests: 0, logicalStates: 0 })
+  })
+
+  it('legacy unscoped dispose retains only a bounded terminal receipt, never full request histories', () => {
+    const registry = intRouteStateRegistry()
+    for (let index = 0; index < 2500; index++) {
+      const id = `legacy-${index}`
+      registry.AddChild(id, { chain: [route], role: 'tan_wei' })
+      registry.getRequestOverride({ id }, route, undefined)
+      registry.getErrorAction({ agent: { id }, provider: route.provider, failure: { status: 400 } }, undefined, undefined, cfg)
+      registry.DelAgent(id)
+    }
+    expect(registry.getTerminal('legacy-2499')).toBe('route_chain_exhausted')
+    expect(registry.getRecovery('legacy-2499')).toBeUndefined()
+    expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 1024 })
+  })
+})
+
+describe('durable successful route recovery', () => {
+  const route = { provider: 'synthetic', model: 'success' }
+  const prepare = (onHealthChange: NonNullable<Parameters<typeof intRouteStateRegistry>[2]>['onHealthChange'], extra: Parameters<typeof intRouteStateRegistry>[2] = {}) => {
+    let clock = 0
+    const health = intRouteHealth(() => clock)
+    health.record(route, { provider: route.provider, model: route.model, kind: 'quota_exhausted', message: 'synthetic fixture' })
+    clock = 5000
+    const registry = intRouteStateRegistry(undefined, undefined, { health, now: () => clock, onHealthChange, ...extra })
+    registry.AddChild(child.id, { chain: [route], role: 'tan_wei', persistent: true, logicalRequestId: 'D-success' })
+    registry.BeginRequestStep(child.id, 0, 0)
+    expect(registry.RequestRouteRetry(route, child.id, { force: true }).ok).toBe(true)
+    expect(registry.getRequestOverride(child, route, undefined)).toMatchObject(route)
+    return registry
+  }
+
+  it('observes committed success immediately but gates the next model request until its tombstone is durable', async () => {
+    let commit!: () => void
+    const hook = vi.fn(() => new Promise<void>((resolve) => { commit = resolve }))
+    const registry = prepare(hook)
+    registry.MarkRequestSucceeded(child.id)
+    registry.MarkRequestSucceeded(child.id)
+    expect(registry.getRecovery(child.id)?.completed).toBe(true)
+    expect(registry.getHealth()).toEqual([])
+    expect(registry.getHealthSnapshot().cleared.length).toBeGreaterThan(0)
+    expect(hook).toHaveBeenCalledTimes(1)
+    expect(hook.mock.calls[0]).toMatchObject([{ schemaVersion: 1, entries: [], cleared: expect.any(Array) }, { agentId: child.id, reason: 'success' }])
+    expect(() => registry.getRequestOverride(child, route, undefined)).toThrow('健康状态持久提交仍未完成')
+    let ready = false
+    const waiting = registry.WaitHealthReady(child.id).then(() => { ready = true })
+    await Promise.resolve()
+    expect(ready).toBe(false)
+    commit()
+    await waiting
+    registry.BeginRequestStep(child.id, 0, 1)
+    expect(registry.getRequestOverride(child, route, undefined)).toMatchObject(route)
+  })
+
+  it('reports a failed success commit, dispatches no model, and recovers only after a fresh health commit succeeds', async () => {
+    let fail = true
+    const hook = vi.fn(async () => { if (fail) throw new Error('synthetic-disk-error') })
+    const notify = vi.fn()
+    const registry = prepare(hook, { onHealthPersistenceFailure: notify })
+    registry.MarkRequestSucceeded(child.id)
+    await expect(registry.WaitHealthReady(child.id)).rejects.toThrow('route_health_persist_failed')
+    expect(notify).toHaveBeenCalledWith({ agentId: child.id, reason: 'route_health_persist_failed' })
+    registry.BeginRequestStep(child.id, 0, 1)
+    expect(() => registry.getRequestOverride(child, route, undefined)).toThrow('route_health_persist_failed')
+    fail = false
+    await registry.WaitHealthReady(child.id)
+    expect(hook).toHaveBeenCalledTimes(2)
+    expect(registry.getRequestOverride(child, route, undefined)).toMatchObject(route)
+  })
+
+  it('bounds persistence waiting and allows cancellation without claiming the underlying write was cancelled', async () => {
+    let commit!: () => void
+    const registry = prepare(() => new Promise<void>((resolve) => { commit = resolve }), { healthCommitWaitMs: 5 })
+    registry.MarkRequestSucceeded(child.id)
+    await expect(registry.WaitHealthReady(child.id)).rejects.toThrow('底层写入状态仍待确认')
+    const controller = new AbortController()
+    const waiting = registry.WaitHealthReady(child.id, controller.signal)
+    controller.abort()
+    await expect(waiting).rejects.toThrow('等待已取消')
+    expect(() => registry.getRequestOverride(child, route, undefined)).toThrow('健康状态持久提交仍未完成')
+    commit()
+    await registry.WaitHealthReady(child.id)
+  })
+
+  it('a late rejected write reports failure without recreating a finished one-shot request', async () => {
+    let reject!: (error: Error) => void
+    const notify = vi.fn()
+    const hook = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail }))
+    const registry = prepare(hook, { onHealthPersistenceFailure: notify })
+    registry.MarkRequestSucceeded(child.id)
+    registry.DelAgent(child.id)
+    registry.FinishLogicalRequest('D-success')
+    reject(new Error('late-disk-error'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(registry.getRecovery(child.id)).toBeUndefined()
+    expect(registry.getTerminal(child.id)).toBeUndefined()
+    expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
+    expect(() => registry.getRequestOverride(root, route, 'tian_shu', config)).toThrow('route_health_persist_failed')
+    hook.mockResolvedValueOnce(undefined)
+    await registry.WaitHealthReady(root.id)
+    expect(registry.getRequestOverride(root, route, 'tian_shu', config)).toMatchObject(route)
+    expect(registry.getRecovery(child.id)).toBeUndefined()
+  })
+
+  it('a successful child retains the shared durability barrier for other agents after Finish', async () => {
+    let commit!: () => void
+    const registry = prepare(() => new Promise<void>((resolve) => { commit = resolve }))
+    registry.MarkRequestSucceeded(child.id)
+    registry.DelAgent(child.id)
+    registry.FinishLogicalRequest('D-success')
+    expect(() => registry.getRequestOverride(root, route, 'tian_shu', config)).toThrow('健康状态持久提交仍未完成')
+    let ready = false
+    const waiting = registry.WaitHealthReady(root.id).then(() => { ready = true })
+    await Promise.resolve()
+    expect(ready).toBe(false)
+    commit()
+    await waiting
+    expect(registry.getRequestOverride(root, route, 'tian_shu', config)).toMatchObject(route)
+    expect(registry.getRecovery(child.id)).toBeUndefined()
+  })
+
+  const prepareConcurrentSuccesses = (waitMs = 10000) => {
+    let clock = 0
+    const health = intRouteHealth(() => clock)
+    const other = { provider: 'synthetic', model: 'other-success' }
+    for (const selected of [route, other]) health.record(selected, { provider: selected.provider, model: selected.model, kind: 'quota_exhausted', message: 'synthetic fixture' })
+    clock = 5000
+    const commits: Array<{ resolve: () => void; reject: (error: Error) => void }> = []
+    const hook = vi.fn(() => new Promise<void>((resolve, reject) => { commits.push({ resolve, reject }) }))
+    const registry = intRouteStateRegistry(undefined, undefined, { health, now: () => clock, onHealthChange: hook, healthCommitWaitMs: waitMs })
+    for (const [id, selected] of [['first', route], ['second', other]] as const) {
+      registry.AddChild(id, { chain: [selected], role: 'tan_wei', persistent: true, logicalRequestId: `D-${id}` })
+      registry.RequestRouteRetry(selected, id, { force: true })
+      registry.getRequestOverride({ id }, selected, undefined)
+    }
+    return { registry, commits }
+  }
+
+  it('a newer complete shared snapshot covers an older failed commit without reopening the model gate early', async () => {
+    const { registry, commits } = prepareConcurrentSuccesses()
+    registry.MarkRequestSucceeded('first')
+    const waiting = registry.WaitHealthReady(root.id)
+    registry.MarkRequestSucceeded('second')
+    commits[0]!.reject(new Error('old-snapshot-write-failed'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(() => registry.getRequestOverride(root, route, 'tian_shu', config)).toThrow('健康状态持久提交仍未完成')
+    commits[1]!.resolve()
+    await waiting
+    expect(registry.getRequestOverride(root, route, 'tian_shu', config)).toMatchObject(route)
+  })
+
+  it('newer shared commits do not reset an existing waiter deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const { registry, commits } = prepareConcurrentSuccesses(20)
+      registry.MarkRequestSucceeded('first')
+      const waiting = expect(registry.WaitHealthReady(root.id)).rejects.toThrow('底层写入状态仍待确认')
+      await vi.advanceTimersByTimeAsync(15)
+      registry.MarkRequestSucceeded('second')
+      commits[0]!.resolve()
+      await vi.advanceTimersByTimeAsync(5)
+      await waiting
+      expect(() => registry.getRequestOverride(root, route, 'tian_shu', config)).toThrow('健康状态持久提交仍未完成')
+      commits[1]!.resolve()
+      await registry.WaitHealthReady(root.id)
+    } finally { vi.useRealTimers() }
+  })
+})
 
 describe('long-running preferred route recovery', () => {
   const primary = { provider: 'preferred', model: 'primary' }
@@ -736,7 +1000,7 @@ describe('共享故障域与有界恢复', () => {
       expect(registry.isRouteAvailable(accountA)).toBe(false)
       expect(registry.getChild(child.id)?.route).toEqual(accountA)
       expect(returned).toBe(false)
-      expect(hook.mock.calls[0]).toMatchObject([expect.any(Array), { agentId: child.id, reason: 'failure' }])
+      expect(hook.mock.calls[0]).toMatchObject([{ schemaVersion: 1, entries: expect.any(Array), cleared: expect.any(Array) }, { agentId: child.id, reason: 'failure' }])
       commit()
       expect(await action).toEqual(backups.length === 0 ? undefined : { kind: 'retry' })
       expect(next).not.toHaveBeenCalled()

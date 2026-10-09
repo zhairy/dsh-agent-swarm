@@ -299,12 +299,19 @@ export interface PlanSessionInput {
   signal: AbortSignal
 }
 
+/** A trusted dispatch refusal must never become a route fallback or replay. */
+export class DispatchAdmissionError extends SwarmError {
+  constructor(message: string, code: import('./util/errors.js').SwarmErrorCode = 'STALE_EVIDENCE') { super(code, message) }
+}
+
 export interface DelegateExecInfo {
   agent: AgentLike
   signal: AbortSignal
   callId?: string
   /** Trusted control-plane target; never accepted as a model/tool parameter. */
   controlledThreadId?: string
+  /** Server-owned frozen contract and final publication gate; never parsed from tool input. */
+  admission?: { task: TaskRecord; dispatch: <T>(publish: () => Promise<T>) => Promise<T> }
 }
 
 /** 委派执行依赖（全部可替换，便于测试） */
@@ -314,7 +321,7 @@ export interface DelegateDepsInfo {
   getTools: () => ToolsLike | undefined
   getAttachments: () => AttachmentsLike | undefined
   probe: RouteProbe
-  probeForChild?: (childId: string, route: RouteInfo) => ReturnType<RouteProbe>
+  probeForChild?: (childId: string, route: RouteInfo, signal?: AbortSignal) => ReturnType<RouteProbe>
   routeState: RouteStateRegistry
   readFile: (path: string) => Promise<Uint8Array>
   gitStatus: (cwd: string) => Promise<GitStatusInfo | undefined>
@@ -444,6 +451,9 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     }
   }
 
+  const dispatch = <T>(exec: DelegateExecInfo, publish: () => Promise<T>): Promise<T> =>
+    exec.admission === undefined ? publish() : exec.admission.dispatch(publish)
+
   const getWorkspaceRoot = (agent: AgentLike): string => getAgentHeader(agent).cwd ?? process.cwd()
 
   /** 统计执行前后的工作区改动；只读角色出现改动时追加告警 */
@@ -493,12 +503,13 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     let published = false
     try {
       outcome = await runWithSignal(exec, (signal) =>
-        subagents.start(provider, { label: `${getRoleInfo(input.role).name}·${task.taskId}`, prompt: [{ type: 'text', text }], parent: exec.agent, signal }),
+        dispatch(exec, () => subagents.start(provider, { label: `${getRoleInfo(input.role).name}·${task.taskId}`, prompt: [{ type: 'text', text }], parent: exec.agent, signal })),
       { onRun: (run) => { published = true; return deps.onChildStart?.({ agentId: run.id, task, record: running, role: input.role, signal: exec.signal, persistent: false, input, parent: exec.agent }) } })
     } catch (error) {
       if (published) return finish(session, running, { status: 'failed', summary: '已开始的原生调用未能登记，已停止并保留待核对状态；没有另启后端重放', error: getErrorText(error), backend: kind, hardIsolation: false, unresolved: ['核对已开始的原生调用可能产生的改动后再继续'], attempts: [...attempts, { route: provider, backend: kind, outcome: 'failed', reason: `registration: ${getErrorText(error)}` }] })
       // 启动失败（例如原生客户端未登录）没有消耗订阅额度：归还次数，记录失败并退回 spawn
       session.counters.native -= 1
+      if (error instanceof DispatchAdmissionError) throw error
       attempts.push({ route: provider, backend: kind, outcome: 'failed', reason: `start: ${getErrorText(error)}` })
       return undefined
     }
@@ -618,7 +629,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
           // 任务说明与 persona 按这一层路由的模型家族组织
           const style = getStyle(route, config)
           try {
-            const run = await subagents.start(SPAWN_PROVIDER, {
+            const run = await dispatch(exec, () => subagents.start(SPAWN_PROVIDER, {
               label: `${role.name}·${task.taskId}`,
               prompt: [{ type: 'text', text: getChildPromptText(task, input, record.delegationId, style) + retryNote }, ...images],
               parent: exec.agent,
@@ -628,11 +639,12 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
               maxDepth: 1,
               ...(toolFilter === undefined ? {} : { toolFilter }),
               persona: getChildPersona(input.role, input.mode, style)
-            })
+            }))
             usedIndex = index
             usedStyle = style
             return run
           } catch (error) {
+            if (error instanceof DispatchAdmissionError) throw error
             attempts.push({ route: getRouteLabel(route), backend: 'spawn', outcome: 'failed', reason: `start: ${getErrorText(error)}` })
           }
         }
@@ -653,6 +665,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
           }
         })
       } catch (error) {
+        if (error instanceof DispatchAdmissionError) throw error
         startError = getErrorText(error)
       }
       const result: SubagentResultLike = outcome?.result ?? { output: [], stopReason: 'error', diagnostic: `未能启动：${startError ?? 'unknown'}` }
@@ -716,9 +729,9 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       const ended = deps.hub.wait(threadId, waitAbort.signal)
       ended.catch(() => undefined)
       try {
-        if (started) await subagents.sendMessage(exec.agent, threadId, content, { signal: exec.signal })
+        if (started) await dispatch(exec, () => subagents.sendMessage!(exec.agent, threadId, content, { signal: exec.signal }))
         else {
-          await subagents.startContinuable({
+          await dispatch(exec, () => subagents.startContinuable!({
             provider: SPAWN_PROVIDER,
             label: `${role.name}·${task.taskId}`,
             childId: threadId,
@@ -731,13 +744,19 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
               ...(toolFilter === undefined ? {} : { toolFilter }),
               persona: getChildPersona(input.role, input.mode, style)
             }
-          })
+          }))
           started = true
         }
       } catch (error) {
         waitAbort.abort()
         exec.signal.removeEventListener('abort', onAbort)
         const reason = getErrorText(error)
+        if (error instanceof DispatchAdmissionError) {
+          session.threads.Update(threadId, { busy: false, ...(!started ? { closed: true } : {}) })
+          deps.routeState.DelAgent(threadId)
+          await deps.onChildEnd?.(threadId, 'not-admitted')
+          throw error
+        }
         if (exec.controlledThreadId !== undefined) {
           session.threads.Update(threadId, { busy: false })
           await deps.onChildEnd?.(threadId, 'not-admitted')
@@ -758,6 +777,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
         thread = { threadId, key, role: input.role, ...(input.mode === undefined ? {} : { mode: input.mode }), rounds: 0, busy: true, closed: false, allowWeb: input.allow_web === true, style, taskIds: [], history: [], createdAt: deps.now(), lastUsedAt: deps.now() }
         session.threads.Add(thread)
         Arm(threadId)
+        await deps.onChildStart?.({ agentId: threadId, task, record, role: input.role, signal: exec.signal, persistent: true, input, parent: exec.agent })
         appended = false
         started = false
         text = getThreadPromptText(task, input, record.delegationId, style)
@@ -838,8 +858,8 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const chain = manual === undefined ? baseChain : [{ ...manual, ...(declared?.policy === undefined ? {} : { policy: declared.policy }) }, ...baseChain.filter((item) => item.provider !== manual.provider || item.model !== manual.model)]
     const requireVision = role.needsVision || (input.image_paths?.length ?? 0) > 0
     const getSelection = () => FindUsableRoutes(chain, {
-      probe: plan.kind === 'continue' && deps.probeForChild !== undefined ? (route) => deps.probeForChild!(plan.threadId, route) : deps.probe,
-      requireVision,
+      probe: plan.kind === 'continue' && deps.probeForChild !== undefined ? (route, signal) => deps.probeForChild!(plan.threadId, route, signal) : deps.probe,
+      requireVision, signal: exec.signal,
       avoidFamilies: getAvoidFamilies(input.role, input.mode, existing)
     })
     let selection = await getSelection()
@@ -934,7 +954,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
   const delegate = async (raw: unknown, exec: DelegateExecInfo, session: DelegateSessionInfo): Promise<DelegationRecord> => {
     const { input, errors } = ValidateDelegateInput(raw)
     if (input === undefined) throw new SwarmError('INVALID_ARGS', errors.join('；'))
-    const task = session.store.getTask(input.task_id)
+    const task = exec.admission?.task ?? session.store.getTask(input.task_id)
     if (task === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${input.task_id}，请先调用 swarm_task_card`)
     const role = getRoleInfo(input.role)
     const mode = input.role === 'suan_heng' ? (input.mode ?? 'research') : undefined
@@ -943,6 +963,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const record: DelegationRecord = {
       delegationId: deps.newId('D'), taskId: task.taskId, role: input.role, roleName: role.name,
       ...(mode === undefined ? {} : { mode }), ...(input.gate === undefined ? {} : { gate: input.gate }),
+      ...(exec.admission === undefined ? {} : { finalization: 'processing' as const }),
       status: 'queued', summary: '', evidence: [], attempts: [], independence: 'n/a', hardIsolation: true, unresolved: [], startedAt: deps.now(),
       cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1,
       ...(input.attempt_id === undefined ? {} : { attemptId: input.attempt_id }),
@@ -952,18 +973,26 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     session.store.AddDelegation(record)
     session.ledger.AddLedgerEvent({ type: 'delegation/queued', taskId: task.taskId, delegationId: record.delegationId, data: { role: input.role, roleName: role.name, mode, gate: input.gate, backend: input.backend ?? 'auto' } })
     const budgetReason = ValidateDelegationBudget(existing, input.role, deps.getConfig().budgets)
-    if (budgetReason !== undefined) return block(session, record, budgetReason)
+    if (budgetReason !== undefined) {
+      deps.routeState.FinishLogicalRequest(record.delegationId)
+      return block(session, record, budgetReason)
+    }
     // 兜底：任何意外异常都把仍在 queued/running 的记录收尾为 failed，避免任务永远无法验收
     const run = async (): Promise<DelegationRecord> => {
       try {
         return await execute(normalized, task, record, exec, session)
       } catch (error) {
         const current = session.store.getDelegation(record.delegationId) ?? record
+        if (error instanceof DispatchAdmissionError) {
+          finish(session, current, { status: 'failed', summary: error.message, error: error.message })
+          throw error
+        }
         if (current.status !== 'queued' && current.status !== 'running') throw error
         return finish(session, current, { status: 'failed', summary: `委派异常中止：${getErrorText(error)}`, error: getErrorText(error) })
       }
     }
-    return role.concurrencySafe ? run() : session.editLock.run(run)
+    try { return await (role.concurrencySafe ? run() : session.editLock.run(run)) }
+    finally { deps.routeState.FinishLogicalRequest(record.delegationId) }
   }
 
   return { delegate }

@@ -11,7 +11,7 @@ import {
 import type { RoleId } from './role-registry.js'
 import { isNetworkSuspect, SleepWithSignal, type NetworkMonitorInfo } from './network.js'
 import { normalizeRouteFailure, isTerminalRouteFailure, getRouteResourcePolicy, getWireReasoningEffort, type RouteFailureMetadata } from './provider-policy.js'
-import { intRouteHealth, type RouteHealth, type RouteHealthEntry } from './route-health.js'
+import { intRouteHealth, type RouteHealth, type RouteHealthSnapshot } from './route-health.js'
 import { SwarmError } from './util/errors.js'
 import { getFailureClass, getRouteKey, getRouteLabel, isSameRoute, type FailureClass, type RouteInfo, type RouteProbe } from './routes.js'
 import { getUpgradedChain } from './upgrade.js'
@@ -86,7 +86,11 @@ export interface RouteStateOptionsInfo {
   recovery?: Partial<RecoveryPolicy>
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
   /** 持久化启用时，故障域必须提交后才把恢复动作交给宿主；失败不得被吞掉。 */
-  onHealthChange?: (entries: RouteHealthEntry[], event: { agentId?: string; reason: 'failure' | 'probe' }) => void | Promise<void>
+  onHealthChange?: (snapshot: RouteHealthSnapshot, event: { agentId?: string; reason: 'failure' | 'probe' | 'success' }) => void | Promise<void>
+  /** Success is observed on an emit-only Host event; report asynchronous persistence failure explicitly. */
+  onHealthPersistenceFailure?: (event: { agentId: string; reason: 'route_health_persist_failed' }) => void
+  /** Maximum wait at the next request boundary, not a model or filesystem cancellation timeout. */
+  healthCommitWaitMs?: number
   onPreferredRecovery?: (event: PreferredRecoveryEventInfo) => void
 }
 
@@ -124,11 +128,17 @@ export interface RouteStateRegistry {
   AddChild: (agentId: string, state: { chain: RouteInfo[]; role: RoleId; onFallback?: (event: FallbackEventInfo) => void; persistent?: boolean; logicalRequestId?: string; initialRoute?: RouteInfo; respectStoredOverride?: boolean; requireVision?: boolean }) => void
   BeginLogicalRequest: (agentId: string, logicalRequestId: string) => void
   BeginRequestStep: (agentId: string, turn: number, step: number) => void
+  /** The delegation owner calls this after every result/terminal has been consumed, including failure and cancellation. */
+  FinishLogicalRequest: (logicalRequestId: string) => void
   getRecovery: (agentId: string) => RequestRecoveryState | undefined
+  /** Aggregate lifecycle counts only; no session, request or model identities. */
+  getRecoveryDiagnostics: () => { agents: number; logicalRequests: number; logicalStates: number; disposedTerminals: number }
   getTerminal: (agentId: string) => RequestRecoveryState['terminal']
   isRouteAvailable: (route: RouteInfo) => boolean
   isRouteAvailableFor: (route: RouteInfo, agentId: string) => boolean
   getHealth: () => ReturnType<RouteHealth['list']>
+  getHealthSnapshot: () => RouteHealthSnapshot
+  WaitHealthReady: (agentId: string, signal?: AbortSignal) => Promise<void>
   RestoreHealth: (entries: unknown) => void
   clearHealth: (key?: string) => void
   MarkRequestSucceeded: (agentId: string) => void
@@ -209,15 +219,56 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
   const now = options.now ?? Date.now
   const health = options.health ?? intRouteHealth(now)
   const recoveries = new Map<string, RequestRecoveryState>()
-  const logical = new Map<string, RequestRecoveryState>()
+  // Health is profile-wide, so its durability barrier must survive the child
+  // that observed success and apply to every managed agent's next request.
+  let pendingHealthCommit: Promise<void> | undefined
+  let failedHealthCommit = false
+  const healthCommitWaiters = new Set<() => void>()
+  const notifyHealthWaiters = () => { for (const waiter of [...healthCommitWaiters]) waiter() }
+  const healthCommitWaitMs = typeof options.healthCommitWaitMs === 'number' && Number.isFinite(options.healthCommitWaitMs)
+    ? Math.min(60000, Math.max(1, options.healthCommitWaitMs)) : 10000
+  // A delegation can restart a one-shot child. Its failed step must keep the
+  // same admission counter until that delegation's Promise finally settles.
+  // Ordinary root requests have only one current step, rather than a process-
+  // lifetime history of every failed/cancelled request.
+  const logical = new Map<string, { states: Map<string, RequestRecoveryState>; agents: Set<string>; delegation: boolean }>()
+  const agentScopes = new Map<string, string>()
+  const disposedTerminals = new Map<string, NonNullable<RequestRecoveryState['terminal']>>()
+  const MAX_DISPOSED_TERMINALS = 1024
+  const MAX_COMPLETED_STEPS = 1024
+  let logicalStates = 0
   const recoveryBoundaries = new Set<string>()
   const preferredRecoveryWaits = new Map<string, { failures: number; nextAt: number }>()
   const preferredTrials = new Map<string, PreferredRecoveryEventInfo>()
   let requestSequence = 0
   const begin = (agentId: string, id: string): void => {
     const changed = recoveries.get(agentId)?.logicalRequestId !== id
-    let state = logical.get(id)
-    if (state === undefined) { state = { logicalRequestId: id, attempts: 0, transientRetries: 0, waitedMs: 0, attemptedRoutes: [] }; logical.set(id, state) }
+    const delegationId = children.get(agentId)?.logicalRequestId
+    const scope = delegationId ?? agentId
+    const previousScope = agentScopes.get(agentId)
+    if (previousScope !== undefined && previousScope !== scope) {
+      const previousGroup = logical.get(previousScope)
+      previousGroup?.agents.delete(agentId)
+      if (previousGroup !== undefined && !previousGroup.delegation && previousGroup.agents.size === 0) {
+        logicalStates -= previousGroup.states.size
+        logical.delete(previousScope)
+      }
+    }
+    let group = logical.get(scope)
+    if (group === undefined) { group = { states: new Map(), agents: new Set(), delegation: delegationId !== undefined }; logical.set(scope, group) }
+    if (!group.delegation && changed) { logicalStates -= group.states.size; group.states.clear() }
+    let state = group.states.get(id)
+    if (state === undefined) {
+      // A persistent child's current receipt survives its owner's finally.
+      // A late duplicate request event must not reset that receipt's ceiling.
+      const current = recoveries.get(agentId)
+      state = current?.logicalRequestId === id ? current : { logicalRequestId: id, attempts: 0, transientRetries: 0, waitedMs: 0, attemptedRoutes: [] }
+      group.states.set(id, state)
+      logicalStates++
+    }
+    group.agents.add(agentId)
+    agentScopes.set(agentId, scope)
+    disposedTerminals.delete(agentId)
     recoveries.set(agentId, state)
     if (changed) {
       recoveryBoundaries.add(agentId)
@@ -228,6 +279,22 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       if (root !== undefined) roots.set(agentId, { ...root, tried: new Set() })
     }
   }
+  const forgetRecovery = (agentId: string, preserveTerminal: boolean): void => {
+    const scope = agentScopes.get(agentId)
+    const group = scope === undefined ? undefined : logical.get(scope)
+    // Scoped children remain readable until FinishLogicalRequest: the delegate
+    // reads getTerminal only after dispose/end have already been published.
+    if (group?.delegation) return
+    const terminal = recoveries.get(agentId)?.terminal
+    if (preserveTerminal && terminal !== undefined) {
+      disposedTerminals.delete(agentId)
+      disposedTerminals.set(agentId, terminal)
+      if (disposedTerminals.size > MAX_DISPOSED_TERMINALS) disposedTerminals.delete(disposedTerminals.keys().next().value!)
+    }
+    if (scope !== undefined && group !== undefined) { logicalStates -= group.states.size; logical.delete(scope) }
+    agentScopes.delete(agentId)
+    recoveries.delete(agentId)
+  }
   const recoveryOf = (id: string): RequestRecoveryState => { if (!recoveries.has(id)) begin(id, id); return recoveries.get(id) as RequestRecoveryState }
   const policyOf = (config?: SwarmConfigInfo): RecoveryPolicy => ({ ...DEFAULT_RECOVERY_POLICY, ...(config as (SwarmConfigInfo & { recovery?: Partial<RecoveryPolicy> }) | undefined)?.recovery, ...options.recovery })
   const terminal = (id: string, reason: RequestRecoveryState['terminal'], failure?: LlmFailureLike): undefined => {
@@ -237,6 +304,52 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     return undefined // 真实 DSH agent-loop 中非 retry 即失败，不发明 stop 动作。
   }
   const managed = (agent: AgentLike, role: RoleId | undefined): boolean => children.has(agent.id) || (role !== undefined && getAgentHeader(agent).parentSession === undefined)
+  const persistSuccess = (agentId: string): void => {
+    if (options.onHealthChange === undefined) return
+    let committed: void | Promise<void>
+    try { committed = options.onHealthChange(health.getSnapshot(), { agentId, reason: 'success' }) } catch (error) { committed = Promise.reject(error) }
+    if (committed === undefined) { failedHealthCommit = false; pendingHealthCommit = undefined; notifyHealthWaiters(); return }
+    let pending: Promise<void>
+    pending = Promise.resolve(committed).then(() => {
+      if (pendingHealthCommit === pending) failedHealthCommit = false
+    }, () => {
+      // The owner may have consumed and disposed this child while the disk
+      // write was pending. Do not recreate a ghost request on late failure.
+      if (pendingHealthCommit === pending) {
+        failedHealthCommit = true
+        const recovery = recoveries.get(agentId)
+        if (recovery !== undefined) recovery.terminal = 'route_health_persist_failed'
+      }
+      try { options.onHealthPersistenceFailure?.({ agentId, reason: 'route_health_persist_failed' }) } catch { /* The recorded failure survives an auxiliary notification error. */ }
+    }).finally(() => {
+      if (pendingHealthCommit === pending) { pendingHealthCommit = undefined; notifyHealthWaiters() }
+    })
+    pendingHealthCommit = pending
+  }
+  const waitHealthReady = async (agentId: string, signal?: AbortSignal): Promise<void> => {
+    if (signal?.aborted === true) throw new SwarmError('RECOVERY_REQUIRED', '健康状态提交等待已取消；未启动新的模型请求')
+    if (failedHealthCommit && pendingHealthCommit === undefined) persistSuccess(agentId)
+    if (pendingHealthCommit !== undefined) await new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let settled = false
+      const cleanup = () => { if (timer !== undefined) clearTimeout(timer); signal?.removeEventListener('abort', onAbort); healthCommitWaiters.delete(check) }
+      const finish = (error?: Error) => { if (settled) return; settled = true; cleanup(); error === undefined ? resolve() : reject(error) }
+      const onAbort = () => finish(new SwarmError('RECOVERY_REQUIRED', '健康状态提交等待已取消；未启动新的模型请求'))
+      const check = () => {
+        if (pendingHealthCommit === undefined) finish(failedHealthCommit ? new SwarmError('SERVICE_UNAVAILABLE', 'route_health_persist_failed') : undefined)
+      }
+      // A detached waiter can be removed on timeout/abort; attaching a new then
+      // handler to a hung filesystem Promise on every retry would retain it.
+      healthCommitWaiters.add(check)
+      signal?.addEventListener('abort', onAbort, { once: true })
+      timer = setTimeout(() => finish(new SwarmError('RECOVERY_REQUIRED', '健康状态持久提交仍未完成；暂停新的模型请求，底层写入状态仍待确认')), healthCommitWaitMs)
+      if (signal?.aborted === true) { onAbort(); return }
+      // One timer covers all newer complete snapshots: frequent successes
+      // cannot restart this waiter's deadline indefinitely.
+      check()
+    })
+    if (failedHealthCommit) throw new SwarmError('SERVICE_UNAVAILABLE', 'route_health_persist_failed')
+  }
   const children = new Map<string, ChildStateInfo>()
   const childOverrides = new Map<string, RouteInfo>()
   const rootPreferences = new Map<string, RouteInfo>()
@@ -366,21 +479,38 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
   const api: RouteStateRegistry = {
     BeginLogicalRequest: begin,
     BeginRequestStep: (id, turn, step) => { begin(id, `${children.get(id)?.logicalRequestId ?? id}:${turn}:${step}`) },
+    FinishLogicalRequest: (id) => {
+      const group = logical.get(id)
+      if (group === undefined || !group.delegation) return
+      for (const agentId of group.agents) {
+        if (agentScopes.get(agentId) !== id) continue
+        agentScopes.delete(agentId)
+        disposedTerminals.delete(agentId)
+        if (children.get(agentId)?.persistent !== true) {
+          recoveries.delete(agentId)
+        }
+      }
+      logicalStates -= group.states.size
+      logical.delete(id)
+    },
     getRecovery: (id) => { const state = recoveries.get(id); return state === undefined ? undefined : { ...state, attemptedRoutes: [...state.attemptedRoutes], ...(state.observedAttemptIds === undefined ? {} : { observedAttemptIds: [...state.observedAttemptIds] }) } },
-    getTerminal: (id) => recoveries.get(id)?.terminal,
+    getRecoveryDiagnostics: () => ({ agents: recoveries.size, logicalRequests: logical.size, logicalStates, disposedTerminals: disposedTerminals.size }),
+    getTerminal: (id) => recoveries.get(id)?.terminal ?? disposedTerminals.get(id),
     isRouteAvailable: (route) => health.isAvailable(route),
     isRouteAvailableFor: (route, agentId) => health.isAvailable(route) || (manualRetries.get(agentId) !== undefined && isSameRoute(manualRetries.get(agentId)!.route, route)),
     getHealth: () => health.list(),
+    getHealthSnapshot: () => health.getSnapshot(),
+    WaitHealthReady: waitHealthReady,
     RestoreHealth: (entries) => health.restore(entries),
     clearHealth: (key) => health.clear(key),
     ObserveRouteFailure: (route, failure, config) => {
       const normalized = normalizeRouteFailure(failure as RouteFailureMetadata, route)
       if (isTerminalRouteFailure(normalized)) {
         health.record(route, normalized)
-        return options.onHealthChange?.(health.list(), { reason: 'probe' })
+        return options.onHealthChange?.(health.getSnapshot(), { reason: 'probe' })
       } else if (normalized.providerRetryAfterMs !== undefined && normalized.providerRetryAfterMs > policyOf(config).maxShortRetryDelayMs) {
         health.record(route, normalized, normalized.providerRetryAfterMs)
-        return options.onHealthChange?.(health.list(), { reason: 'probe' })
+        return options.onHealthChange?.(health.getSnapshot(), { reason: 'probe' })
       }
     },
     MarkRequestStarted: (id, attemptId, actualRoute) => {
@@ -398,7 +528,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     },
     MarkRequestSucceeded: (id) => {
       const route = lastRoutes.get(id)
-      if (route !== undefined) health.succeeded(route, id)
+      const healthChanged = route !== undefined && health.succeeded(route, id)
       const trial = preferredTrials.get(id)
       if (trial !== undefined) {
         if (route !== undefined && isSameRoute(route, trial.to)) { options.onPreferredRecovery?.({ ...trial, to: route, confirmed: true }); preferredRecoveryWaits.delete(id) }
@@ -406,11 +536,15 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       }
       const recovery = recoveries.get(id)
       if (recovery !== undefined) recovery.completed = true
-      // 已完成请求不参与未来恢复，不无限保留旧 step 的恢复记录。
-      if (logical.size > 1024) for (const [key, state] of logical) {
-        if (logical.size <= 1024) break
-        if (state.completed) logical.delete(key)
+      const scope = agentScopes.get(id)
+      const group = scope === undefined ? undefined : logical.get(scope)
+      // Long-lived delegates keep recent completed steps for restart accounting;
+      // failed steps remain until the delegation owner explicitly finishes.
+      if (group !== undefined && group.states.size > MAX_COMPLETED_STEPS) for (const [key, state] of group.states) {
+        if (group.states.size <= MAX_COMPLETED_STEPS) break
+        if (state.completed && state !== recovery) { group.states.delete(key); logicalStates-- }
       }
+      if (healthChanged) persistSuccess(id)
     },
     recover: async (payload, next, role, config, compaction) => {
       if (!managed(payload.agent, role)) return next()
@@ -550,6 +684,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     },
     DelAgent: (agentId) => {
       health.release(agentId)
+      forgetRecovery(agentId, true)
       children.delete(agentId)
       childOverrides.delete(agentId)
       manualPauses.delete(agentId)
@@ -564,6 +699,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     ReleaseAgent: (agentId) => {
       health.release(agentId)
       if (children.get(agentId)?.persistent === true) return
+      forgetRecovery(agentId, false)
       children.delete(agentId)
       childOverrides.delete(agentId)
       manualPauses.delete(agentId)
@@ -577,6 +713,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     },
     getRequestOverride: (agent, resolved, _presetRole, config, explicitSelectionAvailable = false) => {
       if (!managed(agent, _presetRole)) return resolved
+      if (pendingHealthCommit !== undefined) throw new SwarmError('RECOVERY_REQUIRED', '健康状态持久提交仍未完成；请在请求边界等待，未启动模型请求')
+      if (failedHealthCommit) throw new SwarmError('SERVICE_UNAVAILABLE', 'route_health_persist_failed')
       if (manualPauses.has(agent.id)) throw new SwarmError('RECOVERY_REQUIRED', '子会话已人工暂停；取消沉寂后显式继续')
       if (recoveries.get(agent.id)?.completed) begin(agent.id, `${agent.id}:request:${++requestSequence}`)
       const recovery = recoveryOf(agent.id)
@@ -681,7 +819,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       }
       if ((fatal || longWait || failedProbe) && options.onHealthChange !== undefined) {
         let committed: void | Promise<void>
-        try { committed = options.onHealthChange(health.list(), { agentId: payload.agent.id, reason: 'failure' }) } catch (error) {
+        try { committed = options.onHealthChange(health.getSnapshot(), { agentId: payload.agent.id, reason: 'failure' }) } catch (error) {
           terminal(payload.agent.id, 'route_health_persist_failed')
           throw error
         }

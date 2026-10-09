@@ -1,0 +1,582 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-09T04:55:24.573763+00:00",
+  "baseline": {
+    "version": "2.3.1",
+    "sourceCommit": "e38b0a6fc6ebc20336f70a522b76b7a8af88e7d1"
+  },
+  "environment": {
+    "node": "v24.21.0",
+    "kernel": "6.12.107+deb13-amd64",
+    "hostSdk": "0.2.0-rc.2"
+  },
+  "checks": {
+    "unit": {
+      "success": true,
+      "files": 64,
+      "tests": 765,
+      "passed": 765,
+      "failed": 0,
+      "suites": [
+        {
+          "file": "tests/unit/agent-binding.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "tests/unit/agent-control.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "tests/unit/approval-policy.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "tests/unit/artifacts.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "tests/unit/checkpoint.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "tests/unit/client-model-display.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "tests/unit/client-settings.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "tests/unit/client-task-flow.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "tests/unit/config.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "tests/unit/context-store.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "tests/unit/contracts.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "tests/unit/delegate.test.ts",
+          "status": "passed",
+          "tests": 49
+        },
+        {
+          "file": "tests/unit/docs.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "tests/unit/evidence-assessment.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "tests/unit/evidence-service-integration.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "tests/unit/evidence-source.test.ts",
+          "status": "passed",
+          "tests": 36
+        },
+        {
+          "file": "tests/unit/evidence.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "tests/unit/execution-budget.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "tests/unit/experience.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "tests/unit/feature-state-validation.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "tests/unit/git.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "tests/unit/host-recovery.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "tests/unit/jev-hub.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "tests/unit/jev-tools.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "tests/unit/jev.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "tests/unit/maintenance-privacy.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "tests/unit/math-operators.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "tests/unit/memory-handoff-service.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "tests/unit/memory-handoff.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "tests/unit/message-bus.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "tests/unit/model-family.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "tests/unit/network.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "tests/unit/pipeline-atomicity.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "tests/unit/planning-recovery.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "tests/unit/planning-review.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "tests/unit/planning-runtime.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "tests/unit/plugin.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "tests/unit/policy.test.ts",
+          "status": "passed",
+          "tests": 23
+        },
+        {
+          "file": "tests/unit/presets.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "tests/unit/project-discovery.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "tests/unit/provider-policy.test.ts",
+          "status": "passed",
+          "tests": 25
+        },
+        {
+          "file": "tests/unit/review.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "tests/unit/role-registry.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "tests/unit/route-health.test.ts",
+          "status": "passed",
+          "tests": 25
+        },
+        {
+          "file": "tests/unit/route-state.test.ts",
+          "status": "passed",
+          "tests": 60
+        },
+        {
+          "file": "tests/unit/routes.test.ts",
+          "status": "passed",
+          "tests": 34
+        },
+        {
+          "file": "tests/unit/rpc-agent-control.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "tests/unit/rpc-host-registration.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "tests/unit/rpc-task-view.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "tests/unit/service-agent-control-restore.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "tests/unit/service.test.ts",
+          "status": "passed",
+          "tests": 27
+        },
+        {
+          "file": "tests/unit/state-invariants-regression.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "tests/unit/state-store.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "tests/unit/state-validation-diagnostics.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "tests/unit/state-write-regression.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "tests/unit/task-runtime.test.ts",
+          "status": "passed",
+          "tests": 36
+        },
+        {
+          "file": "tests/unit/threads.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "tests/unit/tool-shape.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "tests/unit/tools-recovery-contract.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "tests/unit/upgrade.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "tests/unit/util.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "tests/unit/vision.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "tests/unit/workflow.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "tests/unit/workspace-lease.test.ts",
+          "status": "passed",
+          "tests": 2
+        }
+      ]
+    },
+    "realDshIntegration": {
+      "success": true,
+      "files": 6,
+      "tests": 32,
+      "passed": 32,
+      "failed": 0,
+      "suites": [
+        {
+          "file": "tests/integration/agent-control-host.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "tests/integration/bundle.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "tests/integration/flows.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "tests/integration/recovery-host.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "tests/integration/state-consistency-host.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "tests/integration/upgrade-host.test.ts",
+          "status": "passed",
+          "tests": 4
+        }
+      ]
+    },
+    "typecheck": {
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "privateBuild": {
+      "typescriptExitCode": 0,
+      "clientBuildExitCode": 0,
+      "candidateRoot": "/tmp/swarm-audit-candidate-8by5okai",
+      "matchingSourceFiles": 61,
+      "sourceMismatches": []
+    },
+    "mermaid": {
+      "scope": "official syntax parser only; semantic cross-review separately recorded",
+      "checks": [
+        {
+          "file": "README.md",
+          "diagram": 1,
+          "version": "11.12.0",
+          "ok": true
+        },
+        {
+          "file": "README.md",
+          "diagram": 2,
+          "version": "11.12.0",
+          "ok": true
+        },
+        {
+          "file": "model-routing-context.md",
+          "diagram": 1,
+          "version": "11.12.0",
+          "ok": true
+        }
+      ]
+    },
+    "diffWhitespaceExitCode": 0
+  },
+  "productionBoundary": {
+    "sourceLibAndPackageUnchanged": true,
+    "productionMainPid": 3901732,
+    "serviceActive": true,
+    "productionReloaded": false,
+    "productionConfigurationChanged": false,
+    "subscriptionGenerationCallsMade": false,
+    "privateBusinessStateSuppliedToJev": false
+  },
+  "correctedInitialHostRun": {
+    "status": "stopped after proven incompatibility",
+    "completedFlowTests": 9,
+    "failedFlowTests": 6,
+    "completedAgentControlTests": 6,
+    "failedAgentControlTests": 6,
+    "observedReason": "llm-service-changed from fresh Cordis proxy getters",
+    "fix": "compare cordis.original identity only, execute through contextual proxy; added proxy/target swap tests",
+    "finalRerun": true
+  },
+  "benchmarkBinding": {
+    "checks": {
+      "budget": {
+        "source": "src/execution-budget.ts",
+        "currentSourceDigest": "6efa9d19c1ae02bd3a594161dda897caa7ca2155ecfe47694017bd211a704991",
+        "reportContainsCurrentSourceDigest": true
+      },
+      "route-recovery": {
+        "source": "src/route-state.ts",
+        "currentSourceDigest": "010eb17fe56d961412ba84eae4c649db7483de5dc59287be7353929be9086845",
+        "reportContainsCurrentSourceDigest": true
+      }
+    },
+    "probeAllSourceDigestsMatch": true,
+    "contextCompiledCodeMatchesIgnoringSourceMapComment": true,
+    "methodology": "30 samples / 5 warmups; synthetic local control plane only. Recovery benchmark uses identical existing compiled shared dependencies for both variants; this isolates recovery lifecycle, not the combined health/router overhead."
+  },
+  "sourceDigests": {
+    "src/agent-binding.ts": "62fe7565e8cc320cafef2a934344c240e51653272a7987168d2da70828d7dd23",
+    "src/agent-control.ts": "753d2c44d28833b16684eb185e3a03ab28d03ac83b3c290d70e9f571c20f3891",
+    "src/approval-policy.ts": "970c6906da972fefcd041bf57919fd8c0cd398c499cf3501b45bee717389524e",
+    "src/artifacts.ts": "e86bc80a2f4fd44dd10d85792f438311ddd7ee12352956ee1e3b3190f5b6c90f",
+    "src/checkpoint.ts": "da15451c487d12f2a5dfa468c12a9321cefe91b505ae1dfe3c4634e321160e0d",
+    "src/collaboration-tools.ts": "f16e82a55863b85e0074c82673481271502fea45fd101907b0b80fbff2295483",
+    "src/config.ts": "ad2b321c11a81ca36e1de2997b5f3447025f58c388a9209efbb3e5e84fa9ef00",
+    "src/context-store.ts": "304394b302d1718c2efb7bbf73eb52d256ed028004ee6026b6672b84b5ec818b",
+    "src/contracts.ts": "61b2241e59a35e820d1c19fdc3b3c1d571c05a946a5d60c755558b3933d8cec5",
+    "src/delegate.ts": "7407c3dd0033ea52a9034bddbc99de5707184ac1280a7eec808e8393f0d137cc",
+    "src/evidence-assessment.ts": "2ad7f744a7715d67bd7fb4e6a245948138a25da7cb7c03179cc423fc3dbb2c16",
+    "src/evidence-source.ts": "5a117cf26d6219a0a441374aed8a0d86c3f0afcf7698a3ab9613ea4f3c5a0fd6",
+    "src/evidence.ts": "0b207efe5f9036a43b2d18773569b8d8baf7aed068ab78bca19401c3b0024ebb",
+    "src/execution-budget.ts": "6efa9d19c1ae02bd3a594161dda897caa7ca2155ecfe47694017bd211a704991",
+    "src/experience.ts": "3f79ace4f8b4e808b9cc09371aff0afc8f8556ff89b7254bdc9b12576bd99b20",
+    "src/feature-session.ts": "ef9e9ba5de682a065af75db0dddb5806bb2841bf2fa3621f953f302b19f467e5",
+    "src/host-contract.ts": "4ef7bfdedebc1e13b6c387ee8a4229ba98c047ac08e3e6e52efab6501648d1ed",
+    "src/host-recovery.ts": "64795e7cf3b8a08b04ee38213b2aa8110f2c9e68f0c135e16c833083c6f3dc84",
+    "src/index.ts": "a5786caa043b2213fc59cf56bb57c022e333ca8c76b26e76064a01deccc47842",
+    "src/jev-hub.ts": "6bda92a278987e9d804ab9b4ee599e77c72e02d95484f260cc4c576d00cc4819",
+    "src/jev-questions.ts": "4f98bc1b73d3e965533055a7a49a2402ba1b8924beea4ee6bc0d9a32db547ff8",
+    "src/jev-tools.ts": "5fe632c539621511d77c7b55bdd847b4468a8cd9d3a91fdd7ff770d1191083f2",
+    "src/jev.ts": "e5ca83f624de28e9e9a1645a03426857945fc19d12b2b62934f5fd2202ba9e17",
+    "src/math/limits.ts": "467f62e50813a25e851cd4f6e6dfc2b70bef46e7891f53de7e31db7cfbe4f32d",
+    "src/math/operators.ts": "6490776537e68fbbbadf6bbd3071e9f3c4f36bd00dc1bb84d4ac1658bdb80a70",
+    "src/math/schema.ts": "4610343a35c9ee0624917fc98894aa028ce53ebc25991f92e1e95320a2033d04",
+    "src/math-tools.ts": "576f90eae3828185e9ee7abab42f36de8f21c4af81abe4a7d5a75292d749c1a0",
+    "src/memory-handoff.ts": "b2ab3147101121d50155a49fb8b3d47a926a7f13de874178a38ef3ea1623ea06",
+    "src/message-bus.ts": "77ebe230cd7d5394d14e5b7f0fee7c51790da185026262f6eebf80c2b5dfc98f",
+    "src/model-family.ts": "825755fc0d5781e70f717885335d1bac81964b97238be22775014c11a6a790e6",
+    "src/network.ts": "ecccff1b469f26e7aa98e66349bbb2219014cb46a514f3496be2b669a1b50c33",
+    "src/planning-recovery.ts": "8f9b2248acc34eee1c9756104a1530a116d941fabe4f7e29244f8f9755c64b73",
+    "src/planning-review.ts": "e74f6e269f51cd15b086f2ea0f178d68bc6a61ee9af0e176bc5159383ec57d49",
+    "src/policy.ts": "9833253ecfc57febf2235bb44bb05a877d25cfdeaa08de03780a3b5e25605009",
+    "src/preset-builder.ts": "6bc754fcc1a6bd473bd485a4541fa678edd89c74ec2d88b1d562872deaf2c8cd",
+    "src/project-discovery.ts": "ed2504b64c8b31ab47a5a5c88a19eb791a7b5a72a1f30150925d626358ad4086",
+    "src/provider-policy.ts": "44c73d8aba297f74ea307062b8d7e56390787cdc4d3b0585db0c7ac74d19e96b",
+    "src/review.ts": "9c005d58dc3115d3036261ab9a02c8735193889eb2efc50b97b867de9dfbea05",
+    "src/role-registry.ts": "a2e9f0cf11f15f30b79ccab79205400e6f4baa49cb1217afd8bea56e3bc885e1",
+    "src/route-health.ts": "d1715a021eff3d2a0753a1dec98b62d84c4840378ae540d87e7e65f613bf8a02",
+    "src/route-state.ts": "010eb17fe56d961412ba84eae4c649db7483de5dc59287be7353929be9086845",
+    "src/routes.ts": "0fa9ff79fd132f99f4494ad568cc671a04f23abe68ad136f22ac1fed0260d827",
+    "src/rpc.ts": "ac80cf4610bcb430a589ccc70459b07da449bb88a0755b2ffc43d141fecb6339",
+    "src/runtime.ts": "92651a1eb5544896ba318716f850d4914beed2b6f9ca3831fd431638ec516faf",
+    "src/service.ts": "c695c703dc722aea1cdad0b599a758c0f182d10a9fedf07c54575d24a5c08c83",
+    "src/skills.ts": "c8b9728777fe9a82f1cb01e31f44d814699102dceb44d9d1b4e2b3376da36ecd",
+    "src/state-store.ts": "2b1ed5c78bf40e7ba4b8bbc9b748fe4ecc4dafe221b8af05648c1aa733aa2ad1",
+    "src/task-model.ts": "2a27ed0a3aae42c8838a09108fa637ed506a978e7ebbb713c8c422907d938a06",
+    "src/threads.ts": "90e9718e53a2c21c0b4015483bc2e6bbe6e7e885d58ce19f4dbf46f63a714367",
+    "src/tool-shape.ts": "7ba65a147476ba812d4b3bead4637b4fc4765a39054bd47442e0e5835faed272",
+    "src/tools.ts": "805e6f0c180395f81ddbc9a4fb16fa456f3c6b239bf4b74a3c4ee7bd4436cf59",
+    "src/upgrade.ts": "9dbcaa1f64b47c95a29f773c4c7616463f235aa59c4ece8384861bfacf1d357a",
+    "src/util/errors.ts": "94af6f64d31b502f7d4e5f61a4280bf8f9612f65f6d0efd24cbab3e153da41e9",
+    "src/util/failure-hint.ts": "db5f67fe6775e1d605fbc66c0b1193b88f3b8679ef17683805ab7026573266d3",
+    "src/util/git.ts": "60ffd09a1f2a348bb8215a0a5a7d42d3fa34194c0d1bb16bbee13dde97d7899d",
+    "src/util/json-schema.ts": "2d99a486651ce6cc0ad29dd433de21dd761ecdb346371be51a6d72f7f6f6383b",
+    "src/util/live.ts": "98f012a6591c765d1f2cc39a4a7ef7e191506519036c17ce0b0f17437db3ed95",
+    "src/util/mutex.ts": "c6d5ca8b77143bc2201ae8b85edc4d98b701539d076f80674d73b2849611147b",
+    "src/util/workspace-lease.ts": "f7f93abeb7ccb4b00449298c85caf31693e2cb8861520772265ff1f264d2622a",
+    "src/vision.ts": "20e6deb5786a0743626550cca5c94dbf86341d89445ec6a24368c425b4ee1227",
+    "src/workflow.ts": "29bc60036b57201ca93613530191f69405e3d9bb528da94932b9897db5dd24ad"
+  },
+  "compiledCandidateDigests": {
+    "lib/agent-binding.js": "653fbf0ffc64f3778b63eab3d4c200aff3563acaa63ea783b213f8d3c0118877",
+    "lib/agent-control.js": "82f5a5769d321f4db6de72cdec5295f307785d5d96d3df40a1031e72d0b71561",
+    "lib/approval-policy.js": "982a4632f8b36d1ecd71b253a865f281f6be3d4a82d950a6372e6a220330fe93",
+    "lib/artifacts.js": "446fe1e58a3f6b1ba40efc1bfd6a4731a15a2ae56a34c45a5c7e1b93014c66f4",
+    "lib/checkpoint.js": "9382d9efa19889323f8a68cb1768204c39486d302bd9379aadcd06cae1d3b268",
+    "lib/client.js": "2f81a9df2da0a00c3954ef3fe40c2c5930ca7036004a7717e0f1fe64ca407996",
+    "lib/collaboration-tools.js": "b02979da6cadc0dc7be3f8a2662ecf3705bc7c17af8bd0b47be0afde82f12b9a",
+    "lib/config.js": "03b0ed4af54ad507770aae4b8804d3ee3a126dd57a082a588cc8eddb5e40f453",
+    "lib/context-store.js": "0c1d47295125c1a6b66dc258092cdfd2aa42bb6468b0da7f1cbe8c69b6c0744b",
+    "lib/contracts.js": "4546eabff6cfb4a886fbf8ca25bf59f5a8509dd0f6fde8bf80945f3bb8e39d1d",
+    "lib/delegate.js": "6368fbfd343fe1d4cac048f89b0d1d9b2442c8df56b610ded8fde370f2873ca6",
+    "lib/evidence-assessment.js": "60f2e2c6b18eef48ceea87a5a95960cb9329071586ccfad2afda9f5052a31983",
+    "lib/evidence-source.js": "a6efbe3e0567b46cbf331da6cd378d1157e585f5ce98712f4d1d3c83ad226756",
+    "lib/evidence.js": "06a3a3d319d19fa13662e274184cc62297ef0040706d11483aff8498f24f91f4",
+    "lib/execution-budget.js": "6605ff213690d9d032ec13a37fb3778c12c5075db8393df6877f93d914655f51",
+    "lib/experience.js": "e01b37193335bb6e1d8456b5d08c4f8463fb726e75c26a94762d464bcc76ce4b",
+    "lib/feature-session.js": "bc497a563b738fffb446a80df53daf610ea2f85dac1e17ea2f1714d72fcf6ad8",
+    "lib/host-contract.js": "83019f4d8eb768c154b7915bef33cc11272aba42a70cf8d68177fab1bfb17682",
+    "lib/host-recovery.js": "7f9f842a13adb7a245a33eee685b3d15d40c16e000c8e8fe1398643f57dd3731",
+    "lib/index.js": "88d6387fff0d16674c3b1ceb88077c46681a45003967a7dc39d4a1a410933cb6",
+    "lib/jev-hub.js": "fb09ac750bb338f8867fc073bc5914713fdceeef353732104dd10dcb6af60740",
+    "lib/jev-questions.js": "cb9ff6550bad258b8e770b2b885941675bfff22129323979085bec4438f015a8",
+    "lib/jev-tools.js": "b614183a0553f550624e6b17bd751ccd611f5ee03c84189af5ac86d39adfe5d4",
+    "lib/jev.js": "9a2dcdda8d1e28d8b7e7acafb3f7464a8623f2cd82cf55d124fec593748cb564",
+    "lib/math/limits.js": "8596eef5e1a69b8f82aa8c6c542c47f50329e7e9e9d68b680b2a8e610b661bc7",
+    "lib/math/operators.js": "807126fa927b0992af6ee82b9ecc29017dbc374623b677c7a397c31efced670f",
+    "lib/math/schema.js": "8b5d8dbc82e98909bc22ec41cf16ee0251e77eedf858989e05431a809cc28ccf",
+    "lib/math-tools.js": "449c339c3641702a3fab06f0c62235970c32662e91eaf289b8f6ce3b05edf98b",
+    "lib/memory-handoff.js": "13254fbe5ccb70cecb6547e51f76ea7fc149c1707775c6a26e73794add4fe0c3",
+    "lib/message-bus.js": "3bbb1cc7b5ebbfbf92fd6ef18b7a861fd37eb1e64b74e99e0180ceb42bdd1978",
+    "lib/model-family.js": "8d60504241514c888d023c714743f35a37696431edfec576dd9543ea620883b6",
+    "lib/network.js": "e589e71e08af0a03be421875a91e7795ff94211a4ccb027f222680c4d8468147",
+    "lib/planning-recovery.js": "eae94977db2305d8a2174b4c6f18612fce67cd428466d12e6dd386353a339839",
+    "lib/planning-review.js": "353315895f589d261fb4e8a1aee9180c17d2f11a5653cb3079e7e68d2b776867",
+    "lib/policy.js": "d0c9b537e4bc3a9ef984cc4a3187ab9e402edea5ac644572db7823d7b7234a68",
+    "lib/preset-builder.js": "1fe2d109492e19a11639a6c8ba7d890b02e069bff05a6923626af643cd55e97a",
+    "lib/project-discovery.js": "d357946875f57e6672fcd121ca98d8d1d1daf3b9d6c4ec790902ad151b0c5853",
+    "lib/provider-policy.js": "cb73f0f846a81d931cc188878be892a5d65d044d72de44743d7da85a9eab7bf0",
+    "lib/review.js": "a40520f560cad2bc568035d12eec2c5aa0dd7b7acf7cf16ff434475a35a5d217",
+    "lib/role-registry.js": "f342229d33e328229d002643b30a7cadd5d4329b79ae1410278157b767f875d0",
+    "lib/route-health.js": "6cf5ef887fe824ddea82862ce63902741cdcab6a627cfd23e0953f5f3758cba4",
+    "lib/route-state.js": "e3a05c6c0d849a203e1f366fa032fa4bcfc766d85f40647a6d1df209ef470e59",
+    "lib/routes.js": "9978fe55dcacf6ab6f139139c1f3e41dca68b8d5d5ce60f4516a49889a862f8f",
+    "lib/rpc.js": "13710895190dd4a7a008db6ea3d1100172b5c224712ef3f4bbef1bf8a805d952",
+    "lib/runtime.js": "009bec83443f1e5efe3339f687f43f9b0512a64c5df9dcc7cc62659cf5283264",
+    "lib/service.js": "68f2be30c80022b72b7919e8c4416fa1aba2914e273628efb03035cb0d7a1601",
+    "lib/skills.js": "64f8f2182966d7fb9e43b4da8ad59e4d56d9403ce4d0522c344fe4161c7712d2",
+    "lib/state-store.js": "5c42d062187843709d36387cbaed4bbd93296419ea366895cefe871818f6db6f",
+    "lib/task-model.js": "e6f34aa745aac22929ca45514db8fe0851fa34a6082102c6787e0863c0abd272",
+    "lib/threads.js": "8ae329c4ce2f174c8afa4011a4fd15180ba0fe78b37709505f39c273e2712100",
+    "lib/tool-shape.js": "31e04c9a2d9e0410c82c8c7c37efa9fdc3d0b01316766de118b7a1d2ea355931",
+    "lib/tools.js": "ab07cfffe5c19fa571d405873141b5211f82cd98ed275c9d6d8ef61b42aad716",
+    "lib/upgrade.js": "7c952c8f235e52a88b9abf33ce94cba7ef019c59a266c3e504a91ac9be80e4e5",
+    "lib/util/errors.js": "d19637d1c581931056d0ca9fc495c30522df58dde5b40d3c0feaf42839ba652d",
+    "lib/util/failure-hint.js": "eec2de6e865313770ca2b372b3337a3460f4745a4dd76352ab17993e00c32dff",
+    "lib/util/git.js": "7561338650dd8d8d10f5ecaa79a6561ed4174d5341f1caae84b28b0279eb25a0",
+    "lib/util/json-schema.js": "5eb7bde0796c4eeb6382bf973feaef8ae0976fb88327d490525c51ab74c21eb1",
+    "lib/util/live.js": "d12e9d816151fc62f8e0582240a8d1d5e6d0f7ef2b4ba7f3c39bb41271da172e",
+    "lib/util/mutex.js": "c64025a72c97e506a6fa8e6d18e347c7252af7a3d38e3cae11ff705f510e5b53",
+    "lib/util/workspace-lease.js": "f88249a60797530ebadb5063b9f9aa92928f7df8c5621bb67f5b4029340c0170",
+    "lib/vision.js": "333134462db4a976612a60c43a46873d24061329f8caec9ff13b5f3fbb2bae90",
+    "lib/workflow.js": "1ce385b7d7c8292fa64a76b104d6d20e2f88a7231f79b7b2b7b3adc95291df8c"
+  },
+  "auxiliaryReview": "jev-review.json records real health/check/ask results; probabilities are not correctness certification."
+}

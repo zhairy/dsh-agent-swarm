@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-09T04:49:12.179Z",
+  "baselineRef": "e38b0a6",
+  "environment": {
+    "node": "v24.21.0",
+    "cpu": "Intel(R) Core(TM) Ultra 5 125H",
+    "platform": "linux",
+    "kernel": "6.12.107+deb13-amd64"
+  },
+  "sampleCount": 30,
+  "warmup": 5,
+  "sizes": [
+    500,
+    2000,
+    5000
+  ],
+  "methodology": "Sequential isolated Node processes per source variant; GC before and after each sample. Measures synchronous reserve/start/settle only, excluding snapshot and DSH/model/I/O. Retained heap delta is not peak allocation; peak RSS includes the whole worker. All request history remains retained. No end-to-end latency, token, cost, or memory-saving claim.",
+  "results": [
+    {
+      "variant": "before",
+      "sourceDigest": "65dd26451981bf056f47923eb397b42f9d39b57b8d66b029c321f11baaa7ab3d",
+      "rows": [
+        {
+          "scenario": "unlimited-generation",
+          "count": 500,
+          "medianMs": 22.071976000000063,
+          "p95Ms": 27.90652399999999,
+          "retainedHeapDeltaMedianBytes": 94920,
+          "snapshotBytes": 101656
+        },
+        {
+          "scenario": "unlimited-generation",
+          "count": 2000,
+          "medianMs": 201.93376699999953,
+          "p95Ms": 256.56535600000007,
+          "retainedHeapDeltaMedianBytes": 379208,
+          "snapshotBytes": 407156
+        },
+        {
+          "scenario": "unlimited-generation",
+          "count": 5000,
+          "medianMs": 1237.1876589999956,
+          "p95Ms": 1658.0918230000025,
+          "retainedHeapDeltaMedianBytes": 1048624,
+          "snapshotBytes": 1019156
+        },
+        {
+          "scenario": "jev-with-positive-caps",
+          "count": 500,
+          "medianMs": 7.444778999997652,
+          "p95Ms": 11.400399999998626,
+          "retainedHeapDeltaMedianBytes": 94952,
+          "snapshotBytes": 98639
+        },
+        {
+          "scenario": "jev-with-positive-caps",
+          "count": 2000,
+          "medianMs": 65.42904500000441,
+          "p95Ms": 83.3506880000059,
+          "retainedHeapDeltaMedianBytes": 381720,
+          "snapshotBytes": 395142
+        },
+        {
+          "scenario": "jev-with-positive-caps",
+          "count": 5000,
+          "medianMs": 267.2071610000057,
+          "p95Ms": 330.8410980000044,
+          "retainedHeapDeltaMedianBytes": 1029856,
+          "snapshotBytes": 989142
+        },
+        {
+          "scenario": "limited-count",
+          "count": 500,
+          "medianMs": 21.40892299999541,
+          "p95Ms": 26.882377999994787,
+          "retainedHeapDeltaMedianBytes": 96176,
+          "snapshotBytes": 101602
+        },
+        {
+          "scenario": "limited-count",
+          "count": 2000,
+          "medianMs": 273.6178579999978,
+          "p95Ms": 400.13954000000376,
+          "retainedHeapDeltaMedianBytes": 382992,
+          "snapshotBytes": 407103
+        },
+        {
+          "scenario": "limited-count",
+          "count": 5000,
+          "medianMs": 1179.9265540000051,
+          "p95Ms": 1382.2800390000048,
+          "retainedHeapDeltaMedianBytes": 1036592,
+          "snapshotBytes": 1019103
+        }
+      ],
+      "peakRssBytes": 230502400
+    },
+    {
+      "variant": "after",
+      "sourceDigest": "6efa9d19c1ae02bd3a594161dda897caa7ca2155ecfe47694017bd211a704991",
+      "rows": [
+        {
+          "scenario": "unlimited-generation",
+          "count": 500,
+          "medianMs": 5.9550160000000005,
+          "p95Ms": 8.336105000000089,
+          "retainedHeapDeltaMedianBytes": 95096,
+          "snapshotBytes": 101656
+        },
+        {
+          "scenario": "unlimited-generation",
+          "count": 2000,
+          "medianMs": 16.417605000000094,
+          "p95Ms": 30.240878000000066,
+          "retainedHeapDeltaMedianBytes": 379128,
+          "snapshotBytes": 407156
+        },
+        {
+          "scenario": "unlimited-generation",
+          "count": 5000,
+          "medianMs": 46.981337999999596,
+          "p95Ms": 87.60479200000009,
+          "retainedHeapDeltaMedianBytes": 1052248,
+          "snapshotBytes": 1019156
+        },
+        {
+          "scenario": "jev-with-positive-caps",
+          "count": 500,
+          "medianMs": 7.123913999999786,
+          "p95Ms": 8.751623999999538,
+          "retainedHeapDeltaMedianBytes": 95304,
+          "snapshotBytes": 98639
+        },
+        {
+          "scenario": "jev-with-positive-caps",
+          "count": 2000,
+          "medianMs": 27.55565099999967,
+          "p95Ms": 50.05659300000025,
+          "retainedHeapDeltaMedianBytes": 381296,
+          "snapshotBytes": 395142
+        },
+        {
+          "scenario": "jev-with-positive-caps",
+          "count": 5000,
+          "medianMs": 69.11066500000015,
+          "p95Ms": 87.46085799999855,
+          "retainedHeapDeltaMedianBytes": 1040160,
+          "snapshotBytes": 989142
+        },
+        {
+          "scenario": "limited-count",
+          "count": 500,
+          "medianMs": 15.969688999999562,
+          "p95Ms": 24.158580999999685,
+          "retainedHeapDeltaMedianBytes": 96048,
+          "snapshotBytes": 101602
+        },
+        {
+          "scenario": "limited-count",
+          "count": 2000,
+          "medianMs": 126.5848189999997,
+          "p95Ms": 167.47586500000034,
+          "retainedHeapDeltaMedianBytes": 381808,
+          "snapshotBytes": 407103
+        },
+        {
+          "scenario": "limited-count",
+          "count": 5000,
+          "medianMs": 606.0871540000007,
+          "p95Ms": 754.6297170000034,
+          "retainedHeapDeltaMedianBytes": 1039304,
+          "snapshotBytes": 1019103
+        }
+      ],
+      "peakRssBytes": 230223872
+    }
+  ]
+}

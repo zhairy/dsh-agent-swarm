@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getSwarmConfig, type SwarmConfigInfo } from '../../src/config.js'
 import {
+  DispatchAdmissionError,
   ParseNativeOutput,
   ValidateDelegateInput,
   getAvoidFamilies,
@@ -715,5 +716,31 @@ describe('连续会话的断网等待', () => {
     const signal = new AbortController().signal
     await h.delegator.delegate({ task_id: 'T-1', role: 'fu_he', prompt: 'x' }, { agent, signal }, h.session)
     expect(h.deps.sleep).toHaveBeenCalledWith(5000, signal)
+  })
+})
+
+describe('trusted dispatch admission', () => {
+  it.each(['api', 'codex'] as const)('rechecks after preflight for %s and never retries a refused publication', async (backend) => {
+    const h = track(makeHarness({ providers: ['codex'] }))
+    const task = structuredClone(h.session.store.getTask('T-1')!)
+    const publish = vi.fn(async () => { throw new DispatchAdmissionError('contract changed after preflight') })
+    await expect(h.delegator.delegate({ task_id: 'T-1', role: 'yu_shi', prompt: 'review', backend, session: 'oneshot' }, { ...exec(), admission: { task, dispatch: publish } }, h.session)).rejects.toThrow('contract changed')
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(h.requests).toHaveLength(0)
+    expect(h.routeState.getRecoveryDiagnostics().logicalRequests).toBe(0)
+  })
+  it('gates continuable creation and does not fall back to a new session on refusal', async () => {
+    const h = track(makeHarness())
+    const startContinuable = vi.fn(async () => ({ childId: 'unused', messageId: 'unused' }))
+    const sendMessage = vi.fn(async () => 'unused')
+    h.deps.getSubagents = () => ({ ...h.subagents, startContinuable, sendMessage })
+    const task = structuredClone(h.session.store.getTask('T-1')!)
+    await expect(h.delegator.delegate({ task_id: 'T-1', role: 'fu_he', prompt: 'verify', backend: 'api', session: 'new' }, {
+      ...exec(), admission: { task, dispatch: async () => { throw new DispatchAdmissionError('contract changed') } }
+    }, h.session)).rejects.toThrow('contract changed')
+    expect(startContinuable).not.toHaveBeenCalled()
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(h.requests).toHaveLength(0)
+    expect(h.session.threads.list().every(thread => !thread.busy)).toBe(true)
   })
 })

@@ -43,13 +43,15 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     service.routeState.RecordUserSelection(session.id, selected, event.seq)
     service.agentControl?.ObserveSelection(session.id, selected)
   })
-  ctx.on('agent/request', async (payload: { agent: AgentLike; turn?: number; step?: number }, next: () => Promise<CallConfigLike>) => {
+  ctx.on('agent/request', async (payload: { agent: AgentLike; turn?: number; step?: number; signal?: AbortSignal }, next: () => Promise<CallConfigLike>) => {
     await service.WaitAgentReady(payload.agent)
+    if (isTracked(payload.agent)) await service.routeState.WaitHealthReady(payload.agent.id, payload.signal)
     if (isTracked(payload.agent) && payload.turn !== undefined && payload.step !== undefined) service.routeState.BeginRequestStep(payload.agent.id, payload.turn, payload.step)
     const resolved = await next()
     const projection = (ctx.get('sessionProjections') as SessionProjectionsLike | undefined)?.stateOf(payload.agent.session, 'modelSelection')
     const explicitSelectionAvailable = projection !== null && typeof projection === 'object' && 'pending' in projection
     await service.routeState.PreparePreferredRecovery(payload.agent, resolved, presetRole, service.getConfig())
+    if (isTracked(payload.agent)) await service.routeState.WaitHealthReady(payload.agent.id, payload.signal)
     const result = service.routeState.getRequestOverride(payload.agent, resolved, presetRole, service.getConfig(), explicitSelectionAvailable)
     service.agentControl?.ObserveRequest(payload.agent.id, result)
     const selected = service.routeState.getChildOverride(payload.agent.id)
