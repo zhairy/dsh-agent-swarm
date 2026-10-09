@@ -17,6 +17,285 @@ const child = { id: 'c1', session: { header: { parentSession: 'root' } } }
 const root = { id: 'root', session: { header: {} } }
 const chain = [{ provider: 'a', model: 'm1' }, { provider: 'b', model: 'm2', reasoningEffort: 'high' }, { provider: 'a', model: 'm3' }]
 
+describe('automatic source quota routing', () => {
+  const primary = { provider: 'codex', model: 'gpt-6-sol', reasoningEffort: 'high' }
+  const qwen = { provider: 'qwen-token-plan-cn', model: 'qwen3.8-flash', reasoningEffort: 'medium' }
+  const claude = { provider: 'claude', model: 'claude-sonnet-5' }
+  const api = { provider: 'deepseek-official', model: 'deepseek-flash' }
+  const declared = [primary, qwen, claude, api]
+  const effective = [qwen, claude, primary, api]
+  const cfg = getSwarmConfig({ agents: { rootRecoverMs: 1 }, routes: { tian_shu: { chain: declared } } })
+  const order = (routes: readonly RouteInfo[]) => effective.map((item) => routes.find((route) => route.provider === item.provider)!)
+  const fail = (registry: ReturnType<typeof intRouteStateRegistry>, selected: RouteInfo, agent = root, role: 'tian_shu' | undefined = 'tian_shu') => registry.recover({ agent, provider: selected.provider, failure: { status: 400 } }, async () => undefined, role, cfg)
+
+  it('the runtime automatically selects quota preference on the first request and tries deferred subscriptions before API', async () => {
+    const orderQuotaRoutes = vi.fn(async (routes: readonly RouteInfo[]) => order(routes))
+    const onRouteSuccess = vi.fn()
+    const probe = vi.fn(async () => ({ ok: true as const, vision: true }))
+    const registry = intRouteStateRegistry(undefined, probe, { orderQuotaRoutes, onRouteSuccess })
+    const listeners = new Map<string, (...args: any[]) => any>()
+    applyRuntime({
+      get: (name: string) => name === 'agentSwarm' ? { routeState: registry, getConfig: () => cfg, WaitAgentReady: async () => undefined } : name === 'sessionProjections' ? { stateOf: () => ({ pending: false }) } : undefined,
+      on: (event: string, listener: (...args: any[]) => any) => { listeners.set(event, listener) }
+    } as unknown as PluginContextLike, { role: 'tian_shu' })
+    const request = () => listeners.get('agent/request')!({ agent: root, turn: 0, step: 0, signal: new AbortController().signal }, async () => primary)
+    expect(await request()).toMatchObject(qwen)
+    expect(registry.getRootPreference(root.id)).toMatchObject(primary)
+    expect(registry.getHealth()).toEqual([])
+    for (const [from, to] of [[qwen, claude], [claude, primary], [primary, api]] as const) {
+      expect(await fail(registry, from)).toEqual({ kind: 'retry' })
+      expect(await request()).toMatchObject(to)
+    }
+    expect(orderQuotaRoutes).toHaveBeenCalledTimes(1)
+    expect(registry.getRecovery(root.id)?.attemptedRoutes).toEqual(effective.map((route) => `${route.provider}/${route.model}`))
+    expect(registry.getRecovery(root.id)?.attempts).toBe(4)
+    listeners.get('agent/assistant-stream')!({ agent: root, frame: { type: 'end', outcome: { kind: 'committed', eventType: 'assistant/attempt' } } })
+    expect(onRouteSuccess).not.toHaveBeenCalled()
+    listeners.get('agent/assistant-stream')!({ agent: root, frame: { type: 'end', outcome: { kind: 'committed', eventType: 'assistant/message' } } })
+    expect(onRouteSuccess).toHaveBeenCalledExactlyOnceWith(api)
+  })
+
+  it('a child keeps its declared preference while fallback enumerates the complete effective order', async () => {
+    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: true }), { orderQuotaRoutes: async (routes) => order(routes) })
+    registry.AddChild(child.id, { chain: declared, initialRoute: qwen, initialQuotaOrder: effective, role: 'tan_wei', logicalRequestId: 'D-quota-child' })
+    registry.BeginRequestStep(child.id, 0, 0)
+    await registry.PreparePreferredRecovery(child, qwen, undefined, cfg)
+    await registry.PrepareQuotaRouting(child, qwen, undefined, cfg)
+    expect(registry.getRequestOverride(child, qwen, undefined, cfg, true)).toMatchObject(qwen)
+    for (const [from, to] of [[qwen, claude], [claude, primary], [primary, api]] as const) {
+      expect(await fail(registry, from, child, undefined)).toEqual({ kind: 'retry' })
+      expect(registry.getRequestOverride(child, qwen, undefined, cfg, true)).toMatchObject(to)
+    }
+    registry.FinishLogicalRequest('D-quota-child')
+    registry.DelAgent(child.id)
+    expect(registry.getRecoveryDiagnostics().logicalRequests).toBe(0)
+  })
+
+  it('a trusted spawned child keeps the model actually started after an earlier quota-preferred start failed', async () => {
+    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: true }), { orderQuotaRoutes: async (routes) => order(routes) })
+    // Quota preferred Qwen, but startSpawn failed there and actually created Codex.
+    registry.AddChild(child.id, { chain: declared, initialRoute: primary, initialQuotaOrder: effective, role: 'tan_wei' })
+    registry.BeginRequestStep(child.id, 0, 0)
+    await registry.PreparePreferredRecovery(child, primary, undefined, cfg)
+    await registry.PrepareQuotaRouting(child, primary, undefined, cfg)
+    expect(registry.getRequestOverride(child, primary, undefined, cfg, true)).toMatchObject(primary)
+    expect(registry.getRecovery(child.id)?.attemptedRoutes).toEqual(['codex/gpt-6-sol'])
+    expect(await fail(registry, primary, child, undefined)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(child, primary, undefined, cfg, true)).toMatchObject(qwen)
+  })
+
+  it('an actual preferred recovery trial is protected once from old source quota reports', async () => {
+    let clock = 0
+    const orderQuotaRoutes = vi.fn(async (routes: readonly RouteInfo[], _signal?: AbortSignal, protectedRoutes?: readonly RouteInfo[]) => protectedRoutes?.some((route) => route.provider === primary.provider) ? [...routes] : order(routes))
+    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: true }), { now: () => clock, orderQuotaRoutes })
+    registry.AddChild(child.id, { chain: declared, initialRoute: qwen, initialQuotaOrder: effective, role: 'tan_wei', persistent: true })
+    registry.BeginRequestStep(child.id, 0, 0)
+    await registry.PreparePreferredRecovery(child, qwen, undefined, cfg)
+    await registry.PrepareQuotaRouting(child, qwen, undefined, cfg)
+    registry.getRequestOverride(child, qwen, undefined, cfg, true)
+    registry.MarkRequestSucceeded(child.id)
+    clock = 6000
+    registry.BeginRequestStep(child.id, 0, 1)
+    await registry.PreparePreferredRecovery(child, qwen, undefined, cfg)
+    await registry.PrepareQuotaRouting(child, qwen, undefined, cfg)
+    expect(orderQuotaRoutes.mock.calls.at(-1)?.[2]).toEqual([primary])
+    expect(registry.getRequestOverride(child, qwen, undefined, cfg, true)).toMatchObject(primary)
+    expect(registry.getRecovery(child.id)?.attempts).toBe(1)
+  })
+
+  it.each(['field-order', 'value-change'] as const)('an in-flight fallback survives semantic policy identity and rejects changed values: %s', async (change) => {
+    let release!: () => void
+    const probe = vi.fn(async (route: RouteInfo) => {
+      if (route.provider === claude.provider) await new Promise<void>((resolve) => { release = resolve })
+      return { ok: true as const, vision: true }
+    })
+    const registry = intRouteStateRegistry(undefined, probe)
+    const upgradeChain = [primary, qwen, claude].map((route, index) => ({ ...route, policy: { accessMode: 'subscription' as const, quotaDomainId: `upgrade-domain-${index}` } }))
+    registry.SetRootUpgrade(root.id, upgradeChain, primary)
+    registry.BeginRequestStep(root.id, 0, 0)
+    registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)
+    expect(await fail(registry, primary)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(qwen)
+    const pending = fail(registry, qwen)
+    await vi.waitFor(() => expect(probe).toHaveBeenLastCalledWith(upgradeChain[2]))
+    const refreshed = upgradeChain.map((route, index) => ({ ...route, policy: { quotaDomainId: change === 'value-change' && index === 1 ? 'changed-domain' : route.policy.quotaDomainId, accessMode: 'subscription' as const } }))
+    registry.SetRootUpgrade(root.id, refreshed, primary)
+    release()
+    if (change === 'field-order') {
+      expect(await pending).toEqual({ kind: 'retry' })
+      expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(claude)
+      expect(registry.getRecovery(root.id)?.attempts).toBe(3)
+    } else {
+      expect(await pending).toBeUndefined()
+      expect(registry.getLastRoute(root.id)).toMatchObject(qwen)
+      expect(registry.getRootUpgrade(root.id)?.[1]?.policy?.quotaDomainId).toBe('changed-domain')
+      expect(registry.getRecovery(root.id)?.attempts).toBe(2)
+    }
+  })
+
+  it('a disposed root or a manual selection cannot be overwritten by a late fallback probe', async () => {
+    for (const transition of ['dispose', 'select'] as const) {
+      let release!: () => void
+      const registry = intRouteStateRegistry(undefined, async () => {
+        await new Promise<void>((resolve) => { release = resolve })
+        return { ok: true, vision: true }
+      })
+      registry.BeginRequestStep(root.id, 0, 0)
+      registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)
+      const pending = fail(registry, primary)
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+      if (transition === 'dispose') registry.DelAgent(root.id)
+      else registry.RecordUserSelection(root.id, api)
+      release()
+      expect(await pending).toBeUndefined()
+      if (transition === 'dispose') expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
+      else expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(api)
+    }
+  })
+
+  it('manual child/root selection and rootFallback=false bypass automatic quota sorting', async () => {
+    const orderQuotaRoutes = vi.fn(async (routes: readonly RouteInfo[]) => order(routes))
+    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes })
+    registry.AddChild(child.id, { chain: declared, role: 'tan_wei' })
+    registry.SetChildOverride(child.id, primary)
+    registry.BeginRequestStep(child.id, 0, 0)
+    await registry.PrepareQuotaRouting(child, primary, undefined, cfg)
+    expect(registry.getRequestOverride(child, primary, undefined, cfg, true)).toMatchObject(primary)
+    registry.RecordUserSelection(root.id, primary)
+    registry.BeginRequestStep(root.id, 0, 0)
+    await registry.PrepareQuotaRouting(root, primary, 'tian_shu', cfg)
+    expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(primary)
+    const disabled = getSwarmConfig({ rootFallback: false, routes: { tian_shu: { chain: declared } } })
+    await registry.PrepareQuotaRouting({ id: 'disabled' }, primary, 'tian_shu', disabled)
+    expect(registry.getRequestOverride({ id: 'disabled' }, primary, 'tian_shu', disabled)).toMatchObject(primary)
+    expect(orderQuotaRoutes).not.toHaveBeenCalled()
+  })
+
+  it('a legacy root picker change invalidates already prepared automatic quota order', async () => {
+    const orderQuotaRoutes = vi.fn(async (routes: readonly RouteInfo[]) => order(routes))
+    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes })
+    registry.BeginRequestStep(root.id, 0, 0)
+    await registry.PrepareQuotaRouting(root, primary, 'tian_shu', cfg)
+    expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg)).toMatchObject(qwen)
+    // No explicit model/selection projection exists in this Host generation.
+    // A new model that differs from both resolved and actual last routes is human intent.
+    expect(registry.getRequestOverride(root, claude, 'tian_shu', cfg)).toMatchObject(claude)
+    expect(await fail(registry, claude)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(root, claude, 'tian_shu', cfg)).toMatchObject(primary)
+    expect(orderQuotaRoutes).toHaveBeenCalledTimes(1)
+  })
+
+  it('health and capability checks remain authoritative on a new quota-preferred root route', async () => {
+    const probe = vi.fn(async (route: RouteInfo) => route.provider === qwen.provider ? { ok: false as const, reason: 'provider-not-configured' } : { ok: true as const, vision: true })
+    const registry = intRouteStateRegistry(undefined, probe, { orderQuotaRoutes: async (routes) => order(routes) })
+    registry.BeginRequestStep(root.id, 0, 0)
+    await registry.PrepareQuotaRouting(root, primary, 'tian_shu', cfg)
+    expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(claude)
+    const isolated = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes: async (routes) => order(routes) })
+    await isolated.ObserveRouteFailure(qwen, { code: 'QUOTA' }, cfg)
+    isolated.BeginRequestStep(root.id, 0, 0)
+    await isolated.PrepareQuotaRouting(root, primary, 'tian_shu', cfg)
+    expect(isolated.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(claude)
+    expect(isolated.getHealth().length).toBe(1)
+  })
+
+  it('cancellation or disposal while quota is pending never admits a model or resurrects request state', async () => {
+    let release!: (routes: readonly RouteInfo[]) => void
+    const orderQuotaRoutes = vi.fn(() => new Promise<readonly RouteInfo[]>((resolve) => { release = resolve }))
+    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes })
+    registry.AddChild(child.id, { chain: declared, role: 'tan_wei' })
+    registry.BeginRequestStep(child.id, 0, 0)
+    const controller = new AbortController()
+    const pending = registry.PrepareQuotaRouting(child, primary, undefined, cfg, controller.signal)
+    controller.abort()
+    registry.DelAgent(child.id)
+    release(effective)
+    await expect(pending).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    expect(registry.getRecovery(child.id)).toBeUndefined()
+    expect(registry.getLastRoute(child.id)).toBeUndefined()
+    expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
+    const cancelled = new AbortController(); cancelled.abort()
+    await expect(registry.PrepareQuotaRouting(root, primary, 'tian_shu', cfg, cancelled.signal)).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    expect(orderQuotaRoutes).toHaveBeenCalledTimes(1)
+  })
+
+  it('a late cancelled quota read cannot erase the newer step effective fallback chain', async () => {
+    const releases: Array<(routes: readonly RouteInfo[]) => void> = []
+    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes: () => new Promise<readonly RouteInfo[]>((resolve) => { releases.push(resolve) }) })
+    registry.AddChild(child.id, { chain: declared, role: 'tan_wei' })
+    const old = new AbortController()
+    registry.BeginLogicalRequest(child.id, 'old-step')
+    const pendingOld = registry.PrepareQuotaRouting(child, primary, undefined, cfg, old.signal)
+    registry.BeginLogicalRequest(child.id, 'new-step')
+    const pendingNew = registry.PrepareQuotaRouting(child, primary, undefined, cfg)
+    releases[1]!(effective)
+    await pendingNew
+    expect(registry.getRequestOverride(child, primary, undefined, cfg, true)).toMatchObject(qwen)
+    old.abort()
+    releases[0]!(effective)
+    await expect(pendingOld).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    expect(await fail(registry, qwen, child, undefined)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(child, primary, undefined, cfg, true)).toMatchObject(claude)
+    expect(await fail(registry, claude, child, undefined)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(child, primary, undefined, cfg, true)).toMatchObject(primary)
+    expect(registry.getRecovery(child.id)?.logicalRequestId).toBe('new-step')
+    expect(releases).toHaveLength(2)
+  })
+
+  it('new quota preference cannot rewind the established root fallback before its recovery timer', async () => {
+    const registry = intRouteStateRegistry(undefined, undefined, { now: () => 0, orderQuotaRoutes: async (routes) => order(routes) })
+    registry.BeginRequestStep(root.id, 0, 0)
+    await registry.PrepareQuotaRouting(root, primary, 'tian_shu', cfg)
+    registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)
+    expect(await fail(registry, qwen)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(claude)
+    registry.MarkRequestSucceeded(root.id)
+    registry.BeginRequestStep(root.id, 0, 1)
+    await registry.PreparePreferredRecovery(root, claude, 'tian_shu', cfg)
+    await registry.PrepareQuotaRouting(root, claude, 'tian_shu', cfg)
+    expect(registry.getRequestOverride(root, claude, 'tian_shu', cfg, true)).toMatchObject(claude)
+    expect(registry.getRecovery(root.id)?.attempts).toBe(1)
+  })
+
+  it('bad adapter output cannot add/drop routes, replace policy, or collapse different reasoning efforts', async () => {
+    const declaredPrimary = { ...primary, policy: { quotaDomainId: 'declared-domain' } }
+    const otherEffort = { ...primary, reasoningEffort: 'low' }
+    const declaredChain = [declaredPrimary, otherEffort, api]
+    const selected = getSwarmConfig({ routes: { tian_shu: { chain: declaredChain } } })
+    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes: async () => [{ ...primary, policy: { quotaDomainId: 'forged' } }, api, api] })
+    registry.BeginRequestStep(root.id, 0, 0)
+    await registry.PrepareQuotaRouting(root, primary, 'tian_shu', selected)
+    expect(registry.getRequestOverride(root, primary, 'tian_shu', selected, true)).toMatchObject(primary)
+    expect(registry.getLastRoute(root.id)?.policy?.quotaDomainId).toBe('declared-domain')
+    expect(registry.getRecovery(root.id)?.attempts).toBe(1)
+  })
+
+  it('quota sorting neither resets the eight-attempt ceiling nor lets a restarted delegation admit a ninth model', async () => {
+    const routes = Array.from({ length: 9 }, (_, index) => ({ provider: `subscription-${index}`, model: `model-${index}` }))
+    const orderQuotaRoutes = vi.fn(async (chain: readonly RouteInfo[]) => [...chain.slice(1), chain[0]!])
+    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes })
+    registry.AddChild(child.id, { chain: routes, role: 'tan_wei', logicalRequestId: 'D-eight' })
+    registry.BeginRequestStep(child.id, 0, 0)
+    await registry.PrepareQuotaRouting(child, routes[0]!, undefined, cfg)
+    for (let index = 0; index < 8; index++) {
+      expect(registry.getRequestOverride(child, routes[0]!, undefined, cfg, true)).toMatchObject(routes[index + 1]!)
+      const result = await fail(registry, routes[index + 1]!, child, undefined)
+      expect(result).toEqual(index === 7 ? undefined : { kind: 'retry' })
+    }
+    expect(registry.getRecovery(child.id)?.attempts).toBe(8)
+    expect(registry.getTerminal(child.id)).toBe('recovery_attempts_exhausted')
+    registry.DelAgent(child.id)
+    registry.AddChild('restarted-quota', { chain: routes, role: 'tan_wei', logicalRequestId: 'D-eight' })
+    registry.BeginRequestStep('restarted-quota', 0, 0)
+    await registry.PrepareQuotaRouting({ id: 'restarted-quota' }, routes[0]!, undefined, cfg)
+    expect(() => registry.getRequestOverride({ id: 'restarted-quota' }, routes[0]!, undefined, cfg, true)).toThrow('recovery_attempts_exhausted')
+    expect(orderQuotaRoutes).toHaveBeenCalledTimes(1)
+    registry.DelAgent('restarted-quota')
+    registry.FinishLogicalRequest('D-eight')
+    expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
+  })
+})
+
 describe('request recovery lifetime', () => {
   const route = { provider: 'fixture', model: 'fixture' }
   const cfg = getSwarmConfig({ routes: { tian_shu: { chain: [route] } } })

@@ -59,6 +59,7 @@ import { getCheckpoint } from './checkpoint.js'
 import { createFeatureSession, type FeatureSession } from './feature-session.js'
 import { StateStoreError } from './state-store.js'
 import { calculate } from './math/operators.js'
+import { getCalculateOptions, getMathAvailability } from './math/config.js'
 import { createWorkspaceLeaseManager, type WorkspaceLease } from './util/workspace-lease.js'
 import type { ToolExecLike } from './tool-shape.js'
 import { getPlanningRecovery } from './planning-recovery.js'
@@ -100,6 +101,9 @@ export interface SwarmServiceDepsInfo {
   gitStatus?: (cwd: string) => Promise<GitStatusInfo | undefined>
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
   probe?: RouteProbe
+  orderQuotaRoutes?: import('./route-state.js').RouteStateOptionsInfo['orderQuotaRoutes']
+  onQuotaRouteSuccess?: (route: RouteInfo) => void
+  quotaDiagnostics?: () => unknown
   /** 联网探测；提供时，断网引起的模型请求失败会等待网络恢复后在原路由重试 */
   network?: NetworkMonitorInfo
 }
@@ -592,7 +596,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     deps.logger?.warn(`主会话 ${event.agentId} 路由 ${getRouteLabel(event.from)} 失败（${event.failure.code ?? event.failure.status ?? 'error'}），回退到 ${getRouteLabel(event.to)}`)
     getSession(event.agentId).ledger.AddLedgerEvent({ type: 'route/fallback', data: { scope: 'root', from: getRouteLabel(event.from), to: getRouteLabel(event.to), failure: event.failure } })
   }, probe, {
-    now,
+    now, orderQuotaRoutes: deps.orderQuotaRoutes, onRouteSuccess: deps.onQuotaRouteSuccess,
     onPreferredRecovery: (event) => {
       const parentId = childOwners.get(event.agentId) ?? event.agentId
       const taskId = agentControl.get(event.agentId)?.taskId
@@ -789,6 +793,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     },
     getAttachments: deps.getAttachments,
     probe,
+    orderQuotaRoutes: deps.orderQuotaRoutes,
     probeForChild: (childId, route, signal) => intRouteProbe(deps.getLlm, {
       now, metadataCache, isRouteAvailable: (candidate) => routeState.isRouteAvailableFor(candidate, childId),
       onFailure: observeProbeFailure
@@ -1138,27 +1143,35 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const ReviewPlan: SwarmService['ReviewPlan'] = (raw, exec) => runReviewPlan(raw, exec, false)
 
   const Calculate: SwarmService['Calculate'] = async (raw, exec) => {
+    if (exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '计算已取消，未预占预算或发布证据')
     if (!deps.getConfig().math.enabled) throw new SwarmError('SERVICE_UNAVAILABLE', '数学算子已关闭')
     const { session, features, task: found, binding } = await getToolTask(raw, exec)
     return session.taskLock.run(async () => {
+      if (exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '等待期间计算已取消，未预占预算或发布证据')
       const task = reconcileTask(session, refreshIntent(session, getTaskOrThrow(session, found.taskId), session.rootAgent ?? exec.agent!))
       if (binding !== undefined) {
         features.bindings.requireActive(binding.agentId, 'pure-calc')
         if (!isTaskVersionCurrent(task, binding)) throw new SwarmError('STALE_EVIDENCE', '计算绑定的是旧任务版本')
       }
+      const math = deps.getConfig().math
+      if (!math.enabled) throw new SwarmError('SERVICE_UNAVAILABLE', '数学算子已关闭')
+      const { task_id: _task, ...request } = (raw ?? {}) as Record<string, unknown>
+      const denied = getMathAvailability(request, math)
+      if (denied !== undefined) return { ...denied, task_id: task.taskId }
       const budget = features.budgetFor(task)
+      const remaining = budget.remainingMathWork()
+      if (remaining !== undefined && remaining <= 0) throw new SwarmError('BUDGET_EXHAUSTED', '本任务数学计算工作量已用尽')
+      const options = getCalculateOptions(math, remaining)
       const id = exec.callId ?? `calc-${randomUUID()}`
       const snapshot = budget.getReservation(id)
       if (snapshot !== undefined) throw new SwarmError('INVALID_ARGS', '计算请求ID已使用，读取原有计算证据后再决定')
-      budget.reserve({ id, source: 'math' }); budget.start(id)
-      const { task_id: _task, ...request } = (raw ?? {}) as Record<string, unknown>
-      const remaining = budget.remainingMathWork()
-      const result = calculate(request, { enableExtended: deps.getConfig().math.enableExtended,
-        ...(remaining === undefined ? {} : { limits: { maxWorkUnits: Math.max(0, remaining) } }) })
+      // Reserve the hard work ceiling before the pure synchronous kernel; settle actual units afterwards.
+      budget.reserve({ id, source: 'math', estimatedWorkUnits: options.limits.maxWorkUnits }); budget.start(id)
+      const result = calculate(request, options)
       budget.settle(id, { workUnits: result.workUnits })
       const artifact = features.addContext({
         binding: getTaskContextBinding(task, features.workspaceId),
-        layer: 'L2', kind: 'evidence', text: JSON.stringify({ input: request, result })
+        layer: 'L2', kind: 'evidence', text: JSON.stringify(result.ok ? { input: request, result } : { input: { op: request.op, mode: request.mode }, inputOmitted: 'Rejected input is not persisted; no replay digest is claimed', result })
       })
       session.store.UpdateTask(task.taskId, { contextRefs: [...(task.contextRefs ?? []), { ref: artifact.ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind }] })
       session.ledger.AddLedgerEvent({ type: 'math/computed', taskId: task.taskId, data: { evidenceKind: 'computed', ref: artifact.ref, ok: result.ok, workUnits: result.workUnits } })
@@ -1283,7 +1296,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     }))
     return { ...getStatusResult(views, session, getDiagnostics(exec.agent)),
       persistence: { durable: session.features?.store.durable ?? false, recovery: '已审计状态可恢复；不自动恢复旧 live thread' },
-      recovery: { isolatedRoutes: routeState.getHealth(), current: routeState.getRecovery(exec.agent.id) ?? null, nativeInternalRetryCoverage: 'unverified' },
+      recovery: { quotaEvidence: deps.quotaDiagnostics?.() ?? null, isolatedRoutes: routeState.getHealth(), current: routeState.getRecovery(exec.agent.id) ?? null, nativeInternalRetryCoverage: 'unverified' },
       executionBudgets: session.features === undefined ? [] : tasks.map((task) => ({ task_id: task.taskId, ...session.features!.budgetFor(task).getSnapshot() }))
     }
   }

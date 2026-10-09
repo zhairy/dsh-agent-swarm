@@ -45,6 +45,17 @@ describe('bounded pure mathematical operators', () => {
     expect(calculate({ op: 'variance', mode: 'float64', args: { values: [1] } })).toMatchObject({ ok: true, value: 0 })
   })
 
+  it('preserves finite extreme means and variances without overflowing intermediates', () => {
+    expect(value('mean', { values: [1e308, 1e308] })).toBe(1e308)
+    expect(value('mean', { values: [1e308, 1e-15, -1e308] })).toBe(1e-15 / 3)
+    expect(Number(value('mean', { values: [1e308, 1e308, -1e308] })) / 1e308).toBeCloseTo(1 / 3, 14)
+    expect(Number(value('variance', { values: [1e154, -1e154], ddof: 0 })) / 1e308).toBeCloseTo(1, 14)
+    expect(value('variance', { values: [1e-160, -1e-160], ddof: 0 })).toBe(1e-320)
+    expect(value('variance', { values: [1e12, 1e12 + 1, 1e12 + 2], ddof: 0 })).toBeCloseTo(2 / 3, 14)
+    expect(Number(value('norm2', { values: [1e308, 1e308] })) / 1e308).toBeCloseTo(Math.SQRT2, 14)
+    expect(calculate({ op: 'variance', mode: 'float64', args: { values: [1e154, -1e154], ddof: 1 } })).toMatchObject({ ok: false, code: 'NON_FINITE' })
+  })
+
   it('compares represented finite values without overflow or guessed tolerances', () => {
     expect(value('compare_close', { a: 1e308, b: -1e308 }, 'float64', { tolerance: { abs: 0, rel: 0.1 } })).toBe(false)
     expect(value('compare_close', { a: 1e308, b: -1e308 }, 'float64', { tolerance: { abs: 0, rel: 2 } })).toBe(true)
@@ -57,7 +68,12 @@ describe('bounded pure mathematical operators', () => {
     const values = Object.freeze([1, 2, 3])
     const a = calculate({ op: 'sum', args: { values }, mode: 'float64' })
     const b = calculate({ mode: 'float64', version: 1, args: { values: [1, 2, 3] }, op: 'sum' })
-    expect(a).toEqual(b)
+    expect(a).toMatchObject({ ok: true, inputSummary: { scalarCount: 3 } })
+    expect(b).toMatchObject({ ok: true, inputSummary: { scalarCount: 4 } })
+    if (!a.ok || !b.ok) throw new Error('Expected successful calculations')
+    expect(a.value).toEqual(b.value)
+    expect(a.inputDigest).toBe(b.inputDigest)
+    expect(a.reproducibleDigest).toBe(b.reproducibleDigest)
     const integerA = calculate({ op: 'add', mode: 'bigint', args: { a: '001', b: '-0' } })
     const integerB = calculate({ op: 'add', mode: 'bigint', args: { a: '1', b: '0' } })
     expect(integerA).toEqual(integerB)
@@ -81,6 +97,24 @@ describe('bounded pure mathematical operators', () => {
     expect(calculate(request, { enableExtended: true, limits: { maxMultiplyAdds: 4 } })).toMatchObject({ ok: false, code: 'OPERATION_LIMIT' })
     expect(calculate({ op: 'poly_eval', mode: 'float64', args: { coefficients: [1, 2, 3], x: 2 } }, { enableExtended: true })).toMatchObject({ ok: true, value: 17 })
     expect(calculate({ op: 'residual_norm', mode: 'float64', args: { a: [[2, 0], [0, 2]], x: [3, 4], b: [6, 8] } }, { enableExtended: true })).toMatchObject({ ok: true, value: 0 })
+  })
+
+  it('charges all matrix kernel work before computing any output', () => {
+    const request = { op: 'matmul', mode: 'float64', args: { a: [[1, 2], [3, 4]], b: [[1, 0], [0, 1]] } }
+    expect(calculate(request, { enableExtended: true, limits: { maxWorkUnits: 23 } })).toEqual({ ok: false, code: 'OPERATION_LIMIT', message: 'Computation work limit exceeded', workUnits: 8 })
+    expect(calculate(request, { enableExtended: true, limits: { maxWorkUnits: 24 } })).toMatchObject({ ok: true, value: [[1, 2], [3, 4]], workUnits: 24 })
+    const residual = { op: 'residual_norm', mode: 'float64', args: { a: [[2, 0], [0, 2]], x: [3, 4], b: [6, 8] } }
+    expect(calculate(residual, { enableExtended: true, limits: { maxWorkUnits: 19 } })).toMatchObject({ ok: false, code: 'OPERATION_LIMIT', workUnits: 8 })
+    expect(calculate(residual, { enableExtended: true, limits: { maxWorkUnits: 20 } })).toMatchObject({ ok: true, value: 0, workUnits: 20 })
+  })
+
+  it('applies scalar caps to actual input before execution without charging normalized defaults twice', () => {
+    const omitted = { op: 'variance', mode: 'float64', args: { values: [3] } }
+    expect(calculate(omitted, { limits: { maxTotalElements: 1 } })).toMatchObject({ ok: true, value: 0, operatorVersion: '2', inputSummary: { scalarCount: 1 } })
+    const explicit = { ...omitted, args: { values: [3], ddof: 0 } }
+    expect(calculate(explicit, { limits: { maxTotalElements: 1 } })).toMatchObject({ ok: false, code: 'INPUT_LIMIT', workUnits: 0 })
+    expect(calculate(explicit, { limits: { maxTotalElements: 2 } })).toMatchObject({ ok: true, value: 0, inputSummary: { scalarCount: 2 } })
+    expect(calculate(omitted, { limits: { maxInputBytes: Buffer.byteLength(JSON.stringify(omitted)) } })).toMatchObject({ ok: true, value: 0 })
   })
 
   it('agrees with independent two-pass statistics and direct dot on small exact inputs', () => {

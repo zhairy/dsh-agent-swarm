@@ -24,7 +24,7 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })))
 })
 
-const stage = async (status?: 'running' | 'queued', sourceVersion: '2.3.0' | '2.3.1' = '2.3.0') => {
+const stage = async (status?: 'running' | 'queued', sourceVersion: '2.3.0' | '2.3.1' | '2.3.2' = '2.3.0') => {
   const home = await mkdtemp(join(tmpdir(), 'swarm-memory-handoff-service-'))
   homes.push(home)
   await writeFile(join(home, 'source.ts'), 'export const preserved = 42\n')
@@ -97,7 +97,7 @@ const runtime = (fixture: Awaited<ReturnType<typeof stage>>) => {
 }
 
 describe('memory handoff through the actual service cold initialization boundary', () => {
-  it.each(['2.3.0', '2.3.1'] as const)('restores %s T-1, immutable output, revisions and budget, consumes once, and never imports again', async (sourceVersion) => {
+  it.each(['2.3.0', '2.3.1', '2.3.2'] as const)('restores %s T-1, immutable output, revisions and budget, consumes once, and never imports again', async (sourceVersion) => {
     const fixture = await stage(undefined, sourceVersion)
     const before = await readFile(fixture.pending, 'utf8')
     const restored = runtime(fixture)

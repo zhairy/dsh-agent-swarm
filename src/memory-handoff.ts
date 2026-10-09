@@ -6,7 +6,7 @@ import { canonicalStateJson, StateStoreError, type StateValidationResult } from 
 import { digest } from './task-model.js'
 
 const MAX_BYTES = 4 * 1024 * 1024
-const SOURCE_VERSIONS = ['2.3.0', '2.3.1'] as const
+const SOURCE_VERSIONS = ['2.3.0', '2.3.1', '2.3.2'] as const
 export type MemoryHandoffSourceVersion = typeof SOURCE_VERSIONS[number]
 const sourceVersionValid = (raw: unknown): raw is MemoryHandoffSourceVersion => SOURCE_VERSIONS.some(version => version === raw)
 export interface MemoryHandoffEnvelope<T> {

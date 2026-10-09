@@ -1,0 +1,100 @@
+{
+  "scope": {
+    "scope": "2.4.0 implementation audit; assistant supplied evidence, not independent file access or formal correctness",
+    "implemented": [
+      "Quota reads official percentage/reset metadata, no estimates/UI/quota tool",
+      "Automatic routing only softly defers proven full member pools within subscription segments; deferred routes still before API; unknown stays original; manual and preferred probe protected",
+      "readAt not sampledAt; upstream cache freshness not disclosed; eligibility always unknown; no hard skip",
+      "actual success suppresses same raw-window fingerprint; actual auth/quota/model failures use existing fast fallback; declared route chain preserved",
+      "per-order account catalog index detached, no cross-request authorization cache",
+      "same upgrade config keeps pending fallback; initial child route preserved after spawn; math queued cancel stops before compute; rejected oversize input omitted from persistent evidence"
+    ],
+    "tests": {
+      "unit": 859,
+      "failed": 0,
+      "SDK": "38 in progress;6 quota-math SDK passed separately",
+      "browser": "math-only settings saved/reloaded, real matrix computation;390px page no overflow"
+    },
+    "limits": [
+      "Unsupported provider quota unknown",
+      "native CLI account matching not proven",
+      "synthetic CPU metadata speed does not imply LLM task speed",
+      "math computation not algorithm proof",
+      "production upgrade and real source still pending"
+    ]
+  },
+  "health": {
+    "status": "fulfilled",
+    "value": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"ok\": true,\n  \"model\": \"jev-latest\",\n  \"answers\": {\n    \"models\": [\n      {\n        \"name\": \"jev-latest\",\n        \"description\": \"The latest iteration of TypeSafe's System One Model: Jev\",\n        \"release_date\": \"2026-09-10T18:38:01.391457+00:00\"\n      },\n      {\n        \"name\": \"jev-preview\",\n        \"description\": \"A preview version of `jev-latest`: should be better in most ways\",\n        \"release_date\": \"2026-09-10T18:39:06.057655+00:00\"\n      }\n    ],\n    \"round_trip_latency_ms\": 1626.23\n  },\n  \"usage\": {\n    \"input_tokens\": 0,\n    \"output_tokens\": 0,\n    \"est_cost_usd\": 0.0\n  },\n  \"latency_ms\": 1626.247\n}"
+        }
+      ],
+      "structuredContent": {
+        "ok": true,
+        "model": "jev-latest",
+        "answers": {
+          "models": [
+            {
+              "name": "jev-latest",
+              "description": "The latest iteration of TypeSafe's System One Model: Jev",
+              "release_date": "2026-09-10T18:38:01.391457+00:00"
+            },
+            {
+              "name": "jev-preview",
+              "description": "A preview version of `jev-latest`: should be better in most ways",
+              "release_date": "2026-09-10T18:39:06.057655+00:00"
+            }
+          ],
+          "round_trip_latency_ms": 1626.23
+        },
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "est_cost_usd": 0
+        },
+        "latency_ms": 1626.247
+      },
+      "isError": false
+    }
+  },
+  "check": {
+    "status": "fulfilled",
+    "value": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.13.0\",\n  \"answers\": {\n    \"probabilities\": {\n      \"quotaRoutingUsesEvidenceWithoutClaimingLiveExhaustion\": 0.87,\n      \"retainsFallbackAndRecovery\": 0.85,\n      \"validationHonesty\": 0.94,\n      \"localCatalogLifetime\": 0.73\n    },\n    \"flags\": [\n      \"quotaRoutingUsesEvidenceWithoutClaimingLiveExhaustion\",\n      \"retainsFallbackAndRecovery\",\n      \"validationHonesty\",\n      \"localCatalogLifetime\"\n    ],\n    \"uncertain\": []\n  },\n  \"usage\": {\n    \"input_tokens\": 663,\n    \"output_tokens\": 104,\n    \"est_cost_usd\": 0.000027846\n  },\n  \"latency_ms\": 317.702\n}"
+        }
+      ],
+      "structuredContent": {
+        "ok": true,
+        "model": "jev-1.13.0",
+        "answers": {
+          "probabilities": {
+            "quotaRoutingUsesEvidenceWithoutClaimingLiveExhaustion": 0.87,
+            "retainsFallbackAndRecovery": 0.85,
+            "validationHonesty": 0.94,
+            "localCatalogLifetime": 0.73
+          },
+          "flags": [
+            "quotaRoutingUsesEvidenceWithoutClaimingLiveExhaustion",
+            "retainsFallbackAndRecovery",
+            "validationHonesty",
+            "localCatalogLifetime"
+          ],
+          "uncertain": []
+        },
+        "usage": {
+          "input_tokens": 663,
+          "output_tokens": 104,
+          "est_cost_usd": 0.000027846
+        },
+        "latency_ms": 317.702
+      },
+      "isError": false
+    }
+  }
+}

@@ -21,6 +21,7 @@ const h = React.createElement
  * @typedef {{ session: string, repeatAbove: number, sameCategoryAbove: number, maxRetries: number, retryBackoffMs: number, promptStyle: string, networkWaitMs: number, rootRecoverMs: number, modelCallDisplay: string }} PolicyInfo
  */
 const DATA = __SWARM_DATA__
+const MATH = DATA.math
 
 const NS = 'settings.swarmAgents'
 const EMPTY_SLOT = Object.freeze({ provider: '', model: '', reasoningEffort: '' })
@@ -246,6 +247,22 @@ const en = {
 Object.assign(zh, { errRoutePolicy: '路由额度域配置不合法或超限，请在配置中修正后保存', resource_subscription: '订阅', resource_metered_api: '按量 API', resource_judgment_api: '判断 API', resource_unknown: '资源类型未声明' })
 Object.assign(en, { errRoutePolicy: 'Route quota policy is invalid or exceeds limits; repair its configuration before saving', resource_subscription: 'Subscription', resource_metered_api: 'Metered API', resource_judgment_api: 'Judgment API', resource_unknown: 'Resource type unspecified' })
 Object.assign(zh, {
+  mathTitle: '纯函数数学算子', mathEnabled: '启用数学计算', mathDescription: '按算子组、单个算子和数值模式共同授权；关闭后后端立即拒绝新的计算，不只隐藏界面。计算证据用于核对输入结果，不等于算法正确性证明。',
+  mathModes: '允许的数值模式', mathExact: 'float64 仅有限数；bigint 为十进制整数字符串；rational 为分子/分母字符串。不作隐式跨类型转换，除零拒绝。',
+  mathOptIn: '矩阵与多项式默认关闭，需显式开启。矩阵残差 A,x,b 还要求矩阵组和 matmul 开启。', mathLimits: '高级：单次计算规模与工作量', mathCalls: '每任务数学调用数（0 为不限）', mathWork: '每任务累计数学工作量', mathLimitsHint: '数学工作量是本地确定性计算计费单位，与模型 token、订阅额度和 Jev 调用无关。单次取配置上限与任务剩余额度的较小值。', errMath: '数学授权键或资源限制不合法，请核对配置；各限制须为范围内整数',
+  mathGroup_arithmetic: '基础算术与比较', mathGroup_integer: '整数与组合', mathGroup_statistics: '统计', mathGroup_vector: '向量', mathGroup_matrix: '小矩阵（显式开启）', mathGroup_polynomial: '多项式（显式开启）', mathGroup_verification: '验证辅助',
+  mathHint_arithmetic: 'add/sub/mul/div 支持三种模式；compare 为精确整数/有理数比较；compare_close 需显式 abs、rel 容差。', mathHint_integer: 'gcd/lcm 使用 bigint 字符串；binomial 的 n、k 为安全整数且 0 ≤ k ≤ n。gcd(0,0)=0，lcm 含零为零。', mathHint_statistics: 'Neumaier 补偿求和、缩放均值、移位缩放方差；ddof 为 0/1，默认 0；空数组仅 sum 返回 0。', mathHint_vector: 'dot 同长有限数组，O(n)；norm2 使用缩放法避免不必要的溢出。', mathHint_matrix: 'matmul 要求矩形和维度匹配，O(mnk)；全部乘加工作量在计算前扣除。', mathHint_polynomial: 'poly_eval 系数从常数项到最高次，Horner O(n)；空系数为零多项式。', mathHint_verification: 'residual_norm 对显式残差向量求范数；A,x,b 组合受矩阵授权约束，只输出计算残差。',
+  mathLimit_maxInputBytes: '输入字节数', mathLimit_maxArrayElements: '单数组元素数', mathLimit_maxTotalElements: '总标量数', mathLimit_maxIntegerInputBits: '整数输入位数', mathLimit_maxIntegerOutputBits: '整数输出位数', mathLimit_maxIntermediateBits: '整数中间结果位数', mathLimit_maxBinomialN: '二项式最大 n', mathLimit_maxMatrixDimension: '矩阵单维大小', mathLimit_maxMultiplyAdds: '乘加数', mathLimit_maxPolynomialDegree: '多项式次数', mathLimit_maxWorkUnits: '单次数学工作量'
+})
+Object.assign(en, {
+  mathTitle: 'Pure mathematical operators', mathEnabled: 'Enable mathematical computation', mathDescription: 'Group, individual operator and numeric mode permissions apply together. Disabled operations are rejected by the backend. Computed evidence checks supplied inputs, not general algorithm correctness.',
+  mathModes: 'Allowed numeric modes', mathExact: 'float64 accepts finite numbers; bigint accepts decimal strings; rational accepts numerator/denominator strings. No implicit conversion. Division by zero is rejected.',
+  mathOptIn: 'Matrix and polynomial groups require explicit opt-in. Matrix residual A,x,b also requires the matrix group and matmul.', mathLimits: 'Advanced: per-call size and work limits', mathCalls: 'Math calls per task (0 = unlimited)', mathWork: 'Cumulative math work per task', mathLimitsHint: 'Math work measures local deterministic computation, independently of model tokens, subscription quotas and Jev. Each call uses the smaller of its configured work limit and the task allowance remaining.', errMath: 'Invalid mathematical permission keys or resource limits; use integers within the displayed ranges',
+  mathGroup_arithmetic: 'Arithmetic and comparison', mathGroup_integer: 'Integer and combinatorics', mathGroup_statistics: 'Statistics', mathGroup_vector: 'Vectors', mathGroup_matrix: 'Small matrices (opt-in)', mathGroup_polynomial: 'Polynomials (opt-in)', mathGroup_verification: 'Verification helpers',
+  mathHint_arithmetic: 'add/sub/mul/div support all three modes; compare is exact bigint/rational comparison; compare_close needs explicit abs and rel tolerances.', mathHint_integer: 'gcd/lcm use bigint strings; binomial takes safe integer n,k with 0 ≤ k ≤ n. gcd(0,0)=0; lcm with zero is zero.', mathHint_statistics: 'Neumaier sum, scaled mean and shifted/scaled variance; ddof is 0/1, default 0. Only sum accepts an empty array.', mathHint_vector: 'dot requires equal-length finite arrays, O(n); norm2 scales inputs to avoid unnecessary overflow.', mathHint_matrix: 'matmul requires rectangular, compatible matrices, O(mnk); all multiply-add work is charged before computation.', mathHint_polynomial: 'poly_eval uses coefficients from constant to highest degree, Horner O(n); an empty list is the zero polynomial.', mathHint_verification: 'residual_norm computes an explicit residual vector norm. A,x,b additionally requires matrix permission; it reports a residual, not a proof.',
+  mathLimit_maxInputBytes: 'Input bytes', mathLimit_maxArrayElements: 'Elements per array', mathLimit_maxTotalElements: 'Total scalars', mathLimit_maxIntegerInputBits: 'Integer input bits', mathLimit_maxIntegerOutputBits: 'Integer output bits', mathLimit_maxIntermediateBits: 'Intermediate integer bits', mathLimit_maxBinomialN: 'Maximum binomial n', mathLimit_maxMatrixDimension: 'Matrix dimension', mathLimit_maxMultiplyAdds: 'Multiply-add count', mathLimit_maxPolynomialDegree: 'Polynomial degree', mathLimit_maxWorkUnits: 'Work per call'
+})
+Object.assign(zh, {
   approvalsTitle: '百工工具审批', approvalsDescription: '为百工会话中所选类别的工具调用增加审批要求。继承沿用宿主策略；请求审批需要宿主提供审批能力；拒绝会阻止这些调用。插件不能覆盖宿主的 never 策略，也不能开启被宿主禁用的 MCP。',
   approvalsBoundary: '作用域只覆盖工具调用。shell 包含 run_code；jev 指显式 jev_* 工具。衡鉴分流、会话判断、交付复评与规划审核的内部 Jev HTTP 调用不受此开关控制。',
   approvalsMode: '审批策略', approvalsInherit: '继承宿主', approvalsAsk: '请求审批', approvalsDeny: '拒绝调用', approvalsScope: '作用域', approvalsWrite: '文件写入', approvalsShell: 'Shell / run_code', approvalsMcp: '外部 MCP', approvalsJev: '显式 Jev 工具', approvalsEmpty: '未选择作用域：此设置不会增加工具审批限制。', errApprovals: '请选择有效的审批策略和作用域',
@@ -269,6 +286,37 @@ const getApprovals = (raw) => {
 const getApprovalErrors = (draft) => !APPROVAL_MODES.includes(draft.mode) || !Array.isArray(draft.scope) || draft.scope.some((scope) => !APPROVAL_SCOPES.includes(scope)) ? 'errApprovals' : undefined
 const sameApprovals = (a, b) => a.mode === b.mode && a.scope.length === b.scope.length && a.scope.every((scope) => b.scope.includes(scope))
 const buildApprovals = (draft, saved) => getApprovalErrors(draft) === undefined ? { ...asRecord(saved), mode: draft.mode, scope: APPROVAL_SCOPES.filter((scope) => draft.scope.includes(scope)) } : undefined
+
+const getMath = (raw) => {
+  const source = asRecord(raw)
+  const defaults = MATH.defaults
+  const invalid = raw !== undefined && (raw === null || typeof raw !== 'object' || Array.isArray(raw))
+  const invalidSection = ['groups', 'operators', 'numericModes', 'limits'].some((key) => source[key] !== undefined && (source[key] === null || typeof source[key] !== 'object' || Array.isArray(source[key])))
+  return { ...defaults, ...source, ...(invalid || invalidSection ? { configurationError: 'Invalid math configuration' } : {}),
+    groups: { ...defaults.groups, ...(source.enableExtended === true ? { matrix: true, polynomial: true } : {}), ...asRecord(source.groups) },
+    operators: { ...defaults.operators, ...asRecord(source.operators) }, numericModes: { ...defaults.numericModes, ...asRecord(source.numericModes) }, limits: { ...defaults.limits, ...asRecord(source.limits) } }
+}
+const mathInteger = (value, minimum, maximum) => (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) && Number.isSafeInteger(Number(value)) && Number(value) >= minimum && Number(value) <= maximum
+const getMathErrors = (value) => {
+  const errors = {}
+  if (typeof value.enabled !== 'boolean' || typeof value.enableExtended !== 'boolean' || value.configurationError !== undefined) errors.enabled = 'errMath'
+  for (const section of ['groups', 'operators', 'numericModes']) {
+    const known = MATH.defaults[section]
+    if (Object.keys(asRecord(value[section])).some((key) => !Object.hasOwn(known, key) || typeof value[section][key] !== 'boolean') || Object.keys(known).some((key) => typeof value[section]?.[key] !== 'boolean')) errors[section] = 'errMath'
+  }
+  if (!mathInteger(value.maxCallsPerTask, 0, MATH.maxCallsPerTask)) errors.maxCallsPerTask = 'errMath'
+  if (!mathInteger(value.maxWorkUnitsPerTask, 1, MATH.maxWorkPerTask)) errors.maxWorkUnitsPerTask = 'errMath'
+  if (Object.keys(asRecord(value.limits)).some((key) => !Object.hasOwn(MATH.defaults.limits, key))) errors.limits = 'errMath'
+  for (const key of Object.keys(MATH.defaults.limits)) if (!mathInteger(value.limits?.[key], 1, MATH.limitMaxima[key])) errors[key] = 'errMath'
+  return errors
+}
+const buildMath = (draft, saved) => {
+  if (Object.keys(getMathErrors(draft)).length > 0) return undefined
+  const { configurationError: _error, ...old } = asRecord(saved)
+  return { ...old, enabled: draft.enabled, enableExtended: false, maxCallsPerTask: Number(draft.maxCallsPerTask), maxWorkUnitsPerTask: Number(draft.maxWorkUnitsPerTask),
+    ...Object.fromEntries(['groups', 'operators', 'numericModes'].map((section) => [section, { ...draft[section] }])),
+    limits: Object.fromEntries(Object.keys(MATH.defaults.limits).map((key) => [key, Number(draft.limits[key])])) }
+}
 
 /** 保留页面不编辑的额度域等 JSON 元数据；容量或形状异常时阻止保存，不静默清掉隔离配置。 */
 const cloneResourcePolicy = (raw) => {
@@ -524,6 +572,7 @@ class SwarmAgentsController {
     /** 会话与重试策略的草稿；undefined 表示没有修改 */
     this.policyDraft = undefined
     this.approvalsDraft = undefined
+    this.mathDraft = undefined
     this.draftRevision = undefined
     this.catalog = { status: 'idle', groups: [], failures: [] }
     this.saving = false
@@ -572,7 +621,33 @@ class SwarmAgentsController {
 
   savedApprovals () { return getApprovals(asRecord(this.form.getSnapshot().value).approvals) }
 
-  hasDrafts () { return this.drafts.size > 0 || this.policyDraft !== undefined || this.approvalsDraft !== undefined }
+  savedMath () { return getMath(asRecord(this.form.getSnapshot().value).math) }
+
+  hasDrafts () { return this.drafts.size > 0 || this.policyDraft !== undefined || this.approvalsDraft !== undefined || this.mathDraft !== undefined }
+
+  setMath (patch) {
+    if (!this.canEdit()) return
+    if (!this.hasDrafts()) this.draftRevision = this.form.getSnapshot().revision
+    const base = this.mathDraft ?? this.savedMath()
+    this.mathDraft = { ...base, ...patch }
+    for (const section of ['groups', 'operators', 'numericModes', 'limits']) this.mathDraft[section] = { ...base[section], ...asRecord(patch[section]) }
+    const normalized = buildMath(this.mathDraft, undefined)
+    const saved = buildMath(this.savedMath(), undefined)
+    if (normalized !== undefined && policyDigest(normalized) === policyDigest(saved)) this.mathDraft = undefined
+    if (!this.hasDrafts()) this.draftRevision = undefined
+    this.notice = undefined
+    this.publish()
+  }
+
+  resetMath () {
+    if (!this.canEdit()) return
+    if (!this.hasDrafts()) this.draftRevision = this.form.getSnapshot().revision
+    this.mathDraft = getMath(undefined)
+    if (policyDigest(buildMath(this.mathDraft, undefined)) === policyDigest(buildMath(this.savedMath(), undefined))) this.mathDraft = undefined
+    if (!this.hasDrafts()) this.draftRevision = undefined
+    this.notice = undefined
+    this.publish()
+  }
 
   setApprovals (patch) {
     if (!this.canEdit()) return
@@ -725,6 +800,7 @@ class SwarmAgentsController {
     this.drafts.clear()
     this.policyDraft = undefined
     this.approvalsDraft = undefined
+    this.mathDraft = undefined
     this.draftRevision = undefined
     this.conflicted = false
     this.notice = undefined
@@ -761,6 +837,11 @@ class SwarmAgentsController {
       if (approvals === undefined) { this.publish(); return }
       ops.push({ op: 'set', path: ['approvals'], value: approvals })
     }
+    if (this.mathDraft !== undefined) {
+      const math = buildMath(this.mathDraft, asRecord(snapshot.value).math)
+      if (math === undefined) { this.publish(); return }
+      ops.push({ op: 'set', path: ['math'], value: math })
+    }
     this.saving = true
     this.notice = undefined
     this.publish()
@@ -776,6 +857,7 @@ class SwarmAgentsController {
       this.drafts.clear()
       this.policyDraft = undefined
       this.approvalsDraft = undefined
+      this.mathDraft = undefined
       this.draftRevision = undefined
       this.conflicted = false
       this.notice = 'saved'
@@ -821,6 +903,7 @@ class SwarmAgentsController {
     this.drafts.clear()
     this.policyDraft = undefined
     this.approvalsDraft = undefined
+    this.mathDraft = undefined
     this.draftRevision = undefined
     this.conflicted = false
     this.refreshCatalog()
@@ -859,16 +942,19 @@ class SwarmAgentsController {
       errors: policyErrors
     }
     const approvals = { value: this.approvalsDraft ?? this.savedApprovals(), dirty: this.approvalsDraft !== undefined, error: this.approvalsDraft === undefined ? undefined : getApprovalErrors(this.approvalsDraft) }
+    const mathValue = this.mathDraft ?? this.savedMath()
+    const math = { value: mathValue, dirty: this.mathDraft !== undefined, errors: getMathErrors(mathValue) }
     return {
       status: snapshot.status,
       writable: snapshot.writable,
       rows,
       policy,
       approvals,
+      math,
       catalog: this.catalog,
       saving: this.saving,
       dirty: this.hasDrafts(),
-      invalid: rows.some((row) => row.dirty && hasErrors(row.errors)) || Object.values(policyErrors).some((error) => error !== undefined) || approvals.error !== undefined,
+      invalid: rows.some((row) => row.dirty && hasErrors(row.errors)) || Object.values(policyErrors).some((error) => error !== undefined) || approvals.error !== undefined || (math.dirty && Object.keys(math.errors).length > 0),
       conflicted: this.conflicted,
       notice: this.notice
     }
@@ -998,11 +1084,11 @@ class JevKeyController {
 // ───────────────────────── 视图 ─────────────────────────
 
 const color = {
-  primary: 'var(--dsw-alias-label-primary)',
-  secondary: 'var(--dsw-alias-label-secondary)',
-  tertiary: 'var(--dsw-alias-label-tertiary)',
-  border: 'var(--dsw-alias-border-l2)',
-  layer: 'var(--dsw-alias-bg-layer-3)',
+  primary: 'var(--dsw-alias-label-primary, #182635)',
+  secondary: 'var(--dsw-alias-label-secondary, #596b7d)',
+  tertiary: 'var(--dsw-alias-label-tertiary, #6a7e95)',
+  border: 'var(--dsw-alias-border-l2, #d9e0e8)',
+  layer: 'var(--dsw-alias-bg-layer-3, #fff)',
   danger: 'var(--dsw-alias-label-danger, #d9480f)',
   success: 'var(--dsw-alias-label-success, #2b8a3e)'
 }
@@ -1023,7 +1109,7 @@ const style = {
   select: { height: 30, minWidth: 0, width: '100%', padding: '0 8px', font: 'inherit', fontSize: 12, borderRadius: 8, border: `1px solid ${color.border}`, background: color.layer, color: color.primary },
   error: { gridColumn: '2 / -1', fontSize: 11, color: color.danger, marginTop: -2 },
   spacer: { flex: 1 },
-  footer: { position: 'sticky', bottom: 0, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', padding: '10px 0', borderTop: `1px solid ${color.border}`, background: 'var(--dsw-alias-bg-layer-2)' },
+  footer: { position: 'sticky', bottom: 0, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', padding: '10px 0', borderTop: `1px solid ${color.border}`, background: 'var(--dsw-alias-bg-layer-2, #f7f8fb)' },
   btn: { font: 'inherit', fontSize: 13, padding: '5px 14px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${color.border}`, background: 'none', color: color.secondary },
   btnSmall: { font: 'inherit', fontSize: 12, padding: '2px 10px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${color.border}`, background: 'none', color: color.secondary },
   btnLink: { font: 'inherit', fontSize: 12, padding: '2px 0', border: 'none', background: 'none', color: color.secondary, cursor: 'pointer', justifySelf: 'start' },
@@ -1251,6 +1337,43 @@ function ApprovalsCard ({ t, approvals, editable, controller }) {
   )
 }
 
+function MathNumber ({ t, label, value, maximum, minimum = 1, error, editable, onChange }) {
+  return h('label', { style: style.field },
+    h('span', { style: style.fieldLabel }, t(label)),
+    h('input', { style: style.input, type: 'number', step: 1, min: minimum, max: maximum, value: String(value), disabled: !editable, 'aria-label': t(label), onChange: (event) => onChange(event.target.value) }),
+    error === undefined ? h('span', { style: style.hint }, `${minimum} – ${maximum}`) : h('span', { style: style.fieldError, role: 'alert' }, t(error)))
+}
+
+function MathCard ({ t, math, editable, controller }) {
+  const value = math.value
+  return h('div', { style: style.card, 'data-swarm-math': 'operators' },
+    h('div', { style: style.cardHead }, h('span', { style: style.name }, t('mathTitle')),
+      math.dirty ? h('span', { style: style.tag }, t('pending')) : null,
+      h('span', { style: style.spacer }), h('button', { type: 'button', style: style.btnSmall, disabled: !editable, onClick: () => controller.resetMath() }, t('reset'))),
+    h('p', { style: style.note }, t('mathDescription')),
+    h('label', { style: style.switchLabel }, h('input', { type: 'checkbox', checked: value.enabled, disabled: !editable, onChange: (event) => controller.setMath({ enabled: event.target.checked }) }), t('mathEnabled')),
+    h('div', { style: style.chips, role: 'group', 'aria-label': t('mathModes') }, ...Object.keys(MATH.defaults.numericModes).map((mode) => h('label', { key: mode, style: style.chip },
+      h('input', { type: 'checkbox', checked: value.numericModes[mode], disabled: !editable, onChange: (event) => controller.setMath({ numericModes: { [mode]: event.target.checked } }) }), mode))),
+    h('p', { style: style.note }, t('mathExact')),
+    ...Object.entries(MATH.groups).map(([group, operators]) => h('details', { key: group, 'data-swarm-math-group': group },
+      h('summary', { style: { ...style.switchLabel, display: 'flex', flexWrap: 'wrap' } },
+        h('input', { type: 'checkbox', checked: value.groups[group], disabled: !editable, 'aria-label': t(`mathGroup_${group}`), onClick: (event) => event.stopPropagation(), onChange: (event) => controller.setMath({ groups: { [group]: event.target.checked } }) }),
+        t(`mathGroup_${group}`), h('span', { style: { ...style.hint, overflowWrap: 'anywhere' } }, operators.join(' / '))),
+      h('p', { style: { ...style.note, margin: '8px 0' } }, t(`mathHint_${group}`)),
+      h('div', { style: style.chips }, ...operators.map((op) => h('label', { key: op, style: style.chip },
+        h('input', { type: 'checkbox', checked: value.operators[op], disabled: !editable, 'aria-label': op, onChange: (event) => controller.setMath({ operators: { [op]: event.target.checked } }) }), op))))),
+    h('p', { style: style.note }, t('mathOptIn')),
+    h('div', { style: style.policyGrid },
+      h(MathNumber, { t, label: 'mathCalls', value: value.maxCallsPerTask, minimum: 0, maximum: MATH.maxCallsPerTask, error: math.errors.maxCallsPerTask, editable, onChange: (next) => controller.setMath({ maxCallsPerTask: next }) }),
+      h(MathNumber, { t, label: 'mathWork', value: value.maxWorkUnitsPerTask, maximum: MATH.maxWorkPerTask, error: math.errors.maxWorkUnitsPerTask, editable, onChange: (next) => controller.setMath({ maxWorkUnitsPerTask: next }) })),
+    h('details', null, h('summary', { style: style.fieldLabel }, t('mathLimits')),
+      h('p', { style: { ...style.note, margin: '8px 0' } }, t('mathLimitsHint')),
+      h('div', { style: style.policyGrid }, ...Object.keys(MATH.defaults.limits).map((key) => h(MathNumber, {
+        key, t, label: `mathLimit_${key}`, value: value.limits[key], maximum: MATH.limitMaxima[key], error: math.errors[key], editable, onChange: (next) => controller.setMath({ limits: { [key]: next } }) })))),
+    Object.keys(math.errors).length === 0 ? null : h('p', { style: style.fieldError, role: 'alert' }, t('errMath'))
+  )
+}
+
 /** 专家会话与重试策略 */
 function PolicyCard ({ t, policy, editable, controller }) {
   const value = policy.value
@@ -1370,6 +1493,7 @@ function SwarmAgentsSection ({ controller, jev }) {
     catalogLine,
     h(ApprovalsCard, { key: 'approvals', t, approvals: state.approvals, editable, controller }),
     h(PolicyCard, { key: 'policy', t, policy: state.policy, editable, controller }),
+    h(MathCard, { key: 'math', t, math: state.math, editable, controller }),
     ...state.rows.map((row) => h(AgentCard, { key: row.key, t, row, groups, editable, controller })),
     h('div', { style: style.footer },
       notice,
@@ -1421,4 +1545,4 @@ function apply (ctx) {
 exports.inject = inject
 exports.apply = apply
 exports.NS = NS
-exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, ApprovalsCard, JevTestLine, LayerGrid, SwarmAgentsController, JevKeyController, DATA }
+exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, getMath, getMathErrors, buildMath, MathCard, ApprovalsCard, JevTestLine, LayerGrid, SwarmAgentsController, JevKeyController, DATA }

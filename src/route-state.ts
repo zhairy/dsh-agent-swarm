@@ -15,6 +15,7 @@ import { intRouteHealth, type RouteHealth, type RouteHealthSnapshot } from './ro
 import { SwarmError } from './util/errors.js'
 import { getFailureClass, getRouteKey, getRouteLabel, isSameRoute, type FailureClass, type RouteInfo, type RouteProbe } from './routes.js'
 import { getUpgradedChain } from './upgrade.js'
+import { getCanonicalJson } from './workflow.js'
 
 /** 一次路由回退 */
 export interface FallbackEventInfo {
@@ -28,6 +29,8 @@ export interface FallbackEventInfo {
 interface ChildStateInfo {
   chain: RouteInfo[]
   baseChain?: RouteInfo[]
+  /** Preflight selected a quota preference, not a failed preferred-route trial. */
+  initialQuotaOrder?: RouteInfo[]
   index: number
   role: RoleId
   tried: ReadonlySet<string>
@@ -92,6 +95,9 @@ export interface RouteStateOptionsInfo {
   /** Maximum wait at the next request boundary, not a model or filesystem cancellation timeout. */
   healthCommitWaitMs?: number
   onPreferredRecovery?: (event: PreferredRecoveryEventInfo) => void
+  /** Source-reported quota may change preference only; health and actual failures remain authoritative. */
+  orderQuotaRoutes?: (routes: readonly RouteInfo[], signal?: AbortSignal, protectedRoutes?: readonly RouteInfo[]) => Promise<readonly RouteInfo[]>
+  onRouteSuccess?: (route: RouteInfo) => void
 }
 
 export interface RequestRecoveryState {
@@ -125,7 +131,7 @@ const NETWORK_WAIT_RESET_MS = 30 * 60_000
 /** 路由状态注册表：spawn 子智能体按链回退，swarm 预设的根会话按角色链回退 */
 export interface RouteStateRegistry {
   /** 登记子智能体（或连续会话的新一轮）：路由链从头开始，已试记录清空 */
-  AddChild: (agentId: string, state: { chain: RouteInfo[]; role: RoleId; onFallback?: (event: FallbackEventInfo) => void; persistent?: boolean; logicalRequestId?: string; initialRoute?: RouteInfo; respectStoredOverride?: boolean; requireVision?: boolean }) => void
+  AddChild: (agentId: string, state: { chain: RouteInfo[]; role: RoleId; onFallback?: (event: FallbackEventInfo) => void; persistent?: boolean; logicalRequestId?: string; initialRoute?: RouteInfo; initialQuotaOrder?: readonly RouteInfo[]; respectStoredOverride?: boolean; requireVision?: boolean }) => void
   BeginLogicalRequest: (agentId: string, logicalRequestId: string) => void
   BeginRequestStep: (agentId: string, turn: number, step: number) => void
   /** The delegation owner calls this after every result/terminal has been consumed, including failure and cancellation. */
@@ -158,6 +164,7 @@ export interface RouteStateRegistry {
   getRootPreference: (agentId: string) => RouteInfo | undefined
   RecordUserSelection: (agentId: string, route: RouteInfo, seq?: number) => void
   PreparePreferredRecovery: (agent: AgentLike, resolved: CallConfigLike, presetRole: RoleId | undefined, config: SwarmConfigInfo) => Promise<void>
+  PrepareQuotaRouting: (agent: AgentLike, resolved: CallConfigLike, presetRole: RoleId | undefined, config: SwarmConfigInfo, signal?: AbortSignal) => Promise<void>
   RequestRouteRetry: (route: RouteInfo, agentId: string, options?: { force?: boolean }) => { ok: boolean; keys: string[]; reason?: string; retryAt?: number }
   CancelRouteRetry: (agentId: string) => void
   /** 设置或撤销根会话的容灾升级链（已预检可用的路由） */
@@ -240,6 +247,11 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
   const recoveryBoundaries = new Set<string>()
   const preferredRecoveryWaits = new Map<string, { failures: number; nextAt: number }>()
   const preferredTrials = new Map<string, PreferredRecoveryEventInfo>()
+  // An effective order belongs to one logical step. Keep declared chains intact
+  // so preferred recovery still refers to the user's original preference.
+  const quotaOrders = new Map<string, { logicalRequestId: string; chain: RouteInfo[] }>()
+  const quotaPreparations = new Map<string, object>()
+  const quotaManualSelections = new Set<string>()
   let requestSequence = 0
   const begin = (agentId: string, id: string): void => {
     const changed = recoveries.get(agentId)?.logicalRequestId !== id
@@ -271,6 +283,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     disposedTerminals.delete(agentId)
     recoveries.set(agentId, state)
     if (changed) {
+      quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
       recoveryBoundaries.add(agentId)
       preferredTrials.delete(agentId)
       const child = children.get(agentId)
@@ -280,6 +293,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     }
   }
   const forgetRecovery = (agentId: string, preserveTerminal: boolean): void => {
+    quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
     const scope = agentScopes.get(agentId)
     const group = scope === undefined ? undefined : logical.get(scope)
     // Scoped children remain readable until FinishLogicalRequest: the delegate
@@ -375,27 +389,55 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     preferredTrials.delete(agentId)
   }
 
-  const getChildFallback = (agentId: string, state: ChildStateInfo, failure: LlmFailureLike, failureClass: FailureClass, _action: RequestErrorActionLike): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
+  const effectiveChain = (agentId: string, declared: RouteInfo[]): RouteInfo[] => {
+    const ordered = quotaOrders.get(agentId)
+    return ordered !== undefined && ordered.logicalRequestId === recoveries.get(agentId)?.logicalRequestId ? ordered.chain : declared
+  }
+  const quotaCancelled = (signal?: AbortSignal): void => {
+    if (signal?.aborted === true) throw new SwarmError('RECOVERY_REQUIRED', '额度路由准备已取消；未启动新的模型请求')
+  }
+  const canUse = (route: RouteInfo): boolean => {
+    const policy = getRouteResourcePolicy(route)
+    return health.isAvailable(route) && policy.accessMode !== 'judgment_api' && policy.capabilities?.generation !== false && policy.capabilities?.tools !== false
+  }
+  // Never let an adapter add/drop models or replace declared policy metadata.
+  const validatedQuotaOrder = (declared: RouteInfo[], proposed: readonly RouteInfo[]): RouteInfo[] => {
+    if (!Array.isArray(proposed) || proposed.length !== declared.length) return declared
+    const remaining = [...declared]
+    const ordered: RouteInfo[] = []
+    for (const route of proposed) {
+      if (route === null || typeof route !== 'object') return declared
+      const index = remaining.findIndex((candidate) => sameSelection(candidate, route))
+      if (index < 0) return declared
+      ordered.push(remaining.splice(index, 1)[0]!)
+    }
+    return ordered
+  }
+
+  const getChildFallback = (agentId: string, state: ChildStateInfo, failure: LlmFailureLike, failureClass: FailureClass, _action: RequestErrorActionLike, signal?: AbortSignal): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
     const current = state.chain[state.index] as RouteInfo
+    const chain = effectiveChain(agentId, state.chain)
+    const start = quotaOrders.has(agentId) ? 0 : state.index + 1
     if (state.index === 0 || preferredTrials.has(agentId)) delayPreferred(agentId)
     const tried = new Set([...state.tried, getRouteLabel(current)])
     const settle = (next: number | undefined): RequestErrorActionLike => {
-      if (manualPauses.has(agentId) || children.get(agentId) !== state) return undefined
+      if (signal?.aborted === true || manualPauses.has(agentId) || children.get(agentId) !== state) return undefined
       if (next === undefined) {
         children.set(agentId, { ...state, tried })
         return terminal(agentId, 'route_chain_exhausted', failure)
       }
-      const to = state.chain[next] as RouteInfo
-      children.set(agentId, { ...state, index: next, tried })
+      const to = chain[next] as RouteInfo
+      children.set(agentId, { ...state, index: state.chain.findIndex((route) => sameSelection(route, to)), tried })
       state.onFallback?.({ agentId, from: current, to, failure, scope: 'child' })
       return { kind: 'retry' }
     }
-    if (probe === undefined) return settle(FindNextIndex(state.chain, state.index + 1, tried, current, failureClass, health))
+    if (probe === undefined) return settle(FindNextIndex(chain, start, tried, current, failureClass, health))
     return (async () => {
-      for (let next = FindNextIndex(state.chain, state.index + 1, tried, current, failureClass, health); next !== undefined; next = FindNextIndex(state.chain, next + 1, tried, current, failureClass, health)) {
-        const candidate = state.chain[next] as RouteInfo
-        const checked = await probe(candidate)
-        if (manualPauses.has(agentId) || children.get(agentId) !== state) return undefined
+      for (let next = FindNextIndex(chain, start, tried, current, failureClass, health); next !== undefined; next = FindNextIndex(chain, next + 1, tried, current, failureClass, health)) {
+        if (signal?.aborted === true) return undefined
+        const candidate = chain[next] as RouteInfo
+        const checked = await (signal === undefined ? probe(candidate) : probe(candidate, signal))
+        if (Boolean(signal?.aborted) || manualPauses.has(agentId) || children.get(agentId) !== state) return undefined
         if (checked.ok && (state.requireVision !== true || checked.vision)) return settle(next)
         tried.add(getRouteLabel(candidate))
       }
@@ -407,14 +449,17 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     const agentId = payload.agent.id
     const failed = lastRoutes.get(agentId) ?? { provider: payload.provider, model: '' }
     const previous = roots.get(agentId)
+    const preference = rootPreferences.get(agentId)
+    const recovery = recoveries.get(agentId)
     const picker = rootPreferences.get(agentId) ?? previous?.picker ?? lastResolved.get(agentId) ?? failed
     const tried = new Set([...(previous?.tried ?? []), getRouteLabel(failed)])
     const roleChain = getRoleRoute(config, getRouteKey(presetRole)).chain
     const upgrade = upgrades.get(agentId)
     // 升级期间：先在升级链内回退，再回到常规链
-    const chain = upgrade === undefined ? roleChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, roleChain)
+    const chain = effectiveChain(agentId, upgrade === undefined ? roleChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, roleChain))
     if (preferredTrials.has(agentId) || isSameRoute(failed, picker)) delayPreferred(agentId)
     const settle = (next: number | undefined): RequestErrorActionLike => {
+      if (payload.signal?.aborted === true || manualPauses.has(agentId) || recoveries.get(agentId) !== recovery || roots.get(agentId) !== previous || rootPreferences.get(agentId) !== preference || upgrades.get(agentId) !== upgrade) return undefined
       if (next === undefined) {
         roots.set(agentId, { ...previous, picker, tried })
         return terminal(agentId, 'route_chain_exhausted', payload.failure)
@@ -430,7 +475,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       for (let next = FindNextIndex(chain, 0, tried, failed, failureClass, health); next !== undefined; next = FindNextIndex(chain, next + 1, tried, failed, failureClass, health)) {
         if (payload.signal?.aborted === true) return undefined
         const route = chain[next] as RouteInfo
-        if ((await probe(route)).ok) return next
+        if ((await (payload.signal === undefined ? probe(route) : probe(route, payload.signal))).ok) return next
         tried.add(getRouteLabel(route))
       }
       return undefined
@@ -485,6 +530,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       for (const agentId of group.agents) {
         if (agentScopes.get(agentId) !== id) continue
         agentScopes.delete(agentId)
+        quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
         disposedTerminals.delete(agentId)
         if (children.get(agentId)?.persistent !== true) {
           recoveries.delete(agentId)
@@ -528,6 +574,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     },
     MarkRequestSucceeded: (id) => {
       const route = lastRoutes.get(id)
+      try { if (route !== undefined) options.onRouteSuccess?.(route) } catch { /* Advisory source bookkeeping cannot undo an actual success. */ }
       const healthChanged = route !== undefined && health.succeeded(route, id)
       const trial = preferredTrials.get(id)
       if (trial !== undefined) {
@@ -567,6 +614,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       const initial = state.initialRoute === undefined ? 0 : prepared.findIndex((route) => sameSelection(route, state.initialRoute!))
       children.set(agentId, {
         chain: prepared, baseChain: [...state.chain], index: Math.max(0, initial), role: state.role, tried: new Set(),
+        ...(state.initialQuotaOrder === undefined ? {} : { initialQuotaOrder: validatedQuotaOrder(prepared, state.initialQuotaOrder) }),
         ...(state.onFallback === undefined ? {} : { onFallback: state.onFallback }),
         ...(state.persistent === true ? { persistent: true } : {}),
         ...(state.logicalRequestId === undefined ? {} : { logicalRequestId: state.logicalRequestId }),
@@ -585,7 +633,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       else childOverrides.set(agentId, { ...route })
       if (manualRetries.has(agentId) && (route === undefined || !isSameRoute(manualRetries.get(agentId)!.route, route))) manualRetries.delete(agentId)
       const current = children.get(agentId)
-      if (current !== undefined && !(previous !== undefined && route !== undefined && sameSelection(previous, route))) children.set(agentId, { ...current, chain: selectedChain(current.baseChain ?? current.chain, route), index: 0, tried: new Set() })
+      quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
+      if (current !== undefined && !(previous !== undefined && route !== undefined && sameSelection(previous, route))) children.set(agentId, { ...current, chain: selectedChain(current.baseChain ?? current.chain, route), index: 0, tried: new Set(), initialQuotaOrder: undefined })
     },
     getChildOverride: (agentId) => { const value = childOverrides.get(agentId); return value === undefined ? undefined : { ...value } },
     SetManualPause: (agentId, paused) => { if (paused) manualPauses.add(agentId); else manualPauses.delete(agentId) },
@@ -597,10 +646,12 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       if (seq !== undefined && (userSelectionSeqs.get(agentId) ?? -1) >= seq) return
       if (seq !== undefined) userSelectionSeqs.set(agentId, seq)
       if (children.has(agentId)) api.SetChildOverride(agentId, route)
-      else { rootPreferences.set(agentId, { ...route }); roots.delete(agentId); upgrades.delete(agentId) }
+      else { rootPreferences.set(agentId, { ...route }); roots.delete(agentId); upgrades.delete(agentId); quotaManualSelections.add(agentId) }
+      quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
       preferredTrials.delete(agentId); preferredRecoveryWaits.delete(agentId)
     },
     PreparePreferredRecovery: async (agent, resolved, role, config) => {
+      if (managed(agent, role) && recoveries.get(agent.id)?.completed) begin(agent.id, `${agent.id}:request:${++requestSequence}`)
       if (!managed(agent, role) || manualPauses.has(agent.id) || !recoveryBoundaries.delete(agent.id)) return
       if (rootPreferences.get(agent.id) === undefined && !children.has(agent.id)) rootPreferences.set(agent.id, { provider: resolved.provider, model: resolved.model, ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort }) })
       if ((preferredRecoveryWaits.get(agent.id)?.nextAt ?? 0) > now()) return
@@ -612,7 +663,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       const logicalRequestId = recoveryOf(agent.id).logicalRequestId
       const current = lastRoutes.get(agent.id) ?? child?.chain[child.index] ?? root?.override ?? upgrade?.chain[upgrade.index] ?? resolved
       let candidates: RouteInfo[] = []
-      if (child !== undefined) candidates = child.chain.slice(0, child.index)
+      if (child !== undefined && !(child.initialQuotaOrder !== undefined && !lastRoutes.has(agent.id))) candidates = child.chain.slice(0, child.index)
       else if (upgrade !== undefined) {
         const at = upgrade.chain.findIndex((route) => isSameRoute(route, root?.override ?? upgrade.chain[upgrade.index]!))
         candidates = upgrade.chain.slice(0, Math.max(0, at))
@@ -621,7 +672,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
         const resource = getRouteResourcePolicy(candidate)
         if (!health.isAvailable(candidate) || resource.accessMode === 'judgment_api' || resource.capabilities?.generation === false || resource.capabilities?.tools === false) continue
         const checked = probe === undefined ? { ok: true as const, vision: true } : await probe(candidate)
-        if (manualPauses.has(agent.id) || recoveryOf(agent.id).logicalRequestId !== logicalRequestId || children.get(agent.id) !== child || upgrades.get(agent.id) !== upgrade || roots.get(agent.id) !== root) return
+        if (manualPauses.has(agent.id) || recoveries.get(agent.id)?.logicalRequestId !== logicalRequestId || children.get(agent.id) !== child || upgrades.get(agent.id) !== upgrade || roots.get(agent.id) !== root) return
         if (!checked.ok || (child?.requireVision === true && !checked.vision)) continue
         if (child !== undefined) children.set(agent.id, { ...child, index: child.chain.findIndex((route) => sameSelection(route, candidate)) })
         else if (upgrade !== undefined) { roots.delete(agent.id); upgrade.index = upgrade.chain.findIndex((route) => sameSelection(route, candidate)) }
@@ -631,6 +682,62 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
         return
       }
       if (candidates.length > 0) preferredRecoveryWaits.set(agent.id, { failures: preferredRecoveryWaits.get(agent.id)?.failures ?? 0, nextAt: now() + 5000 })
+    },
+    PrepareQuotaRouting: async (agent, resolved, role, config, signal) => {
+      if (!managed(agent, role)) return
+      quotaCancelled(signal)
+      if (options.orderQuotaRoutes === undefined || manualPauses.has(agent.id) || childOverrides.has(agent.id) || quotaManualSelections.has(agent.id) || (!children.has(agent.id) && !config.rootFallback)) return
+      const recovery = recoveryOf(agent.id)
+      if (recovery.terminal !== undefined || quotaOrders.get(agent.id)?.logicalRequestId === recovery.logicalRequestId) return
+      const child = children.get(agent.id)
+      const root = roots.get(agent.id)
+      const upgrade = upgrades.get(agent.id)
+      const roleChain = role === undefined ? [] : getRoleRoute(config, getRouteKey(role)).chain
+      const preferred = rootPreferences.get(agent.id) ?? resolved
+      const declared = child?.chain ?? (upgrade === undefined ? selectedChain(roleChain, preferred) : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, roleChain))
+      if (declared.length === 0) return
+      const current = child?.chain[child.index] ?? root?.override ?? upgrade?.chain[upgrade.index] ?? withDeclaredPolicy(roleChain, preferred)
+      const trial = preferredTrials.get(agent.id)?.to
+      const token = {}
+      quotaPreparations.set(agent.id, token)
+      try {
+        let proposed: readonly RouteInfo[]
+        try { proposed = child?.initialQuotaOrder ?? await options.orderQuotaRoutes(declared, signal, trial === undefined ? [] : [trial]) }
+        catch (error) { quotaCancelled(signal); proposed = declared }
+        quotaCancelled(signal)
+        const stillCurrent = () => quotaPreparations.get(agent.id) === token && recoveries.get(agent.id) === recovery && children.get(agent.id) === child && roots.get(agent.id) === root && upgrades.get(agent.id) === upgrade && !manualPauses.has(agent.id) && !childOverrides.has(agent.id) && !quotaManualSelections.has(agent.id)
+        if (!stillCurrent()) return
+        const chain = validatedQuotaOrder(declared, proposed)
+        quotaOrders.set(agent.id, { logicalRequestId: recovery.logicalRequestId, chain })
+        // Once an attempt was admitted, quota must not replay a route or reset its
+        // bounded recovery state. Fallback uses this order and the existing tried set.
+        // Established fallback recovery still belongs to its existing timer and
+        // probe policy; a newly read quota report cannot rewind that policy.
+        const retainedFallback = lastRoutes.has(agent.id) && (child === undefined ? root?.override !== undefined || (upgrade?.index ?? 0) > 0 : child.index > 0)
+        if (recovery.attempts > 0 || child?.initialQuotaOrder !== undefined || trial !== undefined || retainedFallback || chain.every((route, index) => sameSelection(route, declared[index]!))) return
+        for (const candidate of chain) {
+          quotaCancelled(signal)
+          if (!canUse(candidate)) continue
+          // Preflight already verified the chosen child route. New root choices
+          // and other candidates must pass the same capability/metadata gate.
+          if (!sameSelection(candidate, current) && probe !== undefined) {
+            const checked = await probe(candidate, signal)
+            quotaCancelled(signal)
+            if (!stillCurrent()) return
+            if (!checked.ok || (child?.requireVision === true && !checked.vision)) continue
+          }
+          if (!stillCurrent()) return
+          if (child !== undefined) children.set(agent.id, { ...child, index: child.chain.findIndex((route) => sameSelection(route, candidate)) })
+          else if (!sameSelection(candidate, current)) roots.set(agent.id, { override: candidate, at: now(), picker: preferred, tried: root?.tried ?? new Set() })
+          return
+        }
+      } finally {
+        // A late cancelled step must not erase a newer step's effective chain.
+        if (quotaPreparations.get(agent.id) === token) {
+          quotaPreparations.delete(agent.id)
+          if (signal?.aborted === true && quotaOrders.get(agent.id)?.logicalRequestId === recovery.logicalRequestId) quotaOrders.delete(agent.id)
+        }
+      }
     },
     RequestRouteRetry: (route, agentId, retryOptions) => {
       const override = childOverrides.get(agentId)
@@ -654,6 +761,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       const root = roots.get(agentId)
       const previous = upgrades.get(agentId)
       if (chain === undefined || chain.length === 0) {
+        quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
         upgrades.delete(agentId)
         // 撤销本次升级的全部自动回退；稳定人工偏好仍由 rootPreferences 保留。
         roots.delete(agentId)
@@ -661,19 +769,25 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
         return
       }
       const sameChain = previous !== undefined && previous.chain.length === chain.length
-        && previous.chain.every((route, index) => sameSelection(route, chain[index]!))
+        && previous.chain.every((route, index) => sameSelection(route, chain[index]!) && getCanonicalJson(route.policy ?? {}) === getCanonicalJson(chain[index]!.policy ?? {}))
+      // Status/card refreshes often repeat the same chain while a metadata probe
+      // is in flight. Preserve identity and clocks so that valid recovery can settle.
+      const completesChain = initialUsableRoute !== undefined && previous?.completeChain !== true
+      if (sameChain && !completesChain) return
       const current = root?.override ?? (previous === undefined ? undefined : previous.chain[previous.index])
       const retained = current === undefined ? -1 : chain.findIndex((route) => sameSelection(route, current))
       // Task-card/status refresh is not permission to retry the preferred model.
       // Keep the active fallback and its clock even when metadata says a higher
       // candidate is usable; PreparePreferredRecovery owns safe timed recovery.
       if (previous !== undefined && (sameChain || retained >= 0)) {
+        if (!sameChain || completesChain) { quotaOrders.delete(agentId); quotaPreparations.delete(agentId) }
         upgrades.set(agentId, { ...previous, chain: [...chain], index: retained >= 0 ? retained : previous.index,
           ...(initialUsableRoute === undefined ? {} : { completeChain: true }) })
         if (root?.override !== undefined && retained >= 0) roots.set(agentId, { ...root, override: chain[retained] })
         return
       }
       const initial = initialUsableRoute === undefined ? 0 : chain.findIndex((route) => sameSelection(route, initialUsableRoute))
+      quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
       upgrades.set(agentId, { chain: [...chain], index: Math.max(0, initial), at: now(), ...(initialUsableRoute === undefined ? {} : { completeChain: true }), ...(previous?.picker === undefined ? {} : { picker: previous.picker }) })
       // 升级优先于之前的回退覆盖；已试记录保留，升级链失败后不会再回到已失败的路由
       if (root?.override !== undefined) roots.set(agentId, { ...root, override: undefined })
@@ -683,6 +797,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       return chain === undefined ? undefined : [...chain]
     },
     DelAgent: (agentId) => {
+      quotaOrders.delete(agentId); quotaPreparations.delete(agentId); quotaManualSelections.delete(agentId)
       health.release(agentId)
       forgetRecovery(agentId, true)
       children.delete(agentId)
@@ -697,8 +812,10 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       networkWaits.delete(agentId)
     },
     ReleaseAgent: (agentId) => {
+      quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
       health.release(agentId)
       if (children.get(agentId)?.persistent === true) return
+      quotaManualSelections.delete(agentId)
       forgetRecovery(agentId, false)
       children.delete(agentId)
       childOverrides.delete(agentId)
@@ -732,7 +849,10 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       }
       const root = roots.get(agent.id)
       // 只在旧宿主的排除自动回退后兼容识别人选；新宿主由 RecordUserSelection 更新。
-      if (child === undefined && legacyUserChange) { rootPreferences.set(agent.id, { ...resolved }); roots.delete(agent.id); upgrades.delete(agent.id) }
+      if (child === undefined && legacyUserChange) {
+        rootPreferences.set(agent.id, { ...resolved }); roots.delete(agent.id); upgrades.delete(agent.id)
+        quotaManualSelections.add(agent.id); quotaOrders.delete(agent.id); quotaPreparations.delete(agent.id)
+      }
       if (child === undefined && !rootPreferences.has(agent.id)) rootPreferences.set(agent.id, { ...resolved })
       const preferredRoot = rootPreferences.get(agent.id) ?? resolved
       // 回退覆盖到期：故障多半已经恢复（例如断网结束），重新尝试对话框所选模型；再失败会重新回退
@@ -758,14 +878,16 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       if (route === undefined || incompatible || !health.claim(route, agent.id)) {
         if (child === undefined && config?.rootFallback === false) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'root-fallback-disabled: route_chain_exhausted') }
         const baseChain = config === undefined || _presetRole === undefined ? [] : getRoleRoute(config, getRouteKey(_presetRole)).chain
-        const chain = child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain))
-        const index = FindNextIndex(chain, child === undefined ? 0 : child.index + 1, child?.tried ?? roots.get(agent.id)?.tried ?? new Set(), route ?? resolved, 'other', health)
+        const chain = effectiveChain(agent.id, child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain)))
+        const index = FindNextIndex(chain, child === undefined || quotaOrders.has(agent.id) ? 0 : child.index + 1, child?.tried ?? roots.get(agent.id)?.tried ?? new Set(), route ?? resolved, 'other', health)
         if (index === undefined) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'route_chain_exhausted') }
         route = chain[index] as RouteInfo
         if (!health.claim(route, agent.id)) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'route_chain_exhausted') }
-        if (child !== undefined) children.set(agent.id, { ...child, index })
+        if (child !== undefined) children.set(agent.id, { ...child, index: child.chain.findIndex((candidate) => sameSelection(candidate, route!)) })
         else roots.set(agent.id, { override: route, at: now(), picker: resolved, tried: root?.tried ?? new Set() })
       }
+      const activeChild = children.get(agent.id)
+      if (activeChild?.initialQuotaOrder !== undefined) children.set(agent.id, { ...activeChild, initialQuotaOrder: undefined })
       recovery.attempts += 1
       recovery.attemptedRoutes.push(getRouteLabel(route))
       const next = route === undefined ? resolved : getRoutedConfig(resolved, route)
@@ -790,7 +912,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
         if (longWait) recovery.suppressedRetryAfterMs = normalized.providerRetryAfterMs
       }
       const afterHealthCommit = (): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
-        if (manualPauses.has(payload.agent.id) || payload.signal?.aborted === true) return undefined
+        if (recoveries.get(payload.agent.id) !== recovery || manualPauses.has(payload.agent.id) || payload.signal?.aborted === true) return undefined
         // 第八次的终态故障仍要记录域隔离，随后停止恢复，不再尝试第九个模型。
         if (recovery.attempts >= policy.maxLogicalAttempts) return terminal(payload.agent.id, 'recovery_attempts_exhausted')
         if (!fatal && !longWait && !failedProbe && (!isNetworkSuspect(payload.failure) || options.network === undefined || config.agents.networkWaitMs <= 0)) {
@@ -804,17 +926,23 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
           }
         }
         const child = children.get(payload.agent.id)
+        const withQuota = (fallback: () => RequestErrorActionLike | Promise<RequestErrorActionLike>) => options.orderQuotaRoutes === undefined ? fallback : async () => {
+          try { await api.PrepareQuotaRouting(payload.agent, { ...failed }, presetRole, config, payload.signal) }
+          catch (error) { if (payload.signal?.aborted === true) return undefined; throw error }
+          if (recoveries.get(payload.agent.id) !== recovery || payload.signal?.aborted === true) return undefined
+          return fallback()
+        }
         if (child !== undefined) {
-          const fallback = () => {
+          const fallback = withQuota(() => {
             // 等待期间子智能体可能已被释放或重新登记：以最新状态为准
             const latest = children.get(payload.agent.id)
-            return latest === undefined ? action : getChildFallback(payload.agent.id, latest, payload.failure, failureClass, action)
-          }
+            return latest === undefined ? action : getChildFallback(payload.agent.id, latest, payload.failure, failureClass, action, payload.signal)
+          })
           return fatal || longWait || failedProbe ? fallback() : getNetworkAwareAction(payload, 'child', config, fallback)
         }
         if (!config.rootFallback || presetRole === undefined) return fatal || longWait || failedProbe ? terminal(payload.agent.id, 'route_chain_exhausted', payload.failure) : action
         if (getAgentHeader(payload.agent).parentSession !== undefined) return action
-        const fallback = () => getRootFallback(payload, presetRole, failureClass, action, config)
+        const fallback = withQuota(() => getRootFallback(payload, presetRole, failureClass, action, config))
         return fatal || longWait || failedProbe ? fallback() : getNetworkAwareAction(payload, 'root', config, fallback)
       }
       if ((fatal || longWait || failedProbe) && options.onHealthChange !== undefined) {

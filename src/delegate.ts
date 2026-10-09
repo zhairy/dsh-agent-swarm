@@ -322,6 +322,7 @@ export interface DelegateDepsInfo {
   getAttachments: () => AttachmentsLike | undefined
   probe: RouteProbe
   probeForChild?: (childId: string, route: RouteInfo, signal?: AbortSignal) => ReturnType<RouteProbe>
+  orderQuotaRoutes?: (routes: readonly RouteInfo[], signal?: AbortSignal, protectedRoutes?: readonly RouteInfo[]) => Promise<readonly RouteInfo[]>
   routeState: RouteStateRegistry
   readFile: (path: string) => Promise<Uint8Array>
   gitStatus: (cwd: string) => Promise<GitStatusInfo | undefined>
@@ -606,6 +607,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     subagents: SubagentsLike
     usable: RouteInfo[]
     compatibleDeclared: RouteInfo[]
+    initialQuotaOrder?: RouteInfo[]
     requireVision: boolean
     toolFilter: { allow?: string[]; deny?: string[] } | undefined
     images: ContentBlockLike[]
@@ -616,7 +618,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
 
   /** 一次性调用（宿主强制结构化提交）；未执行、中断或交付不合格时重新启动，最多 maxRetries 次 */
   const runOneShot = async (ctx: RunContext, plan: SessionPlan): Promise<RunOutcomeInfo> => {
-    const { input, task, record, exec, session, config, subagents, usable, compatibleDeclared, requireVision, toolFilter, images, attempts, onFallback, retries } = ctx
+    const { input, task, record, exec, session, config, subagents, usable, compatibleDeclared, initialQuotaOrder, requireVision, toolFilter, images, attempts, onFallback, retries } = ctx
     const role = getRoleInfo(input.role)
     const session_: DelegationSessionInfo = { kind: 'oneshot', appended: false, source: plan.source, reason: plan.reason }
     let last: RunOutcomeInfo | undefined
@@ -656,7 +658,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       try {
         outcome = await runWithSignal(exec, startSpawn, {
           onRun: async (run) => {
-            deps.routeState.AddChild(run.id, { chain: compatibleDeclared, initialRoute: usable[usedIndex], respectStoredOverride: false, requireVision, role: input.role, onFallback, logicalRequestId: record.delegationId })
+            deps.routeState.AddChild(run.id, { chain: compatibleDeclared, initialRoute: usable[usedIndex], initialQuotaOrder, respectStoredOverride: false, requireVision, role: input.role, onFallback, logicalRequestId: record.delegationId })
             await deps.onChildStart?.({ agentId: run.id, task, record, role: input.role, signal: exec.signal, persistent: false, input, parent: exec.agent })
           },
           beforeDispose: (run) => {
@@ -688,7 +690,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
    * 会话无法建立或无法投递时返回 undefined，由调用方退回一次性调用。
    */
   const runThread = async (ctx: RunContext, plan: Exclude<SessionPlan, { kind: 'oneshot' }>): Promise<RunOutcomeInfo | undefined> => {
-    const { input, task, record, exec, session, config, subagents, usable, compatibleDeclared, requireVision, toolFilter, images, attempts, onFallback, retries } = ctx
+    const { input, task, record, exec, session, config, subagents, usable, compatibleDeclared, initialQuotaOrder, requireVision, toolFilter, images, attempts, onFallback, retries } = ctx
     // 宿主方法依赖 this（SubagentRuntime 实例），必须以 subagents.xxx(...) 调用，不能解构
     if (subagents.startContinuable === undefined || subagents.sendMessage === undefined) return undefined
     const role = getRoleInfo(input.role)
@@ -710,7 +712,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       session.threads.Add(thread)
     }
     let style: PromptStyle = thread.style ?? newStyle
-    const Arm = (id: string): void => deps.routeState.AddChild(id, { chain: compatibleDeclared, initialRoute: usable[0], respectStoredOverride: false, requireVision, role: input.role, onFallback, persistent: true, logicalRequestId: record.delegationId })
+    const Arm = (id: string): void => deps.routeState.AddChild(id, { chain: compatibleDeclared, initialRoute: usable[0], initialQuotaOrder, respectStoredOverride: false, requireVision, role: input.role, onFallback, persistent: true, logicalRequestId: record.delegationId })
     Arm(threadId)
     await deps.onChildStart?.({ agentId: threadId, task, record, role: input.role, signal: exec.signal, persistent: true, input, parent: exec.agent })
     const seen = thread.seenRevisions?.[task.taskId]
@@ -856,8 +858,23 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const manual = plan.kind === 'continue' ? deps.routeState.getChildOverride(plan.threadId) : undefined
     const declared = manual === undefined ? undefined : baseChain.find((item) => item.provider === manual.provider && item.model === manual.model)
     const chain = manual === undefined ? baseChain : [{ ...manual, ...(declared?.policy === undefined ? {} : { policy: declared.policy }) }, ...baseChain.filter((item) => item.provider !== manual.provider || item.model !== manual.model)]
+    let quotaChain: readonly RouteInfo[] = chain
+    if (manual === undefined && deps.orderQuotaRoutes !== undefined) {
+      if (exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '额度路由准备已取消；未启动子智能体')
+      try { quotaChain = await deps.orderQuotaRoutes(chain, exec.signal) }
+      catch (error) { if (exec.signal.aborted) throw error }
+      if (exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '额度路由准备已取消；未启动子智能体')
+      const remaining = [...chain]
+      const ordered: RouteInfo[] = []
+      if (Array.isArray(quotaChain) && quotaChain.length === chain.length) for (const route of quotaChain) {
+        const index = route === null || typeof route !== 'object' ? -1 : remaining.findIndex((candidate) => candidate.provider === route.provider && candidate.model === route.model && candidate.reasoningEffort === route.reasoningEffort)
+        if (index < 0) break
+        ordered.push(remaining.splice(index, 1)[0]!)
+      }
+      quotaChain = ordered.length === chain.length ? ordered : chain
+    }
     const requireVision = role.needsVision || (input.image_paths?.length ?? 0) > 0
-    const getSelection = () => FindUsableRoutes(chain, {
+    const getSelection = () => FindUsableRoutes(quotaChain, {
       probe: plan.kind === 'continue' && deps.probeForChild !== undefined ? (route, signal) => deps.probeForChild!(plan.threadId, route, signal) : deps.probe,
       requireVision, signal: exec.signal,
       avoidFamilies: getAvoidFamilies(input.role, input.mode, existing)
@@ -906,7 +923,8 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const avoid = getAvoidFamilies(input.role, input.mode, existing)
     const permanentlySkipped = new Set(selection.skipped.filter((item) => ['vision-unsupported', 'same-family'].includes(item.reason) || item.reason.startsWith('capability-incompatible:') || /unsupported.?reasoning|unsupported.?effort|UNSUPPORTED_REASONING_EFFORT/.test(item.reason)).map((item) => item.route))
     const compatibleDeclared = chain.filter((route) => !permanentlySkipped.has(route) && (selection.independence !== 'achieved' || !avoid.includes(getModelFamily(route.model))))
-    const ctx: RunContext = { input, task, record, exec, session, config, subagents, usable: selection.usable, compatibleDeclared, requireVision, toolFilter, images, attempts, onFallback, retries }
+    const initialQuotaOrder = manual === undefined && deps.orderQuotaRoutes !== undefined ? quotaChain.filter((route) => compatibleDeclared.includes(route)) : undefined
+    const ctx: RunContext = { input, task, record, exec, session, config, subagents, usable: selection.usable, compatibleDeclared, initialQuotaOrder, requireVision, toolFilter, images, attempts, onFallback, retries }
     const supportsThreads = subagents.startContinuable !== undefined && subagents.sendMessage !== undefined
     let outcome = plan.kind === 'oneshot' || !supportsThreads ? undefined : await runThread(ctx, plan)
     if (outcome === undefined) {
