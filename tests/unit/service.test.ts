@@ -360,6 +360,7 @@ describe('委派、状态与验收', () => {
     await service.delegate({ task_id, role: 'ji_feng', prompt: '改文件' }, exec())
     await service.delegate({ task_id, role: 'fu_he', prompt: '跑测试' }, exec())
     expect(service.getGuardReason({ name: 'edit', agent: root })).toBeUndefined()
+    service.ObserveToolDispatch({ name: 'edit', agent: root })
     const stale = await service.AcceptTask({ task_id, decision: 'accept', summary: 's', stopReason: 's' }, exec())
     expect(stale.status).toBe('blocked')
     expect(stale.missing.join('')).toContain('G_VERIFY')

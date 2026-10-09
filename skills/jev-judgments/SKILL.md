@@ -7,6 +7,8 @@ description: 用百工内嵌的 7 个 Jev 工具（jev_ask / jev_check / jev_cla
 
 Jev 是 TypeSafe 的 System One 模型：给它**状态（state）**和**题目（questions）**，它返回类型化的答案和概率，不写文字、不做推理解释。单次调用约 0.3–3.5 秒，成本约 $0.00001，百工不设调用额度。代码（或你）负责流程和后果，Jev 只提供「常识判断」。
 
+**调用 `jev_check` 时，`state` 与 `propositions` 是顶级并列参数**：`{"state":{"evidence":[]},"propositions":{"supported":"结论有证据支持"}}`。不要写成 `{"state":{"evidence":[],"propositions":{...}}}`；这只把命题表当作事实，会报 `$.propositions 缺失`。参数校验失败发生在调用 Jev 之前，应修正层级后再提交，不能据此宣称模型审核失败或通过。
+
 ## 什么时候用
 
 | 场景 | 工具 | 返回 |

@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import type { SwarmConfigInfo } from './config.js'
 import type { DelegationRecord, TaskRecord, TaskStore } from './evidence.js'
 import type { ThreadInfo, ThreadRegistry } from './threads.js'
-import { createDurableStateStore, StateStoreError, type DurableStateStore } from './state-store.js'
+import { createDurableStateStore, StateStoreError, type DurableStateStore, type StateValidationReport } from './state-store.js'
 import { createAgentBindingRegistry, validateBinding, bindingKey, type AgentBindingRegistry } from './agent-binding.js'
 import { createMessageBus, type MessageBus, type MessageState } from './message-bus.js'
 import { createExperienceRepository, ExperienceError, type ExperienceEntry, type ExperienceReview, type ExperienceState } from './experience.js'
@@ -20,8 +20,17 @@ import { partitionLegacyPlanningBudget } from './planning-recovery.js'
 import { validateAgentControlRecords, type AgentControlRecord } from './agent-control.js'
 import { validateEvidenceAssessment } from './evidence-assessment.js'
 import { ValidateDelegateInput } from './delegate.js'
+import { loadMemoryHandoff } from './memory-handoff.js'
+
+export interface FeatureRuntimeSnapshot {
+  rootEditAt: number
+  taskSequence: number
+  counters: { native: number; jev: number; review: number; session: number }
+  rootUpgradeExplicit: string[]
+}
 
 interface FeatureState extends MessageState, ExperienceState {
+  runtime?: FeatureRuntimeSnapshot
   schemaVersion: 1
   tasks: TaskRecord[]
   delegations: DelegationRecord[]
@@ -43,6 +52,8 @@ export interface FeatureSession {
   budgetFor: (task: TaskRecord) => ExecutionBudget
   planningBudgetFor: (task: TaskRecord) => ExecutionBudget
   getRestoredAgentControls: () => AgentControlRecord[]
+  getRestoredRuntime: () => FeatureRuntimeSnapshot | undefined
+  commitRecovery: () => Promise<void>
   /** Existing attempts and exempt Jev observations keep their original accounting handle during hot changes. */
   finishBudgetFor: (task: TaskRecord) => ExecutionBudget
   persist: (type: string, tasks: TaskStore, threads: ThreadRegistry, routeHealth?: RouteHealthEntry[]) => Promise<void>
@@ -79,53 +90,87 @@ export const validatePersistedRouteHealth = (raw: unknown): raw is RouteHealthEn
 }
 
 /** Verify complete runtime contracts before exposing or replaying any saved state. */
-export const validateFeatureState = (raw: unknown, expected: { rootSessionId: string; workspaceId: string }): boolean => {
+export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: string; workspaceId: string }): StateValidationReport => {
+  let path = '$', code = 'STATE_FORMAT'
+  const at = (nextPath: string, nextCode: string) => { path = nextPath; code = nextCode }
+  const invalid = (): StateValidationReport => ({ ok: false, issues: [{ path, code }] })
   try {
-    if (!object(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.tasks) || !Array.isArray(raw.delegations) || !Array.isArray(raw.threads) || !Array.isArray(raw.contexts) || !['bindings', 'bindingHistory', 'messages', 'messageAcks', 'experiences', 'budgets'].every((key) => object(raw[key]))) return false
+    if (!object(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.tasks) || !Array.isArray(raw.delegations) || !Array.isArray(raw.threads) || !Array.isArray(raw.contexts) || !['bindings', 'bindingHistory', 'messages', 'messageAcks', 'experiences', 'budgets'].every((key) => object(raw[key]))) return invalid()
     const state = raw as unknown as FeatureState
-    if (state.agentControls !== undefined && !validateAgentControlRecords(state.agentControls)) return false
-    if (state.routeHealth !== undefined && !validatePersistedRouteHealth(state.routeHealth)) return false
+    at('$.runtime', 'RUNTIME_FORMAT')
+    if (state.runtime !== undefined) {
+      const runtime = state.runtime
+      if (!object(runtime) || Object.keys(runtime).some((key) => !['rootEditAt', 'taskSequence', 'counters', 'rootUpgradeExplicit'].includes(key))
+        || !Number.isFinite(runtime.rootEditAt) || runtime.rootEditAt < 0 || !Number.isSafeInteger(runtime.taskSequence) || runtime.taskSequence < 0
+        || !object(runtime.counters) || Object.keys(runtime.counters).length !== 4 || !['native', 'jev', 'review', 'session'].every((key) => Number.isSafeInteger(runtime.counters[key as keyof typeof runtime.counters]) && runtime.counters[key as keyof typeof runtime.counters] >= 0)
+        || !strings(runtime.rootUpgradeExplicit) || runtime.rootUpgradeExplicit.some((id) => !identifier(id)) || new Set(runtime.rootUpgradeExplicit).size !== runtime.rootUpgradeExplicit.length) return invalid()
+    }
+    at('$.agentControls', 'CONTROL_FORMAT')
+    if (state.agentControls !== undefined && !validateAgentControlRecords(state.agentControls)) return invalid()
+    at('$.routeHealth', 'ROUTE_HEALTH_FORMAT')
+    if (state.routeHealth !== undefined && !validatePersistedRouteHealth(state.routeHealth)) return invalid()
     const tasks = new Map<string, TaskRecord>()
-    for (const task of state.tasks) {
-      if (!object(task) || !identifier(task.taskId) || tasks.has(task.taskId) || task.sessionId !== expected.rootSessionId || (task.workspaceId !== undefined && task.workspaceId !== expected.workspaceId) || ValidateTaskCard(task.card).card === undefined || !strings(task.delegationIds) || new Set(task.delegationIds).size !== task.delegationIds.length || !Number.isSafeInteger(task.rounds) || task.rounds < 0 || !Number.isFinite(task.createdAt) || !Number.isFinite(task.updatedAt) || ![task.cardRevision, task.workflowRevision, task.requestRevision].every(optionalRevision) || (task.intentLastDigest !== undefined && !/^[a-f0-9]{64}$/.test(task.intentLastDigest))) return false
-      if (!Array.isArray(task.gates) || task.gates.some((gate) => !object(gate) || !GATE_IDS.includes(gate.gate) || GATE_ROLE[gate.gate].role !== gate.role || GATE_ROLE[gate.gate].mode !== gate.mode || !['rule', 'jev', 'jev-fallback'].includes(gate.source) || typeof gate.reason !== 'string')) return false
-      if (!object(task.triage) || !['rules', 'rules+jev', 'rules+jev-fallback'].includes(task.triage.source) || !strings(task.triage.rulesApplied)) return false
+    for (const [index, task] of state.tasks.entries()) {
+      at(`$.tasks[${index}]`, 'TASK_FORMAT')
+      if (!object(task) || !identifier(task.taskId) || tasks.has(task.taskId) || task.sessionId !== expected.rootSessionId || (task.workspaceId !== undefined && task.workspaceId !== expected.workspaceId) || ValidateTaskCard(task.card).card === undefined || !strings(task.delegationIds) || new Set(task.delegationIds).size !== task.delegationIds.length || !Number.isSafeInteger(task.rounds) || task.rounds < 0 || !Number.isFinite(task.createdAt) || !Number.isFinite(task.updatedAt) || ![task.cardRevision, task.workflowRevision, task.requestRevision].every(optionalRevision) || (task.intentLastDigest !== undefined && !/^[a-f0-9]{64}$/.test(task.intentLastDigest))) return invalid()
+      at(`$.tasks[${index}].gates`, 'GATE_FORMAT')
+      if (!Array.isArray(task.gates) || task.gates.some((gate) => !object(gate) || !GATE_IDS.includes(gate.gate) || GATE_ROLE[gate.gate].role !== gate.role || GATE_ROLE[gate.gate].mode !== gate.mode || !['rule', 'jev', 'jev-fallback'].includes(gate.source) || typeof gate.reason !== 'string')) return invalid()
+      at(`$.tasks[${index}].triage`, 'TRIAGE_FORMAT')
+      if (!object(task.triage) || !['rules', 'rules+jev', 'rules+jev-fallback'].includes(task.triage.source) || !strings(task.triage.rulesApplied)) return invalid()
+      at(`$.tasks[${index}].acceptance`, 'ACCEPTANCE_FORMAT')
       if (task.acceptance !== undefined) {
         const a = task.acceptance
-        if (!object(a) || !['accept', 'reject', 'incomplete'].includes(a.decision) || !['accepted', 'blocked', 'recorded'].includes(a.status) || !strings(a.missing) || !strings(a.unresolved) || typeof a.summary !== 'string' || typeof a.stopReason !== 'string' || !Number.isFinite(a.at) || !Array.isArray(a.resolutions) || a.resolutions.some((r) => !object(r) || !identifier(r.delegationId) || !Number.isSafeInteger(r.index) || r.index < 0 || typeof r.resolution !== 'string')) return false
+        if (!object(a) || !['accept', 'reject', 'incomplete'].includes(a.decision) || !['accepted', 'blocked', 'recorded'].includes(a.status) || !strings(a.missing) || !strings(a.unresolved) || typeof a.summary !== 'string' || typeof a.stopReason !== 'string' || !Number.isFinite(a.at) || !Array.isArray(a.resolutions) || a.resolutions.some((r) => !object(r) || !identifier(r.delegationId) || !Number.isSafeInteger(r.index) || r.index < 0 || typeof r.resolution !== 'string')) return invalid()
       }
+      at(`$.tasks[${index}].workflowDefinition`, 'WORKFLOW_CONTRACT')
       if (task.workflowDefinition !== undefined) {
-        if (ValidateWorkflow(task.workflowDefinition, task.card, task.gates).definition === undefined || task.workflowDigest !== getWorkflowDigest(task.workflowDefinition) || !object(task.workflowState) || !object(task.workflowState.nodes)) return false
+        if (ValidateWorkflow(task.workflowDefinition, task.card, task.gates).definition === undefined || task.workflowDigest !== getWorkflowDigest(task.workflowDefinition) || !object(task.workflowState) || !object(task.workflowState.nodes)) return invalid()
         const nodeIds = new Set(task.workflowDefinition.nodes.map((node) => node.id))
-        if (Object.keys(task.workflowState.nodes).length !== nodeIds.size || Object.entries(task.workflowState.nodes).some(([id, node]) => !nodeIds.has(id) || !object(node) || !['pending', 'ready', 'running', 'succeeded', 'failed', 'blocked', 'skipped'].includes(node.status) || (node.attemptId !== undefined && !identifier(node.attemptId)) || (node.evidenceRefs !== undefined && !strings(node.evidenceRefs)))) return false
-      } else if (task.workflowState !== undefined || task.workflowDigest !== undefined) return false
-      if (task.contextRefs !== undefined && (!Array.isArray(task.contextRefs) || task.contextRefs.some((ref) => !object(ref) || !identifier(ref.ref) || !hashPattern.test(ref.digest) || !['L0', 'L1', 'L2'].includes(ref.layer) || !['contract', 'source', 'evidence', 'history', 'experience', 'author-reasoning'].includes(ref.kind)))) return false
-      if (task.requestIds !== undefined && (!object(task.requestIds) || Object.entries(task.requestIds).some(([key, value]) => !identifier(key) || !identifier(value)))) return false
+        if (Object.keys(task.workflowState.nodes).length !== nodeIds.size || Object.entries(task.workflowState.nodes).some(([id, node]) => !nodeIds.has(id) || !object(node) || !['pending', 'ready', 'running', 'succeeded', 'failed', 'blocked', 'skipped'].includes(node.status) || (node.attemptId !== undefined && !identifier(node.attemptId)) || (node.evidenceRefs !== undefined && !strings(node.evidenceRefs)))) return invalid()
+      } else if (task.workflowState !== undefined || task.workflowDigest !== undefined) return invalid()
+      at(`$.tasks[${index}].contextRefs`, 'CONTEXT_REFERENCE_FORMAT')
+      if (task.contextRefs !== undefined && (!Array.isArray(task.contextRefs) || task.contextRefs.some((ref) => !object(ref) || !identifier(ref.ref) || !hashPattern.test(ref.digest) || !['L0', 'L1', 'L2'].includes(ref.layer) || !['contract', 'source', 'evidence', 'history', 'experience', 'author-reasoning'].includes(ref.kind)))) return invalid()
+      at(`$.tasks[${index}].requestIds`, 'REQUEST_INDEX_FORMAT')
+      if (task.requestIds !== undefined && (!object(task.requestIds) || Object.entries(task.requestIds).some(([key, value]) => !identifier(key) || !identifier(value)))) return invalid()
+      at(`$.tasks[${index}].artifactSnapshot`, 'ARTIFACT_SNAPSHOT')
       if (task.artifactSnapshot !== undefined) {
         const artifact = task.artifactSnapshot
-        if (!object(artifact) || artifact.workspaceId !== expected.workspaceId || !Array.isArray(artifact.entries) || typeof artifact.complete !== 'boolean' || artifact.entries.some((entry) => !object(entry) || typeof entry.path !== 'string' || !['file', 'missing', 'unknown'].includes(entry.state) || (entry.state === 'file' && (!hashPattern.test(entry.digest ?? '') || !Number.isSafeInteger(entry.bytes) || Number(entry.bytes) < 0))) || artifact.digest !== getValueDigest({ workspaceId: artifact.workspaceId, entries: artifact.entries }) || (artifact.complete && artifact.entries.some((entry) => entry.state === 'unknown'))) return false
+        if (!object(artifact) || artifact.workspaceId !== expected.workspaceId || !Array.isArray(artifact.entries) || typeof artifact.complete !== 'boolean' || artifact.entries.some((entry) => !object(entry) || typeof entry.path !== 'string' || !['file', 'missing', 'unknown'].includes(entry.state) || (entry.state === 'file' && (!hashPattern.test(entry.digest ?? '') || !Number.isSafeInteger(entry.bytes) || Number(entry.bytes) < 0))) || artifact.digest !== getValueDigest({ workspaceId: artifact.workspaceId, entries: artifact.entries }) || (artifact.complete && artifact.entries.some((entry) => entry.state === 'unknown'))) return invalid()
       }
-      if ([task.planningFixRounds, task.planningAutoReviewRuns].some((value) => value !== undefined && (!Number.isSafeInteger(value) || value < 0))) return false
+      at(`$.tasks[${index}].planningAutoReviewRuns`, 'PLANNING_COUNTER_FORMAT')
+      if ([task.planningFixRounds, task.planningAutoReviewRuns].some((value) => value !== undefined && (!Number.isSafeInteger(value) || value < 0))) return invalid()
       tasks.set(task.taskId, task)
     }
     const recordIds = new Set<string>()
     const recordsById = new Map<string, DelegationRecord>()
     const recordIdsByTask = new Map<string, Set<string>>()
-    for (const record of state.delegations) {
-      if (!object(record) || !identifier(record.delegationId) || recordIds.has(record.delegationId) || !tasks.has(record.taskId) || !isDelegableRoleId(record.role) || !['queued', 'running', 'completed', 'failed', 'blocked'].includes(record.status) || typeof record.summary !== 'string' || !strings(record.unresolved) || !Array.isArray(record.evidence) || record.evidence.some((e) => !object(e) || !['command', 'step', 'finding', 'source', 'observation', 'claim', 'file-change'].includes(e.kind) || typeof e.ref !== 'string') || ![record.cardRevision, record.workflowRevision, record.requestRevision].every(optionalRevision) || !Number.isFinite(record.startedAt)) return false
-      if (record.status === 'completed' && ValidateStructuredOutput(record.role, record.structured, record.mode).length > 0) return false
+    for (const [index, record] of state.delegations.entries()) {
+      at(`$.delegations[${index}]`, 'DELEGATION_FORMAT')
+      if (!object(record) || !identifier(record.delegationId) || recordIds.has(record.delegationId) || !tasks.has(record.taskId) || !isDelegableRoleId(record.role) || !['queued', 'running', 'completed', 'failed', 'blocked'].includes(record.status) || typeof record.summary !== 'string' || !strings(record.unresolved) || !Array.isArray(record.evidence) || record.evidence.some((e) => !object(e) || !['command', 'step', 'finding', 'source', 'observation', 'claim', 'file-change'].includes(e.kind) || typeof e.ref !== 'string') || ![record.cardRevision, record.workflowRevision, record.requestRevision].every(optionalRevision) || !Number.isFinite(record.startedAt)) return invalid()
+      at(`$.delegations[${index}].structured`, 'STRUCTURED_OUTPUT_FORMAT')
+      if (record.status === 'completed' && ValidateStructuredOutput(record.role, record.structured, record.mode).length > 0) return invalid()
+      at(`$.delegations[${index}].continuationInput`, 'CONTINUATION_BINDING')
       if (record.continuationInput !== undefined) {
         const parsed = ValidateDelegateInput(record.continuationInput).input
         if (parsed === undefined || parsed.task_id !== record.taskId || parsed.role !== record.role
-          || (parsed.mode ?? (parsed.role === 'suan_heng' ? 'research' : undefined)) !== record.mode) return false
+          || (parsed.mode ?? (parsed.role === 'suan_heng' ? 'research' : undefined)) !== record.mode) return invalid()
       }
+      at(`$.delegations[${index}].evidenceAssessment`, 'ASSESSMENT_FORMAT')
       if (record.evidenceAssessment !== undefined) {
         const assessment = record.evidenceAssessment
-        if (!validateEvidenceAssessment(assessment) || assessment.delegationId !== record.delegationId || assessment.role !== record.role
-          || assessment.rawDigest !== getValueDigest(record.structured ?? {}) || assessment.binding.rootSessionId !== expected.rootSessionId
-          || assessment.binding.workspaceId !== expected.workspaceId || assessment.binding.taskId !== record.taskId
-          || assessment.binding.cardRevision !== (record.cardRevision ?? 1) || assessment.binding.workflowRevision !== (record.workflowRevision ?? 1)
-          || (assessment.binding.requestRevision ?? 1) !== (record.requestRevision ?? 1) || assessment.binding.artifactDigest !== record.artifactAfter) return false
+        if (!validateEvidenceAssessment(assessment)) return invalid()
+        at(`$.delegations[${index}].evidenceAssessment`, 'ASSESSMENT_IDENTITY_BINDING')
+        if (assessment.delegationId !== record.delegationId || assessment.role !== record.role
+          || assessment.binding.rootSessionId !== expected.rootSessionId || assessment.binding.workspaceId !== expected.workspaceId
+          || assessment.binding.taskId !== record.taskId) return invalid()
+        at(`$.delegations[${index}].evidenceAssessment.rawDigest`, 'ASSESSMENT_RAW_DIGEST')
+        if (assessment.rawDigest !== getValueDigest(record.structured ?? {})) return invalid()
+        for (const key of ['cardRevision', 'workflowRevision', 'requestRevision'] as const) {
+          at(`$.delegations[${index}].evidenceAssessment.binding.${key}`, 'ASSESSMENT_REVISION_MISMATCH')
+          if ((assessment.binding[key] ?? 1) !== (record[key] ?? 1)) return invalid()
+        }
+        at(`$.delegations[${index}].evidenceAssessment.binding.artifactDigest`, 'ASSESSMENT_ARTIFACT_MISMATCH')
+        if (assessment.binding.artifactDigest !== record.artifactAfter) return invalid()
       }
       recordIds.add(record.delegationId)
       recordsById.set(record.delegationId, record)
@@ -133,72 +178,114 @@ export const validateFeatureState = (raw: unknown, expected: { rootSessionId: st
       ids.add(record.delegationId)
       recordIdsByTask.set(record.taskId, ids)
     }
-    for (const task of state.tasks) {
+    for (const [index, task] of state.tasks.entries()) {
+      at(`$.tasks[${index}].delegationIds`, 'DELEGATION_OWNERSHIP_INDEX')
       const owned = recordIdsByTask.get(task.taskId)
-      if ((owned?.size ?? 0) !== task.delegationIds.length || task.delegationIds.some((id) => !owned?.has(id))) return false
+      if ((owned?.size ?? 0) !== task.delegationIds.length || task.delegationIds.some((id) => !owned?.has(id))) return invalid()
     }
-    for (const control of state.agentControls ?? []) {
+    for (const [index, control] of (state.agentControls ?? []).entries()) {
+      at(`$.agentControls[${index}]`, 'CONTROL_BINDING')
       const task = tasks.get(control.taskId)
-      if (!control.persistent || control.parentSessionId !== expected.rootSessionId || task === undefined
-        || !recordIds.has(control.delegationId) || ![control.cardRevision, control.workflowRevision, control.requestRevision].every(optionalRevision)
-        || (control.cardRevision ?? 1) > (task.cardRevision ?? 1) || (control.workflowRevision ?? 1) > (task.workflowRevision ?? 1)
-        || (control.requestRevision ?? 1) > (task.requestRevision ?? 1)) return false
+      if (!control.persistent || control.parentSessionId !== expected.rootSessionId) return invalid()
+      at(`$.agentControls[${index}].taskId`, 'CONTROL_TASK_MISSING')
+      if (task === undefined) return invalid()
+      at(`$.agentControls[${index}].delegationId`, 'CONTROL_DELEGATION_MISSING')
+      if (!recordIds.has(control.delegationId)) return invalid()
+      for (const key of ['cardRevision', 'workflowRevision', 'requestRevision'] as const) {
+        at(`$.agentControls[${index}].${key}`, 'CONTROL_AHEAD_OF_TASK')
+        if (!optionalRevision(control[key]) || (control[key] ?? 1) > (task[key] ?? 1)) return invalid()
+      }
+      at(`$.agentControls[${index}].delegationId`, 'CONTROL_DELEGATION_BINDING')
       const delegation = recordsById.get(control.delegationId)
-      if (delegation?.taskId !== control.taskId) return false
+      if (delegation?.taskId !== control.taskId) return invalid()
     }
     const threadIds = new Set<string>()
-    for (const thread of state.threads) {
-      if (!object(thread) || !identifier(thread.threadId) || threadIds.has(thread.threadId) || !isDelegableRoleId(thread.role) || typeof thread.busy !== 'boolean' || typeof thread.closed !== 'boolean' || typeof thread.allowWeb !== 'boolean' || !strings(thread.taskIds) || thread.taskIds.some((id) => !tasks.has(id)) || !Number.isSafeInteger(thread.rounds) || thread.rounds < 0 || !Array.isArray(thread.history) || thread.history.some((entry) => !object(entry) || !identifier(entry.delegationId) || !tasks.has(entry.taskId) || typeof entry.request !== 'string' || typeof entry.summary !== 'string' || typeof entry.status !== 'string')) return false
+    for (const [index, thread] of state.threads.entries()) {
+      at(`$.threads[${index}]`, 'THREAD_FORMAT')
+      if (!object(thread) || !identifier(thread.threadId) || threadIds.has(thread.threadId) || !isDelegableRoleId(thread.role) || typeof thread.busy !== 'boolean' || typeof thread.closed !== 'boolean' || typeof thread.allowWeb !== 'boolean' || !strings(thread.taskIds) || thread.taskIds.some((id) => !tasks.has(id)) || !Number.isSafeInteger(thread.rounds) || thread.rounds < 0 || !Array.isArray(thread.history) || thread.history.some((entry) => !object(entry) || !identifier(entry.delegationId) || !tasks.has(entry.taskId) || typeof entry.request !== 'string' || typeof entry.summary !== 'string' || typeof entry.status !== 'string')) return invalid()
       threadIds.add(thread.threadId)
     }
-    for (const [key, binding] of Object.entries(state.bindings)) if (!validateBinding(binding) || !isDelegableRoleId(binding.role) || key !== binding.agentId || binding.rootSessionId !== expected.rootSessionId || binding.workspaceId !== expected.workspaceId || !tasks.has(binding.taskId)) return false
-    for (const [key, binding] of Object.entries(state.bindingHistory)) if (!validateBinding(binding) || !isDelegableRoleId(binding.role) || key !== bindingKey(binding) || binding.rootSessionId !== expected.rootSessionId || binding.workspaceId !== expected.workspaceId || !tasks.has(binding.taskId)) return false
+    for (const [index, [key, binding]] of Object.entries(state.bindings).entries()) {
+      at(`$.bindings[${index}]`, 'AGENT_BINDING')
+      if (!validateBinding(binding) || !isDelegableRoleId(binding.role) || key !== binding.agentId || binding.rootSessionId !== expected.rootSessionId || binding.workspaceId !== expected.workspaceId || !tasks.has(binding.taskId)) return invalid()
+    }
+    for (const [index, [key, binding]] of Object.entries(state.bindingHistory).entries()) {
+      at(`$.bindingHistory[${index}]`, 'AGENT_BINDING_HISTORY')
+      if (!validateBinding(binding) || !isDelegableRoleId(binding.role) || key !== bindingKey(binding) || binding.rootSessionId !== expected.rootSessionId || binding.workspaceId !== expected.workspaceId || !tasks.has(binding.taskId)) return invalid()
+    }
     const restoredContexts = intContextStore()
     const material = new Map<string, ContextArtifactInfo>()
-    for (const context of state.contexts) {
+    for (const [index, context] of state.contexts.entries()) {
+      at(`$.contexts[${index}]`, 'CONTEXT_FORMAT')
       const restored = restoredContexts.Restore(context)
-      if (material.has(restored.ref) || restored.binding.rootSessionId !== expected.rootSessionId || restored.binding.workspaceId !== expected.workspaceId || !tasks.has(restored.binding.taskId)) return false
+      at(`$.contexts[${index}].binding`, 'CONTEXT_OWNER_BINDING')
+      if (material.has(restored.ref) || restored.binding.rootSessionId !== expected.rootSessionId || restored.binding.workspaceId !== expected.workspaceId || !tasks.has(restored.binding.taskId)) return invalid()
       const task = tasks.get(restored.binding.taskId)!
-      if (restored.binding.cardRevision > (task.cardRevision ?? 1) || restored.binding.workflowRevision > (task.workflowRevision ?? 1) || (restored.binding.requestRevision ?? 1) > (task.requestRevision ?? 1)) return false
+      for (const key of ['cardRevision', 'workflowRevision', 'requestRevision'] as const) {
+        at(`$.contexts[${index}].binding.${key}`, 'CONTEXT_AHEAD_OF_TASK')
+        if ((restored.binding[key] ?? 1) > (task[key] ?? 1)) return invalid()
+      }
       material.set(restored.ref, restored)
     }
-    for (const task of state.tasks) for (const reference of task.contextRefs ?? []) {
+    for (const [index, task] of state.tasks.entries()) for (const [referenceIndex, reference] of (task.contextRefs ?? []).entries()) {
+      at(`$.tasks[${index}].contextRefs[${referenceIndex}]`, 'CONTEXT_REFERENCE_MISSING')
       const context = material.get(reference.ref)
-      if (context === undefined || context.binding.taskId !== task.taskId || context.digest !== reference.digest || context.layer !== reference.layer || context.kind !== reference.kind) return false
+      if (context === undefined) return invalid()
+      at(`$.tasks[${index}].contextRefs[${referenceIndex}]`, 'CONTEXT_REFERENCE_BINDING')
+      if (context.binding.taskId !== task.taskId || context.digest !== reference.digest || context.layer !== reference.layer || context.kind !== reference.kind) return invalid()
     }
-    for (const task of state.tasks) {
-      if (task.contextDelegations !== undefined && !object(task.contextDelegations)) return false
+    for (const [index, task] of state.tasks.entries()) {
+      at(`$.tasks[${index}].contextDelegations`, 'CONTEXT_MAPPING_FORMAT')
+      if (task.contextDelegations !== undefined && !object(task.contextDelegations)) return invalid()
       const exposedRefs = new Set((task.contextRefs ?? []).map((reference) => reference.ref))
-      for (const [ref, delegationId] of Object.entries(task.contextDelegations ?? {})) {
+      for (const [mappingIndex, [ref, delegationId]] of Object.entries(task.contextDelegations ?? {}).entries()) {
+        at(`$.tasks[${index}].contextDelegations[${mappingIndex}]`, 'CONTEXT_MAPPING_TARGET_MISSING')
         const context = material.get(ref), record = recordsById.get(delegationId)
-        if (context?.binding.taskId !== task.taskId || record?.taskId !== task.taskId || record.evidenceAssessment === undefined) return false
+        if (context === undefined || record === undefined || record.evidenceAssessment === undefined) return invalid()
+        at(`$.tasks[${index}].contextDelegations[${mappingIndex}]`, 'CONTEXT_MAPPING_BINDING')
+        if (context.binding.taskId !== task.taskId || record.taskId !== task.taskId) return invalid()
         if (context.layer !== 'L2' || context.kind !== 'author-reasoning' || !exposedRefs.has(ref)
           || context.binding.cardRevision !== (record.cardRevision ?? 1) || context.binding.workflowRevision !== (record.workflowRevision ?? 1)
-          || (context.binding.requestRevision ?? 1) !== (record.requestRevision ?? 1)
-          || getCanonicalJson(JSON.parse(context.text)) !== getCanonicalJson({ summary: record.summary, structured: record.structured,
-            evidence: record.evidence })) return false
+          || (context.binding.requestRevision ?? 1) !== (record.requestRevision ?? 1)) return invalid()
+        at(`$.tasks[${index}].contextDelegations[${mappingIndex}]`, 'CONTEXT_MAPPING_PAYLOAD')
+        if (getCanonicalJson(JSON.parse(context.text)) !== getCanonicalJson({ summary: record.summary, structured: record.structured,
+          evidence: record.evidence })) return invalid()
       }
     }
-    if (state.planningBudgets !== undefined && !object(state.planningBudgets)) return false
-    for (const collection of [state.budgets, state.planningBudgets ?? {}]) for (const [taskId, budget] of Object.entries(collection)) { if (!tasks.has(taskId)) return false; createExecutionBudget(budget.limits, budget) }
-    for (const [id, message] of Object.entries(state.messages)) {
-      if (!object(message) || id !== message.id || !uuidPattern.test(id) || message.schemaVersion !== 1 || message.rootSessionId !== expected.rootSessionId || message.workspaceId !== expected.workspaceId || !tasks.has(message.taskId) || !['question', 'answer', 'finding', 'review-response'].includes(message.kind) || typeof message.summary !== 'string' || !strings(message.artifactRefs) || ![message.cardRevision, message.workflowRevision, message.senderGeneration, message.senderLeaseEpoch, message.recipientGeneration, message.recipientLeaseEpoch].every(positive) || !optionalRevision(message.requestRevision) || !Number.isFinite(message.createdAt) || !Number.isFinite(message.expiresAt) || message.expiresAt <= message.createdAt) return false
+    at('$.planningBudgets', 'BUDGET_COLLECTION_FORMAT')
+    if (state.planningBudgets !== undefined && !object(state.planningBudgets)) return invalid()
+    for (const [collectionIndex, collection] of [state.budgets, state.planningBudgets ?? {}].entries()) for (const [index, [taskId, budget]] of Object.entries(collection).entries()) {
+      at(`$.${collectionIndex === 0 ? 'budgets' : 'planningBudgets'}[${index}]`, 'BUDGET_FORMAT')
+      if (!tasks.has(taskId)) return invalid()
+      createExecutionBudget(budget.limits, budget)
+    }
+    for (const [index, [id, message]] of Object.entries(state.messages).entries()) {
+      at(`$.messages[${index}]`, 'MESSAGE_FORMAT')
+      if (!object(message) || id !== message.id || !uuidPattern.test(id) || message.schemaVersion !== 1 || message.rootSessionId !== expected.rootSessionId || message.workspaceId !== expected.workspaceId || !tasks.has(message.taskId) || !['question', 'answer', 'finding', 'review-response'].includes(message.kind) || typeof message.summary !== 'string' || !strings(message.artifactRefs) || ![message.cardRevision, message.workflowRevision, message.senderGeneration, message.senderLeaseEpoch, message.recipientGeneration, message.recipientLeaseEpoch].every(positive) || !optionalRevision(message.requestRevision) || !Number.isFinite(message.createdAt) || !Number.isFinite(message.expiresAt) || message.expiresAt <= message.createdAt) return invalid()
+      at(`$.messages[${index}].payloadDigest`, 'MESSAGE_DIGEST')
       const { payloadDigest, ...payload } = message
-      if (payloadDigest !== getValueDigest(payload)) return false
+      if (payloadDigest !== getValueDigest(payload)) return invalid()
+      at(`$.messages[${index}]`, 'MESSAGE_BINDING')
       const sender = state.bindingHistory[message.fromAgentId + ':' + message.senderGeneration + ':' + message.senderLeaseEpoch]
       const recipient = state.bindingHistory[message.toAgentId + ':' + message.recipientGeneration + ':' + message.recipientLeaseEpoch]
-      if (sender === undefined || recipient === undefined || sender.taskId !== message.taskId || recipient.taskId !== message.taskId || sender.attemptId !== message.senderAttemptId || sender.threadId !== message.fromThreadId || recipient.threadId !== message.toThreadId || (message.requestRevision ?? 1) !== (sender.requestRevision ?? 1) || (message.requestRevision ?? 1) !== (recipient.requestRevision ?? 1)) return false
+      if (sender === undefined || recipient === undefined || sender.taskId !== message.taskId || recipient.taskId !== message.taskId || sender.attemptId !== message.senderAttemptId || sender.threadId !== message.fromThreadId || recipient.threadId !== message.toThreadId || (message.requestRevision ?? 1) !== (sender.requestRevision ?? 1) || (message.requestRevision ?? 1) !== (recipient.requestRevision ?? 1)) return invalid()
     }
-    for (const [recipient, acks] of Object.entries(state.messageAcks)) {
-      if (!object(acks) || state.bindingHistory[recipient] === undefined) return false
-      for (const [id, ack] of Object.entries(acks)) if (!object(ack) || ack.messageId !== id || ack.recipientBinding !== recipient || !Number.isFinite(ack.acknowledgedAt) || state.messages[id] === undefined || recipient !== state.messages[id]!.toAgentId + ':' + state.messages[id]!.recipientGeneration + ':' + state.messages[id]!.recipientLeaseEpoch) return false
+    for (const [index, [recipient, acks]] of Object.entries(state.messageAcks).entries()) {
+      at(`$.messageAcks[${index}]`, 'MESSAGE_ACK_BINDING')
+      if (!object(acks) || state.bindingHistory[recipient] === undefined) return invalid()
+      for (const [id, ack] of Object.entries(acks)) if (!object(ack) || ack.messageId !== id || ack.recipientBinding !== recipient || !Number.isFinite(ack.acknowledgedAt) || state.messages[id] === undefined || recipient !== state.messages[id]!.toAgentId + ':' + state.messages[id]!.recipientGeneration + ':' + state.messages[id]!.recipientLeaseEpoch) return invalid()
     }
-    for (const [id, entry] of Object.entries(state.experiences)) {
-      if (!object(entry) || entry.id !== id || !uuidPattern.test(id) || !['candidate', 'validated', 'deprecated'].includes(entry.status) || !object(entry.source) || !tasks.has(entry.source.taskId) || !positive(entry.source.cardRevision) || !positive(entry.source.workflowRevision) || !hashPattern.test(entry.source.artifactDigest) || typeof entry.problemClass !== 'string' || typeof entry.conclusion !== 'string' || !['appliesWhen', 'doesNotApplyWhen', 'verification', 'counterexamples', 'operatorVersions'].every((key) => strings(entry[key as keyof ExperienceEntry])) || !Number.isFinite(entry.createdAt) || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= entry.createdAt || (entry.status === 'validated' && (!identifier(entry.reviewer) || !hashPattern.test(entry.reviewArtifactDigest ?? ''))) || (entry.status === 'deprecated' && typeof entry.deprecationReason !== 'string')) return false
+    for (const [index, [id, entry]] of Object.entries(state.experiences).entries()) {
+      at(`$.experiences[${index}]`, 'EXPERIENCE_FORMAT')
+      if (!object(entry) || entry.id !== id || !uuidPattern.test(id) || !['candidate', 'validated', 'deprecated'].includes(entry.status) || !object(entry.source) || !tasks.has(entry.source.taskId) || !positive(entry.source.cardRevision) || !positive(entry.source.workflowRevision) || !hashPattern.test(entry.source.artifactDigest) || typeof entry.problemClass !== 'string' || typeof entry.conclusion !== 'string' || !['appliesWhen', 'doesNotApplyWhen', 'verification', 'counterexamples', 'operatorVersions'].every((key) => strings(entry[key as keyof ExperienceEntry])) || !Number.isFinite(entry.createdAt) || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= entry.createdAt || (entry.status === 'validated' && (!identifier(entry.reviewer) || !hashPattern.test(entry.reviewArtifactDigest ?? ''))) || (entry.status === 'deprecated' && typeof entry.deprecationReason !== 'string')) return invalid()
     }
-    return true
-  } catch { return false }
+    return { ok: true }
+  } catch { return invalid() }
 }
+
+/** Compatibility wrapper over the same single-pass validation implementation. */
+export const validateFeatureState = (raw: unknown, expected: { rootSessionId: string; workspaceId: string }): boolean =>
+  inspectFeatureState(raw, expected).ok
 
 const recover = (state: FeatureState): FeatureState => {
   const copy = structuredClone(state)
@@ -229,14 +316,18 @@ export const createFeatureSession = async (input: {
   rootSessionId: string; cwd: string; dshHome: string; config: SwarmConfigInfo;
   getConfig?: () => SwarmConfigInfo;
   getAgentControls?: () => AgentControlRecord[];
+  getRuntime?: () => FeatureRuntimeSnapshot;
   tasks: TaskStore; threads: ThreadRegistry; now: () => number
 }): Promise<FeatureSession> => {
   const workspaceId = await getWorkspaceId(input.cwd)
   const directory = join(input.config.persistence.directory || join(input.dshHome, 'share', 'dsh-agent-swarm', 'state'), workspaceId, digest(input.rootSessionId))
   const initialState: FeatureState = { schemaVersion: 1, tasks: [], delegations: [], threads: [], budgets: {},
     bindings: {}, bindingHistory: {}, messages: {}, messageAcks: {}, experiences: {}, contexts: [] }
-  const store = await createDurableStateStore({ directory, initialState, enabled: input.config.persistence.enabled,
-    validate: (raw) => validateFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }), recover })
+  const handoff = await loadMemoryHandoff<FeatureState>({ dshHome: input.dshHome, rootSessionId: input.rootSessionId, workspaceId,
+    persistenceEnabled: input.config.persistence.enabled,
+    validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }) })
+  const store = await createDurableStateStore({ directory, initialState: handoff === undefined ? initialState : recover(handoff.state), enabled: input.config.persistence.enabled,
+    validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }), recover })
   const saved = store.read()
   // Older versions charged planning review reservations against implementation calls.
   // Preserve sent work and observation records, but classify these known reservations correctly.
@@ -340,6 +431,8 @@ export const createFeatureSession = async (input: {
   return {
     workspaceId, store, bindings, bus, contexts, budgetFor, planningBudgetFor,
     getRestoredAgentControls: () => structuredClone(saved.agentControls ?? []),
+    getRestoredRuntime: () => saved.runtime === undefined ? undefined : structuredClone(saved.runtime),
+    commitRecovery: async () => { await handoff?.commitConsumption() },
     finishBudgetFor: (task) => budgets.get(task.taskId) ?? budgetFor(task),
     experiences,
     promoteCandidateWithEvidence: async (id) => {
@@ -382,20 +475,26 @@ export const createFeatureSession = async (input: {
       }
     },
     persist: async (type, tasks, threads, routeHealth) => {
+      // Capture every owned collection synchronously at the call boundary.
+      // Sampling only tasks here and contexts/controls later in the queue mixed
+      // different versions. Sampling everything later could publish a different
+      // operation's uncommitted task revision before its own commit succeeds.
+      const detach = <T>(value: T): T => JSON.parse(getCanonicalJson(value)) as T
       const taskSnapshot = tasks.getTasks()
-      const delegationSnapshot = taskSnapshot.flatMap((task) => tasks.getTaskDelegations(task.taskId))
       const stableHealth = routeHealth?.map(({ halfOpenAgent: _claimant, ...entry }) => entry)
       if (stableHealth !== undefined && !validatePersistedRouteHealth(stableHealth)) throw new StateStoreError('STATE_INVALID', 'Invalid durable route health snapshot')
-      const healthSnapshot = stableHealth === undefined ? undefined : JSON.parse(getCanonicalJson(stableHealth)) as RouteHealthEntry[]
+      const snapshot = detach({
+        tasks: taskSnapshot,
+        delegations: taskSnapshot.flatMap((task) => tasks.getTaskDelegations(task.taskId)),
+        threads: threads.list(), contexts: [...contextArtifacts.values()],
+        budgets: { ...saved.budgets, ...Object.fromEntries([...budgets].map(([key, value]) => [key, value.getSnapshot()])) },
+        planningBudgets: { ...saved.planningBudgets, ...Object.fromEntries([...planningBudgets].map(([key, value]) => [key, value.getSnapshot()])) },
+        ...(input.getAgentControls === undefined ? {} : { agentControls: input.getAgentControls() }),
+        ...(input.getRuntime === undefined ? {} : { runtime: input.getRuntime() }),
+        ...(stableHealth === undefined ? {} : { routeHealth: stableHealth })
+      })
       await store.commit(type, (draft) => {
-        draft.tasks = JSON.parse(getCanonicalJson(taskSnapshot)) as TaskRecord[]
-        draft.delegations = JSON.parse(getCanonicalJson(delegationSnapshot)) as DelegationRecord[]
-        draft.threads = JSON.parse(getCanonicalJson(threads.list())) as ThreadInfo[]
-        draft.contexts = JSON.parse(getCanonicalJson([...contextArtifacts.values()])) as ContextArtifactInfo[]
-        draft.budgets = { ...saved.budgets, ...Object.fromEntries([...budgets].map(([key, value]) => [key, value.getSnapshot()])) }
-        draft.planningBudgets = { ...saved.planningBudgets, ...Object.fromEntries([...planningBudgets].map(([key, value]) => [key, value.getSnapshot()])) }
-        if (input.getAgentControls !== undefined) draft.agentControls = input.getAgentControls()
-        if (healthSnapshot !== undefined) draft.routeHealth = healthSnapshot
+        Object.assign(draft, snapshot)
       })
     },
     dispose: () => store.dispose()

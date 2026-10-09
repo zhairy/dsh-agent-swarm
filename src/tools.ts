@@ -236,6 +236,9 @@ export const getDelegationText = (record: DelegationRecord): string => {
 export const getStatusText = (result: StatusResult): string => {
   const tasks = result.tasks.flatMap((task) => [
     `任务 ${task.task_id}：${task.title}（修复轮次 ${task.rounds}；委派 ${task.budget.used}${task.budget.max > 0 ? `/${task.budget.max}` : ' 次（不限）'}）`,
+    `需求版本：${task.requestRevision}；合同版本：${task.cardRevision}；流程版本：${task.workflowRevision}；规划审核：${task.planningReview?.status ?? 'pending'}`,
+    ...(task.stateRefreshRequired ? [`只读投影待同步：已登记需求 ${task.publishedRevisions.requestRevision} / 合同 ${task.publishedRevisions.cardRevision} / 流程 ${task.publishedRevisions.workflowRevision}；调用 swarm_review_plan 显式同步审核。`] : []),
+    ...(task.planningRecovery.automaticReviewPaused ? ['自动规划审核已暂停；任务卡仍可修改，修订后调用 swarm_review_plan 显式复审。'] : []),
     ...task.gates.map((g) => `${g.satisfied ? '✓' : '✗'} ${g.gate} ${g.label}${g.satisfied ? `（${g.by ?? ''}）` : `：${g.missing ?? ''}`}${g.notes.length > 0 ? `；${g.notes.join('；')}` : ''}`),
     ...task.delegations.map((d) => {
       const review = getAssessmentText(d.assessment ?? undefined)
@@ -285,7 +288,7 @@ export const getSwarmToolDefinitions = (service: SwarmService): ToolDefinitionLi
   }),
   getToolDefinition<unknown, StatusResult>({
     name: 'swarm_status',
-    description: '查询任务状态：门禁是否满足、各委派的状态/路由/证据、调用用量、宿主降级与账本位置。',
+    description: '只读查询当前会话任务的版本、规划审核、门禁、委派状态/路由/证据、调用用量与宿主降级。优先用本工具核对流程；Web taskView RPC 需要宿主认证，不能用匿名 curl 代替。',
     parameters: STATUS_PARAMETERS,
     execute: async (args, exec) => service.getStatus(args, getExec(exec)),
     render: (_args, value) => getStatusText(value)
@@ -302,6 +305,15 @@ export const getSwarmToolDefinitions = (service: SwarmService): ToolDefinitionLi
 /** 天枢系统提示里按模型家族追加的调度风格一节 */
 export const ORCHESTRATION_STYLE_SECTION = 'dsh-agent-swarm:orchestration-style'
 
+const TOOL_RECOVERY_SECTION = 'dsh-agent-swarm:tool-recovery'
+const TOOL_RECOVERY_TEXT = [
+  '工具调用恢复：',
+  '- 核对任务用 swarm_status，授权材料用 swarm_context_read；只读 Web RPC 仍需登录认证，401 不能证明任务数据损坏，不通过读取私有状态绕过。',
+  '- read 的 offset 是从 1 开始的行号；超出总行数时按当前文件重新定位或从 offset:1 读取，不复用旧行号重试。',
+  '- 参数校验失败先核对工具 schema 再修正；jev_check 的 state 与 propositions 必须在顶级并列。agent-browser 截图路径是位置参数（screenshot ./page.png），先用 screenshot --help 核对当前 CLI。',
+  '- 持久状态校验失败时保留错误及 swarm_status 中的版本，停止重复写入并报告维护问题；重启不等于已修复，规划未批准时不能开始执行。'
+].join('\n')
+
 /**
  * 按所选模型的家族给天枢的系统提示追加调度风格说明（Claude / GPT / 其他）。
  * 专家子会话的 persona 带角色标签，它们沿用委派时按路由生成的 persona，不追加。
@@ -314,7 +326,10 @@ export const getStyledAssembly = (assembled: PromptAssemblyLike, policy: PromptS
   if (sections.some((section) => section.name === ORCHESTRATION_STYLE_SECTION || ROLE_TAG_PATTERN.test(section.text))) return assembled
   const variables = assembled.variables ?? {}
   const style = getPromptStyle({ ...(variables.provider === undefined ? {} : { provider: variables.provider }), ...(variables.model === undefined ? {} : { model: variables.model }) }, policy)
-  return { ...assembled, sections: [...sections, { name: ORCHESTRATION_STYLE_SECTION, text: getOrchestratorStyleSection(style), interpolate: false }] }
+  return { ...assembled, sections: [...sections,
+    ...(sections.some((section) => section.name === TOOL_RECOVERY_SECTION) ? [] : [{ name: TOOL_RECOVERY_SECTION, text: TOOL_RECOVERY_TEXT, interpolate: false }]),
+    { name: ORCHESTRATION_STYLE_SECTION, text: getOrchestratorStyleSection(style), interpolate: false }
+  ] }
 }
 
 /**

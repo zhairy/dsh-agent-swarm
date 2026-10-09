@@ -12,6 +12,8 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const SANDBOX_ROOT = join(REPO_ROOT, '.sandbox')
 export const DRIVER_DIR = join(REPO_ROOT, 'tests', 'integration', 'driver')
 export const PROFILE = 'swarmtest'
+// Verify a private compiled candidate without touching a live link-installed lib/.
+export const getPluginRoot = () => process.env.SWARM_PLUGIN_ROOT ? resolve(process.env.SWARM_PLUGIN_ROOT) : REPO_ROOT
 
 export const getTestedVersion = () =>
   process.env.SWARM_DSH_VERSION ?? JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).dsh.testedVersions[0]
@@ -88,8 +90,11 @@ export const ensureProfile = (version = getTestedVersion(), { reset = false } = 
   const profileDir = join(home, 'profiles', PROFILE)
   if (reset) rmSync(profileDir, { recursive: true, force: true })
   const bundles = getBundles(profileDir)
-  if (!bundles.includes('swarm-test-driver') || !bundles.includes('dsh-agent-swarm')) {
-    for (const target of [DRIVER_DIR, REPO_ROOT]) {
+  const pluginRoot = getPluginRoot()
+  let installedRoot
+  try { installedRoot = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')).dependencies?.['dsh-agent-swarm'] } catch {}
+  if (!bundles.includes('swarm-test-driver') || !bundles.includes('dsh-agent-swarm') || installedRoot !== 'link:' + pluginRoot) {
+    for (const target of [DRIVER_DIR, pluginRoot]) {
       const result = runDsh({ version, args: ['plugin', '--profile', PROFILE, 'add', target], timeout: 600000 })
       if (result.status !== 0) throw new Error(`安装 ${target} 失败：\n${result.stdout}\n${result.stderr}`)
     }

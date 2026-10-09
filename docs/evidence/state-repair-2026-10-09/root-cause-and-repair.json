@@ -1,0 +1,66 @@
+{
+  "before": {
+    "ok": false,
+    "issues": [
+      {
+        "path": "$.delegations[0].evidenceAssessment.binding.workflowRevision",
+        "code": "ASSESSMENT_REVISION_MISMATCH"
+      }
+    ]
+  },
+  "after": {
+    "ok": true
+  },
+  "restored": [
+    {
+      "delegationId": "D-1",
+      "from": 4,
+      "to": 2,
+      "proof": "byte-identical last-valid record except workflowRevision"
+    },
+    {
+      "delegationId": "D-2",
+      "from": 4,
+      "to": 2,
+      "proof": "byte-identical last-valid record except workflowRevision"
+    }
+  ],
+  "cancelledCount": 1,
+  "clearedNodes": 1,
+  "clearedRequests": 1,
+  "taskVersions": [
+    {
+      "taskId": "T-1",
+      "cardRevision": 2,
+      "workflowRevision": 4,
+      "requestRevision": 1
+    }
+  ],
+  "taskCount": 1,
+  "rawDelegationsRetained": 2,
+  "rawStructuredDigests": [
+    {
+      "delegationId": "D-1",
+      "sha256": "1815c57047d686476935a58afe1492292d0d000bc62ff945b02cdb3903c029ec"
+    },
+    {
+      "delegationId": "D-2",
+      "sha256": "403007cefd1febcc354c5ddf93bbd4f4254e90ff33bafe777b00bbac7c18592b"
+    }
+  ],
+  "runtimeRestored": {
+    "rootEditAt": 0,
+    "taskSequence": 4,
+    "counters": {
+      "native": 0,
+      "jev": 6,
+      "review": 9,
+      "session": 2
+    },
+    "rootUpgradeExplicit": []
+  },
+  "configChanged": false,
+  "approvalsForged": false,
+  "startedReservationsRefunded": false,
+  "persistedProductionFilesWritten": false
+}

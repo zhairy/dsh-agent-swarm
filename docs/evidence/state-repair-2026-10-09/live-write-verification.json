@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-10-09T02:56:36.164Z",
+  "requestedBusinessTools": 0,
+  "requestedModelCalls": 0,
+  "stateWrite": {
+    "schemaVersion": 1,
+    "startedAt": "2026-10-09T02:56:39.934Z",
+    "version": "2.3.1",
+    "requestedBusinessTools": 0,
+    "requestedModelCalls": 0,
+    "pendingBefore": true,
+    "ok": true,
+    "sequenceBefore": 0,
+    "sequenceAfter": 1,
+    "validation": {
+      "ok": true
+    },
+    "taskVersions": {
+      "cardRevision": 2,
+      "workflowRevision": 4,
+      "requestRevision": 1
+    },
+    "phantomNode": "ready",
+    "preservedDelegations": [
+      {
+        "delegationId": "D-1",
+        "role": "tan_wei",
+        "status": "completed",
+        "structuredSha256": "1815c57047d686476935a58afe1492292d0d000bc62ff945b02cdb3903c029ec",
+        "workflowRevision": 2,
+        "assessmentWorkflowRevision": 2
+      },
+      {
+        "delegationId": "D-2",
+        "role": "mou_ding",
+        "status": "completed",
+        "structuredSha256": "403007cefd1febcc354c5ddf93bbd4f4254e90ff33bafe777b00bbac7c18592b",
+        "workflowRevision": 2,
+        "assessmentWorkflowRevision": null
+      }
+    ],
+    "startedWorkRemainsCharged": true,
+    "handoffConsumedOnce": true,
+    "observedModelRequests": 0,
+    "observedToolExecutions": 0,
+    "sessionGenerationUnchanged": true,
+    "sessionLogEventDelta": 0,
+    "coreFiberIdentityPreserved": true,
+    "serviceIdentityPreserved": true,
+    "inspectorNetworkListener": false,
+    "finishedAt": "2026-10-09T02:56:40.049Z"
+  },
+  "removal": {
+    "removedAt": "2026-10-09T02:56:42.226Z",
+    "coreFiberIdentityPreserved": true,
+    "serviceIdentityPreserved": true,
+    "inspectorNetworkListener": false,
+    "globalReferenceRemoved": true
+  },
+  "profileChangedFiles": [],
+  "configChangedNamespaces": [],
+  "chanUnchanged": true,
+  "temporaryEntryRemoved": true,
+  "authenticatedTaskView": {
+    "httpStatus": 200,
+    "ok": true,
+    "versions": [
+      2,
+      4,
+      1
+    ],
+    "phantomNode": "ready"
+  },
+  "finalRunning": 0,
+  "ok": true,
+  "finishedAt": "2026-10-09T02:56:43.919Z",
+  "method": "Authenticated host maintenance; original owner restored through validated one-time handoff; complete state commit, no business or model request."
+}

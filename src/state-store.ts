@@ -17,15 +17,30 @@ export interface DurableStateStore<T> {
   commit: (type: string, mutate: (draft: T) => T | void | Promise<T | void>) => Promise<T>
   dispose: () => Promise<void>
 }
+export interface StateValidationIssue { path: string; code: string }
+export interface StateValidationReport { ok: boolean; issues?: readonly StateValidationIssue[] }
+export type StateValidationResult = boolean | StateValidationReport
 export interface DurableStateOptions<T> {
   directory: string
   initialState: T
-  validate?: (value: unknown) => boolean
+  validate?: (value: unknown) => StateValidationResult
   recover?: (state: T) => T
   enabled?: boolean
   maxStateBytes?: number
   maxJournalBytes?: number
   snapshotEvery?: number
+}
+
+/** Validators return structural locations and fixed rule codes, never state values. */
+const validationFailureMessage = (result: StateValidationResult): string => {
+  if (typeof result !== 'object' || result === null || !Array.isArray(result.issues)) return 'State schema validation failed'
+  const issues = result.issues.slice(0, 3).flatMap((issue) => {
+    if (issue === null || typeof issue !== 'object' || typeof issue.path !== 'string' || typeof issue.code !== 'string'
+      || issue.path.length > 192 || !/^\$(?:\.[A-Za-z][A-Za-z0-9_]{0,31}|\[\d{1,8}\])*$/.test(issue.path)
+      || !/^[A-Z][A-Z0-9_]{0,63}$/.test(issue.code)) return []
+    return [`${issue.path}: ${issue.code}`]
+  })
+  return 'State schema validation failed' + (issues.length === 0 ? '' : ` (${issues.join('; ')})`)
 }
 
 /** Reject non-JSON, accessors and credential fields before persistence; never silently redact recovery state. */
@@ -120,7 +135,10 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
   const validate = (value: unknown): { value: T; encoded: string } => {
     const encoded = canonicalStateJson(value)
     if (Buffer.byteLength(encoded, 'utf8') > maxStateBytes) throw new StateStoreError('STATE_TOO_LARGE', 'State exceeds byte limit')
-    if (options.validate !== undefined && !options.validate(value)) throw new StateStoreError('STATE_INVALID', 'State schema validation failed')
+    if (options.validate !== undefined) {
+      const result = options.validate(value)
+      if (result !== true && (typeof result !== 'object' || result === null || result.ok !== true)) throw new StateStoreError('STATE_INVALID', validationFailureMessage(result))
+    }
     return { value: JSON.parse(encoded) as T, encoded }
   }
   const initial = validate(options.initialState)
