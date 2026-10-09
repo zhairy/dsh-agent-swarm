@@ -185,27 +185,34 @@ const focusedExcerpt = (body: string, focus: string, policy: EvidenceAssessmentP
   const startLine = body.slice(0, start).split('\n').length
   return { excerpt, excerptDigest: hash(excerpt), startLine, endLine: startLine + excerpt.split('\n').length - 1, truncated: start > 0 || start + policy.maxExcerptChars < body.length }
 }
-const observeCode = async (cwd: string, path: string, kind: 'code' | 'manifest', deps: Pick<EvidenceAssessmentDeps, 'privatePaths'>, policy: EvidenceAssessmentPolicy, onBody?: (body: string) => void): Promise<ObservedCodeReference> => {
+const observeCode = async (cwd: string, path: string, kind: 'code' | 'manifest', deps: Pick<EvidenceAssessmentDeps, 'privatePaths'>, policy: EvidenceAssessmentPolicy, onBody?: (body: string) => void, signal?: AbortSignal): Promise<ObservedCodeReference> => {
   const unknown = (reason: string): ObservedCodeReference => ({ path, kind, status: 'unknown', reason })
+  if (signal?.aborted) return unknown('aborted')
   if (!path || path.replace(/\\/g, '/').split('/').includes('..') || sensitiveCodeReference(path)) return unknown('unsafe-or-sensitive-code-reference')
   try {
     const root = await realpath(cwd)
+    if (signal?.aborted) return unknown('aborted')
     const target = await realpath(resolve(root, path))
+    if (signal?.aborted) return unknown('aborted')
     if (!inside(root, target)) return unknown('code-reference-outside-workspace')
     if (sensitiveCodeReference(relative(root, target))) return unknown('unsafe-or-sensitive-code-reference')
     for (const denied of deps.privatePaths ?? []) {
       const privateRoot = await realpath(resolve(root, denied)).catch(() => resolve(root, denied))
+      if (signal?.aborted) return unknown('aborted')
       if (inside(privateRoot, target)) return unknown('private-runtime-reference')
     }
     const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     try {
+      if (signal?.aborted) return unknown('aborted')
       const before = await handle.stat()
       const beforePath = await stat(target)
+      if (signal?.aborted) return unknown('aborted')
       if (!before.isFile() || before.size > policy.maxSourceBytes || before.dev !== beforePath.dev || before.ino !== beforePath.ino || await realpath(resolve(root, path)) !== target) return unknown('code-source-unavailable-or-oversized')
       // Keep the allocation bounded even if another process grows this file after the initial stat.
       const buffer = Buffer.allocUnsafe(before.size + 1)
       let bytes = 0
       while (bytes < buffer.length) {
+        if (signal?.aborted) return unknown('aborted')
         const read = await handle.read(buffer, bytes, buffer.length - bytes, null)
         if (read.bytesRead === 0) break
         bytes += read.bytesRead
@@ -213,6 +220,7 @@ const observeCode = async (cwd: string, path: string, kind: 'code' | 'manifest',
       const data = buffer.subarray(0, bytes)
       const after = await handle.stat()
       const afterPath = await stat(target)
+      if (signal?.aborted) return unknown('aborted')
       if (data.length === 0 || data.length > policy.maxSourceBytes || data.length !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.ino !== after.ino || after.dev !== afterPath.dev || after.ino !== afterPath.ino || await realpath(resolve(root, path)) !== target || data.includes(0)) return unknown('code-source-changed-empty-or-binary')
       const body = data.toString('utf8')
       onBody?.(body)
@@ -238,6 +246,7 @@ const extract = (input: EvidenceAssessmentInput): Candidate[] => {
 
 /** One independent set of semantic judgments per claim; no local Jev RPS, concurrency, call or fee budget. */
 export const assessExplorationEvidence = async (input: EvidenceAssessmentInput, deps: EvidenceAssessmentDeps, signal?: AbortSignal): Promise<EvidenceAssessment | undefined> => {
+  if (signal?.aborted) return undefined
   if (input.record.status !== 'completed' || !['tan_wei', 'bo_wen'].includes(input.record.role)) return undefined
   const policy = policyFor(deps.policy)
   const now = deps.now ?? Date.now
@@ -253,25 +262,29 @@ export const assessExplorationEvidence = async (input: EvidenceAssessmentInput, 
       let file = fileCache.get(fileKey)
       if (!file) {
         let body: string | undefined
-        file = observeCode(input.cwd, path, kind, deps, policy, (value) => { body = value }).then((reference) => ({ reference, ...(body === undefined ? {} : { body }) }))
+        file = observeCode(input.cwd, path, kind, deps, policy, (value) => { body = value }, signal).then((reference) => ({ reference, ...(body === undefined ? {} : { body }) }))
         fileCache.set(fileKey, file)
       }
-      pending = file.then(({ reference, body }) => focus && body !== undefined && reference.status === 'observed' ? { ...reference, ...focusedExcerpt(body, focus, policy) } : reference)
+      pending = file.then(({ reference, body }) => signal?.aborted !== true && focus && body !== undefined && reference.status === 'observed' ? { ...reference, ...focusedExcerpt(body, focus, policy) } : reference)
       codeCache.set(key, pending)
     }
     return pending
   }
   const actualPaths = [...new Set([...(input.projectPaths ?? input.scope), ...candidates.flatMap((candidate) => candidate.localPath ? [candidate.localPath] : [])])]
   await Promise.all(actualPaths.map((path) => capture(path)))
+  if (signal?.aborted) return undefined
   // A manifest is real version evidence; it is not a substitute for implementation code.
   const manifest = await capture('package.json', 'manifest')
+  if (signal?.aborted) return undefined
   const references = await Promise.all([...codeCache.values()])
   const projectCode = references.filter((ref) => ref.kind === 'code' && ref.status === 'observed')
   const externalCache = new Map<string, Promise<{ document?: ObservedExternalSource; failure?: string }>>()
-  const items = await Promise.all(candidates.map(async (candidate): Promise<EvidenceAssessmentItem> => {
+  const collected = await Promise.all(candidates.map(async (candidate): Promise<EvidenceAssessmentItem | undefined> => {
+    if (signal?.aborted) return undefined
     let source = { ...candidate.source }
     if (candidate.localPath) {
       const local = await capture(candidate.localPath, 'code', candidate.claim)
+      if (signal?.aborted) return undefined
       source = { ...source, status: local.status, ...(local.digest ? { digest: local.digest } : {}), ...(local.excerpt ? { supportingText: local.excerpt } : {}), ...(local.reason ? { reason: local.reason } : {}), ...(local.truncated ? { truncated: true } : {}), retrievedAt: observedAt }
     } else if (source.kind === 'external') {
       let url: URL | undefined
@@ -281,10 +294,11 @@ export const assessExplorationEvidence = async (input: EvidenceAssessmentInput, 
       else {
         let pending = externalCache.get(source.locator)
         if (!pending) {
-          pending = Promise.resolve().then(() => deps.resolveSource!(source.locator, signal)).then((document) => document ? { document } : {}).catch((error: unknown) => ({ failure: record(error) && typeof error.code === 'string' && /^SOURCE_[A-Z_]+$/.test(error.code) ? error.code : 'source-retrieval-failed' }))
+          pending = Promise.resolve().then(() => signal?.aborted ? undefined : deps.resolveSource!(source.locator, signal)).then((document) => document ? { document } : {}).catch((error: unknown) => ({ failure: record(error) && typeof error.code === 'string' && /^SOURCE_[A-Z_]+$/.test(error.code) ? error.code : 'source-retrieval-failed' }))
           externalCache.set(source.locator, pending)
         }
         const { document, failure } = await pending
+        if (signal?.aborted) return undefined
         if (!document || typeof document.text !== 'string' || !Number.isFinite(document.retrievedAt) || document.retrievedAt > observedAt + 300000 || document.retrievedAt < 0 || Buffer.byteLength(document.text) > policy.maxSourceBytes || document.text.trim() === '') source.reason = failure ?? 'source-original-not-observed'
         else source = { ...source, status: 'observed', digest: hash(document.text), supportingText: getRedactedText(document.text, policy.maxExcerptChars), retrievedAt: document.retrievedAt, ...(document.version ? { observedVersion: document.version } : {}), ...(document.finalUrl ? { observedUrl: getRedactedText(document.finalUrl, 2000) } : {}), ...(document.publishedAt ? { observedPublishedAt: document.publishedAt } : {}), ...(document.text.length > policy.maxExcerptChars ? { truncated: true } : {}) }
       }
@@ -294,6 +308,7 @@ export const assessExplorationEvidence = async (input: EvidenceAssessmentInput, 
     let support: EvidenceAssessmentItem['support'] = { relation: 'unknown' }
     let model: string | undefined
     const focused = candidate.localPath ? await capture(candidate.localPath, 'code', candidate.claim) : undefined
+    if (signal?.aborted) return undefined
     const shownCode = [...(focused?.status === 'observed' ? [focused] : []), ...projectCode.filter((ref) => ref.path !== focused?.path)].slice(0, 8)
     const state = { claim: getRedactedText(candidate.claim, 2000), source: { ...source, locator: getRedactedText(source.locator, 2000) },
       project: { goal: getRedactedText(input.goal, 2000), acceptance: input.acceptance.map((value) => getRedactedText(value, 500)), scope: input.scope,
@@ -307,6 +322,7 @@ export const assessExplorationEvidence = async (input: EvidenceAssessmentInput, 
       if (outcome.ok) { credibility = readAxis(outcome.answers.credibility); relevance = readAxis(outcome.answers.relevance); support = readSupport(outcome.answers.support); model = outcome.model }
       else { credibility = unknownAxis(outcome.reason); relevance = unknownAxis(outcome.reason) }
     } catch { credibility = unknownAxis(signal?.aborted ? 'aborted' : 'jev-unavailable'); relevance = unknownAxis(signal?.aborted ? 'aborted' : 'jev-unavailable') }
+    if (signal?.aborted) return undefined
     const judgments = { credibility, relevance, support }
     // Deterministic provenance and freshness checks dominate any optimistic semantic answer.
     if (source.status !== 'observed') credibility = unknownAxis(source.reason ?? 'source-original-not-observed')
@@ -316,7 +332,10 @@ export const assessExplorationEvidence = async (input: EvidenceAssessmentInput, 
     return { id: candidate.id, claim: candidate.claim, source, codeReferences: shownCode.map((ref) => ref.path), credibility, relevance, support, ...decision,
       ...(model ? { model } : {}), contraryEvidenceRetained: support.relation === 'contradicts', judgments }
   }))
+  if (signal?.aborted) return undefined
+  const items = collected.filter((item): item is EvidenceAssessmentItem => item !== undefined)
   const finalReferences = (await Promise.all([...fileCache.values()])).map((file) => file.reference)
+  if (signal?.aborted) return undefined
   return { schemaVersion: 1, questionVersion: EVIDENCE_QUESTION_VERSION, role: input.record.role as 'tan_wei' | 'bo_wen', delegationId: input.record.delegationId,
     binding: { ...input.binding, requestRevision: input.binding.requestRevision ?? 1 }, rawDigest: getValueDigest(input.record.structured ?? {}),
     projectDigest: getValueDigest(finalReferences.map(({ path, digest, status, kind }) => ({ path, digest: digest ?? null, status, kind }))),

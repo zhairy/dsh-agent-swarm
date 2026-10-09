@@ -49,7 +49,7 @@ export const getTaskContextBinding = (task: TaskRecord, workspaceId: string): Co
 
 export const getCurrentDelegations = (task: TaskRecord, records: DelegationRecord[], artifactDigest?: string): DelegationRecord[] =>
   records.filter((record) => {
-    if (!isTaskVersionCurrent(task, record) || record.staleReason) return false
+    if ((record.finalization !== undefined && record.finalization !== 'ready') || !isTaskVersionCurrent(task, record) || record.staleReason) return false
     // 成功验证必须绑定当前产物；旧输入兼容仅限尚未引入版本绑定的第一版任务。
     if (artifactDigest && (['fu_he', 'yu_shi'].includes(record.role) || (record.role === 'suan_heng' && record.mode === 'verify'))
       && record.artifactAfter !== undefined && record.artifactAfter !== artifactDigest) return false

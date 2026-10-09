@@ -33,9 +33,10 @@ const makeService = (options: { config?: Record<string, unknown>; env?: Partial<
   }
   // 旧门禁/路由用例聚焦原行为，独立规划审核由 planning-runtime 用例覆盖。
   const config: SwarmConfigInfo = getSwarmConfig({ planningReview: { enabled: false }, ...options.config })
+  const fixtureLlm = { listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'opencode-go' }, { id: 'deepseek-official' }], resolveModelInfo: async () => ({ inputModalities: ['text', 'image'], reasoning: { efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((id) => ({ id, name: id })) } }) }
   const deps: SwarmServiceDepsInfo = {
     getConfig: () => config,
-    getLlm: () => ({ listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'opencode-go' }, { id: 'deepseek-official' }], resolveModelInfo: async () => ({ inputModalities: ['text', 'image'], reasoning: { efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((id) => ({ id, name: id })) } }) }),
+    getLlm: () => fixtureLlm,
     getSubagents: () => subagents,
     getTools: () => ({ register: () => () => undefined, schemas: () => ['read', 'write', 'edit', 'glob', 'grep', 'pwsh'].map((name) => ({ name })), guard: () => () => undefined }),
     getAttachments: () => undefined,
@@ -444,4 +445,30 @@ describe('守卫与诊断', () => {
     expect(diagnostics).toContain('附件')
     expect(makeService().service.getDiagnostics().join('')).toContain('附件')
   })
+})
+
+it('验收复评绑定具体验收记录，同版本的新决定使旧异步复评失效', async () => {
+  let entered!: () => void, release!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { questions?: Record<string, unknown> }
+    if (body.questions?.supported !== undefined) {
+      entered(); await blocked
+      return new Response(JSON.stringify({ answers: { supported: { noul: 1 }, complete: { noul: 1 }, reliability: { score: 4, confidence: 0.9 } } }), { status: 200 })
+    }
+    return new Response(JSON.stringify(jevBody), { status: 200 })
+  })
+  const { service } = makeService({ env: { fetch: fetchMock as typeof fetch, probe: async () => ({ ok: true, vision: true }) } })
+  const task = await service.AddTaskCard(cardInput({}), exec())
+  const previous = service.AcceptTask({ task_id: task.task_id, decision: 'accept', summary: 'old accepted conclusion', stopReason: 'complete' }, exec())
+  void previous.catch(() => undefined)
+  try {
+    await started
+    const current = await service.AcceptTask({ task_id: task.task_id, decision: 'reject', summary: 'new decision same task revision', stopReason: 'needs fix' }, exec())
+    expect(current.status).toBe('recorded')
+    release()
+    await expect(previous).rejects.toThrow('验收记录在复评期间已更新')
+    expect(service.getStatus({ task_id: task.task_id }, exec()).tasks[0]!.acceptance?.decision).toBe('reject')
+  } finally { release(); await previous.catch(() => undefined) }
 })

@@ -215,6 +215,7 @@ export const getDelegationText = (record: DelegationRecord): string => {
     .map((a) => `${a.outcome === 'skipped' ? '跳过' : a.outcome === 'fallback' ? '回退' : '失败'} ${a.route}（${a.reason ?? ''}）`)
   return clip([
     `【${record.roleName}】${record.status}：${record.summary}`,
+    ...(record.finalization === undefined || record.finalization === 'ready' ? [] : [`证据提交：${({ processing: '整理中，尚不可验收', cancelled: '取消后未提交，不作为当前完成证据', failed: '执行或证据整理失败，需要核对后恢复' })[record.finalization]}`]),
     `委派 ${record.delegationId} · 后端 ${record.backend ?? '无'} · 模型 ${record.route === undefined ? '无' : getRouteDisplay(record.route)}${record.promptStyle === undefined ? '' : ` · ${PROMPT_STYLE_LABELS[record.promptStyle]}`}`,
     ...(record.upgrade === undefined ? [] : [`容灾升级：${record.upgrade.reasons.join('；')} → 优先使用 ${record.upgrade.chain.join(' → ')}`]),
     ...(record.session === undefined ? [] : [getSessionLine(record.session)]),

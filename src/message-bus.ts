@@ -138,9 +138,9 @@ export const createMessageBus = <T extends MessageState>(options: MessageBusOpti
           await verifyMessageFile(existing)
           message = existing; return
         }
-        if (Object.keys(draft.messages).length >= maxRetained) throw new MessageBusError('MESSAGE_LIMIT', 'Retained message capacity reached; archive before sending')
+        if (Object.keys(draft.messages).length >= maxRetained) throw new MessageBusError('MESSAGE_LIMIT', `Retained message capacity reached (${maxRetained}); ACK/expiry do not reclaim retained records. Host maintenance is required; no public archive command is available and no referenced evidence was deleted`)
         const pending = Object.values(draft.messages).filter((m) => m.taskId === sender.taskId && m.expiresAt > now() && !draft.messageAcks[m.toAgentId + ':' + m.recipientGeneration + ':' + m.recipientLeaseEpoch]?.[m.id]).length
-        if (pending >= maxPending) throw new MessageBusError('MESSAGE_LIMIT', 'Task pending message budget exhausted')
+        if (pending >= maxPending) throw new MessageBusError('MESSAGE_LIMIT', `Task pending message capacity reached (${maxPending}); recipients can read and ACK outstanding messages, or wait for expiry`)
         const createdAt = now()
         const payload = {
           schemaVersion: 1 as const, id, taskId: sender.taskId, rootSessionId: sender.rootSessionId, workspaceId: sender.workspaceId,

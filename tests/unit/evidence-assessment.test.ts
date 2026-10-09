@@ -25,6 +25,42 @@ const setup = async (role: 'tan_wei' | 'bo_wen' = 'tan_wei') => {
 }
 
 describe('independent source credibility and project applicability assessment', () => {
+  it('skips collection and every judgment when the caller already cancelled', async () => {
+    const input = await setup()
+    const controller = new AbortController()
+    controller.abort()
+    const ask = vi.fn<JevClient['ask']>(async () => outcome())
+    const resolveSource = vi.fn(async () => ({ text: 'original', retrievedAt: 1000 }))
+    expect(await assessExplorationEvidence(input, { ask, resolveSource, now: () => 1000 }, controller.signal)).toBeUndefined()
+    expect(ask).not.toHaveBeenCalled()
+    expect(resolveSource).not.toHaveBeenCalled()
+  })
+
+  it('does not start judgments after cancellation during source collection', async () => {
+    const input = await setup('bo_wen')
+    ;(input.record.structured as { sources: unknown[] }).sources = Array.from({ length: 20 }, (_, index) => ({ url: `https://docs.example.org/source-${index}`, points: ['库提供求和方法'] }))
+    const controller = new AbortController()
+    const ask = vi.fn<JevClient['ask']>(async () => outcome())
+    const resolveSource = vi.fn(async () => {
+      controller.abort()
+      return { text: 'math-lib provides sum(values)', retrievedAt: 1000 }
+    })
+    expect(await assessExplorationEvidence(input, { ask, resolveSource, now: () => 1000 }, controller.signal)).toBeUndefined()
+    expect(resolveSource).toHaveBeenCalledTimes(1)
+    expect(ask).not.toHaveBeenCalled()
+  })
+
+  it('stops later judgments and leaves the original result unchanged when cancelled during assessment', async () => {
+    const input = await setup()
+    ;(input.record.structured as { findings: unknown[] }).findings = Array.from({ length: 100 }, () => ({ path: 'src/math.ts', evidence: 'stableSum uses reduce' }))
+    const original = structuredClone(input.record)
+    const controller = new AbortController()
+    const ask = vi.fn<JevClient['ask']>(async () => { controller.abort(); return outcome() })
+    expect(await assessExplorationEvidence(input, { ask, now: () => 1000 }, controller.signal)).toBeUndefined()
+    expect(ask).toHaveBeenCalledTimes(1)
+    expect(input.record).toEqual(original)
+  })
+
   it('uses actual project code, manifest versions and independent Jev axes instead of explorer self ratings', async () => {
     const input = await setup()
     const ask = vi.fn<JevClient['ask']>(async () => outcome())

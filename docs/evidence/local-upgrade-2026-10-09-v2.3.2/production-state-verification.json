@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "version": "2.3.2",
+  "checkedAt": "2026-10-09T05:09:50.729Z",
+  "productionPid": 17566,
+  "fullStateWrite": {
+    "sequenceBefore": 0,
+    "sequenceAfter": 1,
+    "validation": {
+      "ok": true
+    }
+  },
+  "preservation": {
+    "taskVersions": {
+      "cardRevision": 2,
+      "workflowRevision": 4,
+      "requestRevision": 1
+    },
+    "originalDelegationCount": 2,
+    "historicalWorkflowRevisions": [
+      2,
+      2
+    ],
+    "immutableStructuredOutputsPreserved": true,
+    "startedWorkRemainsCharged": true,
+    "handoffConsumedOnce": true,
+    "configurationChanged": false,
+    "profileFilesChanged": [],
+    "businessSourcesUnchanged": true,
+    "expertPresetFiles": 46,
+    "expertPresetContentsAndModesUnchanged": true
+  },
+  "sideEffects": {
+    "modelRequests": 0,
+    "businessToolExecutions": 0,
+    "sessionGenerationUnchanged": true,
+    "temporaryEntryRemoved": true,
+    "inspectorNetworkListener": false
+  },
+  "privateBackup": "Stored outside the repository under owner-only DSH maintenance/backups; raw state and credentials are never included in release assets."
+}

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   CLAUDE_MODELS,
   CODEX_MODELS,
@@ -24,6 +24,8 @@ import {
   getRouteDisplay,
   getRouteKey,
   getRouteLabel,
+  createRouteMetadataCache,
+  createRouteFailureObserver,
   intRouteProbe,
   isSameRoute,
   isSwitchWorthy,
@@ -116,11 +118,12 @@ describe('路由工具函数', () => {
     const first: RouteInfo = { provider: 'p', model: 'first', policy: { quotaDomainId: 'account-a', quotaScope: 'account' } }
     const peer: RouteInfo = { provider: 'p', model: 'peer', policy: { quotaDomainId: 'account-a', quotaScope: 'account' } }
     const backup: RouteInfo = { provider: 'p', model: 'backup', policy: { quotaDomainId: 'account-b', quotaScope: 'account' } }
-    const probe = intRouteProbe(() => ({ listProviders: () => [{ id: 'p' }], resolveModelInfo: async (_provider, model) => {
+    const llm = { listProviders: () => [{ id: 'p' }], resolveModelInfo: async (_provider: string, model: string) => {
       calls.push(model)
       if (model === 'first') throw Object.assign(new Error('subscription quota exhausted'), { failure: { code: 'QUOTA', message: 'subscription quota exhausted', quotaDomainId: 'account-a', quotaScope: 'account' } })
       return { inputModalities: ['text'] }
-    } }), { now: () => at, isRouteAvailable: (route) => state.isRouteAvailable(route), onFailure: (route, failure) => state.ObserveRouteFailure(route, failure) })
+    } }
+    const probe = intRouteProbe(() => llm, { now: () => at, isRouteAvailable: (route) => state.isRouteAvailable(route), onFailure: (route, failure) => state.ObserveRouteFailure(route, failure) })
     expect((await probe(first)).ok).toBe(false)
     at = PROBE_FAIL_TTL_MS + 1
     expect(await probe(first)).toEqual({ ok: false, reason: 'route-isolated' })
@@ -134,7 +137,8 @@ describe('路由工具函数', () => {
     const pending = new Promise<void>((resolve) => { release = resolve })
     const state = intRouteStateRegistry(undefined, undefined, { onHealthChange: () => pending })
     const route: RouteInfo = { provider: 'p', model: 'first', policy: { quotaDomainId: 'account', quotaScope: 'account' } }
-    const source = () => ({ listProviders: () => [{ id: 'p' }], resolveModelInfo: async () => { throw Object.assign(new Error('quota exhausted'), { code: 'QUOTA' }) } })
+    const llm = { listProviders: () => [{ id: 'p' }], resolveModelInfo: async () => { throw Object.assign(new Error('quota exhausted'), { code: 'QUOTA' }) } }
+    const source = () => llm
     const probe = intRouteProbe(source, { isRouteAvailable: (route) => state.isRouteAvailable(route), onFailure: (route, failure) => state.ObserveRouteFailure(route, failure) })
     let done = false
     const result = probe(route).then((value) => { done = true; return value })
@@ -269,6 +273,209 @@ describe('intRouteProbe', () => {
 })
 
 describe('预检缓存与并行', () => {
+  it('uses the real Cordis service identity while invoking metadata methods through their current context proxy', async () => {
+    let proxyCalls = 0
+    const original = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async function (this: object) {
+      expect(this).not.toBe(original)
+      proxyCalls++
+      return { inputModalities: ['image'] }
+    }) }
+    const replacement = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async () => ({ inputModalities: ['text'] })) }
+    let target = original
+    // Installed Cordis createTraceable returns a new proxy on each ctx.get().
+    const getLlm = () => new Proxy(target, { get: (inner, key, receiver) => key === Symbol.for('cordis.original') ? inner : Reflect.get(inner, key, receiver) })
+    const probe = intRouteProbe(getLlm), route = { provider: 'p', model: 'm' }
+    expect(await probe(route)).toEqual({ ok: true, vision: true })
+    expect(await probe(route)).toEqual({ ok: true, vision: true })
+    expect(proxyCalls).toBe(1)
+    target = replacement
+    expect(await probe(route)).toEqual({ ok: true, vision: false })
+    expect(replacement.resolveModelInfo).toHaveBeenCalledTimes(1)
+  })
+
+  it('shares metadata across probes while checking each owner before and after the lookup', async () => {
+    let allowed = true, release!: () => void
+    const llm = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async () => {
+      await new Promise<void>((resolve) => { release = resolve })
+      return { inputModalities: ['text', 'image'] }
+    }) }
+    const metadataCache = createRouteMetadataCache()
+    const first = intRouteProbe(() => llm, { metadataCache, isRouteAvailable: () => allowed })
+    const second = intRouteProbe(() => llm, { metadataCache, isRouteAvailable: () => true })
+    const route = { provider: 'p', model: 'm' }
+    const a = first(route), b = second(route)
+    allowed = false; release()
+    expect(await a).toEqual({ ok: false, reason: 'route-isolated' })
+    expect(await b).toEqual({ ok: true, vision: true })
+    expect(await first(route)).toEqual({ ok: false, reason: 'route-isolated' })
+    allowed = true
+    expect(await first(route)).toEqual({ ok: true, vision: true })
+    expect(llm.resolveModelInfo).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalidates metadata when the LLM service changes and ignores an older in-flight result', async () => {
+    let release!: () => void
+    const old = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async () => {
+      await new Promise<void>((resolve) => { release = resolve })
+      return { inputModalities: ['image'] }
+    }) }
+    const replacement = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async () => ({ inputModalities: ['text'] })) }
+    let current = old
+    const probe = intRouteProbe(() => current)
+    const route = { provider: 'p', model: 'm' }
+    const pending = probe(route)
+    current = replacement
+    expect(await probe(route)).toEqual({ ok: true, vision: false })
+    release()
+    expect(await pending).toEqual({ ok: false, reason: 'llm-service-changed' })
+    expect(await probe(route)).toEqual({ ok: true, vision: false })
+    expect(replacement.resolveModelInfo).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps provider registration live even when successful metadata is cached', async () => {
+    let registered = true
+    const llm = { listProviders: () => registered ? [{ id: 'p' }] : [], resolveModelInfo: vi.fn(async () => ({})) }
+    const probe = intRouteProbe(() => llm)
+    const route = { provider: 'p', model: 'm' }
+    expect((await probe(route)).ok).toBe(true)
+    registered = false
+    expect(await probe(route)).toEqual({ ok: false, reason: 'provider-not-configured' })
+    expect(llm.resolveModelInfo).toHaveBeenCalledTimes(1)
+  })
+
+  it('checks provider removal again after an in-flight metadata lookup', async () => {
+    let registered = true, release!: () => void
+    const llm = { listProviders: () => registered ? [{ id: 'p' }] : [], resolveModelInfo: vi.fn(async () => {
+      await new Promise<void>((resolve) => { release = resolve }); return {}
+    }) }
+    const onFailure = vi.fn(), probe = intRouteProbe(() => llm, { onFailure })
+    const pending = probe({ provider: 'p', model: 'm' })
+    registered = false; release()
+    expect(await pending).toEqual({ ok: false, reason: 'provider-not-configured' })
+    expect(onFailure).not.toHaveBeenCalled()
+  })
+
+  it('observes one shared metadata failure once per health registry and propagates durable rejection', async () => {
+    let release!: () => void
+    const llm = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async () => {
+      await new Promise<void>((resolve) => { release = resolve }); throw Object.assign(new Error('quota'), { code: 'QUOTA' })
+    }) }
+    const metadataCache = createRouteMetadataCache(), firstRegistry = vi.fn(), otherRegistry = vi.fn()
+    const sharedObserver = createRouteFailureObserver(firstRegistry)
+    const first = intRouteProbe(() => llm, { metadataCache, onFailure: sharedObserver })
+    const peer = intRouteProbe(() => llm, { metadataCache, onFailure: sharedObserver })
+    const other = intRouteProbe(() => llm, { metadataCache, onFailure: createRouteFailureObserver(otherRegistry) })
+    const route = { provider: 'p', model: 'm' }
+    const pending = Promise.all([first(route), peer(route), other(route)])
+    release(); await pending
+    expect(llm.resolveModelInfo).toHaveBeenCalledTimes(1)
+    expect(firstRegistry).toHaveBeenCalledTimes(1)
+    expect(otherRegistry).toHaveBeenCalledTimes(1)
+    const writeFailure = new Error('durable-fixture-rejected')
+    const persist = vi.fn(async () => { throw writeFailure })
+    const brokenObserver = createRouteFailureObserver(persist)
+    const left = intRouteProbe(() => llm, { metadataCache, onFailure: brokenObserver })
+    const right = intRouteProbe(() => llm, { metadataCache, onFailure: brokenObserver })
+    const failed = Promise.allSettled([left(route), right(route)])
+    release()
+    expect(await failed).toEqual([{ status: 'rejected', reason: writeFailure }, { status: 'rejected', reason: writeFailure }])
+    expect(persist).toHaveBeenCalledTimes(1)
+  })
+
+  it('evicts settled metadata by recent use and bounds the in-flight registry without inventing a model failure', async () => {
+    const llm = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async (_provider: string, _model: string) => ({})) }
+    const metadataCache = createRouteMetadataCache({ maxEntries: 2 })
+    const probe = intRouteProbe(() => llm, { metadataCache })
+    const route = (model: string) => ({ provider: 'p', model })
+    await probe(route('a')); await probe(route('b')); await probe(route('a')); await probe(route('c'))
+    await probe(route('a')); await probe(route('b'))
+    expect(llm.resolveModelInfo.mock.calls.map((call) => call[1])).toEqual(['a', 'b', 'c', 'b'])
+    let release!: () => void
+    const slow = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async () => { await new Promise<void>((resolve) => { release = resolve }); return {} }) }
+    const onFailure = vi.fn()
+    const bounded = intRouteProbe(() => slow, { metadataCache: createRouteMetadataCache({ maxEntries: 1 }), onFailure })
+    const pending = bounded(route('a'))
+    expect(await bounded(route('b'))).toEqual({ ok: false, reason: 'metadata-capacity-busy' })
+    release(); await pending
+    expect(slow.resolveModelInfo).toHaveBeenCalledTimes(1)
+    expect(onFailure).not.toHaveBeenCalled()
+  })
+
+  it('keeps failures local so a fresh manual-owner probe can inspect recovery immediately', async () => {
+    let broken = true
+    const llm = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async () => { if (broken) throw new Error('offline'); return {} }) }
+    const metadataCache = createRouteMetadataCache()
+    const first = intRouteProbe(() => llm, { metadataCache })
+    const route = { provider: 'p', model: 'm' }
+    expect((await first(route)).ok).toBe(false)
+    broken = false
+    expect((await first(route)).ok).toBe(false)
+    const manual = intRouteProbe(() => llm, { metadataCache })
+    expect(await manual(route)).toEqual({ ok: true, vision: false })
+    expect(llm.resolveModelInfo).toHaveBeenCalledTimes(2)
+  })
+
+  it('separates effective capabilities and wire effort while canonicalizing equivalent Codex levels', async () => {
+    const llm = { listProviders: () => [{ id: 'codex' }], resolveModelInfo: vi.fn(async () => ({ inputModalities: ['image'] })),
+      resolveCallConfig: vi.fn(async (config: { provider: string; model: string; reasoningEffort?: string }) => config) }
+    const probe = intRouteProbe(() => llm)
+    const route = { provider: 'codex', model: 'm', reasoningEffort: 'ultra' }
+    expect(await probe(route)).toEqual({ ok: true, vision: true })
+    expect(await probe({ ...route, reasoningEffort: 'max' })).toEqual({ ok: true, vision: true })
+    expect(llm.resolveModelInfo).toHaveBeenCalledTimes(1)
+    expect(await probe({ ...route, policy: { capabilities: { vision: false } } })).toEqual({ ok: true, vision: false })
+    expect(await probe({ ...route, policy: { accessMode: 'judgment_api' } })).toEqual({ ok: false, reason: 'capability-incompatible: generation-tools-unavailable' })
+    expect(llm.resolveModelInfo).toHaveBeenCalledTimes(2)
+    expect(llm.resolveCallConfig).toHaveBeenLastCalledWith({ provider: 'codex', model: 'm', reasoningEffort: 'max' })
+  })
+
+  it('cancels only one waiter without cancelling the shared SDK metadata lookup', async () => {
+    let release!: () => void
+    const llm = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async () => { await new Promise<void>((resolve) => { release = resolve }); return {} }) }
+    const onFailure = vi.fn(), probe = intRouteProbe(() => llm, { onFailure })
+    const controller = new AbortController(), route = { provider: 'p', model: 'm' }
+    const cancelled = probe(route, controller.signal), survivor = probe(route)
+    controller.abort()
+    expect(await cancelled).toEqual({ ok: false, reason: 'metadata-cancelled' })
+    release()
+    expect(await survivor).toEqual({ ok: true, vision: false })
+    expect((await probe(route)).ok).toBe(true)
+    expect(llm.resolveModelInfo).toHaveBeenCalledTimes(1)
+    expect(onFailure).not.toHaveBeenCalled()
+  })
+
+  it('bounds metadata waiting, retains the hung slot without overlap, and accepts a genuinely late completion', async () => {
+    let release!: () => void
+    const llm = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async () => {
+      await new Promise<void>((resolve) => { release = resolve }); return { inputModalities: ['image'] }
+    }) }
+    const onFailure = vi.fn()
+    const probe = intRouteProbe(() => llm, { metadataCache: createRouteMetadataCache({ pendingWaitMs: 5 }), onFailure })
+    const route = { provider: 'p', model: 'm' }, controller = new AbortController()
+    const cancelled = probe(route, controller.signal), waiting = probe(route)
+    controller.abort()
+    expect(await cancelled).toEqual({ ok: false, reason: 'metadata-cancelled' })
+    expect(await waiting).toEqual({ ok: false, reason: 'metadata-pending-timeout' })
+    // No SDK release or new timer is needed to receive the second timeout.
+    expect(await probe(route)).toEqual({ ok: false, reason: 'metadata-pending-timeout' })
+    expect(llm.resolveModelInfo).toHaveBeenCalledTimes(1)
+    expect(onFailure).not.toHaveBeenCalled()
+    release()
+    await vi.waitFor(async () => expect(await probe(route)).toEqual({ ok: true, vision: true }))
+    expect(llm.resolveModelInfo).toHaveBeenCalledTimes(1)
+    expect(onFailure).not.toHaveBeenCalled()
+  })
+
+  it('does not cache or globally isolate SDK cancellation errors', async () => {
+    const llm = { listProviders: () => [{ id: 'p' }], resolveModelInfo: vi.fn(async () => { throw new DOMException('fixture cancelled', 'AbortError') }) }
+    const onFailure = vi.fn(), probe = intRouteProbe(() => llm, { onFailure })
+    const route = { provider: 'p', model: 'm' }
+    expect(await probe(route)).toEqual({ ok: false, reason: 'metadata-cancelled' })
+    expect(await probe(route)).toEqual({ ok: false, reason: 'metadata-cancelled' })
+    expect(llm.resolveModelInfo).toHaveBeenCalledTimes(2)
+    expect(onFailure).not.toHaveBeenCalled()
+  })
+
   it('可用结果缓存较久、失败结果很快过期；并发的同一预检只解析一次', async () => {
     let at = 0
     let calls = 0

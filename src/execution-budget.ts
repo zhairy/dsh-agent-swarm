@@ -37,6 +37,7 @@ export interface ExecutionBudget {
   settle: (id: string, usage?: UsageObservation) => BudgetReservation
   cancel: (id: string) => BudgetReservation
   observeJev: (usage?: UsageObservation, attempts?: number) => void
+  getReservation: (id: string) => BudgetReservation | undefined
   getSnapshot: () => ExecutionBudgetSnapshot
   remainingMathWork: () => number | undefined
 }
@@ -66,6 +67,7 @@ export const createExecutionBudget = (limits: ExecutionBudgetLimits = {}, restor
     const maximum = limits[key]
     if (maximum !== undefined && maximum > 0 && actual > maximum) throw new ExecutionBudgetError('BUDGET_EXHAUSTED', key + ' exhausted')
   }
+  const limited = (key: keyof ExecutionBudgetLimits): boolean => (limits[key] ?? 0) > 0
   const budget: ExecutionBudget = {
     reserve: (input) => {
       if (typeof input.id !== 'string' || input.id.length === 0 || input.id.length > 256 || !['delegate', 'model', 'native', 'math', 'jev'].includes(input.source)) throw new ExecutionBudgetError('BUDGET_INVALID', 'Invalid request identity/source')
@@ -78,20 +80,27 @@ export const createExecutionBudget = (limits: ExecutionBudgetLimits = {}, restor
         if (existing.source !== input.source || existing.estimatedTokens !== estimatedTokens || existing.estimatedCostUsd !== estimatedCostUsd || existing.estimatedWorkUnits !== estimatedWorkUnits) throw new ExecutionBudgetError('REQUEST_CONFLICT', 'Request id already has different budget arguments')
         return structuredClone(existing)
       }
-      const records = used()
       if (input.source !== 'jev') {
-        if (input.source === 'delegate') check('maxDelegations', records.filter((r) => r.source === 'delegate').length + 1)
-        if (input.source === 'model' || input.source === 'native') check('maxModelAttempts', records.filter((r) => r.source === 'model' || r.source === 'native').length + 1)
-        if (input.source === 'math') {
-          check('maxMathCalls', records.filter((r) => r.source === 'math').length + 1)
-          check('maxMathWorkUnits', records.reduce((sum, r) => sum + (r.usage?.workUnits ?? r.estimatedWorkUnits), 0) + estimatedWorkUnits)
-        }
-        if (input.source !== 'math') {
-          const generation = records.filter((record) => record.source !== 'math')
-          check('maxTokens', generation.reduce((sum, r) => sum + (r.usage === undefined ? r.estimatedTokens : r.usageUnknown ? Math.max(r.estimatedTokens, (r.usage.inputTokens ?? 0) + (r.usage.outputTokens ?? 0)) : (r.usage.inputTokens ?? 0) + (r.usage.outputTokens ?? 0)), 0) + estimatedTokens)
-          check('maxCostUsd', generation.reduce((sum, r) => sum + (r.usage?.costUsd ?? r.estimatedCostUsd), 0) + estimatedCostUsd)
-          if ((limits.maxTokens ?? 0) > 0 && (input.estimatedTokens === undefined || generation.some((record) => !record.tokenEstimateKnown && (record.usage?.inputTokens === undefined || record.usage?.outputTokens === undefined)))) throw new ExecutionBudgetError('BUDGET_UNSUPPORTED', 'maxTokens requires a token estimate and covered prior usage; unknown is not zero')
-          if ((limits.maxCostUsd ?? 0) > 0 && (input.estimatedCostUsd === undefined || generation.some((record) => !record.costEstimateKnown && record.usage?.costUsd === undefined))) throw new ExecutionBudgetError('BUDGET_UNSUPPORTED', 'maxCostUsd requires a cost estimate and covered prior usage; unknown is not zero')
+        const countLimit = input.source === 'delegate' ? 'maxDelegations'
+          : input.source === 'math' ? 'maxMathCalls' : 'maxModelAttempts'
+        const countLimited = limited(countLimit)
+        const workLimited = input.source === 'math' && limited('maxMathWorkUnits')
+        const tokensLimited = input.source !== 'math' && limited('maxTokens')
+        const costLimited = input.source !== 'math' && limited('maxCostUsd')
+        // Unlimited generation and exempt Jev must not scan the full request
+        // history. Keep every reservation for later restoration/limit changes.
+        if (countLimited || workLimited || tokensLimited || costLimited) {
+          const records = used()
+          if (countLimited) check(countLimit, records.filter((record) => input.source === 'model' || input.source === 'native'
+            ? record.source === 'model' || record.source === 'native' : record.source === input.source).length + 1)
+          if (workLimited) check('maxMathWorkUnits', records.reduce((sum, r) => sum + (r.usage?.workUnits ?? r.estimatedWorkUnits), 0) + estimatedWorkUnits)
+          if (tokensLimited || costLimited) {
+            const generation = records.filter((record) => record.source !== 'math')
+            if (tokensLimited) check('maxTokens', generation.reduce((sum, r) => sum + (r.usage === undefined ? r.estimatedTokens : r.usageUnknown ? Math.max(r.estimatedTokens, (r.usage.inputTokens ?? 0) + (r.usage.outputTokens ?? 0)) : (r.usage.inputTokens ?? 0) + (r.usage.outputTokens ?? 0)), 0) + estimatedTokens)
+            if (costLimited) check('maxCostUsd', generation.reduce((sum, r) => sum + (r.usage?.costUsd ?? r.estimatedCostUsd), 0) + estimatedCostUsd)
+            if (tokensLimited && (input.estimatedTokens === undefined || generation.some((record) => !record.tokenEstimateKnown && (record.usage?.inputTokens === undefined || record.usage?.outputTokens === undefined)))) throw new ExecutionBudgetError('BUDGET_UNSUPPORTED', 'maxTokens requires a token estimate and covered prior usage; unknown is not zero')
+            if (costLimited && (input.estimatedCostUsd === undefined || generation.some((record) => !record.costEstimateKnown && record.usage?.costUsd === undefined))) throw new ExecutionBudgetError('BUDGET_UNSUPPORTED', 'maxCostUsd requires a cost estimate and covered prior usage; unknown is not zero')
+          }
         }
       }
       const record: BudgetReservation = { id: input.id, source: input.source, state: 'reserved', estimatedTokens, estimatedCostUsd, estimatedWorkUnits, tokenEstimateKnown: input.estimatedTokens !== undefined, costEstimateKnown: input.estimatedCostUsd !== undefined, exempt: input.source === 'jev' }
@@ -144,6 +153,10 @@ export const createExecutionBudget = (limits: ExecutionBudgetLimits = {}, restor
       jev.inputTokens += usage?.inputTokens ?? 0; jev.outputTokens += usage?.outputTokens ?? 0; jev.costUsd += usage?.costUsd ?? 0
       if (usage === undefined || usage.inputTokens === undefined || usage.outputTokens === undefined) jev.unknownUsage += attempts
       if (usage?.costUsd === undefined) jev.unknownCost += attempts
+    },
+    getReservation: (id) => {
+      const reservation = reservations.get(id)
+      return reservation === undefined ? undefined : structuredClone(reservation)
     },
     getSnapshot: () => ({ schemaVersion: 1, limits: { ...limits }, reservations: structuredClone([...reservations.values()]), jev: { ...jev }, coverage: [...coverage] }),
     remainingMathWork: () => limits.maxMathWorkUnits !== undefined && limits.maxMathWorkUnits > 0 ? Math.max(0, limits.maxMathWorkUnits - used().reduce((sum, r) => sum + (r.usage?.workUnits ?? r.estimatedWorkUnits), 0)) : undefined

@@ -1,0 +1,240 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-09T04:53:12.387Z",
+  "baselineRef": "e38b0a6",
+  "environment": {
+    "node": "v24.21.0",
+    "cpu": "Intel(R) Core(TM) Ultra 5 125H",
+    "platform": "linux",
+    "kernel": "6.12.107+deb13-amd64"
+  },
+  "sampleCount": 30,
+  "warmup": 5,
+  "delayMs": 2,
+  "methodology": "Four fake routes per owner; a fresh intRouteProbe wrapper per route call reproduces the old child-probe path. Baseline/current order alternates in one process. Simulated metadata delay only; no HTTP or generation. Each owner fake health predicate remains invoked on every use. Results are metadata-call and synthetic control-latency measurements, not real provider/model latency savings.",
+  "sources": [
+    {
+      "name": "before",
+      "sourceDigests": {
+        "routes.ts": "aa0bd97361c1c31217d46341c06d67ce5a6b1c7bf59e439658feb6b14204af6f",
+        "provider-policy.ts": "44c73d8aba297f74ea307062b8d7e56390787cdc4d3b0585db0c7ac74d19e96b",
+        "util/errors.ts": "94af6f64d31b502f7d4e5f61a4280bf8f9612f65f6d0efd24cbab3e153da41e9"
+      }
+    },
+    {
+      "name": "after",
+      "sourceDigests": {
+        "routes.ts": "0fa9ff79fd132f99f4494ad568cc671a04f23abe68ad136f22ac1fed0260d827",
+        "provider-policy.ts": "44c73d8aba297f74ea307062b8d7e56390787cdc4d3b0585db0c7ac74d19e96b",
+        "util/errors.ts": "94af6f64d31b502f7d4e5f61a4280bf8f9612f65f6d0efd24cbab3e153da41e9"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "variant": "before",
+      "mode": "sequential-owners",
+      "owners": 1,
+      "routesPerOwner": 4,
+      "medianMs": 2.273744000000022,
+      "p95Ms": 2.5395940000000223,
+      "modelInfoCallsPerSample": [
+        4
+      ],
+      "callConfigCallsPerSample": [
+        4
+      ],
+      "ownerHealthChecksPerSample": [
+        4
+      ]
+    },
+    {
+      "variant": "after",
+      "mode": "sequential-owners",
+      "owners": 1,
+      "routesPerOwner": 4,
+      "medianMs": 2.3476459999999975,
+      "p95Ms": 4.09388100000001,
+      "modelInfoCallsPerSample": [
+        4
+      ],
+      "callConfigCallsPerSample": [
+        4
+      ],
+      "ownerHealthChecksPerSample": [
+        8
+      ]
+    },
+    {
+      "variant": "before",
+      "mode": "sequential-owners",
+      "owners": 10,
+      "routesPerOwner": 4,
+      "medianMs": 21.903723000000014,
+      "p95Ms": 25.554325999999946,
+      "modelInfoCallsPerSample": [
+        40
+      ],
+      "callConfigCallsPerSample": [
+        40
+      ],
+      "ownerHealthChecksPerSample": [
+        40
+      ]
+    },
+    {
+      "variant": "after",
+      "mode": "sequential-owners",
+      "owners": 10,
+      "routesPerOwner": 4,
+      "medianMs": 2.4966910000000553,
+      "p95Ms": 2.784387000000038,
+      "modelInfoCallsPerSample": [
+        4
+      ],
+      "callConfigCallsPerSample": [
+        4
+      ],
+      "ownerHealthChecksPerSample": [
+        80
+      ]
+    },
+    {
+      "variant": "before",
+      "mode": "sequential-owners",
+      "owners": 100,
+      "routesPerOwner": 4,
+      "medianMs": 221.47030199999972,
+      "p95Ms": 233.68950200000018,
+      "modelInfoCallsPerSample": [
+        400
+      ],
+      "callConfigCallsPerSample": [
+        400
+      ],
+      "ownerHealthChecksPerSample": [
+        400
+      ]
+    },
+    {
+      "variant": "after",
+      "mode": "sequential-owners",
+      "owners": 100,
+      "routesPerOwner": 4,
+      "medianMs": 4.054387000000133,
+      "p95Ms": 5.076125000000502,
+      "modelInfoCallsPerSample": [
+        4
+      ],
+      "callConfigCallsPerSample": [
+        4
+      ],
+      "ownerHealthChecksPerSample": [
+        800
+      ]
+    },
+    {
+      "variant": "before",
+      "mode": "concurrent-owners",
+      "owners": 1,
+      "routesPerOwner": 4,
+      "medianMs": 2.195929999999862,
+      "p95Ms": 2.312679999999091,
+      "modelInfoCallsPerSample": [
+        4
+      ],
+      "callConfigCallsPerSample": [
+        4
+      ],
+      "ownerHealthChecksPerSample": [
+        4
+      ]
+    },
+    {
+      "variant": "after",
+      "mode": "concurrent-owners",
+      "owners": 1,
+      "routesPerOwner": 4,
+      "medianMs": 2.2722499999999854,
+      "p95Ms": 2.3997049999998126,
+      "modelInfoCallsPerSample": [
+        4
+      ],
+      "callConfigCallsPerSample": [
+        4
+      ],
+      "ownerHealthChecksPerSample": [
+        8
+      ]
+    },
+    {
+      "variant": "before",
+      "mode": "concurrent-owners",
+      "owners": 10,
+      "routesPerOwner": 4,
+      "medianMs": 2.3421180000004824,
+      "p95Ms": 2.878512999999657,
+      "modelInfoCallsPerSample": [
+        40
+      ],
+      "callConfigCallsPerSample": [
+        40
+      ],
+      "ownerHealthChecksPerSample": [
+        40
+      ]
+    },
+    {
+      "variant": "after",
+      "mode": "concurrent-owners",
+      "owners": 10,
+      "routesPerOwner": 4,
+      "medianMs": 2.371689999999944,
+      "p95Ms": 3.80048799999895,
+      "modelInfoCallsPerSample": [
+        4
+      ],
+      "callConfigCallsPerSample": [
+        4
+      ],
+      "ownerHealthChecksPerSample": [
+        80
+      ]
+    },
+    {
+      "variant": "before",
+      "mode": "concurrent-owners",
+      "owners": 100,
+      "routesPerOwner": 4,
+      "medianMs": 3.2423629999993864,
+      "p95Ms": 5.030362999999852,
+      "modelInfoCallsPerSample": [
+        400
+      ],
+      "callConfigCallsPerSample": [
+        400
+      ],
+      "ownerHealthChecksPerSample": [
+        400
+      ]
+    },
+    {
+      "variant": "after",
+      "mode": "concurrent-owners",
+      "owners": 100,
+      "routesPerOwner": 4,
+      "medianMs": 2.4789399999990565,
+      "p95Ms": 3.498609000000215,
+      "modelInfoCallsPerSample": [
+        4
+      ],
+      "callConfigCallsPerSample": [
+        4
+      ],
+      "ownerHealthChecksPerSample": [
+        800
+      ]
+    }
+  ],
+  "peakRssBytes": 687165440
+}

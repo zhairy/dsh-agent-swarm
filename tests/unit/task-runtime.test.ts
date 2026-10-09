@@ -72,9 +72,10 @@ const makeRuntime = async (options: {
   }
   const fetch = vi.fn(async () => { throw new Error('These fixtures disable Jev; no live network calls are allowed') })
   let time = 1000
+  const fixtureLlm = { listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'opencode-go' }, { id: 'deepseek-official' }], resolveModelInfo: async () => ({ inputModalities: ['text', 'image'] }) }
   const service = intSwarmService({
     getConfig: () => config,
-    getLlm: () => ({ listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'opencode-go' }, { id: 'deepseek-official' }], resolveModelInfo: async () => ({ inputModalities: ['text', 'image'] }) }),
+    getLlm: () => fixtureLlm,
     getSubagents: () => subagents,
     getTools: () => ({ register: () => () => undefined, guard: () => () => undefined, schemas: () => ['read', 'write', 'edit', 'glob', 'grep', 'pwsh', 'swarm_calculate', 'swarm_context_read', 'swarm_message_send', 'swarm_message_read', 'swarm_message_ack'].map((name) => ({ name })) }),
     getCredentials: () => undefined, getAttachments: () => undefined,
@@ -444,7 +445,7 @@ describe('task execution through the public service', () => {
       expect(feature.store.read().routeHealth).toBeUndefined()
       const health: RouteHealthEntry[] = [{ key: 'domain:shared-subscription', aliases: ['domain:shared-subscription', 'route:qwen-token-plan-cn/deepseek-test'], kind: 'quota_exhausted', failedAt: 1000, resetAt: 10000, halfOpenAgent: 'dead-half-open-agent', route: { provider: 'qwen-token-plan-cn', model: 'deepseek-test', policy: { accessMode: 'subscription', quotaDomainId: 'shared-subscription', quotaScope: 'plan' } } }]
       await feature.persist('route/isolate', tasks, threads, health)
-      const saved = feature.store.read().routeHealth!
+      const saved = feature.store.read().routeHealth! as RouteHealthEntry[]
       expect(saved).toHaveLength(1)
       expect(saved[0]).not.toHaveProperty('halfOpenAgent')
       expect(saved[0]).toMatchObject({ kind: 'quota_exhausted', failedAt: 1000, resetAt: 10000 })
@@ -597,4 +598,28 @@ describe('task execution through the public service', () => {
     runtime.runs[0]!.release(); runtime.runs[1]!.release()
     await Promise.all([writer, peer])
   })
+})
+
+it('重启时模型已完成但证据仍processing的记录不能变成可验收证据', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'swarm-provisional-recovery-')); directories.push(home)
+  const config = getSwarmConfig({ persistence: { enabled: true }, planningReview: { enabled: false } })
+  const tasks = intTaskStore(), threads = intThreadRegistry()
+  const input = { rootSessionId: 'provisional-root', cwd: home, dshHome: home, config, tasks, threads, now: () => 1000 }
+  const feature = await FeatureSessions.createFeatureSession(input)
+  let restored: FeatureSessions.FeatureSession | undefined
+  try {
+    const { ValidateTaskCard } = await import('../../src/policy.js')
+    const card = ValidateTaskCard({ title: 'fixture', goal: 'recover provisional evidence', acceptance: ['source still current'], scope: [], flags: {} }).card!
+    tasks.AddTask({ taskId: 'T-1', sessionId: input.rootSessionId, card, gates: [], triage: { source: 'rules', rulesApplied: [] }, delegationIds: [], rounds: 0, createdAt: 1, updatedAt: 1 })
+    tasks.AddDelegation({ delegationId: 'D-1', taskId: 'T-1', role: 'fu_he', roleName: '复核', status: 'completed', finalization: 'processing', structured: structuredClone(VALID_OUTPUTS.fu_he), summary: 'raw model completed', evidence: [], attempts: [], independence: 'n/a', hardIsolation: true, unresolved: [], startedAt: 2 })
+    await feature.persist('fixture/provisional-other-checkpoint', tasks, threads)
+    await feature.dispose()
+    const recoveredTasks = intTaskStore()
+    restored = await FeatureSessions.createFeatureSession({ ...input, tasks: recoveredTasks, threads: intThreadRegistry() })
+    const record = recoveredTasks.getDelegation('D-1')!
+    expect(record).toMatchObject({ status: 'failed', finalization: 'failed', error: 'recovery_required' })
+    expect(record.structured).toEqual(VALID_OUTPUTS.fu_he)
+    const { getCurrentDelegations } = await import('../../src/task-model.js')
+    expect(getCurrentDelegations(recoveredTasks.getTask('T-1')!, [record])).toEqual([])
+  } finally { await feature.dispose(); await restored?.dispose() }
 })

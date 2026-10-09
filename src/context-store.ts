@@ -57,6 +57,9 @@ export interface ContextStore {
 /** 受控引用读取；ID 不是授权，始终检查根、工作区、任务、版本与盲审权限。 */
 export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactBytes?: number; maxPageChars?: number } = {}): ContextStore => {
   const store = new Map<string, ContextArtifactInfo>()
+  // Artifacts remain private immutable values; byte lengths are derived once,
+  // never persisted and never used as an authorization cache.
+  const byteLengths = new WeakMap<ContextArtifactInfo, number>()
   const byTask = new Map<string, { refs: Set<string>; version: number }>()
   const replacements = new Map<string, symbol>()
   let rollbackSlots = 0
@@ -106,8 +109,11 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
     const binding = input.binding as Record<string, unknown>
     if (Object.keys(binding).some((key) => !['rootSessionId', 'workspaceId', 'taskId', 'cardRevision', 'workflowRevision', 'requestRevision', 'threadId', 'blindReview'].includes(key)) || ['rootSessionId', 'workspaceId', 'taskId'].some((key) => typeof binding[key] !== 'string' || String(binding[key]).trim() === '') || ['cardRevision', 'workflowRevision'].some((key) => !Number.isSafeInteger(binding[key]) || Number(binding[key]) < 1) || (binding.requestRevision !== undefined && (!Number.isSafeInteger(binding.requestRevision) || Number(binding.requestRevision) < 1))) throw new SwarmError('INVALID_ARGS', '恢复材料身份或版本不合法')
     if ((binding.threadId !== undefined && typeof binding.threadId !== 'string') || (binding.blindReview !== undefined && typeof binding.blindReview !== 'boolean') || (input.allowThreads !== undefined && (!Array.isArray(input.allowThreads) || input.allowThreads.some((thread) => typeof thread !== 'string' || thread.trim() === '')))) throw new SwarmError('INVALID_ARGS', '恢复材料专家权限不合法')
-    if (Buffer.byteLength(input.text, 'utf8') > maxArtifactBytes) throw new SwarmError('INVALID_ARGS', '恢复材料超过容量上限')
-    return { ...structuredClone(input), binding: { ...structuredClone(binding), requestRevision: binding.requestRevision ?? 1 } } as unknown as ContextArtifactInfo
+    const totalBytes = Buffer.byteLength(input.text, 'utf8')
+    if (totalBytes > maxArtifactBytes) throw new SwarmError('INVALID_ARGS', '恢复材料超过容量上限')
+    const artifact = { ...structuredClone(input), binding: { ...structuredClone(binding), requestRevision: binding.requestRevision ?? 1 } } as unknown as ContextArtifactInfo
+    byteLengths.set(artifact, totalBytes)
+    return artifact
   }
   const makeArtifact = (input: Omit<ContextArtifactInfo, 'ref' | 'digest'>) => ValidateArtifact({ ...input, ref: `ctx-${randomUUID()}`, digest: getValueDigest(input.text) })
   return {
@@ -185,13 +191,13 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
       if (start > 0 && /[\uDC00-\uDFFF]/.test(artifact.text[start] ?? '') && /[\uD800-\uDBFF]/.test(artifact.text[start - 1] ?? '')) start -= 1
       let end = Math.min(artifact.text.length, start + limit)
       if (end < artifact.text.length && /[\uD800-\uDBFF]/.test(artifact.text[end - 1] ?? '') && /[\uDC00-\uDFFF]/.test(artifact.text[end] ?? '')) end += 1
-      return { ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind, text: artifact.text.slice(start, end), cursor: String(start), nextCursor: end < artifact.text.length ? String(end) : null, truncated: start > 0 || end < artifact.text.length, totalBytes: Buffer.byteLength(artifact.text, 'utf8'), cardRevision: owner.cardRevision, workflowRevision: owner.workflowRevision, requestRevision: owner.requestRevision ?? 1 }
+      return { ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind, text: artifact.text.slice(start, end), cursor: String(start), nextCursor: end < artifact.text.length ? String(end) : null, truncated: start > 0 || end < artifact.text.length, totalBytes: byteLengths.get(artifact)!, cardRevision: owner.cardRevision, workflowRevision: owner.workflowRevision, requestRevision: owner.requestRevision ?? 1 }
     },
     List: (binding) => [...(byTask.get(taskKey(binding))?.refs ?? [])].flatMap((ref) => {
       try {
         const artifact = requireArtifact(binding, ref)
         return [{ ref: artifact.ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind,
-          totalBytes: Buffer.byteLength(artifact.text, 'utf8'), cardRevision: artifact.binding.cardRevision,
+          totalBytes: byteLengths.get(artifact)!, cardRevision: artifact.binding.cardRevision,
           workflowRevision: artifact.binding.workflowRevision, requestRevision: artifact.binding.requestRevision ?? 1 }]
       } catch { return [] }
     }),

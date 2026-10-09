@@ -41,6 +41,8 @@ export interface AssessmentInfo {
 /** 一次委派的完整记录 */
 export interface DelegationRecord extends GateDelegationView {
   requestRevision?: number
+  /** Model completion is provisional until outer evidence/version finalization. */
+  finalization?: 'processing' | 'ready' | 'cancelled' | 'failed'
   taskId: string
   roleName: string
   gate?: string

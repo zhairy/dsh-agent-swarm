@@ -24,7 +24,7 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })))
 })
 
-const stage = async (status?: 'running' | 'queued') => {
+const stage = async (status?: 'running' | 'queued', sourceVersion: '2.3.0' | '2.3.1' = '2.3.0') => {
   const home = await mkdtemp(join(tmpdir(), 'swarm-memory-handoff-service-'))
   homes.push(home)
   await writeFile(join(home, 'source.ts'), 'export const preserved = 42\n')
@@ -77,7 +77,7 @@ const stage = async (status?: 'running' | 'queued') => {
     const directory = join(home, 'share', 'dsh-agent-swarm', 'maintenance', workspaceId, digest(root.id))
     await mkdir(directory, { recursive: true, mode: 0o700 })
     const pending = join(directory, 'pending.json')
-    const write = async () => atomicStateFile(directory, 'pending.json', canonicalStateJson(createMemoryHandoffEnvelope({ rootSessionId: root.id, workspaceId, state })))
+    const write = async () => atomicStateFile(directory, 'pending.json', canonicalStateJson(createMemoryHandoffEnvelope({ rootSessionId: root.id, workspaceId, state, sourceVersion })))
     await write()
     return { home, root, config, workspaceId, state, pending, directory, write, raw, childId }
   } finally { await feature.dispose() }
@@ -97,8 +97,8 @@ const runtime = (fixture: Awaited<ReturnType<typeof stage>>) => {
 }
 
 describe('memory handoff through the actual service cold initialization boundary', () => {
-  it('restores T-1, immutable output, revisions and budget, consumes once, and never imports the consumed handoff again', async () => {
-    const fixture = await stage()
+  it.each(['2.3.0', '2.3.1'] as const)('restores %s T-1, immutable output, revisions and budget, consumes once, and never imports again', async (sourceVersion) => {
+    const fixture = await stage(undefined, sourceVersion)
     const before = await readFile(fixture.pending, 'utf8')
     const restored = runtime(fixture)
     await restored.service.WaitAgentReady(fixture.root)

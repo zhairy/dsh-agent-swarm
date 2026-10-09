@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "scope": "Public code/evidence-only auxiliary review; no private host state or credentials supplied.",
+  "qualification": "Jev probability/confidence is not a correctness certificate. Official Mermaid parser checks syntax only. Independent tests and adversarial review are recorded separately.",
+  "health": {
+    "ok": true,
+    "model": "jev-latest",
+    "answers": {
+      "models": [
+        {
+          "name": "jev-latest",
+          "description": "The latest iteration of TypeSafe's System One Model: Jev",
+          "release_date": "2026-09-10T18:38:01.391457+00:00"
+        },
+        {
+          "name": "jev-preview",
+          "description": "A preview version of `jev-latest`: should be better in most ways",
+          "release_date": "2026-09-10T18:39:06.057655+00:00"
+        }
+      ],
+      "round_trip_latency_ms": 1197.172
+    },
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "est_cost_usd": 0
+    },
+    "latency_ms": 1197.184
+  },
+  "check": {
+    "input": {
+      "scope": "public source audit only; independent machine tests and host checks are required; no private sessions or credentials",
+      "baseline": "dsh-agent-swarm 2.3.1 e38b0a6",
+      "findings": [
+        {
+          "problem": "task admitted under old contract, awaits fingerprint+metadata+session judgment/edit lock, delegator rereads new task without new approval",
+          "fix": "trusted captured task; each start/native/continuable/send gate checks three revisions+planning+attempt+abort under same task lock until SDK publication acceptance; DispatchAdmissionError cannot route-fallback",
+          "evidence": "deterministic deferred fingerprint test: updated contract causes zero host starts; API/native/thread refusals tested"
+        },
+        {
+          "problem": "accept holds taskLock then waits workspace lease for experience promotion; verification holds lease then waits taskLock to finalize",
+          "fix": "model result is processing until evidence finalization; pending acceptance blocked; experience promotion and acceptance Jev outside taskLock",
+          "evidence": "experience enabled advisory fixture early accept blocked; verifier and subsequent accept complete"
+        },
+        {
+          "problem": "old root persisted quarantine resurrects a health entry cleared by newer success",
+          "fix": "versioned per-resource tombstone snapshot; UUID+monotone failure identity; restore only suppresses proven older entries for same aliases; genuine new failure retained; provider reset floor respected; actual success triggers controlled persistence and next request waits at most10s then recovery-required; historical array accepted"
+        },
+        {
+          "problem": "closed route recovery objects retained per child",
+          "fix": "outer logical request finally releases ephemeral objects; retries share accounting until outer completes; persistent current state/manual override survives; late cancelled model request rejected"
+        },
+        {
+          "problem": "unlimited budget scans N history on every reservation",
+          "fix": "scan only positive enabled limits; Jev no scan or imposed quota; tiny limits signature avoids snapshot cloning on unchanged budget; getReservation is detached O(1)"
+        },
+        {
+          "problem": "pagination recomputes full artifact UTF8 bytes for each page",
+          "fix": "private immutable-artifact WeakMap byte count, authority and digest rechecked every read"
+        }
+      ],
+      "limits": [
+        "full validated JSON checkpoint remains O(S),4MiB cap and bounded contexts/message records require explicit future archival design",
+        "new health resource union has4096 identity cap; fail closed on capacity, never silently evict safety watermark",
+        "metadata cancellation ends a waiter; SDK HTTP abort cannot be claimed",
+        "no end-to-end LLM latency/token/cost saving measured; synthetic current loops may be slightly slower to free stale recovery state",
+        "native CLI internal retry coverage unverified; no Claude generation tests"
+      ],
+      "tests": "747 unit green before latest routing cache wiring; fresh private candidate integration currently running"
+    },
+    "result": {
+      "ok": true,
+      "model": "jev-1.13.0",
+      "answers": {
+        "probabilities": {
+          "dispatch_fix_targets_proven_race": 0.72,
+          "accept_fix_breaks_lock_cycle": 0.85,
+          "global_success_timestamp_is_safe": 0.05,
+          "synthetic_speedup_proves_total_latency": 0.04,
+          "remaining_capacity_boundary_disclosed": 0.85,
+          "all_future_failures_eliminated": 0.03
+        },
+        "flags": [
+          "dispatch_fix_targets_proven_race",
+          "accept_fix_breaks_lock_cycle",
+          "remaining_capacity_boundary_disclosed"
+        ],
+        "uncertain": []
+      },
+      "usage": {
+        "input_tokens": 1070,
+        "output_tokens": 135,
+        "est_cost_usd": 0.00004494000000000001
+      },
+      "latency_ms": 327.845
+    }
+  },
+  "ask": {
+    "ok": true,
+    "model": "jev-1.13.0",
+    "answers": {
+      "health_tradeoff": {
+        "type": "choice",
+        "choice": "explicit",
+        "confidence": 1,
+        "probabilities": {
+          "explicit": 1,
+          "unjustified": 0,
+          "unknown": 0
+        }
+      },
+      "review_strength": {
+        "type": "choice",
+        "choice": "bounded",
+        "confidence": 1,
+        "probabilities": {
+          "bounded": 1,
+          "complete": 0,
+          "unknown": 0
+        }
+      },
+      "diagram_code_truth": {
+        "type": "noul",
+        "noul": 0.03
+      }
+    },
+    "usage": {
+      "input_tokens": 1337,
+      "output_tokens": 99,
+      "est_cost_usd": 0.000056154000000000005
+    },
+    "latency_ms": 1258.178
+  }
+}

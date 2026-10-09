@@ -8,7 +8,7 @@ import { canonicalStateJson } from '../../src/state-store.js'
 
 const homes: string[] = []
 afterEach(async () => { await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true }))) })
-const setup = async () => {
+const setup = async (sourceVersion: '2.3.0' | '2.3.1' = '2.3.0') => {
   const dshHome = await mkdtemp(join(tmpdir(), 'swarm-memory-handoff-')); homes.push(dshHome)
   const rootSessionId = 'handoff-root', workspaceId = 'a'.repeat(64)
   const maintenance = join(dshHome, 'share', 'dsh-agent-swarm', 'maintenance')
@@ -16,7 +16,7 @@ const setup = async () => {
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const pending = join(directory, 'pending.json')
   const state = { tasks: [{ taskId: 'T-1', goal: 'keep an in-memory task' }], revision: 1 }
-  const envelope = createMemoryHandoffEnvelope({ rootSessionId, workspaceId, state })
+  const envelope = createMemoryHandoffEnvelope({ rootSessionId, workspaceId, state, sourceVersion })
   await writeFile(pending, canonicalStateJson(envelope), { mode: 0o600 })
   const validate = vi.fn((raw: unknown) => (raw as typeof state).revision === 1)
   const input = { dshHome, rootSessionId, workspaceId, persistenceEnabled: false, validate }
@@ -24,12 +24,12 @@ const setup = async () => {
 }
 
 describe('trusted one-time memory handoff', () => {
-  it('loads without consuming, preserves a failed initializer, then consumes exactly once after success', async () => {
-    const fixture = await setup()
+  it.each(['2.3.0', '2.3.1'] as const)('loads %s without consuming, preserves a failed initializer, then consumes exactly once', async (sourceVersion) => {
+    const fixture = await setup(sourceVersion)
     const before = await readFile(fixture.pending, 'utf8')
     const loaded = await loadMemoryHandoff<typeof fixture.state>(fixture.input)
     expect(loaded?.state).toEqual(fixture.state)
-    expect(loaded?.sourceVersion).toBe('2.3.0')
+    expect(loaded?.sourceVersion).toBe(sourceVersion)
     expect(fixture.input.validate).toHaveBeenCalledTimes(1)
     expect(await readFile(fixture.pending, 'utf8')).toBe(before)
     // Omitting commitConsumption is the failed-initialization path.
@@ -43,6 +43,12 @@ describe('trusted one-time memory handoff', () => {
     expect(await loaded!.commitConsumption()).toBe(backup)
     expect(await loadMemoryHandoff(fixture.input)).toBeUndefined()
     expect(await readdir(fixture.directory)).toEqual([backup.split('/').at(-1)])
+  })
+
+  it('requires an explicit supported origin when creating the maintenance envelope', () => {
+    const scope = { rootSessionId: 'handoff-root', workspaceId: 'a'.repeat(64), state: {} }
+    expect(() => createMemoryHandoffEnvelope({ ...scope, sourceVersion: '2.3.2' as '2.3.1' })).toThrow('ENVELOPE_VERSION')
+    expect(() => createMemoryHandoffEnvelope(scope as Parameters<typeof createMemoryHandoffEnvelope>[0])).toThrow('ENVELOPE_VERSION')
   })
 
   it('does nothing without a staged handoff or when durable persistence is enabled', async () => {
