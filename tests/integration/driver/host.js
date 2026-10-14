@@ -103,6 +103,9 @@ class MockAdapter {
   }
 
   *streamChild(options, role) {
+    const languageText = (options.messages ?? []).map(getText).join('\n')
+    const language = [...languageText.matchAll(/OUTPUT LANGUAGE: [^\n]*?\((zh-CN|zh-TW|en|ja|ko)\)/g)].at(-1)?.[1]
+    if (language) (this.state.outputLanguages ??= []).push({role, language})
     const key = String(options.sessionId)
     const step = this.childSteps.get(key) ?? 0
     this.childSteps.set(key, step + 1)

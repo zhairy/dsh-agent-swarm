@@ -57,7 +57,7 @@ describe('委派任务说明', () => {
     const gpt = getChildPromptText(task, input, 'D-1', 'gpt')
     expect(gpt).toMatch(/^GOAL:\n实现登录[\s\S]*CONTEXT:[\s\S]*STOP WHEN: [\s\S]*EVIDENCE: [\s\S]*DELIVERABLE（交付）:/)
     const generic = getChildPromptText(task, input, 'D-1')
-    expect(generic).toMatch(/任务 T-1 \/ 委派 D-1[\s\S]*—— 本次任务 ——\n\n实现登录\n\n—— 交付 ——/)
+    expect(generic).toMatch(/任务 T-1 \/ 委派 D-1[\s\S]*—— 本次任务 ——\n\n实现登录[\s\S]*OUTPUT LANGUAGE:[\s\S]*—— 交付 ——/)
   })
 
   it('连续会话：首轮带完整背景；追加到已知任务时只带编号；原生后端带 persona 与 JSON Schema', () => {

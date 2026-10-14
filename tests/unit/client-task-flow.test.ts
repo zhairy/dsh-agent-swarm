@@ -10,6 +10,7 @@ const loadModule = () => {
   const React = {
     createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): ElementInfo => ({ type, props: props ?? {}, children }),
     useState: (initial: unknown) => [initial, vi.fn()],
+    useRef: (initial: unknown) => ({ current: initial }),
     useEffect: (effect: () => unknown) => effects.push(effect)
   }
   new Function('require', 'module', 'exports', source)((name: string) => {
@@ -22,8 +23,71 @@ const loadModule = () => {
 const event = (seq = 1, text = 'task_id: T-1（任务卡已记录）\n```mermaid\nflowchart TD\n  n_a["分析"]\n```') => ({ type: 'tool/result', seq, data: { message: { content: [{ type: 'text', text }], isError: false } } })
 const textOf = (element: any): string => typeof element === 'string' ? element : element === null || element === undefined ? '' : (element.children ?? []).map(textOf).join('')
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 describe('真实任务流程客户端投影', () => {
+  it('慢RPC完成后才轮询，15秒超时停止自动重试，迟到结果不覆盖错误', async () => {
+    vi.useFakeTimers()
+    const { createTaskPoller } = loadModule().__test__
+    let resolve: (value: unknown) => void = () => undefined
+    const request = vi.fn(() => new Promise((done) => { resolve = done }))
+    const onValue = vi.fn(); const onError = vi.fn()
+    const stop = createTaskPoller({ request, onValue, onError })
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(request).toHaveBeenCalledTimes(1)
+    resolve({ task_id: 'T-1' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onValue).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(request).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(onError).toHaveBeenCalledTimes(1)
+    resolve({ task_id: 'late' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onValue).toHaveBeenCalledTimes(1)
+    stop()
+  })
+  it('失败或已验收停止轮询，卸载后既不发布也不产生后续请求', async () => {
+    vi.useFakeTimers()
+    const { createTaskPoller } = loadModule().__test__
+    const failed = vi.fn().mockRejectedValue(new Error('offline'))
+    const onError = vi.fn()
+    const stopFailed = createTaskPoller({ request: failed, onValue: vi.fn(), onError })
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(failed).toHaveBeenCalledTimes(1); expect(onError).toHaveBeenCalledTimes(1)
+    stopFailed()
+    const accepted = vi.fn().mockResolvedValue({ accepted: true })
+    const stopAccepted = createTaskPoller({ request: accepted, onValue: () => false, onError })
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(accepted).toHaveBeenCalledTimes(1)
+    stopAccepted()
+    let done: (value: unknown) => void = () => undefined
+    const onValue = vi.fn()
+    const stop = createTaskPoller({ request: () => new Promise((resolve) => { done = resolve }), onValue, onError })
+    await vi.advanceTimersByTimeAsync(0)
+    stop(); done({ task: 'late' })
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(onValue).not.toHaveBeenCalled()
+  })
+  it('刷新与任务变更共用单flight，旧等待者失效后不会补发', async () => {
+    const { createTaskLoader } = loadModule().__test__
+    const loader = createTaskLoader()
+    let done: (value: unknown) => void = () => undefined
+    const first = vi.fn(() => new Promise((resolve) => { done = resolve }))
+    const second = vi.fn().mockResolvedValue('new-task')
+    const old = loader.load(first, () => true)
+    await Promise.resolve()
+    let active = true
+    const obsolete = loader.load(second, () => active).catch((error: Error) => error.message)
+    active = false
+    const latest = loader.load(second, () => true)
+    expect(second).not.toHaveBeenCalled()
+    done('old-task')
+    await expect(old).resolves.toBe('old-task')
+    await expect(obsolete).resolves.toContain('disposed')
+    await expect(latest).resolves.toBe('new-task')
+    expect(second).toHaveBeenCalledTimes(1)
+  })
   it('三维审核区分别显示模型意见和代码结论，缺项不显示通过', () => {
     const { getPlanningReviewView, PlanningReviewPanel } = loadModule().__test__
     const empty = getPlanningReviewView(undefined)

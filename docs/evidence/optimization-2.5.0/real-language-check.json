@@ -1,0 +1,32 @@
+{
+  "provider": "deepseek-official",
+  "model": "deepseek-flash",
+  "results": [
+    {
+      "language": "zh-CN",
+      "text": "你好，我已准备好用简体中文为你提供帮助。",
+      "latencyMs": 840
+    },
+    {
+      "language": "en",
+      "text": "Hello!",
+      "latencyMs": 1097
+    },
+    {
+      "language": "zh-TW",
+      "text": "您好，我會以繁體中文為您說明。",
+      "latencyMs": 902
+    },
+    {
+      "language": "ja",
+      "text": "こんにちは、これから日本語でご説明します。",
+      "latencyMs": 944
+    },
+    {
+      "language": "ko",
+      "text": "안녕하세요, 요청하신 작업을 한국어로 진행하겠습니다.",
+      "latencyMs": 980
+    }
+  ],
+  "scope": "Direct real Host Llm.prepareCall, candidate language helper, 5 short fixed prompts, zero tools; SDK expert integration tested separately"
+}

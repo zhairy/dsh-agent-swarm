@@ -27,11 +27,13 @@ const NS = 'settings.swarmAgents'
 const EMPTY_SLOT = Object.freeze({ provider: '', model: '', reasoningEffort: '' })
 const NO_UPGRADE = Object.freeze({ enabled: false, chain: [], triggers: [] })
 /** 与宿主 DEFAULT_AGENTS_CONFIG 一致；构建时由 DATA.policy 注入，缺失时用这份兜底 */
-const POLICY_DEFAULTS = Object.freeze({ session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every', ...(DATA.policy?.defaults ?? {}) })
+const POLICY_DEFAULTS = Object.freeze({ language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every', ...(DATA.policy?.defaults ?? {}) })
 const SESSION_POLICIES = ['auto', 'continuable', 'oneshot']
 const PROMPT_STYLES = ['auto', 'claude', 'gpt', 'generic']
 const MODEL_CALL_DISPLAYS = ['every', 'turn']
-const POLICY_KEYS = ['session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffMs', 'promptStyle', 'networkWaitMs', 'rootRecoverMs', 'modelCallDisplay']
+const LANGUAGES = ['zh-CN', 'en', 'zh-TW', 'ja', 'ko']
+const LANGUAGE_NAMES = { 'zh-CN': '简体中文', en: 'English', 'zh-TW': '繁體中文', ja: '日本語', ko: '한국어' }
+const POLICY_KEYS = ['language', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffMs', 'promptStyle', 'networkWaitMs', 'rootRecoverMs', 'modelCallDisplay']
 /** Jev 密钥的默认凭据引用名（swarm-core 的 jev.apiKeyEnv） */
 const DEFAULT_JEV_REF = 'TYPESAFE_API_KEY'
 const APPROVAL_MODES = ['inherit', 'ask', 'deny']
@@ -244,6 +246,8 @@ const en = {
   jevLoadFailed: 'Could not read the Jev key status.'
 }
 
+Object.assign(zh, { policyLanguage: '默认交付语言', policyLanguageHint: '每轮专家调用生效；本轮明确语言要求优先，JSON 键、代码和证据路径保持原文。语言差异不会触发业务重试。', errLanguage: '请选择支持的交付语言' })
+Object.assign(en, { policyLanguage: 'Default output language', policyLanguageHint: 'Applied on every expert turn. Explicit language requests take precedence. JSON keys, code and evidence paths remain unchanged; language differences never replay work.', errLanguage: 'Select a supported output language' })
 Object.assign(zh, { errRoutePolicy: '路由额度域配置不合法或超限，请在配置中修正后保存', resource_subscription: '订阅', resource_metered_api: '按量 API', resource_judgment_api: '判断 API', resource_unknown: '资源类型未声明' })
 Object.assign(en, { errRoutePolicy: 'Route quota policy is invalid or exceeds limits; repair its configuration before saving', resource_subscription: 'Subscription', resource_metered_api: 'Metered API', resource_judgment_api: 'Judgment API', resource_unknown: 'Resource type unspecified' })
 Object.assign(zh, {
@@ -490,6 +494,7 @@ const getPolicy = (value) => {
   const merged = Object.fromEntries(POLICY_KEYS.map((key) => [key, typeof record[key] === typeof POLICY_DEFAULTS[key] ? record[key] : POLICY_DEFAULTS[key]]))
   return {
     ...merged,
+    language: LANGUAGES.includes(merged.language) ? merged.language : 'zh-CN',
     session: SESSION_POLICIES.includes(merged.session) ? merged.session : 'auto',
     promptStyle: PROMPT_STYLES.includes(merged.promptStyle) ? merged.promptStyle : 'auto',
     modelCallDisplay: MODEL_CALL_DISPLAYS.includes(merged.modelCallDisplay) ? merged.modelCallDisplay : 'every'
@@ -509,6 +514,7 @@ const getPolicyErrors = (policy) => {
   const range = (value, max, error) => { const n = toNumber(value); return Number.isFinite(n) && n >= 0 && n <= max ? undefined : error }
   const retries = toNumber(policy.maxRetries)
   return {
+    language: LANGUAGES.includes(policy.language ?? 'zh-CN') ? undefined : 'errLanguage',
     repeatAbove: ratio(policy.repeatAbove),
     sameCategoryAbove: ratio(policy.sameCategoryAbove),
     maxRetries: Number.isInteger(retries) && retries >= 0 && retries <= 10 ? undefined : 'errRetries',
@@ -519,10 +525,11 @@ const getPolicyErrors = (policy) => {
 }
 
 /** 草稿里的时长字段：重试等待用秒，断网等待与恢复用分钟 */
-const DRAFT_KEYS = ['session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffSec', 'promptStyle', 'networkWaitMin', 'rootRecoverMin', 'modelCallDisplay']
+const DRAFT_KEYS = ['language', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffSec', 'promptStyle', 'networkWaitMin', 'rootRecoverMin', 'modelCallDisplay']
 
 /** 已保存策略 → 编辑草稿（时长换成秒或分钟） */
 const toPolicyDraft = (policy) => ({
+  language: policy.language,
   session: policy.session,
   repeatAbove: policy.repeatAbove,
   sameCategoryAbove: policy.sameCategoryAbove,
@@ -543,6 +550,7 @@ const toPolicyDraft = (policy) => ({
 const buildPolicy = (draft, saved) => {
   if (Object.values(getPolicyErrors(draft)).some((error) => error !== undefined)) return undefined
   const value = {
+    language: LANGUAGES.includes(draft.language) ? draft.language : 'zh-CN',
     session: SESSION_POLICIES.includes(draft.session) ? draft.session : 'auto',
     repeatAbove: toNumber(draft.repeatAbove),
     sameCategoryAbove: toNumber(draft.sameCategoryAbove),
@@ -1390,6 +1398,7 @@ function PolicyCard ({ t, policy, editable, controller }) {
     ),
     h('p', { style: style.note }, t('policyDescription')),
     h('div', { style: style.policyGrid },
+      h('label', { style: style.field }, h('span', { style: style.fieldLabel }, t('policyLanguage')), h('select', { style: style.select, value: value.language, disabled: !editable, 'aria-label': t('policyLanguage'), onChange: event => controller.setPolicy({ language: event.target.value }) }, ...LANGUAGES.map(language => h('option', { key: language, value: language }, LANGUAGE_NAMES[language]))), h('span', { style: style.hint }, t('policyLanguageHint'))),
       h('label', { style: style.field },
         h('span', { style: style.fieldLabel }, t('policySession')),
         h('select', {

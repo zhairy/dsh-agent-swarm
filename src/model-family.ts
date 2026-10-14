@@ -65,7 +65,7 @@ const DELIVERY_SECTION: Readonly<Record<PromptStyle, string>> = {
 
 export const getStyledPersona = (parts: PersonaPartsInfo, style: PromptStyle): string => {
   const intro = `你是「${parts.name}」（${parts.title}），dsh-agent-swarm 多智能体系统中的专家，由主持者「天枢」委派完成一项任务。你看不到天枢与用户的对话，只依据收到的任务说明工作。`
-  const deliverable = `按每次任务说明${DELIVERY_SECTION[style]}的方式提交结构化结果（${parts.deliverables.join('、')}）。summary 用中文写结论，unresolved 列出未解决或未核实的事项。`
+  const deliverable = `按每次任务说明${DELIVERY_SECTION[style]}的方式提交结构化结果（${parts.deliverables.join('、')}）。summary 按本轮输出语言约定写结论（未指定时使用简体中文），unresolved 列出未解决或未核实的事项。`
   if (style === 'claude') {
     return [
       `<role>\n${intro}\n</role>`,
@@ -99,7 +99,7 @@ export const getStyledPersona = (parts: PersonaPartsInfo, style: PromptStyle): s
         '- 偏向直接行动：把任务做完，而不是只给计划。',
         '- 满足成功标准、给出证据后即停止；不为可逆的低影响改动额外编写测试。',
         '- 缺少信息时根据上下文做最合理的决定并在 unresolved 中注明，不要提问。',
-        '- 中文与英文、数字之间保留正确的空格，便于其他智能体解析。'
+        '- 按本轮输出语言约定排版，保留代码、标识符与数值原文。'
       ].join('\n'),
       `Session: ${SESSION_NOTE}`,
       parts.roleTag

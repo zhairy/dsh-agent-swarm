@@ -1,0 +1,58 @@
+{
+  "scope": "controlled candidate real SwarmService/HostReact; saves are ephemeral QA config only",
+  "checks": [
+    {
+      "language": "ja",
+      "quotaUI": false
+    },
+    {
+      "artifactRef": "ctx-0ca78e8a-e212-4a4d-b40d-449cdb58b74d",
+      "diagnostics": [
+        "binary64 inputs and arithmetic are approximate; replay requires the same numeric implementation, not cross-engine bit identity"
+      ],
+      "evidenceKind": "computed",
+      "exact": false,
+      "inputDigest": "3550c0fcd9089cae0a914b7ce74584cd64d674c4fb21f130bb4bb4a90c0f1515",
+      "inputSummary": {
+        "scalarCount": 8,
+        "shape": [
+          2,
+          2
+        ]
+      },
+      "numericMode": "float64",
+      "ok": true,
+      "operatorVersion": "2",
+      "reproducibleDigest": "dbdce1881f42c8106ffc125c2bb048c315027e3f838dab009b47e459feed62aa",
+      "semantics": "Computed result for supplied inputs; not a general proof",
+      "task_id": "T-1",
+      "value": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          4
+        ]
+      ],
+      "workUnits": 24
+    },
+    {
+      "errors": [],
+      "lifecycle": {
+        "effectiveLaunch": {
+          "browserLaunched": true,
+          "engine": "chrome",
+          "launchHash": 11677035664275010974
+        },
+        "launched": false,
+        "relaunchedBrowser": false,
+        "restartedBackground": false,
+        "restoreStatus": "not_configured",
+        "reused": true,
+        "saveStatus": "not_attempted"
+      }
+    }
+  ]
+}

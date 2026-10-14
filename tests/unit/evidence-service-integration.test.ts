@@ -126,7 +126,8 @@ describe('exploration evidence through actual service delegation and consumption
     }
     // A failed durable store remains quarantined: reload the repaired original journal, rather than
     // pretending an uncertain failed append can be retried in the same trusted state handle.
-    await runtime.service.dispose()
+    await expect(runtime.service.dispose()).rejects.toThrow('Swarm shutdown checkpoint failed')
+    await expect(runtime.service.dispose()).rejects.toThrow('Swarm shutdown checkpoint failed')
     const repaired = await makeRuntime({ home: runtime.home, jev: 'disabled' })
     const saved = await repaired.service.AddTaskCard(edit, repaired.exec())
     expect(saved.cardRevision).toBe(task.cardRevision + 1)

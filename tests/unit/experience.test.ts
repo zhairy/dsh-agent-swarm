@@ -3,6 +3,29 @@ import { createDurableStateStore } from '../../src/state-store.js'
 import { createExperienceRepository, type ExperienceReview, type ExperienceState } from '../../src/experience.js'
 
 describe('reviewed reusable experiences', () => {
+  it('deduplicates exact live candidates, preserving expired, reviewed and changed-source audit history', async () => {
+    let now = 1000
+    const store = await createDurableStateStore<ExperienceState>({ directory: '/unused', initialState: { experiences: {} }, enabled: false })
+    const repository = createExperienceRepository(store, { now: () => now, verifyReview: () => true })
+    const input = { problemClass: 'numerical', appliesWhen: ['finite'], doesNotApplyWhen: ['symbolic'], conclusion: 'compensated sum', source: { taskId: 'T1', cardRevision: 1, workflowRevision: 1, artifactDigest: 'a'.repeat(64), authorId: 'author' }, verification: ['test'], counterexamples: [], operatorVersions: ['2'], expiresAt: 2000 }
+    const first = await repository.addCandidate(input)
+    const repeated = await repository.addCandidate({ ...input, expiresAt: 3000 })
+    expect(repeated.id).toBe(first.id); expect(repeated.expiresAt).toBe(2000)
+    expect(Object.keys(store.read().experiences)).toHaveLength(1)
+    const changedSource = await repository.addCandidate({ ...input, source: { ...input.source, workflowRevision: 2 } })
+    const changedOperator = await repository.addCandidate({ ...input, operatorVersions: ['3'] })
+    expect(new Set([first.id, changedSource.id, changedOperator.id]).size).toBe(3)
+    await repository.promote(first.id, { author: 'author', reviewer: 'independent', reviewArtifactDigest: 'b'.repeat(64), sourceArtifactDigest: 'a'.repeat(64), evidenceComplete: true, unresolvedSevere: 0, applicabilityConfirmed: true })
+    const afterPromotion = await repository.addCandidate(input)
+    expect(afterPromotion.id).not.toBe(first.id)
+    expect(repository.query({ text: 'compensated' }).matches.map((match) => match.id)).toEqual([first.id])
+    now = 2500
+    const afterExpiration = await repository.addCandidate({ ...input, expiresAt: 4000 })
+    expect(afterExpiration.id).not.toBe(afterPromotion.id)
+    expect(repository.query({ text: 'compensated' }).matches).toEqual([])
+    expect(Object.keys(store.read().experiences)).toHaveLength(5)
+    await store.dispose()
+  })
   it('keeps accepted-derived candidates separate and requires trusted independent evidence before promotion', async () => {
     const store = await createDurableStateStore<ExperienceState>({ directory: '/unused', initialState: { experiences: {} }, enabled: false })
     const repository = createExperienceRepository(store, { now: () => 1000, verifyReview: (_entry, review) => review.reviewArtifactDigest === 'b'.repeat(64) })
