@@ -1,3 +1,8 @@
+import { suggestRolesByCapabilities } from './role-registry.js'
+import { getLanguageInstruction } from './language.js'
+import { getTaskDiagrams } from './task-diagrams.js'
+import { createDelegationScheduler } from './scheduler.js'
+import { formatMemoryReferences } from './memory.js'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { readFile } from 'node:fs/promises'
@@ -324,6 +329,7 @@ const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: 
     recovered: task.recovered ?? false,
     contextRefs: (task.contextRefs ?? []).map((material) => material.ref),
     contextArtifacts: task.contextRefs ?? [],
+    diagrams: getTaskDiagrams(task, delegations),
     flow: task.workflowDefinition === undefined ? null : {
       definition: task.workflowDefinition, state: task.workflowState, digest: task.workflowDigest,
       mermaid: getWorkflowMermaid(task.workflowDefinition)
@@ -344,6 +350,7 @@ const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: 
 
 const getStatusResult = (tasks: ReturnType<typeof getTaskView>[], session: SessionStateInfo, diagnostics: string[]) => ({
   tasks,
+  roleSuggestions: [] as ReturnType<typeof suggestRolesByCapabilities>,
   rootUpgrade: session.rootUpgrade ?? null,
   threads: session.threads.list().map(getThreadView),
   ledgerPath: session.ledger.path,
@@ -358,6 +365,14 @@ const getStatusResult = (tasks: ReturnType<typeof getTaskView>[], session: Sessi
  */
 export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const sessions = new Map<string, SessionStateInfo>()
+  let closing = false
+  let disposal: Promise<void> | undefined
+  const schedulers = new Map<string, ReturnType<typeof createDelegationScheduler>>()
+  const schedulerFor = (sessionId: string) => {
+    let scheduler = schedulers.get(sessionId)
+    if (scheduler === undefined) { scheduler = createDelegationScheduler({ getOptions: () => deps.getConfig().scheduling }); schedulers.set(sessionId, scheduler) }
+    return scheduler
+  }
   const now = deps.now ?? Date.now
   let sequence = 0
   const newId = (prefix: string): string => `${prefix}-${++sequence}`
@@ -1087,7 +1102,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
               label: `规划审核·${task.taskId}`, parent: exec.agent, signal: exec.signal,
               prompt: [{ type: 'text', text: prompt }], outputSchema: schema, maxDepth: 1,
               toolFilter: { allow: allowed }, agentOptions: { provider: route.provider, model: route.model, ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}) },
-              persona: '你是独立只读的规划审查者。审核原始用户需求、目标、流程和源码，严禁写入、shell或自行委派。[[swarm:role=yu_shi]]'
+              persona: '你是独立只读的规划审查者。审核原始用户需求、目标、流程和源码，严禁写入、shell或自行委派。[[swarm:role=yu_shi]]\n' + getLanguageInstruction(deps.getConfig().agents.language)
             })
             childOwners.set(run.id, session.sessionId)
             childSignals.set(run.id, exec.signal)
@@ -1271,6 +1286,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
 
   const getDiagnostics = (agent?: AgentLike): string[] => {
     const out: string[] = getApprovalPolicyDiagnostics(deps.getConfig().approvals, getHostApprovalPolicy(deps.getApproval?.(), agent))
+    if (deps.getConfig().memory.enabled && !deps.getConfig().experience.enabled) out.push('记忆召回要求启用 experience.enabled；当前不自动采集或注入历史经验')
     if (deps.getLlm() === undefined) out.push('ctx.llm 不可用：无法做路由预检')
     if (deps.getTools() === undefined) out.push('ctx.tools 不可用：无法计算子智能体工具白名单')
     const spawn = deps.getSubagents()?.getProvider(SPAWN_PROVIDER)
@@ -1294,7 +1310,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session)),
       stateRefreshRequired: !isTaskVersionCurrent(task, getTaskOrThrow(session, task.taskId)), publishedRevisions: getTaskBinding(getTaskOrThrow(session, task.taskId))
     }))
+    const capabilityRequest = raw as { capability_tags?: string[]; allow_write_roles?: boolean }
     return { ...getStatusResult(views, session, getDiagnostics(exec.agent)),
+      scheduling: schedulerFor(session.sessionId).status(),
+      roleSuggestions: capabilityRequest.capability_tags === undefined ? [] : suggestRolesByCapabilities(capabilityRequest.capability_tags, { allowWrite: capabilityRequest.allow_write_roles === true }),
       persistence: { durable: session.features?.store.durable ?? false, recovery: '已审计状态可恢复；不自动恢复旧 live thread' },
       recovery: { quotaEvidence: deps.quotaDiagnostics?.() ?? null, isolatedRoutes: routeState.getHealth(), current: routeState.getRecovery(exec.agent.id) ?? null, nativeInternalRetryCoverage: 'unverified' },
       executionBudgets: session.features === undefined ? [] : tasks.map((task) => ({ task_id: task.taskId, ...session.features!.budgetFor(task).getSnapshot() }))
@@ -1414,6 +1433,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   }
 
   const getGuardReason = (execution: ToolExecutionLike): string | undefined => {
+    if (closing && execution.agent !== undefined && isManagedAgent(execution.agent) && (WRITE_TOOL_NAMES.includes(execution.name) || ['bash', 'pwsh'].includes(execution.name))) return '百工正在停止，拒绝新增写入或命令执行'
     const writer = WRITE_TOOL_NAMES.includes(execution.name) || ['bash', 'pwsh'].includes(execution.name)
     const role = getRoleForAgent(execution.agent)
     if (isManagedAgent(execution.agent)) {
@@ -1489,6 +1509,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     jev,
     AddTaskCard,
     delegate: delegateEntry = async (raw, exec) => {
+      if (closing) throw new SwarmError('RECOVERY_REQUIRED', '百工正在停止，未启动新委派')
       const session = getSession(exec.agent.id)
       const features = await ensureFeatures(session, exec.agent)
       const args = { ...(raw as { task_id: string; role: import('./role-registry.js').DelegableRoleId; mode?: import('./role-registry.js').SuanHengMode; gate?: import('./policy.js').GateId; node_id?: string; request_id?: string; expected_workflow_revision?: number; prompt?: string; session?: string; review_phase?: 'blind' | 'response' }) }
@@ -1515,6 +1536,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         if (previous !== undefined) return previous
         throw new SwarmError('RECOVERY_REQUIRED', '此请求正在执行或需要恢复核对，不能重复启动')
       }
+      return schedulerFor(session.sessionId).run(async () => {
       let replay: DelegationRecord | undefined
       let admissionPrevious: TaskRecord | undefined
       let reserved = false
@@ -1604,11 +1626,15 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         const paths = [...new Set([...captured.card.scope, ...session.store.getTaskDelegations(captured.taskId).flatMap((record) => record.changedFiles ?? [])])]
         const before = await getArtifactSnapshot(cwd, paths)
         if (responsePhase && before.digest !== captured.artifactSnapshot?.digest) throw new SwarmError('STALE_EVIDENCE', '产物改变后必须重新进行独立盲审')
-        const input = { ...args, ...(nodeId === undefined ? {} : { node_id: nodeId }), attempt_id: attemptId,
+        const memory = deps.getConfig().memory
+        const independent = args.role === 'yu_shi' || (args.role === 'suan_heng' && args.mode === 'verify') || args.role === 'fu_he'
+        const referenceMemory = memory.enabled && deps.getConfig().experience.enabled && !independent
+          ? formatMemoryReferences(features.experiences.query({ text: String(args.prompt ?? captured.card.goal).slice(0, 4000), excludeTaskId: captured.taskId, maxMatches: memory.maxMatches, maxChars: memory.maxChars, maxAgeMs: memory.ttlMs })) : ''
+        const input = { ...args, referenceMemory, ...(nodeId === undefined ? {} : { node_id: nodeId }), attempt_id: attemptId,
           ...((!responsePhase && (args.role === 'yu_shi' || (args.role === 'suan_heng' && args.mode === 'verify'))) ? { session: 'new', review_phase: 'blind' } : {}) }
         const dispatch = <T>(publish: () => Promise<T>): Promise<T> => session.taskLock.run(async () => {
           const latest = deriveReconciledTask(session, deriveIntentRefresh(getTaskOrThrow(session, captured.taskId), exec.agent))
-          if (exec.signal.aborted) throw new DispatchAdmissionError('调用方已取消，未投递专家请求', 'RECOVERY_REQUIRED')
+          if (closing || exec.signal.aborted) throw new DispatchAdmissionError('宿主停止或调用方取消，未投递专家请求', 'RECOVERY_REQUIRED')
           if (!isTaskVersionCurrent(latest, captured)) throw new DispatchAdmissionError('投递前合同或原始需求改版，请重新获取准入')
           if (latest.acceptance?.decision === 'incomplete') throw new DispatchAdmissionError('任务已停止，未投递旧预约', 'RECOVERY_REQUIRED')
           if (latest.acceptance?.status === 'accepted') throw new DispatchAdmissionError('任务已验收，不能投递旧预约')
@@ -1621,7 +1647,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         const delegated = await delegator.delegate(input, { ...exec, admission: { task: structuredClone(captured), dispatch } }, session)
         const record = await ReviewDelegation(session, delegated, args.prompt, exec.signal)
         const after = await getArtifactSnapshot(cwd, [...new Set([...paths, ...(record.changedFiles ?? [])])])
-        if (exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '委派已取消，未发布完成证据')
+        if (closing || exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '宿主停止或委派已取消，未发布完成证据')
         const evidenceAssessment = await assessExplorationEvidence({ cwd,
           binding: { ...getTaskContextBinding(captured, features.workspaceId), artifactDigest: after.digest },
           goal: captured.card.goal, acceptance: captured.card.acceptance, scope: captured.card.scope,
@@ -1634,7 +1660,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         if (started) executionBudget!.settle(reservationId)
         else executionBudget!.cancel(reservationId)
         return await session.taskLock.run(async () => {
-          if (exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '完成提交前已取消')
+          if (closing || exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '宿主停止或完成提交前取消')
           let task = refreshIntent(session, getTaskOrThrow(session, captured.taskId), exec.agent)
           const stale = !isTaskVersionCurrent(task, captured)
           const verifier = ['fu_he', 'yu_shi'].includes(args.role) || (args.role === 'suan_heng' && args.mode === 'verify')
@@ -1680,6 +1706,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       } catch (error) {
         const budget = executionBudget!
         budget.cancel(reservationId)
+        if (closing) throw error
         await session.taskLock.run(async () => {
           const task = getTaskOrThrow(session, captured.taskId)
           const provisional = session.store.getTaskDelegations(task.taskId).find((record) => record.attemptId === attemptId)
@@ -1702,6 +1729,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       } finally {
         if (lease !== undefined) await lease.release({ confirmedStopped: !exec.signal.aborted })
       }
+      }, { group: args.role, priority: (raw as { priority?: number }).priority, signal: exec.signal })
     },
     getStatus,
     AcceptTask,
@@ -1728,16 +1756,31 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       if (session === undefined || session.rootAgent === undefined || !isRootTianShu(session.rootAgent)) throw new SwarmError('PERMISSION_DENIED', '该会话不是已登记的百工根会话')
       const stored = getTaskOrThrow(session, taskId)
       const task = deriveReconciledTask(session, deriveIntentRefresh(stored, session.rootAgent))
-      return { ...getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session)),
+      const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session))
+      return { ...view,
+        diagrams: { ...view.diagrams, stateRefreshRequired: task !== stored },
+        scheduling: schedulerFor(sessionId).status(),
         stateRefreshRequired: task !== stored, publishedRevisions: getTaskBinding(stored) }
     }
-    ,dispose: async () => {
+    ,dispose: () => disposal ??= (async () => {
+      closing = true
+      for (const scheduler of schedulers.values()) scheduler.dispose()
       for (const { controller } of manualRuns.values()) controller.abort()
       await Promise.allSettled([...manualRuns.values()].map(({ run }) => run))
-      for (const session of sessions.values()) if (session.featuresPromise) await (await session.featuresPromise).dispose()
-    }
+      const errors: unknown[] = []
+      for (const session of sessions.values()) if (session.featuresPromise) {
+        let features: FeatureSession | undefined
+        try {
+          features = await session.featuresPromise
+          // Persist a complete checkpoint; started work stays charged and never replays.
+          await session.taskLock.run(() => features!.persist('lifecycle/dispose', session.store, session.threads, routeState.getHealthSnapshot()))
+        } catch (error) { errors.push(error) }
+        finally { if (features !== undefined) try { await features.dispose() } catch (error) { errors.push(error) } }
+      }
+      if (errors.length > 0) throw new AggregateError(errors, 'Swarm shutdown checkpoint failed; storage cleanup attempted, reconcile last valid state before recovery')
+    })()
     ,WaitAgentReady: async (agent) => {
-      if (childSignals.get(agent.id)?.aborted) throw new SwarmError('RECOVERY_REQUIRED', '专家已取消，延迟模型请求被拒绝')
+      if (closing || childSignals.get(agent.id)?.aborted) throw new SwarmError('RECOVERY_REQUIRED', '专家已取消或宿主停止，延迟模型请求被拒绝')
       const pending = childReady.get(agent.id)
       if (pending !== undefined) await pending
       else if (isRootTianShu(agent)) {
@@ -1749,7 +1792,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         }
         PruneRootUpgrade(agent, session)
       }
-      if (childSignals.get(agent.id)?.aborted) throw new SwarmError('RECOVERY_REQUIRED', '专家已取消，延迟模型请求被拒绝')
+      if (closing || childSignals.get(agent.id)?.aborted) throw new SwarmError('RECOVERY_REQUIRED', '专家已取消或宿主停止，延迟模型请求被拒绝')
     }
   }
 }

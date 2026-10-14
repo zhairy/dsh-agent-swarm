@@ -296,7 +296,7 @@ describe('SwarmAgentsController', () => {
 
 describe('专家会话与重试策略', () => {
   it('读取已保存值时按类型补默认；校验范围；只写与默认不同的字段', () => {
-    const defaults = { session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every' }
+    const defaults = { language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every' }
     expect(getPolicy(undefined)).toEqual(defaults)
     expect(getPolicy({ session: 'weird', maxRetries: '5', repeatAbove: 0.7, promptStyle: 'odd' })).toMatchObject({ session: 'auto', maxRetries: 3, repeatAbove: 0.7, promptStyle: 'auto' })
     const draft = toPolicyDraft(getPolicy(undefined))
@@ -314,7 +314,7 @@ describe('专家会话与重试策略', () => {
   })
 
   it('保存策略时只保留组合层与用户层写过的字段，不把 schema 默认值固化进用户配置', async () => {
-    const defaults = { session: 'auto', maxRetries: 3, networkProbeUrls: ['https://a', 'https://b'] }
+    const defaults = { language: 'zh-CN', session: 'auto', maxRetries: 3, networkProbeUrls: ['https://a', 'https://b'] }
     const form = createForm({ routes: {}, agents: { ...defaults, custom: 'x' } })
     form.replace({ base: { agents: { custom: 'x' } }, user: { agents: { maxRetries: 3 } } } as never)
     const controller = new SwarmAgentsController(createCtx(form))

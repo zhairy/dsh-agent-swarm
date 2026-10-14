@@ -204,6 +204,32 @@ export const FindRoleByPresetId = (presetId: string | undefined): RoleInfo | und
 export const getDelegableRoleIds = (): DelegableRoleId[] =>
   ROLE_INFO_LIST.map((role) => role.id).filter(isDelegableRoleId)
 
+/** Semantic capability hints are separate from Host tool permissions. */
+export const ROLE_CAPABILITY_TAGS: Readonly<Record<DelegableRoleId, readonly string[]>> = Object.freeze({
+  mou_ding: Object.freeze(['planning', 'requirements']),
+  shu_ji: Object.freeze(['architecture', 'performance', 'concurrency']),
+  suan_heng: Object.freeze(['mathematics', 'algorithm', 'performance']),
+  tan_wei: Object.freeze(['code', 'exploration']),
+  bo_wen: Object.freeze(['research', 'sources']),
+  guan_xiang: Object.freeze(['vision', 'ui']),
+  zhu_jian: Object.freeze(['code', 'implementation', 'refactor']),
+  xing_zhou: Object.freeze(['execution', 'commands']),
+  ji_feng: Object.freeze(['code', 'implementation']),
+  yu_shi: Object.freeze(['review', 'security', 'performance']),
+  fu_he: Object.freeze(['verification', 'tests', 'performance']),
+  miao_bi: Object.freeze(['writing', 'ui'])
+})
+export const getRoleCapabilityTags = (id: DelegableRoleId): readonly string[] => ROLE_CAPABILITY_TAGS[id]
+
+/** Suggestions never change the requested role, allowed tools or mandatory workflow gates. */
+export const suggestRolesByCapabilities = (tags: readonly string[], options: { allowWrite?: boolean } = {}): Array<{ role: DelegableRoleId; tags: readonly string[] }> => {
+  if (!Array.isArray(tags) || tags.length < 1 || tags.length > 16 || tags.some((tag) => typeof tag !== 'string' || !/^[a-z][a-z0-9-]{0,31}$/.test(tag))) throw new Error('Invalid bounded capability tags')
+  const required = [...new Set(tags)]
+  return getDelegableRoleIds().filter((role) => (options.allowWrite === true || !isEditRole(role))
+    && required.every((tag) => ROLE_CAPABILITY_TAGS[role].includes(tag)))
+    .map((role) => ({ role, tags: ROLE_CAPABILITY_TAGS[role] }))
+}
+
 export const isEditRole = (id: RoleId): boolean => getRoleInfo(id).permission === 'workspace-edit'
 
 export const isWriteAllowed = (id: RoleId): boolean => {
@@ -260,7 +286,7 @@ export const getChildPersona = (id: DelegableRoleId, mode?: SuanHengMode, style:
 export const getRoleCatalogText = (): string =>
   ROLE_INFO_LIST
     .filter((role) => role.id !== 'tian_shu')
-    .map((role) => `- ${role.id} ${role.name}：${role.title}（${PERMISSION_LABEL[role.permission]}）— ${role.triggers.join('；')}`)
+    .map((role) => `- ${role.id} ${role.name}：${role.title}（${PERMISSION_LABEL[role.permission]}；能力 ${getRoleCapabilityTags(role.id as DelegableRoleId).join('/')}）— ${role.triggers.join('；')}`)
     .join('\n')
 
 const TIAN_SHU_PERSONA = [

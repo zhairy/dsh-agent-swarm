@@ -16,6 +16,10 @@ Object.assign(zh, { planningReview: '规划审核', goalDimension: '目标', des
 Object.assign(en, { planningReview: 'Planning review', goalDimension: 'Goal', designDimension: 'Workflow design', mermaidDimension: 'Mermaid', agentOpinion: 'Independent Agent', jevOpinion: 'Jev judgment', syntaxCheck: 'Syntax', projectionCheck: 'Projection', semanticCheck: 'Semantics', notReviewed: 'Not reviewed', checkPass: 'Pass', checkFail: 'Failed', reviewIssues: 'Review findings and errors' })
 Object.assign(zh, { reviewUnavailable: '未审核（服务不可用）' })
 Object.assign(en, { reviewUnavailable: 'Not reviewed (service unavailable)' })
+Object.assign(zh, { diagramType: '图表视角', workflow: '工作流', architecture: '委派架构', sequence: '委派记录时序', dataflow: '合同与证据流', lifecycle: '生命周期快照', progress: '当前有效完成的委派节点', progressUnknown: '无委派节点，进度不适用', progressBoundary: '节点比例不表示工时、正确率或验收通过；失败、阻塞与跳过单独统计。', exportSnapshot: '导出图表快照 JSON', deviations: '状态偏移诊断', omitted: '更早记录未展示', diagramBindingMismatch: '图表版本不一致，保留原流程；请刷新状态' })
+Object.assign(en, { diagramType: 'Diagram view', workflow: 'Workflow', architecture: 'Delegation topology', sequence: 'Recorded call sequence', dataflow: 'Contract and evidence', lifecycle: 'Lifecycle snapshot', progress: 'Current completed delegation nodes', progressUnknown: 'No delegation nodes; progress is not applicable', progressBoundary: 'Node ratio does not measure effort, correctness, or acceptance; failures, blocks and skips remain separate.', exportSnapshot: 'Export diagram snapshot JSON', deviations: 'State deviation diagnostics', omitted: 'Older records omitted', diagramBindingMismatch: 'Diagram revision mismatch; retaining the original flow. Refresh status.' })
+Object.assign(zh, { unknownNode: '状态未知', projectionPending: '这是待同步的只读投影；图表刷新不会批准新版本执行。' })
+Object.assign(en, { unknownNode: 'Unknown state', projectionPending: 'This is a read projection awaiting synchronization. Refreshing diagrams does not authorize the new revision.' })
 
 const textOf = (event) => {
   const content = event?.data?.message?.content
@@ -43,17 +47,45 @@ const taskFlowDefinition = {
 const validateSource = (source) => {
   if (typeof source !== 'string' || source.length > 32768) throw new Error('Mermaid source limit')
   const lines = source.trim().split(/\r?\n/)
-  if (lines[0] !== 'flowchart TD') throw new Error('Unsupported diagram')
+  if (lines[0] === 'sequenceDiagram') {
+    const participants = new Set()
+    const messages = []
+    for (const line of lines.slice(1)) {
+      const participant = /^\s*participant (p_(?:root|\d+)) as ([^"\\<>\r\n]+)$/.exec(line)
+      if (participant !== null) { if (participants.has(participant[1])) throw new Error('Duplicate participant'); participants.add(participant[1]); continue }
+      const message = /^\s*(p_(?:root|\d+))(?:->>|-->>)(p_(?:root|\d+)): ([^"\\<>\r\n]+)$/.exec(line)
+      if (message !== null) { messages.push([message[1], message[2]]); continue }
+      if (line === '  Note over p_root: 无可用执行时间记录') continue
+      throw new Error('Unsupported sequence directive')
+    }
+    if (!participants.has('p_root') || participants.size > 32 || messages.length > 64 || messages.some(([from, to]) => !participants.has(from) || !participants.has(to))) throw new Error('Invalid sequence references')
+    return
+  }
+  if (lines[0] === 'stateDiagram-v2') {
+    const states = new Set()
+    for (const line of lines.slice(1)) {
+      const state = /^\s*state "[^"\\<>\r\n]+" as s_(pending|ready|running|succeeded|failed|blocked|skipped|unknown)$/.exec(line)
+      if (state === null || states.has(state[1])) throw new Error('Unsupported state directive')
+      states.add(state[1])
+    }
+    if (states.size !== 8) throw new Error('Invalid lifecycle states')
+    return
+  }
+  if (lines[0] !== 'flowchart TD' && lines[0] !== 'flowchart LR') throw new Error('Unsupported diagram')
   const ids = new Set()
   const edges = []
+  const classes = []
   for (const line of lines.slice(1)) {
     const node = /^\s*n_([A-Za-z][A-Za-z0-9_-]{0,63})\["([^"\\<>]*)"\]\s*$/.exec(line)
     if (node !== null) { if (ids.has(node[1])) throw new Error('Duplicate node'); ids.add(node[1]); continue }
     const edge = /^\s*n_([A-Za-z][A-Za-z0-9_-]{0,63}) --> n_([A-Za-z][A-Za-z0-9_-]{0,63})\s*$/.exec(line)
     if (edge !== null) { edges.push([edge[1], edge[2]]); continue }
+    if (/^\s*classDef (pending|ready|running|succeeded|failed|blocked|skipped|unknown) fill:#(?:f1f5f9|dbeafe|fef3c7|dcfce7|fee2e2|ffedd5|e5e7eb|ede9fe),stroke:#475569,color:#0f172a$/.test(line)) continue
+    const nodeClass = /^\s*class n_([A-Za-z][A-Za-z0-9_-]{0,63}) (pending|ready|running|succeeded|failed|blocked|skipped|unknown)$/.exec(line)
+    if (nodeClass !== null) { classes.push(nodeClass[1]); continue }
     throw new Error('Unsupported Mermaid directive')
   }
-  if (ids.size === 0 || ids.size > 32 || edges.length > 64 || edges.some(([from, to]) => !ids.has(from) || !ids.has(to))) throw new Error('Invalid Mermaid nodes or edges')
+  if (ids.size === 0 || ids.size > 32 || edges.length > 64 || edges.some(([from, to]) => !ids.has(from) || !ids.has(to)) || classes.some((id) => !ids.has(id))) throw new Error('Invalid Mermaid nodes or edges')
 }
 
 let mermaidPromise
@@ -109,6 +141,66 @@ const getTaskMarkdown = (view, fallback) => {
   return [`### ${card.title ?? view.task_id}`, `任务：${view.task_id} · 合同 ${view.cardRevision ?? 1} · 流程 ${view.workflowRevision ?? 1}`, `目标：${card.goal ?? ''}`, '验收标准：', ...(Array.isArray(card.acceptance) ? card.acceptance.map((item, i) => `- A${i + 1}：${item}`) : []), `相关文件：${Array.isArray(card.scope) && card.scope.length > 0 ? card.scope.join('、') : '待定位'}`, `性能预算：${card.perf === undefined ? '待测' : Object.entries(card.perf).map(([key, value]) => `${key}=${value}`).join('；') || '待测'}`, ...(view.budget?.max === undefined ? [] : [`委派预算：${view.budget.max === 0 ? '不限' : `${view.budget.max} 次`}；已用 ${view.budget.used ?? 0}`])].join('\n\n')
 }
 
+const getDiagramBundle = (view) => {
+  const bundle = view?.diagrams
+  if (bundle?.format !== 'dsh-agent-swarm/task-diagrams' || bundle.schemaVersion !== 1 || !Array.isArray(bundle.views)) return null
+  const binding = bundle.binding
+  if (typeof view?.task_id !== 'string' || binding?.taskId !== view.task_id || ['cardRevision', 'workflowRevision', 'requestRevision'].some((key) => binding[key] !== (view[key] ?? 1))) return null
+  const kinds = ['workflow', 'architecture', 'sequence', 'dataflow', 'lifecycle']
+  if (!/^[a-f0-9]{64}$/.test(bundle.snapshotDigest) || bundle.views.length !== kinds.length || new Set(bundle.views.map((item) => item?.kind)).size !== kinds.length
+    || bundle.views.some((item) => !kinds.includes(item?.kind) || typeof item?.mermaid !== 'string' || item.mermaid.length > 32768 || typeof item.basis !== 'string' || !Number.isSafeInteger(item.truncated) || item.truncated < 0)
+    || !Array.isArray(bundle.diagnostics) || bundle.diagnostics.some((item) => typeof item?.code !== 'string' || typeof item?.message !== 'string')) return null
+  const progress = bundle.progress
+  if (progress === undefined || !Number.isSafeInteger(progress.total) || progress.total < 0 || !Number.isSafeInteger(progress.completed) || progress.completed < 0 || progress.completed > progress.total
+    || progress.percent !== (progress.total === 0 ? null : Math.floor(progress.completed / progress.total * 100)) || !progress.statuses || Object.values(progress.statuses).some((count) => !Number.isSafeInteger(count) || count < 0)
+    || Object.values(progress.statuses).reduce((sum, count) => sum + count, 0) !== progress.total || progress.statuses.succeeded !== progress.completed) return null
+  return bundle
+}
+const exportDiagramSnapshot = (bundle) => {
+  if (bundle === null) return
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `swarm-${String(bundle.binding.taskId).replace(/[^A-Za-z0-9_-]/g, '_')}-diagrams.json`
+  anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+/** One outstanding transport per component; obsolete queued reads never dispatch after cleanup. */
+const createTaskLoader = () => {
+  let pending
+  const load = (request, active) => {
+    if (!active()) return Promise.reject(new Error('Task view disposed'))
+    if (pending !== undefined) return pending.promise.catch(() => undefined).then(() => load(request, active))
+    const entry = { promise: undefined }
+    entry.promise = Promise.resolve().then(() => { if (!active()) throw new Error('Task view disposed'); return request() }).finally(() => { if (pending === entry) pending = undefined })
+    pending = entry
+    return entry.promise
+  }
+  return { load }
+}
+
+/** Poll after a successful response, never while a request is pending. Error/timeout requires manual retry. */
+const createTaskPoller = ({ request, onValue, onError, intervalMs = 5000, timeoutMs = 15000 }) => {
+  let disposed = false
+  let timer
+  let timeout
+  const run = () => {
+    if (disposed) return
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') { timer = setTimeout(run, intervalMs); return }
+    let expired = false
+    timeout = setTimeout(() => { if (!disposed) { expired = true; onError(new Error('Task view timed out; refresh manually')) } }, timeoutMs)
+    Promise.resolve().then(() => request(() => !disposed && !expired)).then((value) => {
+      if (disposed || expired) return
+      clearTimeout(timeout)
+      if (onValue(value) !== false) timer = setTimeout(run, intervalMs)
+    }).catch((error) => { if (!disposed && !expired) { clearTimeout(timeout); onError(error) } })
+  }
+  run()
+  return () => { disposed = true; clearTimeout(timer); clearTimeout(timeout) }
+}
+
 /** 分开显示代码检查和两类模型意见；没有结果时明确未审核。 */
 const getPlanningReviewView = (review) => {
   const verdict = (value) => ['pass', 'changes_requested', 'unknown', 'needs-clarification', 'review_required', 'unavailable'].includes(value) ? value : 'unknown'
@@ -158,22 +250,35 @@ function TaskFlowRow (props) {
   const [renderError, setRenderError] = React.useState(null)
   const [refresh, setRefresh] = React.useState(0)
   const [zoom, setZoom] = React.useState(1)
+  const [diagramKind, setDiagramKind] = React.useState('workflow')
+  const loader = React.useRef(null)
+  if (loader.current === null) loader.current = createTaskLoader()
+  React.useEffect(() => { setView(null); setDiagramKind('workflow'); setZoom(1) }, [sessionId, data?.taskId])
   React.useEffect(() => {
     let active = true
-    setView(null)
     setError(null)
     if (typeof sessionId !== 'string' || typeof data?.taskId !== 'string' || typeof loadTask !== 'function') { setError(translate('unavailable')); return () => { active = false } }
-    loadTask(sessionId, data.taskId).then((value) => { if (active) setView(getTaskFromRpc(value, data.taskId)) }).catch((cause) => { if (active) setError(String(cause.message ?? cause)) })
-    return () => { active = false }
+    const stop = createTaskPoller({
+      request: (current) => loader.current.load(() => loadTask(sessionId, data.taskId), () => active && current()),
+      onValue: (value) => {
+        const task = getTaskFromRpc(value, data.taskId)
+        if (active) { setView(task); setError(null) }
+        return task.acceptance?.status !== 'accepted' && task.acceptance?.decision !== 'incomplete'
+      },
+      onError: (cause) => { if (active) { setView(null); setError(String(cause.message ?? cause)) } }
+    })
+    return () => { active = false; stop() }
   }, [sessionId, data?.taskId, data?.seq, loadTask, refresh])
-  const source = view?.flow?.mermaid ?? view?.mermaid ?? data?.mermaid
+  const bundle = getDiagramBundle(view)
+  const diagram = bundle?.views.find((candidate) => candidate.kind === diagramKind)
+  const source = diagram?.mermaid ?? view?.flow?.mermaid ?? view?.mermaid ?? data?.mermaid
   React.useEffect(() => {
     let active = true
     setSvg(null)
     setRenderError(null)
     if (source !== undefined) renderMermaid(source).then((value) => { if (active) setSvg(value) }).catch((cause) => { if (active) setRenderError(String(cause.message ?? cause)) })
     return () => { active = false }
-  }, [source, refresh])
+  }, [source])
   if (data === undefined) return null
   const definition = view?.flow?.definition ?? view?.workflowDefinition
   const state = view?.flow?.state ?? view?.workflowState
@@ -184,6 +289,17 @@ function TaskFlowRow (props) {
     error === null ? view === null ? h('p', { role: 'status' }, translate('loading')) : null : h('p', { role: 'status' }, `${translate('unavailable')}：${error}`),
     MarkdownText === undefined ? h('pre', { style: styles.source }, markdown) : h(MarkdownText, { text: markdown, streaming: false, labels: EMPTY_LABELS, variant: 'compact' }),
     h(PlanningReviewPanel, { review: view?.planningReview, t }),
+    bundle === null ? null : h('div', { 'data-swarm-task-progress': '', style: { margin: '10px 0', fontSize: 13 } },
+      h('strong', null, bundle.progress.percent === null ? translate('progressUnknown') : `${translate('progress')}：${bundle.progress.completed}/${bundle.progress.total} (${bundle.progress.percent}%)`),
+      bundle.progress.percent === null ? null : h('progress', { value: bundle.progress.completed, max: bundle.progress.total, style: { display: 'block', width: '100%', margin: '6px 0' }, 'aria-label': translate('progress') }),
+      h('p', { style: { margin: '4px 0' } }, Object.entries(bundle.progress.statuses).map(([status, count]) => `${translate(status === 'pending' ? 'nodePending' : status === 'unknown' ? 'unknownNode' : status)} ${count}`).join(' · ')),
+      h('small', null, translate('progressBoundary'))),
+    view?.stateRefreshRequired === true ? h('p', { role: 'status', 'data-swarm-projection-pending': '' }, translate('projectionPending')) : null,
+    bundle === null ? view?.diagrams === undefined ? null : h('p', { role: 'status' }, translate('diagramBindingMismatch')) : h('div', { style: { ...styles.header, margin: '10px 0' } },
+      h('label', null, `${translate('diagramType')} `, h('select', { value: diagramKind, onChange: (event) => { setDiagramKind(event.target.value); setZoom(1) }, 'aria-label': translate('diagramType'), 'data-swarm-diagram-type': '', style: { minHeight: 36, maxWidth: '100%' } }, ...bundle.views.map((candidate) => h('option', { key: candidate.kind, value: candidate.kind }, translate(candidate.kind))))),
+      h('button', { type: 'button', style: styles.button, onClick: () => exportDiagramSnapshot(bundle) }, translate('exportSnapshot'))),
+    diagram === undefined ? null : h('p', { style: styles.status, 'data-swarm-diagram-basis': diagram.kind }, `${diagram.basis}${diagram.truncated > 0 ? `；${translate('omitted')} ${diagram.truncated}` : ''} · ${bundle.snapshotDigest.slice(0, 12)}`),
+    bundle?.diagnostics.length > 0 ? h('details', { 'data-swarm-diagram-diagnostics': '' }, h('summary', null, `${translate('deviations')} (${bundle.diagnostics.length})`), h('ul', null, ...bundle.diagnostics.map((item, index) => h('li', { key: index }, `${item.code}${item.nodeId === undefined ? '' : ` · ${item.nodeId}`}：${item.message}`)))) : null,
     svg === null ? null : h('div', null,
       h('div', { style: styles.header }, h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, disabled: zoom >= 3, onClick: () => setZoom((value) => Math.min(3, value + 0.5)) }, translate('zoomIn')), h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, disabled: zoom <= 1, onClick: () => setZoom((value) => Math.max(1, value - 0.5)) }, translate('zoomOut')), h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, onClick: () => setZoom(1) }, translate('fit'))),
       h('div', { style: styles.diagram, tabIndex: 0, 'aria-label': translate('title'), 'data-swarm-diagram-zoom': String(zoom) }, h('div', { style: { width: `${zoom * 100}%` }, role: 'img', 'aria-label': translate('title'), dangerouslySetInnerHTML: { __html: svg } }))),
@@ -209,4 +325,4 @@ function apply (ctx) {
 exports.inject = inject
 exports.apply = apply
 exports.NS = NS
-exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskFromRpc, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, TaskFlowRow }
+exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskFromRpc, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, createTaskLoader, createTaskPoller, TaskFlowRow }

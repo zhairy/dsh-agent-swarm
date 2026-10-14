@@ -1,3 +1,5 @@
+import { deduplicateContextPaths } from './memory.js'
+import { getLanguageInstruction, isOutputLanguage, type OutputLanguage } from './language.js'
 import { getRoleRoute, type SwarmConfigInfo } from './config.js'
 import { ValidateStructuredOutput, getEvidenceFromOutput, getOutputSchema, type EvidenceItem } from './contracts.js'
 import type { BackendKind, DelegationRecord, DelegationRetryInfo, DelegationSessionInfo, Ledger, RouteAttempt, TaskRecord, TaskStore } from './evidence.js'
@@ -42,6 +44,11 @@ export type DelegateBackend = typeof DELEGATE_BACKENDS[number]
 /** swarm_delegate 的参数 */
 export interface DelegateInput {
   task_id: string
+  language?: OutputLanguage
+  priority?: number
+  /** Host-only reviewed reference; never exposed by the tool schema. */
+  referenceMemory?: string
+  languageExplicit?: boolean
   role: DelegableRoleId
   mode?: SuanHengMode
   prompt: string
@@ -75,6 +82,8 @@ export const ValidateDelegateInput = (raw: unknown): { input?: DelegateInput; er
   const errors: string[] = []
   if (typeof value.task_id !== 'string' || value.task_id.trim() === '') errors.push('task_id 必须是非空字符串')
   if (typeof value.prompt !== 'string' || value.prompt.trim() === '') errors.push('prompt 必须是非空字符串')
+  if (value.language !== undefined && !isOutputLanguage(value.language)) errors.push('language 必须是 zh-CN / en / zh-TW / ja / ko')
+  if (value.priority !== undefined && (typeof value.priority !== 'number' || !Number.isInteger(value.priority) || value.priority < -100 || value.priority > 100)) errors.push('priority 必须是 -100 至 100 的整数')
   const role = value.role
   if (!isDelegableRoleId(role)) {
     errors.push('role 必须是可委派角色 ID（天枢不能被委派）')
@@ -172,6 +181,8 @@ export const getTaskBrief = (task: TaskRecord, input: DelegateInput, delegationI
   ].join('\n')
 }
 
+const getVisibleRequest = (input: DelegateInput): string => [input.prompt, getLanguageInstruction(input.language, input.languageExplicit ?? input.language !== undefined), ...(input.referenceMemory ? [input.referenceMemory] : [])].join('\n\n')
+
 /**
  * 一次性调用的任务说明（宿主提供结构化提交工具），按模型家族组织
  * @param {TaskRecord} task - 任务
@@ -183,7 +194,7 @@ export const getTaskBrief = (task: TaskRecord, input: DelegateInput, delegationI
 export const getChildPromptText = (task: TaskRecord, input: DelegateInput, delegationId: string, style: PromptStyle = 'generic'): string =>
   getStyledTaskPrompt({
     brief: getTaskBrief(task, input, delegationId),
-    request: input.prompt,
+    request: getVisibleRequest(input),
     delivery: `完成后调用 ${STRUCTURED_OUTPUT_TOOL} 提交结果（${getRoleInfo(input.role).deliverables.join('、')}）。`
   }, style)
 
@@ -199,7 +210,7 @@ export const getJsonDeliveryText = (role: DelegableRoleId): string => ['—— �
 
 /** 连续会话的首轮任务 */
 export const getThreadPromptText = (task: TaskRecord, input: DelegateInput, delegationId: string, style: PromptStyle = 'generic'): string =>
-  getStyledTaskPrompt({ brief: getTaskBrief(task, input, delegationId), request: input.prompt, delivery: getJsonDeliveryBody(input.role) }, style)
+  getStyledTaskPrompt({ brief: getTaskBrief(task, input, delegationId), request: getVisibleRequest(input), delivery: getJsonDeliveryBody(input.role) }, style)
 
 /**
  * 追加到连续会话的新任务：会话没见过的任务附完整背景，同一任务只附编号
@@ -214,7 +225,7 @@ export const getThreadFollowupText = (task: TaskRecord, input: DelegateInput, de
   getStyledTaskPrompt({
     header: knowsTask ? `【追加】任务 ${task.taskId} / 委派 ${delegationId}（同一任务的后续工作，沿用你已有的上下文）` : '【追加】新的任务，背景如下。',
     ...(knowsTask ? {} : { brief: getTaskBrief(task, input, delegationId) }),
-    request: input.prompt,
+    request: getVisibleRequest(input),
     delivery: getJsonDeliveryBody(input.role)
   }, style)
 
@@ -240,7 +251,7 @@ export const getNativePromptText = (task: TaskRecord, input: DelegateInput, dele
     getChildPersona(input.role, mode, style),
     getStyledTaskPrompt({
       brief: getTaskBrief(task, input, delegationId),
-      request: input.prompt,
+      request: getVisibleRequest(input),
       delivery: ['最后以一个 ```json 代码块输出结果，字段必须符合以下 JSON Schema（不要输出其他 json 代码块）：', JSON.stringify(getOutputSchema(input.role))].join('\n\n')
     }, style)
   ].join('\n\n')
@@ -970,7 +981,9 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
   }
 
   const delegate = async (raw: unknown, exec: DelegateExecInfo, session: DelegateSessionInfo): Promise<DelegationRecord> => {
-    const { input, errors } = ValidateDelegateInput(raw)
+    const parsed = ValidateDelegateInput(raw)
+    const errors = parsed.errors
+    const input = parsed.input === undefined ? undefined : { ...parsed.input, language: parsed.input.languageExplicit === false ? deps.getConfig().agents.language : parsed.input.language ?? deps.getConfig().agents.language, languageExplicit: parsed.input.languageExplicit ?? parsed.input.language !== undefined, ...(parsed.input.context_paths === undefined ? {} : { context_paths: deduplicateContextPaths(parsed.input.context_paths) }) }
     if (input === undefined) throw new SwarmError('INVALID_ARGS', errors.join('；'))
     const task = exec.admission?.task ?? session.store.getTask(input.task_id)
     if (task === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${input.task_id}，请先调用 swarm_task_card`)

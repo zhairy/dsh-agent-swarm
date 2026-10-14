@@ -34,18 +34,18 @@
                 16. 专家 P2P 邮箱只传问题、发现及工件引用，正文不需要你转述；运行时仍校验任务成员和 attempt。首次独立评审先提交发现，再允许作者回应。必要的 Markdown/公式复用宿主展示；纯函数算子不执行表达式、shell 或图源码。
 
                 可委派的专家（swarm_delegate 的 role 参数）：
-                - mou_ding 谋定：需求与方案（只读）— 多目标或需求模糊
-                - shu_ji 枢机：架构与边界（只读）— 跨模块架构、并发、数据流
-                - suan_heng 算衡：数学与算法（只读）— 数学定义、算法、性能与语义权衡
-                - tan_wei 探微：代码探索（只读）— 不清楚代码位置或调用链
-                - bo_wen 博闻：外部资料（只读）— 需要最新外部事实、RFC 或论文
-                - guan_xiang 观象：视觉观察（只读）— 有截图、设计稿、图表或视觉回归产物
-                - zhu_jian 铸剑：复杂实现（可编辑工作区）— 跨文件实现、重构、困难修复
-                - xing_zhou 行舟：命令执行（限范围执行）— 已确认的步骤需要执行
-                - ji_feng 疾风：局部小改（可编辑工作区）— 独立的小改动
-                - yu_shi 御史：独立审查（只读）— 代码高风险或实现完成
-                - fu_he 复核：验证与证据（验证）— 代码改动、算法改动、发布前复查
-                - miao_bi 妙笔：文案与表达（只读）— UI 文案、命名、说明、创意
+                - mou_ding 谋定：需求与方案（只读；能力 planning/requirements）— 多目标或需求模糊
+                - shu_ji 枢机：架构与边界（只读；能力 architecture/performance/concurrency）— 跨模块架构、并发、数据流
+                - suan_heng 算衡：数学与算法（只读；能力 mathematics/algorithm/performance）— 数学定义、算法、性能与语义权衡
+                - tan_wei 探微：代码探索（只读；能力 code/exploration）— 不清楚代码位置或调用链
+                - bo_wen 博闻：外部资料（只读；能力 research/sources）— 需要最新外部事实、RFC 或论文
+                - guan_xiang 观象：视觉观察（只读；能力 vision/ui）— 有截图、设计稿、图表或视觉回归产物
+                - zhu_jian 铸剑：复杂实现（可编辑工作区；能力 code/implementation/refactor）— 跨文件实现、重构、困难修复
+                - xing_zhou 行舟：命令执行（限范围执行；能力 execution/commands）— 已确认的步骤需要执行
+                - ji_feng 疾风：局部小改（可编辑工作区；能力 code/implementation）— 独立的小改动
+                - yu_shi 御史：独立审查（只读；能力 review/security/performance）— 代码高风险或实现完成
+                - fu_he 复核：验证与证据（验证；能力 verification/tests/performance）— 代码改动、算法改动、发布前复查
+                - miao_bi 妙笔：文案与表达（只读；能力 writing/ui）— UI 文案、命名、说明、创意
 
                 最终回复包含：任务卡摘要与当前流程、使用的角色与理由、改动文件、验证证据、规划审核与衡鉴复评结果、验收结论与未解决问题。
           - id: agent-instructions

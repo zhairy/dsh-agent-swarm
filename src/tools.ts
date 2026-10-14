@@ -1,3 +1,4 @@
+import { getLanguageInstruction, type OutputLanguage } from './language.js'
 import { DELEGATE_BACKENDS } from './delegate.js'
 import type { DelegationRecord } from './evidence.js'
 import { SWARM_SERVICE, type PluginContextLike, type PromptAssemblyLike, type SkillsLike, type ToolsLike } from './host-contract.js'
@@ -100,6 +101,8 @@ export const TASK_CARD_PARAMETERS: JsonSchemaObject = {
 export const DELEGATE_PARAMETERS: JsonSchemaObject = {
   type: 'object',
   properties: {
+    language: { type: 'string', enum: ['zh-CN', 'en', 'zh-TW', 'ja', 'ko'], description: '本次可见交付语言；省略使用设置默认，不翻译JSON键、代码或证据路径' },
+    priority: { type: 'number', description: '整数-100至100；仅priority调度策略使用；不改变任务依赖、权限或预算' },
     task_id: { type: 'string', description: 'swarm_task_card 返回的 task_id' },
     node_id: { type: 'string', description: '执行节点 ID；必须与 ready 节点及角色对应' },
     expected_workflow_revision: { type: 'number', description: '流程版本；过期版本拒绝执行' },
@@ -127,6 +130,8 @@ export const DELEGATE_PARAMETERS: JsonSchemaObject = {
 export const STATUS_PARAMETERS: JsonSchemaObject = {
   type: 'object',
   properties: {
+    capability_tags: strList('可选能力标签，如algorithm/review/code；仅返回角色建议，不授予权限或自动切换模型'),
+    allow_write_roles: { type: 'boolean', description: '角色建议可包含写角色；默认false，仍需正常委派准入' },
     task_id: { type: 'string', description: '只看某个任务；不传则列出本会话全部任务' },
     verbose: { type: 'boolean', description: '附带每个委派的结构化结果、证据与路由记录' }
   },
@@ -292,7 +297,7 @@ export const getSwarmToolDefinitions = (service: SwarmService): ToolDefinitionLi
     description: '只读查询当前会话任务的版本、规划审核、门禁、委派状态/路由/证据、调用用量与宿主降级。优先用本工具核对流程；Web taskView RPC 需要宿主认证，不能用匿名 curl 代替。',
     parameters: STATUS_PARAMETERS,
     execute: async (args, exec) => service.getStatus(args, getExec(exec)),
-    render: (_args, value) => getStatusText(value)
+    render: (_args, value) => getStatusText(value) + (value.roleSuggestions.length ? '\n角色能力建议（不授予权限）：' + JSON.stringify(value.roleSuggestions) : '')
   }),
   getToolDefinition<unknown, AcceptResultInfo>({
     name: 'swarm_accept',
@@ -322,12 +327,15 @@ const TOOL_RECOVERY_TEXT = [
  * @param {PromptStylePolicy} policy - 配置的提示风格
  * @returns {PromptAssemblyLike} 追加后的组装结果
  */
-export const getStyledAssembly = (assembled: PromptAssemblyLike, policy: PromptStylePolicy): PromptAssemblyLike => {
+export const getStyledAssembly = (assembled: PromptAssemblyLike, policy: PromptStylePolicy, language?: OutputLanguage): PromptAssemblyLike => {
   const sections = Array.isArray(assembled.sections) ? assembled.sections : []
-  if (sections.some((section) => section.name === ORCHESTRATION_STYLE_SECTION || ROLE_TAG_PATTERN.test(section.text))) return assembled
+  if (sections.some(section => ROLE_TAG_PATTERN.test(section.text))) return assembled
+  const languageSection = { name: 'dsh-agent-swarm:output-language', text: getLanguageInstruction(language) }
+  if (sections.some(section => section.name === ORCHESTRATION_STYLE_SECTION)) return language === undefined ? assembled : { ...assembled, sections: [...sections.filter(section => section.name !== languageSection.name), languageSection] }
   const variables = assembled.variables ?? {}
   const style = getPromptStyle({ ...(variables.provider === undefined ? {} : { provider: variables.provider }), ...(variables.model === undefined ? {} : { model: variables.model }) }, policy)
   return { ...assembled, sections: [...sections,
+    ...(language === undefined ? [] : [{ name: 'dsh-agent-swarm:output-language', text: getLanguageInstruction(language) }]),
     ...(sections.some((section) => section.name === TOOL_RECOVERY_SECTION) ? [] : [{ name: TOOL_RECOVERY_SECTION, text: TOOL_RECOVERY_TEXT, interpolate: false }]),
     { name: ORCHESTRATION_STYLE_SECTION, text: getOrchestratorStyleSection(style), interpolate: false }
   ] }
@@ -364,5 +372,5 @@ export const apply = (ctx: PluginContextLike): void => {
   const skills = ctx.get('skills') as SkillsLike | undefined
   if (skills !== undefined) for (const skill of getEmbeddedSkills()) ctx.effect(() => skills.register(skill))
   ctx.on('system-prompt/assemble', async (_assembly: unknown, _context: unknown, next: () => Promise<PromptAssemblyLike>) =>
-    getStyledAssembly(await next(), service.getConfig().agents.promptStyle))
+    getStyledAssembly(await next(), service.getConfig().agents.promptStyle, service.getConfig().agents.language))
 }

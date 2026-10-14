@@ -36,7 +36,7 @@ describe('Config schema', () => {
     expect(config.budgets.maxAutoFixRounds).toBe(1)
     expect(config.budgets.maxCallsPerRole).toBe(0)
     expect(config.agents).toEqual({
-      session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000,
+      language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000,
       promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000,
       networkProbeUrls: ['https://api.deepseek.com', 'https://dashscope.aliyuncs.com', 'https://www.baidu.com'],
       modelCallDisplay: 'every'

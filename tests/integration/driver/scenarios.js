@@ -7,6 +7,7 @@ const delegate = (args) => ({ tool: 'swarm_delegate', args: { task_id: '$TASK', 
 const accept = (stopReason) => ({ tool: 'swarm_accept', args: { task_id: '$TASK', decision: 'accept', summary: '申请验收', stopReason } })
 
 export const SCENARIOS = {
+  'language-flow': { preset: 'tian-shu', root: [card({}), delegate({role:'tan_wei',prompt:'只读输出语言测试',session:'new'}), delegate({role:'tan_wei',prompt:'同一任务追加语言测试',session:'continue',language:'en',priority:10}), delegate({role:'yu_shi',prompt:'独立审查语言测试',session:'oneshot',language:'ko'}), {tool:'swarm_status',args:{task_id:'$TASK',capability_tags:['algorithm']}}, {text:'DONE'}] },
   'gate-flow': {
     preset: 'tian-shu',
     root: [

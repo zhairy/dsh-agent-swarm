@@ -7,6 +7,7 @@ import { DEFAULT_UPGRADES, UPGRADE_TRIGGERS, UPGRADEABLE_KEYS, isUpgradeTrigger,
 import { DEFAULT_REVIEW_THRESHOLDS, type ReviewThresholdsInfo } from './review.js'
 import { readLiveObject } from './util/live.js'
 import { DEFAULT_MATH_CONFIG, getMathConfig, MATH_GROUP_OPERATORS, MATH_LIMIT_MAXIMA, MATH_NUMERIC_MODES, MAX_MATH_CALLS_PER_TASK, MAX_MATH_WORK_PER_TASK, type MathConfigInfo } from './math/config.js'
+import { OUTPUT_LANGUAGES, getOutputLanguage, type OutputLanguage } from './language.js'
 import { CALC_OPERATORS } from './math/schema.js'
 
 export const APPROVAL_SCOPES = ['write', 'shell', 'external_mcp', 'jev'] as const
@@ -42,6 +43,8 @@ const RoleRouteSchema = Schema.object({
 export const Config = Schema.object({
   routes: Schema.dict(RoleRouteSchema).default({})
     .description('按角色覆盖路由链；键为角色 ID（算衡用 suan_heng:research / suan_heng:verify）；留空使用内置默认').volatile(),
+  scheduling: Schema.object({ strategy: Schema.union(['fifo', 'priority', 'roundRobin']).default('fifo'), maxActive: Schema.natural().min(1).max(32).default(8), maxPending: Schema.natural().min(1).max(512).default(128) }).default({}).description('每个根会话的有界委派调度；不代替任务依赖、预算或工作区租约').volatile(),
+  memory: Schema.object({ enabled: Schema.boolean().default(false), maxMatches: Schema.natural().min(1).max(10).default(3), maxChars: Schema.natural().min(256).max(16000).default(4000), ttlMs: Schema.natural().min(1000).max(31536000000).default(604800000) }).default({}).description('从本根会话经验库召回已复核参考，盲审不注入；不缓存执行结果或删除原始证据').volatile(),
   rootFallback: Schema.boolean().default(true).description('主会话模型致命失败时按角色链回退').volatile(),
   approvals: Schema.object({
     mode: Schema.union(['inherit', 'ask', 'deny']).default('inherit'),
@@ -76,6 +79,7 @@ export const Config = Schema.object({
     doubtfulBelow: Schema.number().default(DEFAULT_REVIEW_THRESHOLDS.doubtfulBelow).description('可信度低于此值（或证据支撑 < 0.35）判为存疑')
   }).default({}).description('衡鉴复评（沿用 jev 的密钥、地址与模型）').volatile(),
   agents: Schema.object({
+    language: Schema.union([...OUTPUT_LANGUAGES]).default('zh-CN').description('可见交付的默认语言；本轮用户明确要求优先，不改变JSON键与代码，不因语言重试业务'),
     session: Schema.union(['auto', 'oneshot', 'continuable']).default('auto')
       .description('专家会话策略：auto 由衡鉴（Jev）按任务判断一次性调用还是连续会话；oneshot 全部一次性；continuable 全部连续会话'),
     repeatAbove: Schema.number().default(0.5).description('衡鉴判断「同一大类任务还会再次调用该专家」的概率不低于此值时，开连续会话'),
@@ -180,6 +184,7 @@ export type AgentSessionPolicy = 'auto' | 'oneshot' | 'continuable'
 
 /** 专家的会话与重试策略 */
 export interface AgentsConfigInfo {
+  language: OutputLanguage
   session: AgentSessionPolicy
   repeatAbove: number
   sameCategoryAbove: number
@@ -203,6 +208,7 @@ export type ModelCallDisplay = 'every' | 'turn'
 export const DEFAULT_NETWORK_PROBE_URLS: readonly string[] = ['https://api.deepseek.com', 'https://dashscope.aliyuncs.com', 'https://www.baidu.com']
 
 export const DEFAULT_AGENTS_CONFIG: AgentsConfigInfo = {
+  language: 'zh-CN',
   session: 'auto',
   repeatAbove: 0.5,
   sameCategoryAbove: 0.5,
@@ -217,6 +223,8 @@ export const DEFAULT_AGENTS_CONFIG: AgentsConfigInfo = {
 
 /** 合并默认值后的完整配置 */
 export interface SwarmConfigInfo {
+  scheduling: { strategy: 'fifo' | 'priority' | 'roundRobin'; maxActive: number; maxPending: number }
+  memory: { enabled: boolean; maxMatches: number; maxChars: number; ttlMs: number }
   approvals: ApprovalsConfigInfo
   routes: Partial<Record<RouteKey, RoleRouteInfo>>
   rootFallback: boolean
@@ -304,6 +312,7 @@ const getAgentsConfig = (raw: unknown): AgentsConfigInfo => {
   const urls = Array.isArray(merged.networkProbeUrls) ? merged.networkProbeUrls.filter((url): url is string => typeof url === 'string' && /^https?:\/\//.test(url)) : []
   return {
     ...merged,
+    language: getOutputLanguage(merged.language),
     session: AGENT_SESSION_POLICIES.includes(merged.session) ? merged.session : 'auto',
     promptStyle: PROMPT_STYLES.includes(merged.promptStyle) ? merged.promptStyle : 'auto',
     networkProbeUrls: urls.length > 0 ? urls : [...DEFAULT_NETWORK_PROBE_URLS],
@@ -318,7 +327,11 @@ const getAgentsConfig = (raw: unknown): AgentsConfigInfo => {
  */
 export const getSwarmConfig = (raw: unknown): SwarmConfigInfo => {
   const plain = readLiveObject(raw)
+  const bounded = (value: unknown, fallback: number, min: number, max: number): number => typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value <= max ? value : fallback
+  const scheduling = asRecord(plain.scheduling), memory = asRecord(plain.memory)
   return {
+    scheduling: { strategy: ['fifo', 'priority', 'roundRobin'].includes(String(scheduling.strategy)) ? scheduling.strategy as SwarmConfigInfo['scheduling']['strategy'] : 'fifo', maxActive: bounded(scheduling.maxActive, 8, 1, 32), maxPending: bounded(scheduling.maxPending, 128, 1, 512) },
+    memory: { enabled: memory.enabled === true, maxMatches: bounded(memory.maxMatches, 3, 1, 10), maxChars: bounded(memory.maxChars, 4000, 256, 16000), ttlMs: bounded(memory.ttlMs, 604800000, 1000, 31536000000) },
     routes: getRouteOverrides(plain.routes),
     rootFallback: typeof plain.rootFallback === 'boolean' ? plain.rootFallback : true,
     approvals: (() => {

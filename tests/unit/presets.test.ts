@@ -14,8 +14,9 @@ import {
 } from '../../src/preset-builder.js'
 import { ROLE_INFO_LIST, getPresetPersona } from '../../src/role-registry.js'
 
-const ROOT = join(import.meta.dirname, '..', '..')
-const standard = getJsRevived(JSON.parse(readFileSync(join(ROOT, 'tests', 'fixtures', 'standard-plugins.json'), 'utf8'))) as PluginRow[]
+const SOURCE_ROOT = join(import.meta.dirname, '..', '..')
+const ROOT = process.env.SWARM_PLUGIN_ROOT ?? SOURCE_ROOT
+const standard = getJsRevived(JSON.parse(readFileSync(join(SOURCE_ROOT, 'tests', 'fixtures', 'standard-plugins.json'), 'utf8'))) as PluginRow[]
 const ids = (rows: PluginRow[]) => rows.map((row) => row.id)
 
 describe('预设构建器', () => {

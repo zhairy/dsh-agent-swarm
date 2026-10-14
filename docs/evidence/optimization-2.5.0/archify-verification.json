@@ -1,0 +1,147 @@
+{
+  "scope": "Synthetic task fixture exported through the real upstream Archify CLI; no production task execution",
+  "contract": {
+    "repository": "https://github.com/tt-a1i/archify",
+    "commit": "58ab0b98d2d0def8e49dced705c7b566936723ec",
+    "version": "3.0.1"
+  },
+  "snapshotDigest": "08b72433752c215e77c5badc9b4e24725fc3857ca4e951e867306757959459ac",
+  "qualityProfile": "standard",
+  "visualCheckRun": false,
+  "results": [
+    {
+      "kind": "workflow",
+      "status": "delivered",
+      "validateExitCode": 0,
+      "deliverExitCode": 0,
+      "specification": {
+        "sha256": "0d01882c95001947de3c673e703e959b8a3ea7d363e795e5cf67a7f58e32f505",
+        "bytes": 2054
+      },
+      "artifact": {
+        "sha256": "a699d92201565145f46e8156a1e5df8ed63838c9bb8d6db22e05bb76660a348b",
+        "bytes": 746816
+      },
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "standard",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      }
+    },
+    {
+      "kind": "architecture",
+      "status": "delivered",
+      "validateExitCode": 0,
+      "deliverExitCode": 0,
+      "specification": {
+        "sha256": "302aaeb0fcaa4b58c4ae0dfea721f986b5a5e6ba60141869cd1c7350b7852563",
+        "bytes": 963
+      },
+      "artifact": {
+        "sha256": "8d1cf19a8bc4a4eb78bfc074316dfd7924adee2c5e2f42fbb67964248d674bdb",
+        "bytes": 741620
+      },
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "standard",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      }
+    },
+    {
+      "kind": "sequence",
+      "status": "delivered",
+      "validateExitCode": 0,
+      "deliverExitCode": 0,
+      "specification": {
+        "sha256": "b20ec1cc13ca199517fd759b3b3d740784657f29ebd9b8f5b0979a32689520c7",
+        "bytes": 1072
+      },
+      "artifact": {
+        "sha256": "3bda4bfd9bef2bff8773072797e910bf7694ed94a24195379a8a6ad1810177bb",
+        "bytes": 742489
+      },
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "standard",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      }
+    },
+    {
+      "kind": "dataflow",
+      "status": "delivered",
+      "validateExitCode": 0,
+      "deliverExitCode": 0,
+      "specification": {
+        "sha256": "98776084c27ed08434a11a43e4f1cd4d1c81860ef45744af710627f94ee205c7",
+        "bytes": 1466
+      },
+      "artifact": {
+        "sha256": "6b633c1a5c4140bb631133041e73409a04941f544ca8b82a77d2269db50ab6a3",
+        "bytes": 745035
+      },
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "standard",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 1,
+        "compositionIssues": [
+          {
+            "severity": "warning",
+            "code": "composition/micro-segment",
+            "relationship": {
+              "from": "contract",
+              "to": "context",
+              "label": "关联",
+              "collectionIndex": 0,
+              "artifactIndex": 1
+            },
+            "segmentIndex": 1,
+            "position": "interior",
+            "length": 7,
+            "from": [
+              207.5,
+              150
+            ],
+            "to": [
+              207.5,
+              157
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "kind": "lifecycle",
+      "status": "delivered",
+      "validateExitCode": 0,
+      "deliverExitCode": 0,
+      "specification": {
+        "sha256": "47a739a1110dc29cd9bd5935f8e770f85bb96bbc5ff0c448208095c1805bc27f",
+        "bytes": 1658
+      },
+      "artifact": {
+        "sha256": "48bd48c6d6ca2d0e90a313c06a5bdf61e116e5151cec5fa300acb77991f46f54",
+        "bytes": 749026
+      },
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "standard",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      }
+    }
+  ]
+}
