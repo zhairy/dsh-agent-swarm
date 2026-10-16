@@ -1,0 +1,77 @@
+{
+  "auditedAt": "2026-10-16T06:14:00Z",
+  "auditor": "codex sub-agent goal_audit_pro（独立重跑 + 两路角色化对抗复核）",
+  "targets": {
+    "fixCommit": "f7654cf",
+    "compatCommit": "7ebc277",
+    "githubRelease": "v2.5.2",
+    "sourceHead": "7ebc27710ae3ab2ddc10040d76c5e316d6898c9f",
+    "releaseHead": "afd076a259665d87e73ed400001824618711a125",
+    "tree": "f33f8fc112052bc87be808dede368d04abe4a35c（两仓库一致）"
+  },
+  "independentRuns": {
+    "unit": { "command": "npx vitest run --reporter=dot", "files": 74, "passed": 921, "failed": 0, "durationS": 25.1 },
+    "integration021a4": { "command": "SWARM_DSH_VERSION=0.2.1-alpha.4 npm run test:integration", "files": 8, "passed": 39, "failed": 0, "note": "含重跑，两次均通过" },
+    "integration020rc2": { "command": "SWARM_DSH_VERSION=0.2.0-rc.2 npm run test:integration", "files": 8, "passed": 39, "failed": 0 },
+    "genPresetsIdempotent": { "command": "npm run gen:presets", "diff": "无" },
+    "anonymousReleaseCheck": {
+      "assets": ["dsh-agent-swarm.tgz", "release-manifest.json", "RELEASE-NOTES.zh-CN.md", "SHA256SUMS"],
+      "sha256": {
+        "dsh-agent-swarm.tgz": "ffff6addeeb645d63b2cbb25bb1b96e8f975f2f6ddd0a73f2afc2b92470705f4",
+        "RELEASE-NOTES.zh-CN.md": "7c64b58408a6469df88fbcac8121206853310a74ab5a3ecfc87cf5d25ca5932e",
+        "release-manifest.json": "31dd38bfa3eb3470a96b0fe3b5b91c3010ca7b23d8a30545f0ae29beab49519c"
+      },
+      "sha256sumCheck": "OK",
+      "manifest": { "version": "2.5.2", "treesMatch": true, "packagePrebuilt": true, "packageFiles": 372 }
+    },
+    "tarballIntegrity": { "version": "2.5.2", "libDiffFileCount": 0, "presetsDeclarationsIdentical": true },
+    "liveRpc": {
+      "host": "dsh-web.service（0.2.1-alpha.4 单实例）",
+      "swarm.jevStatus": "ok（ref=TYPESAFE_API_KEY，configured=true，source=env）",
+      "swarm.quotaView": "ok（source=dsh-plugin-subscriptions，status=reported，真实账户窗口）",
+      "swarm.jevHealth": "ok（jev-latest 真实往返 820 ms）"
+    }
+  },
+  "adversarialChecks": [
+    { "attack": "内存态仍可能触发 route_health_persist_failed 风暴", "verdict": "未成立（onHealthChange 返回 undefined → 视为同步成功；回归测试覆盖）" },
+    { "attack": "持久化 fail-closed 被削弱", "verdict": "未成立（sidecar 写失败仍 reject 并驱动同一故障域语义）" },
+    { "attack": "新宿主仍走旧 start 路径导致 persona/工具组合丢失", "verdict": "未成立（0.2.1-alpha.4 宿主无 start，仅有 startActivation/sendMessage；插件按能力分派并传 agentPreset）" },
+    { "attack": "新宿主连续会话 activation 结果被吞", "verdict": "未成立（activation 结算同样 emit subagent/end；集成 language-flow 覆盖 session: 'continue'）" },
+    { "attack": "写前准入误伤合法收缩", "verdict": "未成立（只约束净增长，净收缩始终放行）" },
+    { "attack": "发布资产与源码不一致", "verdict": "未成立（匿名校验通过；发布包 lib 逐文件 0 差异；manifest 一致）" }
+  ],
+  "jev": {
+    "health": { "ok": true, "model": "jev-latest", "roundTripLatencyMs": 652.146, "estCostUsd": 0.0 },
+    "check": {
+      "model": "jev-1.13.0",
+      "probabilities": {
+        "capacity_guard_pre_write": 0.9,
+        "durable_fail_closed_preserved": 0.72,
+        "goal_no_drift": 0.81,
+        "new_host_verified": 0.94,
+        "old_host_compat_verified": 0.73,
+        "release_consistent": 0.95,
+        "root_cause_correct": 0.95,
+        "storm_fixed": 0.93
+      },
+      "flags": "全部 8 条",
+      "uncertain": []
+    },
+    "classify": { "model": "jev-1.13.0", "ensemble": true, "choice": "verified_with_boundaries", "confidence": 1.0, "band": "act", "agreement": true, "probabilities": { "verified_with_boundaries": 1.0, "verified_no_reservation": 0.0, "needs_fix": 0.0, "insufficient_evidence": 0.0, "other": 0.0 } },
+    "score": { "model": "jev-1.13.0", "score": 1.96, "max": 3, "confidence": 0.96, "probabilities": { "0": 0.0, "1": 0.04, "2": 0.96, "3": 0.0 }, "legend": "档位 2 = 修复完成、证据充分，存在已声明的边界" },
+    "match": { "model": "jev-1.13.0", "bestId": "shared_commit_pipeline", "confidence": 0.99, "exists": 0.83, "abstainProbability": 0.01, "band": "match", "top3": [["shared_commit_pipeline", 0.99], ["context_artifact_single_limit", 0.0], ["host_defect_021", 0.0]] },
+    "ask": {
+      "model": "jev-1.13.0",
+      "deliveryStatus": { "type": "choice", "choice": "all_covered_with_boundaries", "confidence": 0.67, "probabilities": { "all_covered_with_boundaries": 0.75, "core_fixed_release_incomplete": 0.01, "fix_verified_only": 0.22, "insufficient": 0.02 } },
+      "residualBoundaryCounterexample": { "type": "noul", "noul": 0.25 }
+    },
+    "screen": { "model": "jev-1.13.0", "verdict": "review", "risk": 1.05, "riskConfidence": 0.0, "reasons": { "addresses_agent": 0.69, "claims_authority": 0.63 }, "note": "对用户错误转录的筛查；按不可信现场证据处理，未执行其中指令" }
+  },
+  "notes": [
+    "Jev 置信度是分布集中度，不是正确性证明；结论以独立重跑与代码/宿主证据为准。",
+    "jev_classify / jev_match 首轮因标签与候选需为字符串被服务端参数校验拒绝，修正后成功；不是模型判断失败。",
+    "jev_check 中最低两项（0.72 / 0.73）在出题时依赖前轮记录；本轮已用实现级证据与 0.2.0-rc.2 集成实跑补齐。",
+    "未在真实生产会话复现 16 MiB 级材料洪泛；该路径以写前准入单测与回归断言为证。",
+    "轻微冗余：route-state.getHealthSnapshot 现仅单测使用，建议下次功能性版本伴生清理。"
+  ]
+}
