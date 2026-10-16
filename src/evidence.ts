@@ -182,8 +182,23 @@ export interface TaskStore {
   getDelegation: (delegationId: string) => DelegationRecord | undefined
   getTaskDelegations: (taskId: string) => DelegationRecord[]
   getTasks: () => TaskRecord[]
+  /**
+   * 取走并清空自上次确认以来的写入口脏键；缺失时调用方回退全量快照提交。
+   * 取走即清空是关键：提交是异步的，清空若不与取走原子，await 期间的新写入会被误清而永不落盘。
+   */
+  takeDirty?: () => TaskStoreDirty
+  /** 提交失败时把取走的脏键放回，保证重试会再次携带同一批键；成功路径不需要调用。 */
+  restoreDirty?: (dirty: TaskStoreDirty) => void
   /** Internal card transaction rollback; preserves independently added delegation associations. */
   RollbackTask?: (taskId: string, previous: TaskRecord | undefined, expected: { cardRevision: number; workflowRevision: number; requestRevision: number }) => boolean
+}
+
+/** 任务存储的增量脏键：set 对应新增/替换，removed 对应删除。 */
+export interface TaskStoreDirty {
+  readonly tasks: readonly string[]
+  readonly delegations: readonly string[]
+  readonly removedTasks: readonly string[]
+  readonly removedDelegations: readonly string[]
 }
 
 /**
@@ -193,16 +208,27 @@ export interface TaskStore {
 export const intTaskStore = (): TaskStore => {
   const tasks = new Map<string, TaskRecord>()
   const delegations = new Map<string, DelegationRecord>()
+  // 写入口脏追踪：状态增量提交只编码被触碰的分片，未变更分片复用已提交缓存。
+  const dirtyTasks = new Set<string>()
+  const dirtyDelegations = new Set<string>()
+  const removedTasks = new Set<string>()
+  const removedDelegations = new Set<string>()
+  const markTask = (taskId: string): void => { dirtyTasks.add(taskId); removedTasks.delete(taskId) }
+  const markDelegation = (delegationId: string): void => { dirtyDelegations.add(delegationId); removedDelegations.delete(delegationId) }
+  const markRemovedTask = (taskId: string): void => { dirtyTasks.delete(taskId); removedTasks.add(taskId) }
+  const markRemovedDelegation = (delegationId: string): void => { dirtyDelegations.delete(delegationId); removedDelegations.add(delegationId) }
   const RollbackTask: NonNullable<TaskStore['RollbackTask']> = (taskId, previous, expected) => {
     const current = tasks.get(taskId)
     if (current === undefined || (current.cardRevision ?? 1) !== expected.cardRevision || (current.workflowRevision ?? 1) !== expected.workflowRevision
       || (current.requestRevision ?? 1) !== expected.requestRevision) return false
     if (previous === undefined) {
       if (current.delegationIds.length > 0) return false
+      markRemovedTask(taskId)
       return tasks.delete(taskId)
     }
     if (previous.taskId !== taskId || previous.sessionId !== current.sessionId) return false
     tasks.set(taskId, { ...structuredClone(previous), delegationIds: [...current.delegationIds] })
+    markTask(taskId)
     return true
   }
 
@@ -213,6 +239,7 @@ export const intTaskStore = (): TaskStore => {
     if (patch.delegationIds !== undefined && (patch.delegationIds.length !== current.delegationIds.length || patch.delegationIds.some((id, index) => id !== current.delegationIds[index]))) throw new SwarmError('INVALID_ARGS', '委派关联只能由 AddDelegation 原子更新')
     const next = { ...current, ...patch, updatedAt: Date.now() }
     tasks.set(taskId, next)
+    markTask(taskId)
     return next
   }
 
@@ -224,6 +251,8 @@ export const intTaskStore = (): TaskStore => {
     const nextTask = { ...task, delegationIds: [...task.delegationIds, record.delegationId], updatedAt: Date.now() }
     delegations.set(record.delegationId, record)
     tasks.set(record.taskId, nextTask)
+    markTask(record.taskId)
+    markDelegation(record.delegationId)
   }
 
   const UpdateDelegation = (delegationId: string, patch: Partial<DelegationRecord>): DelegationRecord => {
@@ -235,6 +264,7 @@ export const intTaskStore = (): TaskStore => {
     }
     const next = { ...current, ...patch }
     delegations.set(delegationId, next)
+    markDelegation(delegationId)
     return next
   }
 
@@ -243,12 +273,24 @@ export const intTaskStore = (): TaskStore => {
       if (tasks.has(task.taskId)) throw new SwarmError('INVALID_ARGS', `重复任务：${task.taskId}`)
       if (task.delegationIds.length > 0) throw new SwarmError('INVALID_ARGS', '新任务不能包含尚未提交的委派关联')
       tasks.set(task.taskId, task)
+      markTask(task.taskId)
     },
     getTask: (taskId) => tasks.get(taskId),
     UpdateTask,
     RollbackTask,
     AddDelegation,
     UpdateDelegation,
+    takeDirty: () => {
+      const snapshot: TaskStoreDirty = { tasks: [...dirtyTasks], delegations: [...dirtyDelegations], removedTasks: [...removedTasks], removedDelegations: [...removedDelegations] }
+      dirtyTasks.clear(); dirtyDelegations.clear(); removedTasks.clear(); removedDelegations.clear()
+      return snapshot
+    },
+    restoreDirty: (dirty) => {
+      for (const id of dirty.tasks) dirtyTasks.add(id)
+      for (const id of dirty.delegations) dirtyDelegations.add(id)
+      for (const id of dirty.removedTasks) removedTasks.add(id)
+      for (const id of dirty.removedDelegations) removedDelegations.add(id)
+    },
     getDelegation: (delegationId) => delegations.get(delegationId),
     getTaskDelegations: (taskId) => {
       const records: DelegationRecord[] = []

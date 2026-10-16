@@ -48,19 +48,29 @@ export interface ThreadRegistry {
   Update: (threadId: string, patch: Partial<ThreadInfo>) => ThreadInfo | undefined
   /** 记录一轮结果并释放会话 */
   AddRound: (threadId: string, round: ThreadInfo['history'][number], now: number) => ThreadInfo | undefined
+  /** 取走并清空自上次确认以来的写入口脏键；缺失时调用方回退全量快照提交。 */
+  takeDirty?: () => ThreadStoreDirty
+  /** 提交失败时把取走的脏键放回；成功路径不需要调用。 */
+  restoreDirty?: (dirty: ThreadStoreDirty) => void
 }
+
+/** 会话登记表的增量脏键：只有新增与替换，没有删除入口。 */
+export interface ThreadStoreDirty { readonly threads: readonly string[] }
 
 export const intThreadRegistry = (): ThreadRegistry => {
   const threads = new Map<string, ThreadInfo>()
+  const dirtyThreads = new Set<string>()
+  const markThread = (threadId: string): void => { dirtyThreads.add(threadId) }
   const Update: ThreadRegistry['Update'] = (threadId, patch) => {
     const current = threads.get(threadId)
     if (current === undefined) return undefined
     const next = { ...current, ...patch }
     threads.set(threadId, next)
+    markThread(threadId)
     return next
   }
   return {
-    Add: (thread) => { threads.set(thread.threadId, thread) },
+    Add: (thread) => { threads.set(thread.threadId, thread); markThread(thread.threadId) },
     get: (threadId) => threads.get(threadId),
     getCandidates: (key) => [...threads.values()]
       .filter((thread) => thread.key === key && !thread.busy && !thread.closed)
@@ -77,7 +87,13 @@ export const intThreadRegistry = (): ThreadRegistry => {
         history: [...current.history, round].slice(-HISTORY_LIMIT),
         lastUsedAt: now
       })
-    }
+    },
+    takeDirty: () => {
+      const snapshot: ThreadStoreDirty = { threads: [...dirtyThreads] }
+      dirtyThreads.clear()
+      return snapshot
+    },
+    restoreDirty: (dirty) => { for (const threadId of dirty.threads) dirtyThreads.add(threadId) }
   }
 }
 

@@ -11,6 +11,7 @@ import { createWorkspaceLeaseManager } from '../../src/util/workspace-lease.js'
 import * as AgentBindings from '../../src/agent-binding.js'
 import * as FeatureSessions from '../../src/feature-session.js'
 import { createDurableStateStore } from '../../src/state-store.js'
+import { SWARM_SEGMENT_SPECS } from '../../src/state-chunks.js'
 import { getWorkspaceId } from '../../src/artifacts.js'
 import { digest } from '../../src/task-model.js'
 import type { ExperienceEntry } from '../../src/experience.js'
@@ -355,7 +356,8 @@ describe('task execution through the public service', () => {
     await runtime.service.dispose()
     const directory = join(runtime.home, 'share', 'dsh-agent-swarm', 'state', await getWorkspaceId(runtime.home), digest(runtime.root.id))
     // Recompute valid storage checksums through the store to exercise schema validation, not only hash corruption.
-    const tampering = await createDurableStateStore<Record<string, unknown>>({ directory, initialState: {} })
+    // 必须与服务使用同一段布局：分片根哈希依赖段规格，布局不同会被明确拒绝而不是静默误判。
+    const tampering = await createDurableStateStore<Record<string, unknown>>({ directory, initialState: {}, segments: SWARM_SEGMENT_SPECS })
     try {
       await tampering.commit('fixture/invalid-schema', (draft) => {
         const tasks = draft.tasks as Array<Record<string, unknown>>

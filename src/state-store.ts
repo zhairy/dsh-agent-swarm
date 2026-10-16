@@ -1,12 +1,13 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { open, mkdir, readFile, rename, unlink, lstat, realpath } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { hostname } from 'node:os'
 import { intMutex } from './util/mutex.js'
+import { StateStoreError, canonicalStateJson, checksumText, checksum, deepFreeze } from './state-core.js'
+import { ChunkedState, normalizeStatePatch, type SegmentSpecs, type StatePatch } from './state-chunks.js'
 
-export class StateStoreError extends Error {
-  constructor (readonly code: 'RECOVERY_REQUIRED' | 'STATE_INVALID' | 'STATE_TOO_LARGE' | 'STORE_CLOSED' | 'OWNER_ACTIVE', message: string) { super(message); this.name = 'StateStoreError' }
-}
+export { StateStoreError, canonicalStateJson } from './state-core.js'
+
 export interface DurableStateStore<T> {
   readonly directory: string
   readonly durable: boolean
@@ -14,21 +15,41 @@ export interface DurableStateStore<T> {
   readonly maxStateBytes: number
   /** 最近一次成功提交（或恢复装载）状态的编码字节数；提交失败不改变该读数。 */
   getStateBytes: () => number
+  /** 当前状态的根校验和（分片哈希的规范组合）；用于链校验与诊断。 */
+  getRootChecksum: () => string
   read: () => T
   readPath?: <R = unknown>(path: readonly (string | number)[]) => R | undefined
   readFields?: <K extends keyof T>(keys: readonly K[]) => Pick<T, K>
   getSequence: () => number
   commit: (type: string, mutate: (draft: T) => T | void | Promise<T | void>) => Promise<T>
+  /**
+   * 分片增量提交：只编码/校验/哈希本次变更的分片，日志只写增量。
+   * 调用方必须保证补丁覆盖了全部变更（未声明的分片保持已提交内容不变）。
+   * 传入函数时在互斥区内以冻结的当前状态求值，使“读取-判断-写补丁”与提交之间没有其它写入者。
+   * 返回提交元信息而不是状态快照：增量路径不应为返回值再复制一份完整状态。
+   * `changed === false` 表示补丁与已提交内容逐字节一致，未写入日志也未消耗序列号。
+   */
+  update: (type: string, write: StateWrite<T>) => Promise<{ readonly sequence: number; readonly changed: boolean }>
   dispose: () => Promise<void>
 }
+/**
+ * 增量写入的两种形式：直接给补丁，或在互斥区内按冻结基线求值补丁。
+ * `build` 形式让“读取-判断-写补丁”与提交同处一个事务，避免读-改-写竞态。
+ */
+export type StateWrite<T> = { readonly patch: unknown } | { readonly build: (state: T) => unknown | Promise<unknown> }
 export interface StateValidationIssue { path: string; code: string }
 export interface StateValidationReport { ok: boolean; issues?: readonly StateValidationIssue[] }
 export type StateValidationResult = boolean | StateValidationReport
+export interface StateChunkTouch { readonly segment: string; readonly key: string }
 export interface DurableStateOptions<T> {
   directory: string
   initialState: T
   validate?: (value: unknown) => StateValidationResult
+  /** 增量提交的按分片校验：只收到本次触碰的分片；未提供时增量提交回退全量 validate。 */
+  validateIncremental?: (state: T, changed: readonly StateChunkTouch[]) => StateValidationResult
   recover?: (state: T) => T
+  /** 顶层段的分片规格；未声明的段按 whole 处理（每次提交整段替换）。 */
+  segments?: SegmentSpecs
   enabled?: boolean
   maxStateBytes?: number
   maxJournalBytes?: number
@@ -47,31 +68,6 @@ const validationFailureMessage = (result: StateValidationResult): string => {
   return 'State schema validation failed' + (issues.length === 0 ? '' : ` (${issues.join('; ')})`)
 }
 
-/** Reject non-JSON, accessors and credential fields before persistence; never silently redact recovery state. */
-export const canonicalStateJson = (value: unknown): string => {
-  const stack = new Set<object>()
-  const encode = (item: unknown, depth: number): string => {
-    if (depth > 64) throw new StateStoreError('STATE_INVALID', 'State nesting exceeds limit')
-    if (item === null || typeof item === 'boolean' || typeof item === 'string') return JSON.stringify(item)
-    if (typeof item === 'number' && Number.isFinite(item)) return JSON.stringify(Object.is(item, -0) ? 0 : item)
-    if (typeof item !== 'object' || item === null || (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null)) throw new StateStoreError('STATE_INVALID', 'State must contain finite plain JSON values')
-    if (stack.has(item)) throw new StateStoreError('STATE_INVALID', 'State is cyclic')
-    stack.add(item)
-    const entries: string[] = []
-    const keys = Array.isArray(item) ? Array.from({ length: item.length }, (_, index) => String(index)) : Object.keys(item).sort()
-    for (const key of keys) {
-      if (/^(?:api[_-]?key|password|authorization|credentials|private[_-]?key)$/i.test(key) || ['__proto__', 'constructor', 'prototype'].includes(key)) throw new StateStoreError('STATE_INVALID', 'Credential or unsafe state field is forbidden')
-      const descriptor = Object.getOwnPropertyDescriptor(item, key)
-      if (descriptor === undefined || !('value' in descriptor)) throw new StateStoreError('STATE_INVALID', 'State accessors and sparse arrays are forbidden')
-      entries.push((Array.isArray(item) ? '' : JSON.stringify(key) + ':') + encode(descriptor.value, depth + 1))
-    }
-    stack.delete(item)
-    return Array.isArray(item) ? '[' + entries.join(',') + ']' : '{' + entries.join(',') + '}'
-  }
-  return encode(value, 0)
-}
-const checksumText = (text: string): string => createHash('sha256').update(text).digest('hex')
-const checksum = (value: unknown): string => checksumText(canonicalStateJson(value))
 // Only already-validated private state reaches this copier. Validation remains at every commit boundary.
 const copy = <T>(value: T): T => structuredClone(value)
 const stateEnvelope = (fields: Record<string, unknown>, encodedState: string): string => '{' + [...Object.keys(fields), 'state'].sort().map((key) => JSON.stringify(key) + ':' + (key === 'state' ? encodedState : canonicalStateJson(fields[key]))).join(',') + '}'
@@ -109,11 +105,19 @@ export const reconcileStoppedStateOwner = async (directory: string): Promise<boo
 }
 
 interface Snapshot<T> { schemaVersion: 1; sequence: number; checksum: string; state: T }
-interface JournalEntry<T> extends Snapshot<T> { type: string; previousChecksum: string; entryChecksum: string }
+/** v1 行携带完整状态对象；v2 行携带 `state`（编码字符串）或 `changes`（增量分片编码）；两代都以 entryChecksum 自校验。 */
+interface JournalEntry { schemaVersion?: number; sequence: number; type: string; previousChecksum: string; checksum: string; state?: unknown; changes?: unknown; layout?: unknown; entryChecksum: string }
 const snapshotValid = (value: unknown): value is Snapshot<unknown> => {
   if (value === null || typeof value !== 'object') return false
   const record = value as Snapshot<unknown>
   return record.schemaVersion === 1 && Number.isSafeInteger(record.sequence) && record.sequence >= 0 && typeof record.checksum === 'string' && record.checksum === checksum(record.state)
+}
+const journalShape = (value: unknown): value is JournalEntry => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as JournalEntry
+  return Number.isSafeInteger(record.sequence) && record.sequence >= 0 && typeof record.type === 'string'
+    && typeof record.previousChecksum === 'string' && typeof record.checksum === 'string' && typeof record.entryChecksum === 'string'
+    && (record.schemaVersion === undefined || record.schemaVersion === 1 || record.schemaVersion === 2)
 }
 
 /** Running work is interrupted on recovery; live host sessions are never assumed resumable. */
@@ -134,9 +138,10 @@ export const markInterruptedOnRecovery = <T>(state: T): T => {
 export const createDurableStateStore = async <T>(options: DurableStateOptions<T>): Promise<DurableStateStore<T>> => {
   const maxStateBytes = options.maxStateBytes ?? 4 * 1024 * 1024
   const maxJournalBytes = options.maxJournalBytes ?? 64 * 1024 * 1024
-  const snapshotEvery = options.snapshotEvery ?? 16
+  // 增量日志下 journal 增长缓慢：较大周期只会摊薄整份快照成本，不改变恢复正确性。
+  const snapshotEvery = options.snapshotEvery ?? 64
   if (![maxStateBytes, maxJournalBytes, snapshotEvery].every((n) => Number.isSafeInteger(n) && n > 0)) throw new StateStoreError('STATE_INVALID', 'Invalid state resource limits')
-  const validate = (value: unknown): { value: T; encoded: string; bytes: number } => {
+  const validateFull = (value: unknown): { value: T; encoded: string; bytes: number } => {
     const encoded = canonicalStateJson(value)
     const bytes = Buffer.byteLength(encoded, 'utf8')
     if (bytes > maxStateBytes) throw new StateStoreError('STATE_TOO_LARGE', 'State exceeds byte limit')
@@ -146,12 +151,18 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
     }
     return { value: JSON.parse(encoded) as T, encoded, bytes }
   }
-  const initial = validate(options.initialState)
-  let state = initial.value
-  let stateEncoded = initial.encoded
-  let stateBytes = initial.bytes
+  const assertValidation = (result: StateValidationResult): void => {
+    if (result !== true && (typeof result !== 'object' || result === null || result.ok !== true)) throw new StateStoreError('STATE_INVALID', validationFailureMessage(result))
+  }
+  const initial = validateFull(options.initialState)
+  const segmentSpecs: SegmentSpecs = options.segments ?? {}
+  // 分片根哈希依赖段布局：把布局指纹写进每一行，避免用不同布局打开同一目录时报出难以定位的校验和不符。
+  const layoutId = checksumText(canonicalStateJson(Object.entries(segmentSpecs).sort(([left], [right]) => left < right ? -1 : 1).map(([name, spec]) => [name, spec.kind])))
+  let chunked = ChunkedState.fromState(initial.value, segmentSpecs, { verified: true })
+  let state = deepFreeze(chunked.materialize()) as T
+  let stateBytes = chunked.getStateBytes()
+  let stateChecksum = chunked.rootChecksum()
   let sequence = 0
-  let stateChecksum = checksumText(stateEncoded)
   let journalBytes = 0
   let closed = false
   let failed = false
@@ -196,10 +207,16 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
         const parsed: unknown = JSON.parse(raw)
         if (!snapshotValid(parsed)) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot checksum/schema mismatch')
         snapshot = parsed as Snapshot<T>
-        const validated = validate(snapshot.state)
-        state = validated.value; stateEncoded = validated.encoded; stateBytes = validated.bytes
-        sequence = snapshot.sequence; stateChecksum = snapshot.checksum
+        const validated = validateFull(snapshot.state)
+        chunked = ChunkedState.fromState(validated.value, segmentSpecs, { verified: true })
+        state = deepFreeze(chunked.materialize()) as T
+        stateBytes = chunked.getStateBytes()
+        stateChecksum = chunked.rootChecksum()
+        sequence = snapshot.sequence
       } catch (error) { if (!missing(error)) throw error }
+      // 旧格式（v1）行的链值不是分片根哈希；单独跟踪，升级后新行一律使用 v2 根哈希链。
+      let legacyChecksum = snapshot?.checksum ?? checksumText(initial.encoded)
+      let sawUpgradedEntry = false
       let journal = ''
       let journalPresent = false
       try {
@@ -212,33 +229,117 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       journalBytes = Buffer.byteLength(journal)
       if (journalBytes > maxJournalBytes || (journal !== '' && !journal.endsWith('\n'))) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal is oversized or has an incomplete committed record')
       for (const line of journal.split('\n').filter(Boolean)) {
-        const entry: JournalEntry<T> = JSON.parse(line)
+        const raw: unknown = JSON.parse(line)
+        if (!journalShape(raw)) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal checksum/schema mismatch')
+        const entry = raw
         const { entryChecksum, ...payload } = entry
-        if (!snapshotValid(entry) || entryChecksum !== checksum(payload) || typeof entry.type !== 'string' || typeof entry.previousChecksum !== 'string') throw new StateStoreError('RECOVERY_REQUIRED', 'Journal checksum/schema mismatch')
+        if (entryChecksum !== checksumText(canonicalStateJson(payload))) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal checksum/schema mismatch')
         if (entry.sequence <= sequence) {
-          if (entry.sequence === sequence && entry.checksum !== stateChecksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot and journal disagree')
+          // 与快照同序号的行可能来自升级前的 v1 写入（例如压缩时快照已落盘、日志清空未完成的崩溃窗口）：
+          // 它的链值是整份状态的校验和，而不是分片根哈希，必须按代际选择比较基准。
+          const expectedChecksum = entry.schemaVersion === 2 ? stateChecksum : legacyChecksum
+          if (entry.sequence === sequence && entry.checksum !== expectedChecksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot and journal disagree')
           continue
         }
-        if (entry.sequence !== sequence + 1 || entry.previousChecksum !== stateChecksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal sequence or ancestry mismatch')
-        const validated = validate(entry.state)
-        state = validated.value; stateEncoded = validated.encoded; stateBytes = validated.bytes
-        sequence = entry.sequence; stateChecksum = entry.checksum
+        if (entry.sequence !== sequence + 1) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal sequence or ancestry mismatch')
+        if (entry.schemaVersion === 2) {
+          if (entry.layout !== layoutId) throw new StateStoreError('RECOVERY_REQUIRED', 'State journal was written with a different chunk layout')
+          if (entry.previousChecksum !== stateChecksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal sequence or ancestry mismatch')
+          let next: ChunkedState
+          if (entry.state !== undefined) {
+            next = ChunkedState.fromState(entry.state, segmentSpecs, { verified: true })
+          } else if (entry.changes !== null && typeof entry.changes === 'object' && !Array.isArray(entry.changes)) {
+            next = chunked.applyEncoded(entry.changes as Parameters<typeof chunked.applyEncoded>[0])
+          } else throw new StateStoreError('RECOVERY_REQUIRED', 'Journal entry carries neither state nor changes')
+          if (next.rootChecksum() !== entry.checksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal checksum mismatch')
+          if (next.getStateBytes() > maxStateBytes) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal state exceeds byte limit')
+          chunked = next
+          state = deepFreeze(chunked.materialize()) as T
+          stateBytes = chunked.getStateBytes()
+          stateChecksum = entry.checksum
+          sawUpgradedEntry = true
+        } else {
+          if (sawUpgradedEntry) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal mixes legacy entries after upgraded entries')
+          if (!snapshotValid(entry)) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal checksum/schema mismatch')
+          if (entry.previousChecksum !== legacyChecksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal sequence or ancestry mismatch')
+          const validated = validateFull(entry.state)
+          chunked = ChunkedState.fromState(validated.value, segmentSpecs, { verified: true })
+          state = deepFreeze(chunked.materialize()) as T
+          stateBytes = chunked.getStateBytes()
+          stateChecksum = chunked.rootChecksum()
+          legacyChecksum = entry.checksum
+        }
+        sequence = entry.sequence
       }
-      if (snapshot === undefined) {
-        if (sequence !== 0) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal has no initial trusted snapshot')
-        await atomicStateFile(directory, 'snapshot.json', stateEnvelope({ schemaVersion: 1, sequence, checksum: stateChecksum }, stateEncoded))
+      const writeSnapshot = async (atSequence: number): Promise<void> => {
+        const encoded = chunked.encode()
+        await atomicStateFile(directory, 'snapshot.json', stateEnvelope({ schemaVersion: 1, sequence: atSequence, checksum: checksumText(encoded) }, encoded))
       }
+      const clearJournal = async (): Promise<void> => { await atomicStateFile(directory, 'journal.jsonl', ''); journalBytes = 0 }
+      if (snapshot === undefined && sequence === 0) await writeSnapshot(0)
       // The first journal directory entry must be durable before any committed append is acknowledged.
-      if (!journalPresent) await atomicStateFile(directory, 'journal.jsonl', '')
+      if (!journalPresent) await clearJournal()
     } catch (error) {
       await clearOwnOwner().catch(() => undefined)
       if (error instanceof StateStoreError) throw error
       throw new StateStoreError('RECOVERY_REQUIRED', 'Cannot recover trusted state: ' + (error instanceof Error ? error.message : String(error)))
     }
   }
+  const writeSnapshot = async (atSequence: number): Promise<void> => {
+    const encoded = chunked.encode()
+    await atomicStateFile(directory, 'snapshot.json', stateEnvelope({ schemaVersion: 1, sequence: atSequence, checksum: checksumText(encoded) }, encoded))
+  }
+  const clearJournal = async (): Promise<void> => { await atomicStateFile(directory, 'journal.jsonl', ''); journalBytes = 0 }
+  const appendJournal = async (fields: Record<string, unknown>): Promise<void> => {
+    const payload = canonicalStateJson(fields)
+    const line = canonicalStateJson({ ...fields, entryChecksum: checksumText(payload) }) + '\n'
+    const lineBytes = Buffer.byteLength(line, 'utf8')
+    if (lineBytes > maxJournalBytes) throw new StateStoreError('STATE_TOO_LARGE', 'One committed state exceeds the journal capacity')
+    try {
+      if (journalBytes + lineBytes > maxJournalBytes) {
+        await writeSnapshot(sequence)
+        await clearJournal()
+      }
+      const journalPath = join(directory, 'journal.jsonl')
+      try { if ((await lstat(journalPath)).isSymbolicLink()) throw new StateStoreError('STATE_INVALID', 'Journal cannot be a symlink') } catch (error) { if (!missing(error)) throw error }
+      const handle = await open(journalPath, 'a', 0o600)
+      try { await handle.writeFile(line, 'utf8'); await handle.sync() } finally { await handle.close() }
+      journalBytes += lineBytes
+    } catch (error) { failed = true; throw new StateStoreError('RECOVERY_REQUIRED', 'Durable commit failed: ' + (error instanceof Error ? error.message : String(error))) }
+  }
+  const compactIfDue = async (): Promise<void> => {
+    if (!store.durable || sequence % snapshotEvery !== 0) return
+    try {
+      await writeSnapshot(sequence)
+      await clearJournal()
+    } catch { failed = true }
+  }
+  const buildChanges = (patch: StatePatch, preview: { encoded: Record<string, Record<string, { encoded: string }>>; next: ChunkedState }): Record<string, unknown> => {
+    const { encoded, next } = preview
+    const changes: Record<string, unknown> = {}
+    const segments = new Set([...Object.keys(patch.set ?? {}), ...Object.keys(patch.remove ?? {}), ...Object.keys(patch.order ?? {}), ...Object.keys(patch.whole ?? {})])
+    for (const segment of segments) {
+      const out: Record<string, unknown> = {}
+      // 列表段的键序必须显式入日志：canonical JSON 按键名排序对象字段，回放不能依赖 set 的键序。
+      const order = next.order(segment)
+      if (order !== undefined) out.order = [...order]
+      const remove = patch.remove?.[segment]
+      if (remove !== undefined) out.remove = [...remove]
+      if (patch.whole !== undefined && segment in patch.whole) out.whole = encoded[segment]?.['']?.encoded ?? (() => { throw new StateStoreError('STATE_INVALID', 'Missing encoded whole chunk') })()
+      const set = patch.set?.[segment]
+      if (set !== undefined) out.set = Object.fromEntries(Object.keys(set).map((key) => {
+        const chunk = encoded[segment]?.[key]
+        if (chunk === undefined) throw new StateStoreError('STATE_INVALID', 'Missing encoded chunk')
+        return [key, chunk.encoded]
+      }))
+      changes[segment] = out
+    }
+    return changes
+  }
   const store: DurableStateStore<T> = {
     directory, durable: options.enabled !== false, maxStateBytes,
     getStateBytes: () => stateBytes,
+    getRootChecksum: () => stateChecksum,
     read: () => { if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed'); return copy(state) },
     readPath: <R = unknown>(path: readonly (string | number)[]): R | undefined => {
       if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed')
@@ -271,38 +372,44 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       if (typeof type !== 'string' || type.length < 1 || type.length > 120) throw new StateStoreError('STATE_INVALID', 'Invalid event type')
       const draft = copy(state)
       const returned = await mutate(draft)
-      const next = validate(returned === undefined ? draft : returned)
-      const nextChecksum = checksumText(next.encoded)
-      if (store.durable) {
-        const fields = { schemaVersion: 1 as const, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type }
-        const payload = stateEnvelope(fields, next.encoded)
-        const line = stateEnvelope({ ...fields, entryChecksum: checksumText(payload) }, next.encoded) + '\n'
-        const lineBytes = Buffer.byteLength(line, 'utf8')
-        if (lineBytes > maxJournalBytes) throw new StateStoreError('STATE_TOO_LARGE', 'One committed state exceeds the journal capacity')
-        try {
-          if (journalBytes + lineBytes > maxJournalBytes) {
-            await atomicStateFile(directory, 'snapshot.json', stateEnvelope({ schemaVersion: 1, sequence, checksum: stateChecksum }, stateEncoded))
-            await atomicStateFile(directory, 'journal.jsonl', '')
-            journalBytes = 0
-          }
-          const journalPath = join(directory, 'journal.jsonl')
-          try { if ((await lstat(journalPath)).isSymbolicLink()) throw new StateStoreError('STATE_INVALID', 'Journal cannot be a symlink') } catch (error) { if (!missing(error)) throw error }
-          const handle = await open(journalPath, 'a', 0o600)
-          try { await handle.writeFile(line, 'utf8'); await handle.sync() } finally { await handle.close() }
-          journalBytes += lineBytes
-        } catch (error) { failed = true; throw new StateStoreError('RECOVERY_REQUIRED', 'Durable commit failed: ' + (error instanceof Error ? error.message : String(error))) }
-      }
-      state = next.value; stateEncoded = next.encoded; stateBytes = next.bytes
-      sequence++; stateChecksum = nextChecksum
-      if (store.durable && sequence % snapshotEvery === 0) {
-        // Journal is already durable. Compaction failure must not pretend the committed transaction was rolled back.
-        try {
-          await atomicStateFile(directory, 'snapshot.json', stateEnvelope({ schemaVersion: 1, sequence, checksum: stateChecksum }, stateEncoded))
-          await atomicStateFile(directory, 'journal.jsonl', '')
-          journalBytes = 0
-        } catch { failed = true }
-      }
+      const next = validateFull(returned === undefined ? draft : returned)
+      const nextChunked = ChunkedState.fromState(next.value, segmentSpecs, { verified: true })
+      const nextChecksum = nextChunked.rootChecksum()
+      if (store.durable) await appendJournal({ schemaVersion: 2, layout: layoutId, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, state: next.value })
+      chunked = nextChunked
+      state = deepFreeze(chunked.materialize()) as T
+      stateBytes = chunked.getStateBytes()
+      stateChecksum = nextChecksum
+      sequence++
+      await compactIfDue()
       return copy(state)
+    }),
+    update: (type, write) => mutex.run(async () => {
+      if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed')
+      if (failed) throw new StateStoreError('RECOVERY_REQUIRED', 'A previous durable write failed; reconcile before further commits')
+      if (typeof type !== 'string' || type.length < 1 || type.length > 120) throw new StateStoreError('STATE_INVALID', 'Invalid event type')
+      // build 形式在互斥区内求值：调用方读到的就是本次提交的基线，读-改-写不再有竞态窗口。
+      const normalized = normalizeStatePatch('build' in write ? await write.build(state) : write.patch)
+      const preview = chunked.preview(normalized)
+      // 与已提交分片逐字节一致的补丁不写日志、不消耗序列号：重复提交同一内容保持幂等。
+      if (!preview.changed) return { sequence, changed: false }
+      const nextBytes = preview.next.getStateBytes()
+      if (nextBytes > maxStateBytes) throw new StateStoreError('STATE_TOO_LARGE', 'State exceeds byte limit')
+      // 校验与提交使用同一个冻结视图：校验器看到的字节与被提交的状态完全一致。
+      const view = deepFreeze(preview.next.materialize()) as T
+      const changed = [...new Map([...preview.removed, ...preview.touched.map(({ segment, key }) => ({ segment, key }))]
+        .map((entry) => [entry.segment + '\u0000' + entry.key, entry])).values()]
+      if (options.validateIncremental !== undefined) assertValidation(options.validateIncremental(view, changed))
+      else if (options.validate !== undefined) assertValidation(options.validate(view))
+      const nextChecksum = preview.next.rootChecksum()
+      if (store.durable) await appendJournal({ schemaVersion: 2, layout: layoutId, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, changes: buildChanges(normalized, preview) })
+      chunked = preview.next
+      state = view
+      stateBytes = nextBytes
+      stateChecksum = nextChecksum
+      sequence++
+      await compactIfDue()
+      return { sequence, changed: true }
     }),
     dispose: () => mutex.run(async () => {
       if (closed) return
@@ -312,8 +419,8 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
   }
   if (options.recover !== undefined && sequence > 0) {
     try {
-      const recovered = validate(options.recover(copy(state)))
-      if (checksumText(recovered.encoded) !== stateChecksum) await store.commit('state/recovered', () => recovered.value)
+      const recovered = validateFull(options.recover(copy(state)))
+      if (recovered.encoded !== chunked.encode()) await store.commit('state/recovered', () => copy(recovered.value))
     } catch (error) {
       closed = true
       await clearOwnOwner().catch(() => undefined)

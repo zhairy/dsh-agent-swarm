@@ -10,6 +10,8 @@ export const STATE_PROVIDER = 'swarm-state-consistency-provider'
 const pluginRoot = process.env.SWARM_PLUGIN_ROOT || fileURLToPath(new URL('../../../', import.meta.url))
 const { getWorkspaceId } = await import(pathToFileURL(join(pluginRoot, 'lib/artifacts.js')))
 const { digest } = await import(pathToFileURL(join(pluginRoot, 'lib/task-model.js')))
+// 增量日志行只携带变更分片：观察提交状态必须按与恢复器相同的分片语义回放。
+const { ChunkedState, SWARM_SEGMENT_SPECS } = await import(pathToFileURL(join(pluginRoot, 'lib/state-chunks.js')))
 const textOf = message => (message?.content ?? []).filter(block => block.type === 'text').map(block => block.text).join('')
 
 function* text(value) {
@@ -45,8 +47,17 @@ export const apply = ctx => {
   let rootStep = 0, finished = false, stateDirectory
   const committed = () => {
     const snapshot = JSON.parse(readFileSync(join(stateDirectory, 'snapshot.json'), 'utf8'))
-    const journal = readFileSync(join(stateDirectory, 'journal.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
-    return [snapshot, ...journal].reduce((latest, entry) => entry.sequence > latest.sequence ? entry : latest)
+    let chunked = ChunkedState.fromState(snapshot.state, SWARM_SEGMENT_SPECS, { verified: true })
+    let sequence = snapshot.sequence
+    for (const line of readFileSync(join(stateDirectory, 'journal.jsonl'), 'utf8').split('\n').filter(Boolean)) {
+      const entry = JSON.parse(line)
+      if (entry.sequence <= sequence) continue
+      chunked = entry.changes === undefined
+        ? ChunkedState.fromState(entry.state, SWARM_SEGMENT_SPECS, { verified: true })
+        : chunked.applyEncoded(entry.changes)
+      sequence = entry.sequence
+    }
+    return { sequence, state: chunked.materialize() }
   }
   const finish = (status, extra = {}) => {
     if (finished) return

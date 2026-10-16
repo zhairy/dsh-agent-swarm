@@ -55,7 +55,14 @@ export interface ContextStore {
   Read: (binding: ContextBindingInfo, ref: string, options?: { cursor?: string; limit?: number; expectedDigest?: string }) => ContextPageInfo
   List: (binding: ContextBindingInfo) => Array<Pick<ContextPageInfo, 'ref' | 'digest' | 'layer' | 'kind' | 'totalBytes' | 'cardRevision' | 'workflowRevision' | 'requestRevision'>>
   DelTask: (rootSessionId: string, taskId: string) => void
+  /** 取走并清空自上次确认以来被新增/替换或删除的材料引用；缺失时调用方回退全量快照提交。 */
+  takeDirty?: () => ContextStoreDirty
+  /** 提交失败时把取走的脏键放回；成功路径不需要调用。 */
+  restoreDirty?: (dirty: ContextStoreDirty) => void
 }
+
+/** 材料存储的增量脏键：set 为新增/替换，removed 为删除。 */
+export interface ContextStoreDirty { readonly set: readonly string[]; readonly removed: readonly string[] }
 
 /** 受控引用读取；ID 不是授权，始终检查根、工作区、任务、版本与盲审权限。 */
 export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactBytes?: number; maxPageChars?: number; getByteBudget?: () => number } = {}): ContextStore => {
@@ -69,6 +76,11 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
   const byTask = new Map<string, { refs: Set<string>; version: number }>()
   const replacements = new Map<string, symbol>()
   let rollbackSlots = 0
+  // 写入口脏追踪：状态增量提交只编码被触碰的材料分片；提交失败时保留，重试会再次携带。
+  const dirtyRefs = new Set<string>()
+  const removedRefs = new Set<string>()
+  const markSet = (ref: string): void => { dirtyRefs.add(ref); removedRefs.delete(ref) }
+  const markRemoved = (ref: string): void => { dirtyRefs.delete(ref); removedRefs.add(ref) }
   const maxArtifacts = limits.maxArtifacts ?? 512
   const maxArtifactBytes = limits.maxArtifactBytes ?? 1024 * 1024
   const maxPageChars = limits.maxPageChars ?? 8000
@@ -90,6 +102,7 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
     encodedBytes.set(artifact.ref, size)
     totalEncodedBytes += size
     store.set(artifact.ref, artifact)
+    markSet(artifact.ref)
     const key = taskKey(artifact.binding)
     let group = byTask.get(key)
     if (!group) { group = { refs: new Set(), version: 0 }; byTask.set(key, group) }
@@ -97,6 +110,7 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
   }
   const remove = (artifact: ContextArtifactInfo) => {
     store.delete(artifact.ref)
+    markRemoved(artifact.ref)
     totalEncodedBytes -= encodedBytes.get(artifact.ref) ?? 0
     encodedBytes.delete(artifact.ref)
     const key = taskKey(artifact.binding), group = byTask.get(key)
@@ -239,6 +253,15 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
     DelTask: (rootSessionId, taskId) => {
       const key = taskKey({ rootSessionId, taskId }); mutable(key)
       for (const ref of [...(byTask.get(key)?.refs ?? [])]) remove(store.get(ref)!)
+    },
+    takeDirty: () => {
+      const snapshot: ContextStoreDirty = { set: [...dirtyRefs], removed: [...removedRefs] }
+      dirtyRefs.clear(); removedRefs.clear()
+      return snapshot
+    },
+    restoreDirty: (dirty) => {
+      for (const ref of dirty.set) dirtyRefs.add(ref)
+      for (const ref of dirty.removed) removedRefs.add(ref)
     }
   }
 }

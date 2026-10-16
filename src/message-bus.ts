@@ -126,20 +126,21 @@ export const createMessageBus = <T extends MessageState>(options: MessageBusOpti
       const id = input.messageId ?? randomUUID()
       if (!uuid.test(id)) throw new MessageBusError('MESSAGE_INVALID', 'Message id must be a UUID')
       let message!: ExpertMessage
-      await options.store.commit('message/send', async (draft) => {
-        const sender = current(draft, agentId, 'message-send')
-        const recipient = draft.bindings[input.toAgentId]
+      // 补丁在 store 的互斥区内按冻结基线求值；信箱文件先落盘再提交索引，与旧顺序一致。
+      await options.store.update('message/send', { build: async (state) => {
+        const sender = current(state, agentId, 'message-send')
+        const recipient = state.bindings[input.toAgentId]
         if (recipient === undefined || recipient.state !== 'active' || !recipient.permissions.includes('message-read')) throw new MessageBusError('RECEIVER_UNAVAILABLE', 'Recipient is not an active authorized host-bound attempt')
         if (recipient.blindReview || !matchingScope(sender, recipient) || sender.taskId !== input.taskId) throw new MessageBusError('IDENTITY_DENIED', 'Messages cannot cross root/workspace/task/revision or blind-review boundaries')
         if (artifactRefs.some((ref) => options.validateArtifactRef === undefined || !options.validateArtifactRef(ref, sender) || !options.validateArtifactRef(ref, recipient))) throw new MessageBusError('IDENTITY_DENIED', 'Artifact reference is not authorized for both peers')
-        const existing = draft.messages[id]
+        const existing = state.messages[id]
         if (existing !== undefined) {
           if (existing.fromAgentId !== agentId || existing.senderGeneration !== sender.generation || existing.senderLeaseEpoch !== sender.leaseEpoch || existing.toAgentId !== input.toAgentId || existing.recipientGeneration !== recipient.generation || existing.recipientLeaseEpoch !== recipient.leaseEpoch || (existing.requestRevision ?? 1) !== (sender.requestRevision ?? 1) || existing.summary !== input.summary || existing.kind !== input.kind || canonicalStateJson(existing.artifactRefs) !== canonicalStateJson(artifactRefs) || existing.correlationId !== input.correlationId) throw new MessageBusError('MESSAGE_CONFLICT', 'Message id was already committed with different content or identity')
           await verifyMessageFile(existing)
-          message = existing; return
+          message = existing; return {}
         }
-        if (Object.keys(draft.messages).length >= maxRetained) throw new MessageBusError('MESSAGE_LIMIT', `Retained message capacity reached (${maxRetained}); ACK/expiry do not reclaim retained records. Host maintenance is required; no public archive command is available and no referenced evidence was deleted`)
-        const pending = Object.values(draft.messages).filter((m) => m.taskId === sender.taskId && m.expiresAt > now() && !draft.messageAcks[m.toAgentId + ':' + m.recipientGeneration + ':' + m.recipientLeaseEpoch]?.[m.id]).length
+        if (Object.keys(state.messages).length >= maxRetained) throw new MessageBusError('MESSAGE_LIMIT', `Retained message capacity reached (${maxRetained}); ACK/expiry do not reclaim retained records. Host maintenance is required; no public archive command is available and no referenced evidence was deleted`)
+        const pending = Object.values(state.messages).filter((m) => m.taskId === sender.taskId && m.expiresAt > now() && !state.messageAcks[m.toAgentId + ':' + m.recipientGeneration + ':' + m.recipientLeaseEpoch]?.[m.id]).length
         if (pending >= maxPending) throw new MessageBusError('MESSAGE_LIMIT', `Task pending message capacity reached (${maxPending}); recipients can read and ACK outstanding messages, or wait for expiry`)
         const createdAt = now()
         const payload = {
@@ -157,8 +158,8 @@ export const createMessageBus = <T extends MessageState>(options: MessageBusOpti
         if (Buffer.byteLength(encoded, 'utf8') > maxEnvelopeBytes) throw new MessageBusError('MESSAGE_LIMIT', 'Message envelope is too large')
         const directory = await ensureMailbox(message.toThreadId)
         await atomicStateFile(directory, 'message-' + id + '.json', encoded)
-        draft.messages[id] = message
-      })
+        return { set: { messages: { [id]: message } } }
+      } })
       return structuredClone(message)
     },
     pull: async (agentId, input = {}) => {
@@ -186,18 +187,18 @@ export const createMessageBus = <T extends MessageState>(options: MessageBusOpti
     ack: async (agentId, input) => {
       if (!Array.isArray(input.messageIds) || input.messageIds.length > 32 || input.messageIds.some((id) => !uuid.test(id))) throw new MessageBusError('MESSAGE_INVALID', 'ACK expects at most 32 UUID message identifiers')
       let acknowledged: string[] = []
-      await options.store.commit('message/ack', (draft) => {
-        const recipient = current(draft, agentId, 'message-read')
+      await options.store.update('message/ack', { build: (state) => {
+        const recipient = current(state, agentId, 'message-read')
         const key = bindingKey(recipient)
-        const mailbox = draft.messageAcks[key] ?? {}
+        const mailbox = { ...(state.messageAcks[key] ?? {}) }
         for (const id of new Set(input.messageIds)) {
-          const message = draft.messages[id]
-          if (message === undefined || !isDeliverable(draft, message, recipient)) throw new MessageBusError('IDENTITY_DENIED', 'Cannot ACK unknown, stale or another recipient message')
+          const message = state.messages[id]
+          if (message === undefined || !isDeliverable(state, message, recipient)) throw new MessageBusError('IDENTITY_DENIED', 'Cannot ACK unknown, stale or another recipient message')
           mailbox[id] = mailbox[id] ?? { messageId: id, recipientBinding: key, acknowledgedAt: now() }
         }
-        draft.messageAcks[key] = mailbox
         acknowledged = [...new Set(input.messageIds)]
-      })
+        return { set: { messageAcks: { [key]: mailbox } } }
+      } })
       return { acknowledged }
     }
   }

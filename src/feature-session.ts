@@ -4,6 +4,7 @@ import type { SwarmConfigInfo } from './config.js'
 import type { DelegationRecord, TaskRecord, TaskStore } from './evidence.js'
 import type { ThreadInfo, ThreadRegistry } from './threads.js'
 import { atomicStateFile, canonicalStateJson, createDurableStateStore, StateStoreError, type DurableStateStore, type StateValidationReport } from './state-store.js'
+import { SWARM_SEGMENT_SPECS, type StatePatch } from './state-chunks.js'
 import { createAgentBindingRegistry, validateBinding, bindingKey, type AgentBindingRegistry } from './agent-binding.js'
 import { createMessageBus, type MessageBus, type MessageState } from './message-bus.js'
 import { createExperienceRepository, ExperienceError, type ExperienceEntry, type ExperienceReview, type ExperienceState } from './experience.js'
@@ -85,6 +86,13 @@ const positive = (raw: unknown) => Number.isSafeInteger(raw) && Number(raw) >= 1
 const optionalRevision = (raw: unknown) => raw === undefined || positive(raw)
 const hashPattern = /^[a-f0-9]{64}$/i
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * 已通过完整材料校验的冻结对象。分片值在入库前深冻结且未触碰时复用同一引用，
+ * 因此引用身份即内容身份：增量提交复现未触碰材料时可跳过 text 摘要重算与深拷贝，
+ * 而材料字节正是状态体积的主体，这一步让提交成本不再随材料字节线性增长。
+ */
+const verifiedFrozenContexts = new WeakSet<object>()
 
 /** Only stable quarantine facts are durable. A process-local half-open claimant is never resumed. */
 export const validatePersistedRouteHealth = validateRouteHealthSnapshot
@@ -217,7 +225,10 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
     const material = new Map<string, ContextArtifactInfo>()
     for (const [index, context] of state.contexts.entries()) {
       at(`$.contexts[${index}]`, 'CONTEXT_FORMAT')
-      const restored = restoredContexts.Restore(context)
+      // 冻结且此前完整校验通过的对象直接复用：字段与交叉检查照旧执行，只有 text 摘要重算被跳过。
+      const reusable = object(context) && Object.isFrozen(context) && verifiedFrozenContexts.has(context)
+      const restored = reusable ? context as unknown as ContextArtifactInfo : restoredContexts.Restore(context)
+      if (!reusable && object(context) && Object.isFrozen(context)) verifiedFrozenContexts.add(context)
       at(`$.contexts[${index}].binding`, 'CONTEXT_OWNER_BINDING')
       if (material.has(restored.ref) || restored.binding.rootSessionId !== expected.rootSessionId || restored.binding.workspaceId !== expected.workspaceId || !tasks.has(restored.binding.taskId)) return invalid()
       const task = tasks.get(restored.binding.taskId)!
@@ -346,7 +357,7 @@ export const createFeatureSession = async (input: {
   const configuredLimit = input.config.persistence.maxStateBytes
   const store = await createDurableStateStore({ directory, initialState: handoff === undefined ? initialState : recover(handoff.state), enabled: input.config.persistence.enabled,
     ...(configuredLimit > 0 ? { maxStateBytes: configuredLimit } : input.config.persistence.enabled ? {} : { maxStateBytes: MEMORY_MODE_MAX_STATE_BYTES }),
-    validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }), recover })
+    validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }), segments: SWARM_SEGMENT_SPECS, recover })
   const saved = store.read()
   // Older versions charged planning review reservations against implementation calls.
   // Preserve sent work and observation records, but classify these known reservations correctly.
@@ -375,6 +386,8 @@ export const createFeatureSession = async (input: {
   const contextArtifacts = new Map(saved.contexts.map((artifact) => [artifact.ref, artifact]))
   for (const artifact of saved.contexts) contexts.Restore(artifact, artifact.binding)
   committedContextBytes = contexts.getTotalEncodedBytes()
+  // 装载的材料来自已提交状态，不需要在首次增量提交时重写一遍。
+  if (contexts.takeDirty !== undefined) contexts.takeDirty()
   // 路由健康 sidecar：与任务状态容量解耦；写失败仍然是 fail-closed（由 route-state 的故障域契约决定是否拦截请求）。
   const healthDirectory = join(directory, 'route-health')
   const healthPath = join(healthDirectory, 'snapshot.json')
@@ -491,6 +504,55 @@ export const createFeatureSession = async (input: {
       return actual !== undefined && getCanonicalJson(actual) === getCanonicalJson(supplied)
     }
   })
+  // 增量提交装配器：各存储的写入口记录脏键，persist 只把这些脏键翻译成"变更分片"补丁。
+  // 未触碰分片沿用已提交缓存；提交失败时脏键保留，重试会再次携带同一批键。
+  const committedBudgetSignatures = new Map<string, string>()
+  const committedPlanningBudgetSignatures = new Map<string, string>()
+  const committedControlSignatures = new Map<string, string>()
+  let committedRuntimeSignature: string | undefined
+
+  /** 增量提交超限诊断：只重编码本次变更分片，不在错误路径深拷贝完整状态。 */
+  const describeIncrementalCapacityExceeded = (patch: StatePatch): SwarmError => {
+    const mib = (bytes: number): string => `${(bytes / 1048576).toFixed(2)} MiB`
+    const sizes = Object.entries(patch.set ?? {}).map(([segment, entries]) => {
+      let bytes = 0
+      for (const value of Object.values(entries)) bytes += Buffer.byteLength(canonicalStateJson(value), 'utf8')
+      return [segment, bytes] as [string, number]
+    }).sort((left, right) => right[1] - left[1])
+    const patchBytes = sizes.reduce((sum, [, bytes]) => sum + bytes, 0)
+    const detail = sizes.length === 0 ? '' : `；最大变更段 ${sizes.slice(0, 3).map(([segment, bytes]) => `${segment} ${mib(bytes)}`).join('、')}`
+    return new SwarmError('CAPACITY_EXCEEDED', `会话完整状态超过容量上限（当前 ${mib(store.getStateBytes())} + 本次变更 ${mib(patchBytes)}，上限 ${mib(store.maxStateBytes)}${detail}）。完整状态未被部分写入；请结束当前任务后在新会话中继续，或在设置中提高 persistence.maxStateBytes（内存态默认 16 MiB，持久化默认 4 MiB）`)
+  }
+
+  /** 无脏追踪的存储（测试替身或外部实现）回退到全量快照提交，保留既有语义。 */
+  const persistFull = async (type: string, tasks: TaskStore, threads: ThreadRegistry): Promise<void> => {
+    // Capture every owned collection synchronously at the call boundary.
+    // Sampling only tasks here and contexts/controls later in the queue mixed
+    // different versions. Sampling everything later could publish a different
+    // operation's uncommitted task revision before its own commit succeeds.
+    const detach = <T>(value: T): T => JSON.parse(getCanonicalJson(value)) as T
+    const taskSnapshot = tasks.getTasks()
+    const contextsSnapshotBytes = contexts.getTotalEncodedBytes()
+    const snapshot = detach({
+      tasks: taskSnapshot,
+      delegations: taskSnapshot.flatMap((task) => tasks.getTaskDelegations(task.taskId)),
+      threads: threads.list(), contexts: [...contextArtifacts.values()],
+      budgets: { ...saved.budgets, ...Object.fromEntries([...budgets].map(([key, value]) => [key, value.getSnapshot()])) },
+      planningBudgets: { ...saved.planningBudgets, ...Object.fromEntries([...planningBudgets].map(([key, value]) => [key, value.getSnapshot()])) },
+      ...(input.getAgentControls === undefined ? {} : { agentControls: input.getAgentControls() }),
+      ...(input.getRuntime === undefined ? {} : { runtime: input.getRuntime() })
+    })
+    try {
+      await store.commit(type, (draft) => {
+        Object.assign(draft, snapshot)
+      })
+    } catch (error) {
+      if (error instanceof StateStoreError && error.code === 'STATE_TOO_LARGE') throw describeCapacityExceeded(store, snapshot)
+      throw error
+    }
+    committedContextBytes = contextsSnapshotBytes
+  }
+
   return {
     workspaceId, store, bindings, bus, contexts, budgetFor, planningBudgetFor,
     getRestoredAgentControls: () => structuredClone(saved.agentControls ?? []),
@@ -540,30 +602,116 @@ export const createFeatureSession = async (input: {
     persistRouteHealth,
     readRouteHealth,
     persist: async (type, tasks, threads) => {
-      // Capture every owned collection synchronously at the call boundary.
-      // Sampling only tasks here and contexts/controls later in the queue mixed
-      // different versions. Sampling everything later could publish a different
-      // operation's uncommitted task revision before its own commit succeeds.
-      const detach = <T>(value: T): T => JSON.parse(getCanonicalJson(value)) as T
-      const taskSnapshot = tasks.getTasks()
+      const takeTaskDirty = tasks.takeDirty, restoreTaskDirty = tasks.restoreDirty
+      const takeThreadDirty = threads.takeDirty, restoreThreadDirty = threads.restoreDirty
+      const takeContextDirty = contexts.takeDirty, restoreContextDirty = contexts.restoreDirty
+      if (takeTaskDirty === undefined || restoreTaskDirty === undefined || takeThreadDirty === undefined || restoreThreadDirty === undefined
+        || takeContextDirty === undefined || restoreContextDirty === undefined) {
+        await persistFull(type, tasks, threads)
+        return
+      }
       const contextsSnapshotBytes = contexts.getTotalEncodedBytes()
-      const snapshot = detach({
-        tasks: taskSnapshot,
-        delegations: taskSnapshot.flatMap((task) => tasks.getTaskDelegations(task.taskId)),
-        threads: threads.list(), contexts: [...contextArtifacts.values()],
-        budgets: { ...saved.budgets, ...Object.fromEntries([...budgets].map(([key, value]) => [key, value.getSnapshot()])) },
-        planningBudgets: { ...saved.planningBudgets, ...Object.fromEntries([...planningBudgets].map(([key, value]) => [key, value.getSnapshot()])) },
-        ...(input.getAgentControls === undefined ? {} : { agentControls: input.getAgentControls() }),
-        ...(input.getRuntime === undefined ? {} : { runtime: input.getRuntime() })
-      })
+      const taskDirty = takeTaskDirty()
+      const threadDirty = takeThreadDirty()
+      const contextDirty = takeContextDirty()
+      const set: Record<string, Record<string, unknown>> = {}
+      const remove: Record<string, string[]> = {}
+      const whole: Record<string, unknown> = {}
+      const confirmations: Array<() => void> = []
+      const setSegment = (segment: string, entries: Record<string, unknown>): void => {
+        if (Object.keys(entries).length > 0) set[segment] = { ...(set[segment] ?? {}), ...entries }
+      }
+      const removeSegment = (segment: string, keys: readonly string[]): void => { if (keys.length > 0) remove[segment] = [...keys] }
+
+      const taskEntries: Record<string, unknown> = {}
+      for (const taskId of taskDirty.tasks) {
+        const task = tasks.getTask(taskId)
+        if (task !== undefined) taskEntries[taskId] = task
+      }
+      setSegment('tasks', taskEntries)
+      removeSegment('tasks', taskDirty.removedTasks)
+      const delegationEntries: Record<string, unknown> = {}
+      for (const delegationId of taskDirty.delegations) {
+        const record = tasks.getDelegation(delegationId)
+        if (record !== undefined) delegationEntries[delegationId] = record
+      }
+      setSegment('delegations', delegationEntries)
+      removeSegment('delegations', taskDirty.removedDelegations)
+
+      const threadEntries: Record<string, unknown> = {}
+      for (const threadId of threadDirty.threads) {
+        const thread = threads.get(threadId)
+        if (thread !== undefined) threadEntries[threadId] = thread
+      }
+      setSegment('threads', threadEntries)
+
+      const contextEntries: Record<string, unknown> = {}
+      for (const ref of contextDirty.set) {
+        const artifact = contextArtifacts.get(ref)
+        // 脏键与已提交索引不一致时 fail-closed：宁可拒绝提交也不写出与内存不符的状态。
+        if (artifact === undefined) throw new StateStoreError('STATE_INVALID', 'Dirty task material is missing from the committed index')
+        contextEntries[ref] = artifact
+      }
+      setSegment('contexts', contextEntries)
+      removeSegment('contexts', contextDirty.removed)
+
+      // 执行预算按项签名比对：项数等于任务数，成本与任务数同阶，不随材料字节增长。
+      const diffBudgets = (segment: string, source: Map<string, ExecutionBudget>, signatures: Map<string, string>): void => {
+        const entries: Record<string, unknown> = {}
+        for (const [taskId, budget] of source) {
+          const value = budget.getSnapshot()
+          const encoded = canonicalStateJson(value)
+          if (signatures.get(taskId) === encoded) continue
+          entries[taskId] = value
+          confirmations.push(() => signatures.set(taskId, encoded))
+        }
+        setSegment(segment, entries)
+      }
+      diffBudgets('budgets', budgets, committedBudgetSignatures)
+      diffBudgets('planningBudgets', planningBudgets, committedPlanningBudgetSignatures)
+
+      if (input.getAgentControls !== undefined) {
+        const controls = input.getAgentControls()
+        const controlEntries: Record<string, unknown> = {}
+        const seen = new Set<string>()
+        const signatures = new Map<string, string>()
+        for (const control of controls) {
+          const encoded = canonicalStateJson(control)
+          seen.add(control.childId)
+          signatures.set(control.childId, encoded)
+          if (committedControlSignatures.get(control.childId) !== encoded) controlEntries[control.childId] = control
+        }
+        setSegment('agentControls', controlEntries)
+        removeSegment('agentControls', [...committedControlSignatures.keys()].filter((childId) => !seen.has(childId)))
+        confirmations.push(() => { committedControlSignatures.clear(); for (const [childId, encoded] of signatures) committedControlSignatures.set(childId, encoded) })
+      }
+      if (input.getRuntime !== undefined) {
+        const runtime = input.getRuntime()
+        if (runtime !== undefined) {
+          const encoded = canonicalStateJson(runtime)
+          if (committedRuntimeSignature !== encoded) {
+            whole.runtime = runtime
+            confirmations.push(() => { committedRuntimeSignature = encoded })
+          }
+        }
+      }
+
+      const patch: StatePatch = {
+        ...(Object.keys(set).length === 0 ? {} : { set }),
+        ...(Object.keys(remove).length === 0 ? {} : { remove }),
+        ...(Object.keys(whole).length === 0 ? {} : { whole })
+      }
       try {
-        await store.commit(type, (draft) => {
-          Object.assign(draft, snapshot)
-        })
+        await store.update(type, { patch })
       } catch (error) {
-        if (error instanceof StateStoreError && error.code === 'STATE_TOO_LARGE') throw describeCapacityExceeded(store, snapshot)
+        // 脏键已在取走时清空：失败必须放回，否则这批修改会永久漏写。
+        restoreTaskDirty(taskDirty)
+        restoreThreadDirty(threadDirty)
+        restoreContextDirty(contextDirty)
+        if (error instanceof StateStoreError && error.code === 'STATE_TOO_LARGE') throw describeIncrementalCapacityExceeded(patch)
         throw error
       }
+      for (const confirm of confirmations) confirm()
       committedContextBytes = contextsSnapshotBytes
     },
     dispose: () => store.dispose()

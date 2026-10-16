@@ -10,6 +10,7 @@ import type { AgentLike, SubagentResultLike, SubagentStartRequestLike } from '..
 import { ROLE_TAG_PATTERN, type DelegableRoleId } from '../../src/role-registry.js'
 import { VALID_OUTPUTS } from '../fixtures/valid-outputs.js'
 import { createDurableStateStore } from '../../src/state-store.js'
+import { SWARM_SEGMENT_SPECS } from '../../src/state-chunks.js'
 import { getWorkspaceId } from '../../src/artifacts.js'
 import { digest } from '../../src/task-model.js'
 import type { EvidenceConsumptionNotice } from '../../src/evidence-assessment.js'
@@ -141,7 +142,7 @@ describe('exploration evidence through actual service delegation and consumption
     const listed = await runtime.service.ReadContext({ task_id: task.task_id }, runtime.exec()) as { materials: Array<{ ref: string }> }
     await runtime.service.dispose()
     const directory = join(runtime.home, 'share', 'dsh-agent-swarm', 'state', await getWorkspaceId(runtime.home), digest(runtime.root.id))
-    const store = await createDurableStateStore<Record<string, unknown>>({ directory, initialState: {} })
+    const store = await createDurableStateStore<Record<string, unknown>>({ directory, initialState: {}, segments: SWARM_SEGMENT_SPECS })
     const childId = 'fixture-persistent-recovery-child'
     try {
       await store.commit('fixture/control-idle-delegation-running', (draft) => {
@@ -259,7 +260,7 @@ describe('exploration evidence through actual service delegation and consumption
     const ref = await materialRef(runtime, task.task_id)
     await runtime.service.dispose()
     const directory = join(runtime.home, 'share', 'dsh-agent-swarm', 'state', await getWorkspaceId(runtime.home), digest(runtime.root.id))
-    const store = await createDurableStateStore<Record<string, unknown>>({ directory, initialState: {} })
+    const store = await createDurableStateStore<Record<string, unknown>>({ directory, initialState: {}, segments: SWARM_SEGMENT_SPECS })
     try {
       await store.commit('fixture/tampered-evidence-raw', (draft) => {
         const saved = (draft.delegations as Array<{ delegationId: string; structured: { findings: Array<{ evidence: string }> } }>).find((entry) => entry.delegationId === record.delegationId)!

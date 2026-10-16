@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { createDurableStateStore } from '../../src/state-store.js'
 import { createAgentBindingRegistry, type BindingInput, type BindingState } from '../../src/agent-binding.js'
+import { SWARM_SEGMENT_SPECS } from '../../src/state-chunks.js'
 
 const input: BindingInput = { agentId: 'actual-host-child', rootSessionId: 'root', workspaceId: 'workspace', taskId: 'task', nodeId: 'node', attemptId: 'attempt', threadId: 'thread', role: 'suan_heng', cardRevision: 1, workflowRevision: 1, permissions: ['pure-calc', 'message-read'], blindReview: true }
 describe('host-owned agent binding generations', () => {
   it('atomically replaces old attempts, keeps history and revokes capabilities on end', async () => {
-    const store = await createDurableStateStore<BindingState>({ directory: '/unused', enabled: false, initialState: { bindings: {}, bindingHistory: {} } })
+    const store = await createDurableStateStore<BindingState>({ directory: '/unused', enabled: false, initialState: { bindings: {}, bindingHistory: {} }, segments: SWARM_SEGMENT_SPECS })
     const registry = createAgentBindingRegistry(store)
     const first = await registry.bind(input)
     expect(registry.requireActive(input.agentId, 'pure-calc')).toEqual(first)
