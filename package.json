@@ -32,17 +32,18 @@
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
-    "lib",
-    "cordis.patch.yml",
-    "presets",
-    "skills",
-    "locale",
-    "config",
-    "docs",
-    "scripts/doctor.mjs",
     "README.md",
     "THIRD-PARTY-NOTICES.md",
-    "scripts/export-task-diagrams.mjs"
+    "config",
+    "cordis.patch.yml",
+    "docs",
+    "lib",
+    "locale",
+    "presets",
+    "scripts/doctor.mjs",
+    "scripts/export-task-diagrams.mjs",
+    "scripts/repair-state.mjs",
+    "skills"
   ],
   "scripts": {
     "bench:state": "npm run build && node --expose-gc scripts/bench-state-store.mjs",
