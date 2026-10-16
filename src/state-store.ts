@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { open, mkdir, readFile, rename, unlink, lstat, realpath } from 'node:fs/promises'
+import { open, mkdir, readFile, readdir, rename, unlink, lstat, realpath } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { hostname } from 'node:os'
 import { intMutex } from './util/mutex.js'
@@ -50,6 +50,14 @@ export interface DurableStateOptions<T> {
   recover?: (state: T) => T
   /** 顶层段的分片规格；未声明的段按 whole 处理（每次提交整段替换）。 */
   segments?: SegmentSpecs
+  /**
+   * 旧布局回放规格：日志行声明的布局不等于 `layoutVersion` 时按它回放。
+   * 缺省与 `segments` 相同（不存在布局迁移）。旧目录在这种情形下会在下一次写入时
+   * 自动补一条当前布局的全量行，之后的写入才是增量行。
+   */
+  legacySegments?: SegmentSpecs
+  /** 当前布局版本；日志行的 `layout` 必须等于它才能直接续写增量行。默认 1。 */
+  layoutVersion?: number
   enabled?: boolean
   maxStateBytes?: number
   maxJournalBytes?: number
@@ -70,7 +78,6 @@ const validationFailureMessage = (result: StateValidationResult): string => {
 
 // Only already-validated private state reaches this copier. Validation remains at every commit boundary.
 const copy = <T>(value: T): T => structuredClone(value)
-const stateEnvelope = (fields: Record<string, unknown>, encodedState: string): string => '{' + [...Object.keys(fields), 'state'].sort().map((key) => JSON.stringify(key) + ':' + (key === 'state' ? encodedState : canonicalStateJson(fields[key]))).join(',') + '}'
 const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.code === 'ENOENT'
 const syncDirectory = async (directory: string): Promise<void> => {
   const handle = await open(directory, 'r')
@@ -104,14 +111,28 @@ export const reconcileStoppedStateOwner = async (directory: string): Promise<boo
   return true
 }
 
-interface Snapshot<T> { schemaVersion: 1; sequence: number; checksum: string; state: T }
+interface Snapshot<T> { schemaVersion: 1; sequence: number; checksum: string; state: T; layout?: unknown; layoutFingerprint?: unknown }
 /** v1 行携带完整状态对象；v2 行携带 `state`（编码字符串）或 `changes`（增量分片编码）；两代都以 entryChecksum 自校验。 */
-interface JournalEntry { schemaVersion?: number; sequence: number; type: string; previousChecksum: string; checksum: string; state?: unknown; changes?: unknown; layout?: unknown; entryChecksum: string }
+interface JournalEntry { schemaVersion?: number; sequence: number; type: string; previousChecksum: string; checksum: string; state?: unknown; changes?: unknown; layout?: unknown; layoutFingerprint?: unknown; entryChecksum: string }
 const snapshotValid = (value: unknown): value is Snapshot<unknown> => {
   if (value === null || typeof value !== 'object') return false
   const record = value as Snapshot<unknown>
   return record.schemaVersion === 1 && Number.isSafeInteger(record.sequence) && record.sequence >= 0 && typeof record.checksum === 'string' && record.checksum === checksum(record.state)
 }
+/** 行/快照声明的布局版本：数字版本号才是当前格式；2.6.0 写的是布局哈希，一律视为 legacy。 */
+const readStoredLayout = (raw: unknown): number | undefined =>
+  typeof raw === 'number' && Number.isSafeInteger(raw) && raw > 0 ? raw : undefined
+/** 旧布局（行里没有数字版本号）在内存中的占位版本；只用于与 `currentLayout` 比较。 */
+const LEGACY_LAYOUT = 0
+
+/** 段布局指纹：段名 + 类型 + 是否分桶。版本号决定「能否续写」，指纹决定「规格是否真的对得上」。 */
+const layoutFingerprintOf = (specs: SegmentSpecs): string => checksumText(canonicalStateJson(
+  Object.entries(specs).sort(([left], [right]) => left < right ? -1 : 1).map(([name, spec]) => [name, spec.kind, spec.bucketOf !== undefined])
+))
+/** 2.6.0 的布局指纹算法（只含段名与类型）；旧行把它直接写在 `layout` 字段里。 */
+const legacyLayoutHashOf = (specs: SegmentSpecs): string => checksumText(canonicalStateJson(
+  Object.entries(specs).sort(([left], [right]) => left < right ? -1 : 1).map(([name, spec]) => [name, spec.kind])
+))
 const journalShape = (value: unknown): value is JournalEntry => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
   const record = value as JournalEntry
@@ -156,8 +177,22 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
   }
   const initial = validateFull(options.initialState)
   const segmentSpecs: SegmentSpecs = options.segments ?? {}
-  // 分片根哈希依赖段布局：把布局指纹写进每一行，避免用不同布局打开同一目录时报出难以定位的校验和不符。
-  const layoutId = checksumText(canonicalStateJson(Object.entries(segmentSpecs).sort(([left], [right]) => left < right ? -1 : 1).map(([name, spec]) => [name, spec.kind])))
+  const legacySpecs: SegmentSpecs = options.legacySegments ?? segmentSpecs
+  const currentLayout = options.layoutVersion ?? 1
+  if (!Number.isSafeInteger(currentLayout) || currentLayout < 1) throw new StateStoreError('STATE_INVALID', 'Invalid state layout version')
+  const currentFingerprint = layoutFingerprintOf(segmentSpecs)
+  const legacyFingerprint = layoutFingerprintOf(legacySpecs)
+  const legacyLayoutHash = legacyLayoutHashOf(legacySpecs)
+  /** 行声明的布局是否与期望规格一致：新行比对指纹，2.6.0 行比对它自带的布局哈希。 */
+  const layoutMatches = (entryLayout: number | undefined, fingerprint: unknown, rawLayout: unknown): boolean => {
+    if (entryLayout === currentLayout) return fingerprint === currentFingerprint
+    if (fingerprint !== undefined) return fingerprint === legacyFingerprint
+    return rawLayout === legacyLayoutHash
+  }
+  // 用旧布局打开的目录在下一次写入时补一条当前布局的全量行；之后的写入才是增量行。
+  let needsLayoutCommit = false
+  /** chunked 当前实际使用的布局；迁移前是 LEGACY_LAYOUT，迁移行之后是 currentLayout。 */
+  let chunkedLayout = currentLayout
   let chunked = ChunkedState.fromState(initial.value, segmentSpecs, { verified: true })
   let state = deepFreeze(chunked.materialize()) as T
   let stateBytes = chunked.getStateBytes()
@@ -179,6 +214,89 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
     } catch (error) { if (!missing(error)) throw error }
   }
   const mutex = intMutex()
+  const snapshotDirectory = join(directory, 'snapshot')
+  const snapshotSegmentFile = (name: string, fingerprint: string): string => `${name}.${fingerprint.slice(0, 16)}.json`
+  const pathWithin = (parent: string, name: string): string => {
+    if (!/^[A-Za-z][A-Za-z0-9._-]*\.json$/.test(name)) throw new StateStoreError('STATE_INVALID', 'Unsafe snapshot file name')
+    return join(parent, name)
+  }
+  const existingFile = async (path: string): Promise<boolean> => lstat(path).then(() => true, () => false)
+  /** 旧格式：单个 snapshot.json 承载整份状态。只读兼容，不再写入。 */
+  const readWholeSnapshot = async (): Promise<Snapshot<T> | undefined> => {
+    const snapshotPath = join(directory, 'snapshot.json')
+    let raw: string
+    try {
+      const metadata = await lstat(snapshotPath)
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > maxStateBytes + 1024) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot file is invalid')
+      raw = await readFile(snapshotPath, 'utf8')
+    } catch (error) { if (missing(error)) return undefined; throw error }
+    if (Buffer.byteLength(raw) > maxStateBytes + 1024) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot size is invalid')
+    const parsed: unknown = JSON.parse(raw)
+    if (!snapshotValid(parsed)) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot checksum/schema mismatch')
+    return parsed as Snapshot<T>
+  }
+  /**
+   * 按段快照：段文件按内容指纹命名并复用，因此一次快照只写发生变化的分片段，
+   * 未变段直接沿用上一次的文件；`meta.json` 最后原子替换，读取方只会看到完整的一代。
+   */
+  const readSegmentedSnapshot = async (): Promise<{ sequence: number; layout?: unknown; layoutFingerprint?: unknown; checksum: string; state: unknown } | undefined> => {
+    const metaPath = join(snapshotDirectory, 'meta.json')
+    let raw: string
+    try {
+      const metadata = await lstat(metaPath)
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 1024 * 1024) throw new StateStoreError('RECOVERY_REQUIRED', 'Segmented snapshot metadata is invalid')
+      raw = await readFile(metaPath, 'utf8')
+    } catch (error) { if (missing(error)) return undefined; throw error }
+    let meta: { schemaVersion?: unknown; sequence?: unknown; layout?: unknown; layoutFingerprint?: unknown; checksum?: unknown; segments?: unknown }
+    try { meta = JSON.parse(raw) as typeof meta } catch { throw new StateStoreError('RECOVERY_REQUIRED', 'Segmented snapshot metadata is not valid JSON') }
+    if (meta.schemaVersion !== 1 || !Number.isSafeInteger(meta.sequence) || (meta.sequence as number) < 0
+      || typeof meta.checksum !== 'string' || meta.segments === null || typeof meta.segments !== 'object' || Array.isArray(meta.segments)) {
+      throw new StateStoreError('RECOVERY_REQUIRED', 'Segmented snapshot metadata is invalid')
+    }
+    const metadata = await lstat(snapshotDirectory)
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new StateStoreError('RECOVERY_REQUIRED', 'Segmented snapshot directory is invalid')
+    const state: Record<string, unknown> = {}
+    for (const [name, entry] of Object.entries(meta.segments as Record<string, unknown>)) {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw new StateStoreError('RECOVERY_REQUIRED', 'Segmented snapshot entry is invalid')
+      const file = (entry as { file?: unknown }).file
+      if (typeof file !== 'string') throw new StateStoreError('RECOVERY_REQUIRED', 'Segmented snapshot entry is invalid')
+      const filePath = pathWithin(snapshotDirectory, file)
+      const fileMetadata = await lstat(filePath)
+      if (!fileMetadata.isFile() || fileMetadata.isSymbolicLink() || fileMetadata.size > maxStateBytes + 1024) throw new StateStoreError('RECOVERY_REQUIRED', 'Segmented snapshot segment file is invalid')
+      const segmentRaw = await readFile(filePath, 'utf8')
+      if (Buffer.byteLength(segmentRaw) > maxStateBytes + 1024) throw new StateStoreError('RECOVERY_REQUIRED', 'Segmented snapshot segment size is invalid')
+      state[name] = JSON.parse(segmentRaw)
+    }
+    return { sequence: meta.sequence as number, layout: meta.layout, layoutFingerprint: meta.layoutFingerprint, checksum: meta.checksum as string, state }
+  }
+  /** 写一代按段快照；只落盘指纹变化的段文件，然后原子替换 meta.json 并清理上一代的孤儿文件。 */
+  const writeSnapshot = async (atSequence: number): Promise<void> => {
+    await mkdir(snapshotDirectory, { recursive: true, mode: 0o700 })
+    const directoryMetadata = await lstat(snapshotDirectory)
+    if (!directoryMetadata.isDirectory() || directoryMetadata.isSymbolicLink()) throw new StateStoreError('STATE_INVALID', 'Snapshot directory must be a private directory, not a symlink')
+    const segments: Record<string, { file: string; fingerprint: string }> = {}
+    const keep = new Set<string>(['meta.json'])
+    for (const name of chunked.segmentNames()) {
+      const fingerprint = chunked.segmentFingerprint(name)!
+      const encoded = chunked.segmentEncoded(name)!
+      const file = snapshotSegmentFile(name, fingerprint)
+      keep.add(file)
+      segments[name] = { file, fingerprint }
+      if (!await existingFile(join(snapshotDirectory, file))) await atomicStateFile(snapshotDirectory, file, encoded)
+    }
+    await atomicStateFile(snapshotDirectory, 'meta.json', canonicalStateJson({
+      schemaVersion: 1, sequence: atSequence, layout: chunkedLayout,
+      layoutFingerprint: chunkedLayout === currentLayout ? currentFingerprint : legacyFingerprint,
+      checksum: chunked.rootChecksum(), segments
+    }))
+    for (const entry of await readdir(snapshotDirectory)) {
+      if (!entry.endsWith('.json') || keep.has(entry)) continue
+      await unlink(join(snapshotDirectory, entry)).catch(() => undefined)
+    }
+    // 按段快照是同一份数据的更细表示：保留旧整份快照既浪费空间，也会让恢复路径读到过期状态。
+    await unlink(join(directory, 'snapshot.json')).catch(() => undefined)
+  }
+  const clearJournal = async (): Promise<void> => { await atomicStateFile(directory, 'journal.jsonl', ''); journalBytes = 0 }
   if (options.enabled !== false) {
     await mkdir(directory, { recursive: true, mode: 0o700 })
     if ((await lstat(directory)).isSymbolicLink()) throw new StateStoreError('STATE_INVALID', 'State directory cannot be a symlink')
@@ -199,20 +317,50 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       await syncDirectory(directory)
       let snapshot: Snapshot<T> | undefined
       try {
-        const snapshotPath = join(directory, 'snapshot.json')
-        const metadata = await lstat(snapshotPath)
-        if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > maxStateBytes + 1024) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot file is invalid')
-        const raw = await readFile(snapshotPath, 'utf8')
-        if (Buffer.byteLength(raw) > maxStateBytes + 1024) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot size is invalid')
-        const parsed: unknown = JSON.parse(raw)
-        if (!snapshotValid(parsed)) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot checksum/schema mismatch')
-        snapshot = parsed as Snapshot<T>
-        const validated = validateFull(snapshot.state)
-        chunked = ChunkedState.fromState(validated.value, segmentSpecs, { verified: true })
-        state = deepFreeze(chunked.materialize()) as T
-        stateBytes = chunked.getStateBytes()
-        stateChecksum = chunked.rootChecksum()
-        sequence = snapshot.sequence
+        // 优先按段快照；没有才回退旧整份快照。两条路径都会在读取后按声明布局重建分片。
+        const segmented = await readSegmentedSnapshot()
+        let loadedState: unknown
+        let loadedLayout: number | undefined
+        let loadedChecksum: string | undefined
+        let loadedFingerprint: unknown
+        if (segmented !== undefined) {
+          loadedState = segmented.state
+          loadedLayout = readStoredLayout(segmented.layout)
+          loadedChecksum = segmented.checksum
+          loadedFingerprint = segmented.layoutFingerprint
+          sequence = segmented.sequence
+        } else {
+          const whole = await readWholeSnapshot()
+          if (whole !== undefined) {
+            loadedState = whole.state
+            loadedLayout = readStoredLayout(whole.layout)
+            loadedChecksum = whole.checksum
+            loadedFingerprint = whole.layoutFingerprint
+            sequence = whole.sequence
+          }
+        }
+        if (loadedState !== undefined) {
+          if (loadedLayout !== undefined && loadedLayout > currentLayout) {
+            throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot was written by a newer layout version')
+          }
+          if (loadedLayout !== undefined && !layoutMatches(loadedLayout, loadedFingerprint, undefined)) {
+            throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot was written with a different chunk layout')
+          }
+          const validated = validateFull(loadedState)
+          const useCurrent = loadedLayout === currentLayout
+          chunked = ChunkedState.fromState(validated.value, useCurrent ? segmentSpecs : legacySpecs, { verified: true })
+          const rebuiltChecksum = chunked.rootChecksum()
+          // 按段快照的校验和是分片根哈希；旧整份快照的是整份编码的 sha256，两者都在此逐字节重建后复核。
+          if (loadedChecksum !== undefined && loadedChecksum !== rebuiltChecksum && loadedChecksum !== checksumText(validated.encoded)) {
+            throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot checksum/schema mismatch')
+          }
+          chunkedLayout = useCurrent ? currentLayout : LEGACY_LAYOUT
+          needsLayoutCommit = !useCurrent
+          state = deepFreeze(chunked.materialize()) as T
+          stateBytes = chunked.getStateBytes()
+          stateChecksum = rebuiltChecksum
+          snapshot = { schemaVersion: 1, sequence, checksum: loadedChecksum ?? rebuiltChecksum, state: validated.value, layout: loadedLayout }
+        }
       } catch (error) { if (!missing(error)) throw error }
       // 旧格式（v1）行的链值不是分片根哈希；单独跟踪，升级后新行一律使用 v2 根哈希链。
       let legacyChecksum = snapshot?.checksum ?? checksumText(initial.encoded)
@@ -243,17 +391,32 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
         }
         if (entry.sequence !== sequence + 1) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal sequence or ancestry mismatch')
         if (entry.schemaVersion === 2) {
-          if (entry.layout !== layoutId) throw new StateStoreError('RECOVERY_REQUIRED', 'State journal was written with a different chunk layout')
+          const entryLayout = readStoredLayout(entry.layout)
+          // 目录比代码新：拒绝打开，避免用旧布局改写并破坏后续兼容。
+          if (entryLayout !== undefined && entryLayout > currentLayout) {
+            throw new StateStoreError('RECOVERY_REQUIRED', 'Journal was written by a newer layout version')
+          }
+          // 版本号只决定能否续写；指纹决定这套规格是否真的对得上目录，防止用错规格静默读出错误状态。
+          if (!layoutMatches(entryLayout, entry.layoutFingerprint, entry.layout)) {
+            throw new StateStoreError('RECOVERY_REQUIRED', 'Journal was written with a different chunk layout')
+          }
+          const isCurrentLayout = entryLayout === currentLayout
+          // 当前布局的增量行只能出现在迁移行之后；否则说明日志被人为拼接。
+          if (isCurrentLayout && chunkedLayout !== currentLayout && entry.changes !== undefined) {
+            throw new StateStoreError('RECOVERY_REQUIRED', 'Journal continues incremental entries before the layout migration record')
+          }
+          if (!isCurrentLayout) needsLayoutCommit = true
           if (entry.previousChecksum !== stateChecksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal sequence or ancestry mismatch')
           let next: ChunkedState
           if (entry.state !== undefined) {
-            next = ChunkedState.fromState(entry.state, segmentSpecs, { verified: true })
+            next = ChunkedState.fromState(entry.state, isCurrentLayout ? segmentSpecs : legacySpecs, { verified: true })
           } else if (entry.changes !== null && typeof entry.changes === 'object' && !Array.isArray(entry.changes)) {
             next = chunked.applyEncoded(entry.changes as Parameters<typeof chunked.applyEncoded>[0])
           } else throw new StateStoreError('RECOVERY_REQUIRED', 'Journal entry carries neither state nor changes')
           if (next.rootChecksum() !== entry.checksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal checksum mismatch')
           if (next.getStateBytes() > maxStateBytes) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal state exceeds byte limit')
           chunked = next
+          chunkedLayout = isCurrentLayout ? currentLayout : LEGACY_LAYOUT
           state = deepFreeze(chunked.materialize()) as T
           stateBytes = chunked.getStateBytes()
           stateChecksum = entry.checksum
@@ -263,7 +426,9 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
           if (!snapshotValid(entry)) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal checksum/schema mismatch')
           if (entry.previousChecksum !== legacyChecksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal sequence or ancestry mismatch')
           const validated = validateFull(entry.state)
-          chunked = ChunkedState.fromState(validated.value, segmentSpecs, { verified: true })
+          chunked = ChunkedState.fromState(validated.value, legacySpecs, { verified: true })
+          chunkedLayout = LEGACY_LAYOUT
+          needsLayoutCommit = true
           state = deepFreeze(chunked.materialize()) as T
           stateBytes = chunked.getStateBytes()
           stateChecksum = chunked.rootChecksum()
@@ -271,11 +436,6 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
         }
         sequence = entry.sequence
       }
-      const writeSnapshot = async (atSequence: number): Promise<void> => {
-        const encoded = chunked.encode()
-        await atomicStateFile(directory, 'snapshot.json', stateEnvelope({ schemaVersion: 1, sequence: atSequence, checksum: checksumText(encoded) }, encoded))
-      }
-      const clearJournal = async (): Promise<void> => { await atomicStateFile(directory, 'journal.jsonl', ''); journalBytes = 0 }
       if (snapshot === undefined && sequence === 0) await writeSnapshot(0)
       // The first journal directory entry must be durable before any committed append is acknowledged.
       if (!journalPresent) await clearJournal()
@@ -285,11 +445,6 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       throw new StateStoreError('RECOVERY_REQUIRED', 'Cannot recover trusted state: ' + (error instanceof Error ? error.message : String(error)))
     }
   }
-  const writeSnapshot = async (atSequence: number): Promise<void> => {
-    const encoded = chunked.encode()
-    await atomicStateFile(directory, 'snapshot.json', stateEnvelope({ schemaVersion: 1, sequence: atSequence, checksum: checksumText(encoded) }, encoded))
-  }
-  const clearJournal = async (): Promise<void> => { await atomicStateFile(directory, 'journal.jsonl', ''); journalBytes = 0 }
   const appendJournal = async (fields: Record<string, unknown>): Promise<void> => {
     const payload = canonicalStateJson(fields)
     const line = canonicalStateJson({ ...fields, entryChecksum: checksumText(payload) }) + '\n'
@@ -313,6 +468,23 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       await writeSnapshot(sequence)
       await clearJournal()
     } catch { failed = true }
+  }
+  /**
+   * 旧布局目录的首次写入：用当前布局重建全部段并补一条全量行。
+   * 增量行的分片键依赖布局，因此必须先把当前状态以新布局落盘，后续增量才有意义。
+   */
+  const migrateLayout = async (): Promise<void> => {
+    const nextChunked = ChunkedState.fromState(state, segmentSpecs, { verified: true })
+    const nextChecksum = nextChunked.rootChecksum()
+    if (options.enabled !== false) {
+      await appendJournal({ schemaVersion: 2, layout: currentLayout, layoutFingerprint: currentFingerprint, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type: 'state/layout-migrated', state })
+    }
+    chunked = nextChunked
+    chunkedLayout = currentLayout
+    stateBytes = nextChunked.getStateBytes()
+    stateChecksum = nextChecksum
+    sequence++
+    needsLayoutCommit = false
   }
   const buildChanges = (patch: StatePatch, preview: { encoded: Record<string, Record<string, { encoded: string }>>; next: ChunkedState }): Record<string, unknown> => {
     const { encoded, next } = preview
@@ -370,12 +542,13 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed')
       if (failed) throw new StateStoreError('RECOVERY_REQUIRED', 'A previous durable write failed; reconcile before further commits')
       if (typeof type !== 'string' || type.length < 1 || type.length > 120) throw new StateStoreError('STATE_INVALID', 'Invalid event type')
+      if (needsLayoutCommit) await migrateLayout()
       const draft = copy(state)
       const returned = await mutate(draft)
       const next = validateFull(returned === undefined ? draft : returned)
       const nextChunked = ChunkedState.fromState(next.value, segmentSpecs, { verified: true })
       const nextChecksum = nextChunked.rootChecksum()
-      if (store.durable) await appendJournal({ schemaVersion: 2, layout: layoutId, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, state: next.value })
+      if (store.durable) await appendJournal({ schemaVersion: 2, layout: currentLayout, layoutFingerprint: currentFingerprint, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, state: next.value })
       chunked = nextChunked
       state = deepFreeze(chunked.materialize()) as T
       stateBytes = chunked.getStateBytes()
@@ -388,6 +561,7 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed')
       if (failed) throw new StateStoreError('RECOVERY_REQUIRED', 'A previous durable write failed; reconcile before further commits')
       if (typeof type !== 'string' || type.length < 1 || type.length > 120) throw new StateStoreError('STATE_INVALID', 'Invalid event type')
+      if (needsLayoutCommit) await migrateLayout()
       // build 形式在互斥区内求值：调用方读到的就是本次提交的基线，读-改-写不再有竞态窗口。
       const normalized = normalizeStatePatch('build' in write ? await write.build(state) : write.patch)
       const preview = chunked.preview(normalized)
@@ -402,7 +576,7 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       if (options.validateIncremental !== undefined) assertValidation(options.validateIncremental(view, changed))
       else if (options.validate !== undefined) assertValidation(options.validate(view))
       const nextChecksum = preview.next.rootChecksum()
-      if (store.durable) await appendJournal({ schemaVersion: 2, layout: layoutId, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, changes: buildChanges(normalized, preview) })
+      if (store.durable) await appendJournal({ schemaVersion: 2, layout: currentLayout, layoutFingerprint: currentFingerprint, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, changes: buildChanges(normalized, preview) })
       chunked = preview.next
       state = view
       stateBytes = nextBytes

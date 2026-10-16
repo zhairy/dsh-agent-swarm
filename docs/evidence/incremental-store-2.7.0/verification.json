@@ -1,0 +1,114 @@
+{
+  "topic": "2.7.0 segmented snapshot, bucketed delegations and layout migration",
+  "checkedAt": "2026-10-16T15:38:00+00:00",
+  "verifiedBy": "独立验证 agent 复跑（2026-10-16 23:21-23:38 CST）；主持 agent 的部署与 RPC 记录在 realHost 中单独标注",
+  "tests": {
+    "typecheck": true,
+    "unit": {
+      "files": 80,
+      "passed": 947,
+      "failed": 0,
+      "command": "npx vitest run"
+    },
+    "hostIntegration": {
+      "files": 8,
+      "passed": 39,
+      "failed": 0,
+      "hosts": [
+        "0.2.1-alpha.4",
+        "0.2.0-rc.2"
+      ],
+      "scope": "real dsh CLI + sandbox profile via vitest.integration.config.ts；两台宿主分别以 SWARM_DSH_VERSION 指定，各 8 文件 / 39 用例"
+    },
+    "build": {
+      "ok": true,
+      "command": "npm run build"
+    }
+  },
+  "packageClosure": {
+    "script": "scripts/pack-release.mjs --check-only --skip-build",
+    "entry": "lib/index.js",
+    "closureFiles": 67,
+    "packagedFiles": 391,
+    "missing": 0
+  },
+  "upgradePath": {
+    "script": ".work/verify-upgrade.mjs（2.5.2 真实构建产物 → 当前构建；使用插件真实的 SWARM_LAYOUT_OPTIONS，同语义断言固化在 tests/unit/state-layout-migration.test.ts）",
+    "legacyJournalVersions": [
+      1,
+      1
+    ],
+    "legacyLineBytes": [
+      530,
+      262708
+    ],
+    "recoveredStateEqual": true,
+    "migrationLineBytes": 262812,
+    "continuedIncrementalLineBytes": 534,
+    "reopenedOk": true,
+    "materialRoundtrip": true
+  },
+  "layoutMigrationFrom260": {
+    "script": ".work/verify-upgrade-260.mjs（本地一次性；2.6.0 真实构建产物 .work/bench-lib-2.6.0 → 当前构建；同语义断言固化在 tests/unit/state-layout-migration.test.ts）",
+    "summary": {
+      "total": 6,
+      "passed": 6
+    },
+    "cases": [
+      "2.6.0 目录按旧布局完整恢复（状态逐字节相等）",
+      "迁移后增量写入成功",
+      "首次写入补 state/layout-migrated 全量行，其后才是增量行",
+      "混合代日志（v1 行 + 2.6.0 v2 行 + 迁移行 + 2.7 增量行）重开后一致",
+      "用旧布局规格打开 2.7 目录被拒绝（newer layout version）",
+      "同版本下布局指纹不符被显式拒绝（different chunk layout）"
+    ]
+  },
+  "complexityBenchmark": {
+    "artifact": "benchmark.json",
+    "artifactSha256": "600b3fecb9a1c07249b01f0f4bd16aab5b5dd89243a370b35c234412f45fa306",
+    "recordedAt": "2026-10-16T15:16:16.560Z",
+    "method": "memory-only store, 12 samples + 3 warmup with --expose-gc, alternating before/after in one process",
+    "incrementalChunkMedianMsRange": [
+      0.149,
+      0.222
+    ],
+    "fullCommitRatioRange": "0.97x-1.25x (2.7.0/2.6.0 across 0.25-16 MiB)",
+    "note": "增量列与状态规模无关；全量 commit 无明显改善（0.97-1.25，含噪声），如实记录"
+  },
+  "segmentHashCache": {
+    "script": ".work/bench-hash-cache.mjs（本地一次性微基准）",
+    "probe": "4000 条 experiences（约 529 KiB 状态）连续 rootChecksum 与小补丁 preview，各 200 次",
+    "rootChecksumMedianMs": {
+      "2.6.0": 5.3033,
+      "2.7.0": 0.0266
+    },
+    "previewMedianMs": {
+      "2.6.0": 0.364,
+      "2.7.0": 0.3687
+    },
+    "note": "段哈希缓存对未变段生效（约 200x）；端到端 commit 列不受益，因为每次提交都会重建分片表"
+  },
+  "adversarialVerification": {
+    "script": "scripts/verify-incremental-adversarial.mjs",
+    "artifact": "adversarial-verification.json",
+    "artifactSha256": "df3fd8a0b35836037183e98d06bfd5881cf47c744ea64bd1acbc30e4f22ca63c",
+    "summary": {
+      "total": 12,
+      "passed": 12
+    },
+    "moduleDigests": {
+      "state-store.js": "4cc4f8a81684878b69fe2e96c2033ef60fbd421520af23df1b2f2a5ae4292ded",
+      "state-chunks.js": "63c7d4d374652a9b5c64741aa2b3e7c23dba293bcc0c3a78a602fa915beefb88",
+      "state-core.js": "c577de92f5cccb98329b6b151b7642e5bdaf69a7384ddc55f90377ccfbe792c7"
+    },
+    "note": "首次记录的 state-chunks.js 摘要是旧构建（d6af8ae0…），与当前构建不符；已用当前构建重新生成"
+  },
+  "realHost": {
+    "service": "dsh-web.service (user) ActiveEnterTimestamp=2026-10-16 23:29:07 CST, ActiveState=active",
+    "deployedBuild": "profiles/web/node_modules/dsh-agent-swarm -> 工作区；lib/state-store.js sha256 4cc4f8a8… 与工作区构建一致",
+    "logScan": "23:29 起 journalctl 中 STATE_TOO_LARGE / STATE_INVALID / route_health_persist_failed / RECOVERY_REQUIRED 命中 0 次",
+    "stateBackup": "~/.dsh/backups/agent-swarm-pre-2.7.0-20261016-232850（23 MiB）",
+    "rpc": "POST /api/swarm.jevHealth 与 /api/swarm.jevStatus -> HTTP 200, result.ok=true（主持 agent 于 23:29 记录；本文件未复跑该真实模型往返）"
+  },
+  "updatedAt": "2026-10-16T15:49:13.806264+00:00"
+}

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { canonicalStateJson, createDurableStateStore, type DurableStateStore } from '../../src/state-store.js'
-import { SWARM_SEGMENT_SPECS } from '../../src/state-chunks.js'
+import { SWARM_LAYOUT_OPTIONS } from '../../src/state-chunks.js'
 
 const directories: string[] = []
 const stores: DurableStateStore<Record<string, unknown>>[] = []
@@ -45,20 +45,20 @@ describe('legacy snapshot and journal overlap (crash between snapshot write and 
 
   it('recovers the snapshot state and continues with version-2 incremental entries', async () => {
     const { path, second } = await buildCrashWindowDirectory()
-    const store = track(await createDurableStateStore({ directory: path, segments: SWARM_SEGMENT_SPECS, initialState: initialState(), validate: () => true }))
+    const store = track(await createDurableStateStore({ directory: path, ...SWARM_LAYOUT_OPTIONS, initialState: initialState(), validate: () => true }))
     expect(store.read()).toEqual(second)
     expect(store.getSequence()).toBe(2)
     await store.update('task/retitle', { patch: { set: { tasks: { 'T-2': { taskId: 'T-2', title: 'two-v2' } } } } })
     const appended = JSON.parse((await readFile(join(path, 'journal.jsonl'), 'utf8')).split('\n').filter(Boolean).at(-1)!) as { schemaVersion: number }
     expect(appended.schemaVersion).toBe(2)
     await store.dispose()
-    const reopened = track(await createDurableStateStore({ directory: path, segments: SWARM_SEGMENT_SPECS, initialState: initialState(), validate: () => true }))
+    const reopened = track(await createDurableStateStore({ directory: path, ...SWARM_LAYOUT_OPTIONS, initialState: initialState(), validate: () => true }))
     expect(reopened.read().tasks).toEqual([{ taskId: 'T-1', title: 'one' }, { taskId: 'T-2', title: 'two-v2' }])
   })
 
   it('still rejects a same-sequence legacy line whose checksum disagrees with the snapshot', async () => {
     const { path } = await buildCrashWindowDirectory({ forgeLastChecksum: true })
-    await expect(createDurableStateStore({ directory: path, segments: SWARM_SEGMENT_SPECS, initialState: initialState(), validate: () => true }))
+    await expect(createDurableStateStore({ directory: path, ...SWARM_LAYOUT_OPTIONS, initialState: initialState(), validate: () => true }))
       .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
   })
 })
@@ -66,14 +66,14 @@ describe('legacy snapshot and journal overlap (crash between snapshot write and 
 describe('whole patches on declared segments', () => {
   it('rejects a whole patch for an absent segment that is declared as a chunked kind', async () => {
     const path = await directory()
-    const store = track(await createDurableStateStore({ directory: path, segments: SWARM_SEGMENT_SPECS, initialState: { schemaVersion: 1 }, validate: () => true }))
+    const store = track(await createDurableStateStore({ directory: path, ...SWARM_LAYOUT_OPTIONS, initialState: { schemaVersion: 1 }, validate: () => true }))
     await expect(store.update('seed/whole', { patch: { whole: { tasks: [{ taskId: 'T-1', title: 'seed' }] } } }))
       .rejects.toMatchObject({ code: 'STATE_INVALID' })
     // 拒绝后同一段仍按声明类型接受分片补丁，段类型不会被固化。
     await store.update('task/add', { patch: { set: { tasks: { 'T-1': { taskId: 'T-1', title: 'chunked' } } } } })
     expect(store.read().tasks).toEqual([{ taskId: 'T-1', title: 'chunked' }])
     await store.dispose()
-    const reopened = track(await createDurableStateStore({ directory: path, segments: SWARM_SEGMENT_SPECS, initialState: { schemaVersion: 1 }, validate: () => true }))
+    const reopened = track(await createDurableStateStore({ directory: path, ...SWARM_LAYOUT_OPTIONS, initialState: { schemaVersion: 1 }, validate: () => true }))
     expect(reopened.read().tasks).toEqual([{ taskId: 'T-1', title: 'chunked' }])
   })
 })

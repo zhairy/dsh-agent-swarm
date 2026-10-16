@@ -6,7 +6,16 @@ import { canonicalStateJson, checksumText, deepFreeze, StateStoreError } from '.
  * 分片值入库前深冻结；冻结后的引用身份即“内容未变”的可靠信号，配合各存储的写入口脏追踪使用。
  */
 export type SegmentKind = 'list' | 'dict' | 'whole'
-export interface SegmentSpec { readonly kind: SegmentKind; readonly keyOf?: (value: never) => string }
+export interface SegmentSpec {
+  readonly kind: SegmentKind
+  /** list 段的元素键；分桶段用它校验桶内元素，可省略。 */
+  readonly keyOf?: (value: never) => string
+  /**
+   * 分桶键：同桶元素合并进一个分片（分片 key = 桶键，值 = 该桶的元素数组）。
+   * 让段内分片数按桶（例如任务）计数，而不是随历史条目线性增长。
+   */
+  readonly bucketOf?: (value: never) => string
+}
 export type SegmentSpecs = Readonly<Record<string, SegmentSpec>>
 
 const itemKey = (field: string) => (value: never): string => {
@@ -16,10 +25,10 @@ const itemKey = (field: string) => (value: never): string => {
 }
 
 /**
- * dsh-agent-swarm 的状态分片规格；通用 state-store 不假定任何段名，
- * 调用方（feature-session）注入本规格后才会获得分片级增量收益。
+ * 2.6.0 的扁平布局：list 段每个元素一个分片。
+ * 恢复时会按日志行声明的布局选择规格，因此旧目录仍能完整回放。
  */
-export const SWARM_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
+export const LEGACY_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
   tasks: { kind: 'list', keyOf: itemKey('taskId') },
   delegations: { kind: 'list', keyOf: itemKey('delegationId') },
   threads: { kind: 'list', keyOf: itemKey('threadId') },
@@ -32,6 +41,39 @@ export const SWARM_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
   experiences: { kind: 'dict' },
   budgets: { kind: 'dict' },
   planningBudgets: { kind: 'dict' }
+})
+
+/** 当前布局版本：2 = delegations 按任务分桶。日志行的 `layout` 数字必须与它一致才能直接增量续写。 */
+export const LAYOUT_VERSION = 2
+
+/**
+ * dsh-agent-swarm 的状态分片规格；通用 state-store 不假定任何段名，
+ * 调用方（feature-session）注入本规格后才会获得分片级增量收益。
+ */
+export const SWARM_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
+  tasks: { kind: 'list', keyOf: itemKey('taskId') },
+  // 委派按任务分桶：段内分片数 = 任务数，而不是历史委派总数。
+  delegations: { kind: 'list', keyOf: itemKey('delegationId'), bucketOf: itemKey('taskId') },
+  threads: { kind: 'list', keyOf: itemKey('threadId') },
+  contexts: { kind: 'list', keyOf: itemKey('ref') },
+  agentControls: { kind: 'list', keyOf: itemKey('childId') },
+  bindings: { kind: 'dict' },
+  bindingHistory: { kind: 'dict' },
+  messages: { kind: 'dict' },
+  messageAcks: { kind: 'dict' },
+  experiences: { kind: 'dict' },
+  budgets: { kind: 'dict' },
+  planningBudgets: { kind: 'dict' }
+})
+
+/**
+ * 当前布局的完整 store 选项。
+ * 「当前布局 / 旧布局 / 版本号」必须一起改：只改一半会把日志行写成与磁盘不一致的布局。
+ */
+export const SWARM_LAYOUT_OPTIONS = Object.freeze({
+  segments: SWARM_SEGMENT_SPECS,
+  legacySegments: LEGACY_SEGMENT_SPECS,
+  layoutVersion: LAYOUT_VERSION
 })
 
 export interface Chunk {
@@ -47,9 +89,13 @@ export interface Chunk {
 
 export interface Segment {
   readonly kind: SegmentKind
+  /** 分桶 list 段：分片值是元素数组；非分桶 list 段：分片值是单个元素。 */
+  readonly bucket?: boolean
   /** list 段的键序；dict/whole 段为 undefined */
   readonly order?: readonly string[]
   readonly chunks: ReadonlyMap<string, Chunk>
+  /** 段哈希缓存：段对象不可变（chunks/order 只读且不再修改），未变段在预览中按引用复用。 */
+  hash?: string
 }
 
 /** 调用方提交的增量补丁（值形态；分片编码与冻结由本模块完成）。 */
@@ -82,7 +128,13 @@ const chunkOf = (value: unknown): Chunk => {
   } catch (error) {
     if (!(error instanceof StateStoreError)) throw error
     // 内存态记录可能带 undefined 字段或类原型：与旧的全量提交一致，回退到一次 JSON 往返。
-    return chunkFromEncoded(canonicalStateJson(JSON.parse(JSON.stringify(value)) as unknown))
+    try {
+      return chunkFromEncoded(canonicalStateJson(JSON.parse(JSON.stringify(value)) as unknown))
+    } catch (nested) {
+      // 回退也失败（例如循环引用）：统一成 STATE_INVALID，而不是把 TypeError 泄露给调用方。
+      if (nested instanceof StateStoreError) throw nested
+      throw new StateStoreError('STATE_INVALID', 'State chunk value is not serialisable: ' + (nested instanceof Error ? nested.message : String(nested)))
+    }
   }
 }
 
@@ -101,19 +153,36 @@ export const chunkFromEncoded = (encoded: string): Chunk => ({
 })
 
 const segmentHash = (segment: Segment): string => {
+  if (segment.hash !== undefined) return segment.hash
   const entries: Array<[string, string]> = []
   if (segment.kind === 'whole') entries.push(['', segment.chunks.get('')?.hash ?? ''])
   else if (segment.kind === 'list') for (const key of segment.order ?? []) entries.push([key, segment.chunks.get(key)?.hash ?? ''])
   else for (const key of [...segment.chunks.keys()].sort()) entries.push([key, segment.chunks.get(key)!.hash])
-  return checksumText(canonicalStateJson(entries))
+  segment.hash = checksumText(canonicalStateJson(entries))
+  return segment.hash
 }
+
+/** 分桶段的桶值编码去掉外层方括号后的长度；用于精确累计整份状态字节数。 */
+const bucketInnerBytes = (chunk: Chunk | undefined): number => chunk === undefined ? 0 : Math.max(0, chunk.bytes - 2)
+
+/** 重建 list 段时保留该段是否为分桶段；分桶标记丢失会让 materialize 不再展开桶值。 */
+const listSegment = (order: readonly string[], chunks: ReadonlyMap<string, Chunk>, bucket: boolean | undefined): Segment =>
+  bucket === true ? { kind: 'list', bucket: true, order, chunks } : { kind: 'list', order, chunks }
 
 const segmentBytes = (name: string, segment: Segment): number => {
   let inner = 2
   if (segment.kind === 'whole') inner = segment.chunks.get('')?.bytes ?? 0
   else if (segment.kind === 'list') {
     const keys = segment.order ?? []
-    for (const [index, key] of keys.entries()) inner += (segment.chunks.get(key)?.bytes ?? 0) + (index === 0 ? 0 : 1)
+    if (segment.bucket === true) {
+      let buckets = 0
+      for (const key of keys) {
+        const bytes = bucketInnerBytes(segment.chunks.get(key))
+        if (bytes === 0) continue
+        inner += bytes + (buckets === 0 ? 0 : 1)
+        buckets++
+      }
+    } else for (const [index, key] of keys.entries()) inner += (segment.chunks.get(key)?.bytes ?? 0) + (index === 0 ? 0 : 1)
   } else {
     const keys = [...segment.chunks.keys()].sort()
     for (const [index, key] of keys.entries()) inner += Buffer.byteLength(JSON.stringify(key), 'utf8') + 1 + segment.chunks.get(key)!.bytes + (index === 0 ? 0 : 1)
@@ -137,6 +206,21 @@ export class ChunkedState {
     const spec = specs[name]
     if (spec?.kind === 'list') {
       if (!Array.isArray(value)) throw new StateStoreError('STATE_INVALID', `State segment ${name} must be an array`)
+      if (spec.bucketOf !== undefined) {
+        // 分桶段：同桶元素合并为一个分片，桶间顺序 = 首次出现顺序，桶内保持原顺序。
+        const buckets = new Map<string, unknown[]>()
+        const order: string[] = []
+        for (const item of value) {
+          const bucket = spec.bucketOf(item as never)
+          if (spec.keyOf !== undefined) spec.keyOf(item as never)
+          let items = buckets.get(bucket)
+          if (items === undefined) { items = []; buckets.set(bucket, items); order.push(bucket) }
+          items.push(item)
+        }
+        const chunks = new Map<string, Chunk>()
+        for (const [bucket, items] of buckets) chunks.set(bucket, toChunk(items))
+        return { kind: 'list', bucket: true, order, chunks }
+      }
       const chunks = new Map<string, Chunk>()
       const order: string[] = []
       for (const item of value) {
@@ -161,7 +245,16 @@ export class ChunkedState {
     const result: Record<string, unknown> = {}
     for (const [name, segment] of this.segments) {
       if (segment.kind === 'whole') result[name] = segment.chunks.get('')?.value
-      else if (segment.kind === 'list') result[name] = (segment.order ?? []).map((key) => segment.chunks.get(key)?.value)
+      else if (segment.kind === 'list') {
+        if (segment.bucket === true) {
+          const flat: unknown[] = []
+          for (const key of segment.order ?? []) {
+            const chunk = segment.chunks.get(key)
+            if (chunk !== undefined) flat.push(...(chunk.value as unknown[]))
+          }
+          result[name] = flat
+        } else result[name] = (segment.order ?? []).map((key) => segment.chunks.get(key)?.value)
+      }
       else {
         const value: Record<string, unknown> = {}
         for (const key of [...segment.chunks.keys()].sort()) value[key] = segment.chunks.get(key)!.value
@@ -179,7 +272,19 @@ export class ChunkedState {
 
   private encodeSegment (segment: Segment): string {
     if (segment.kind === 'whole') return segment.chunks.get('')?.encoded ?? 'null'
-    if (segment.kind === 'list') return '[' + (segment.order ?? []).map((key) => segment.chunks.get(key)?.encoded ?? 'null').join(',') + ']'
+    if (segment.kind === 'list') {
+      if (segment.bucket === true) {
+        // 分桶段的分片值是数组：去掉外层方括号后按扁平顺序拼接，与 materialize 的展开一致。
+        const parts: string[] = []
+        for (const key of segment.order ?? []) {
+          const encoded = segment.chunks.get(key)?.encoded
+          if (encoded === undefined || encoded === '[]') continue
+          parts.push(encoded.slice(1, -1))
+        }
+        return '[' + parts.join(',') + ']'
+      }
+      return '[' + (segment.order ?? []).map((key) => segment.chunks.get(key)?.encoded ?? 'null').join(',') + ']'
+    }
     return '{' + [...segment.chunks.keys()].sort().map((key) => JSON.stringify(key) + ':' + segment.chunks.get(key)!.encoded).join(',') + '}'
   }
 
@@ -199,6 +304,24 @@ export class ChunkedState {
 
   /** 列表段的键序；whole/dict 段返回 undefined。增量日志必须显式记录它。 */
   order (name: string): readonly string[] | undefined { return this.segments.get(name)?.order }
+
+  /** 现有段名（按段快照与诊断用）；顺序为内部 Map 顺序，不代表规范顺序。 */
+  segmentNames (): readonly string[] { return [...this.segments.keys()] }
+
+  /** 单个段的规范编码；与整份状态里该段逐字节一致，按段快照直接落盘。 */
+  segmentEncoded (name: string): string | undefined {
+    const segment = this.segments.get(name)
+    return segment === undefined ? undefined : this.encodeSegment(segment)
+  }
+
+  /**
+   * 单个段的密码学指纹（分片哈希的规范组合）。
+   * 与「整份编码的 sha256」不同：它只依赖分片，未变段的结果可直接复用缓存。
+   */
+  segmentFingerprint (name: string): string | undefined {
+    const segment = this.segments.get(name)
+    return segment === undefined ? undefined : segmentHash(segment)
+  }
 
   /**
    * 预演一次增量补丁：编码新增/替换分片、合并顺序与删除，返回候选分片表与变更清单。
@@ -243,7 +366,9 @@ export class ChunkedState {
         removedAny = true
       }
       if (!removedAny) continue
-      segments.set(name, current.kind === 'list' ? { kind: 'list', order: (current.order ?? []).filter((key) => !keys.includes(key)), chunks } : { kind: 'dict', chunks })
+      segments.set(name, current.kind === 'list'
+        ? listSegment((current.order ?? []).filter((key) => !keys.includes(key)), chunks, current.bucket)
+        : { kind: 'dict', chunks })
       changed = true
     }
     for (const [name, entries] of Object.entries(patch.set ?? {})) {
@@ -256,7 +381,10 @@ export class ChunkedState {
       let segmentChanged = false
       for (const [key, value] of Object.entries(entries)) {
         if (value === undefined) throw new StateStoreError('STATE_INVALID', `State segment ${name} set.${key} must not be undefined`)
-        if (spec?.keyOf !== undefined && spec.keyOf(value as never) !== key) throw new StateStoreError('STATE_INVALID', `State segment ${name} key does not match the value identity`)
+        // 分桶段的键是桶键，值必须是该桶的元素数组：否则会在 materialize 时才暴露出类型错位。
+        if (spec?.bucketOf !== undefined && !Array.isArray(value)) throw new StateStoreError('STATE_INVALID', `State segment ${name} set.${key} must be an array of bucket items`)
+        // 非分桶 list 段要求 set 的键与元素身份一致；分桶段的键是桶键，不对应元素字段。
+        if (spec?.keyOf !== undefined && spec.bucketOf === undefined && spec.keyOf(value as never) !== key) throw new StateStoreError('STATE_INVALID', `State segment ${name} key does not match the value identity`)
         const existing = chunks.get(key)
         const chunk = chunkOf(value)
         if (existing !== undefined && existing.hash === chunk.hash) {
@@ -270,7 +398,9 @@ export class ChunkedState {
         segmentChanged = true
         changed = true
       }
-      if (segmentChanged) segments.set(name, kind === 'list' ? { kind: 'list', order: order ?? [], chunks } : { kind: 'dict', chunks })
+      if (segmentChanged) segments.set(name, kind === 'list'
+        ? listSegment(order ?? [], chunks, current?.bucket ?? spec?.bucketOf !== undefined)
+        : { kind: 'dict', chunks })
     }
     for (const [name, order] of Object.entries(patch.order ?? {})) {
       const current = segments.get(name)
@@ -281,7 +411,7 @@ export class ChunkedState {
       for (const key of current.chunks.keys()) if (!order.includes(key)) throw new StateStoreError('STATE_INVALID', `State segment ${name} has chunk missing from order`)
       const previous = current.order ?? []
       if (previous.length === order.length && order.every((key, index) => previous[index] === key)) continue
-      segments.set(name, { kind: 'list', order: [...order], chunks: current.chunks })
+      segments.set(name, listSegment([...order], current.chunks, current.bucket))
       changed = true
     }
     return { next: new ChunkedState(segments, this.specs), encoded, touched, removed, changed }
@@ -324,7 +454,8 @@ export class ChunkedState {
         if (new Set(finalOrder).size !== finalOrder.length) throw new StateStoreError('STATE_INVALID', `State journal segment ${name} order contains duplicate keys`)
         for (const key of finalOrder) if (!chunks.has(key)) throw new StateStoreError('STATE_INVALID', `State journal segment ${name} order references missing key`)
         for (const key of chunks.keys()) if (!finalOrder.includes(key)) throw new StateStoreError('STATE_INVALID', `State journal segment ${name} has chunk missing from order`)
-        segments.set(name, { kind: 'list', order: finalOrder, chunks })
+        // 按该段自身（或声明）的布局决定是否分桶；回放不得依赖“上一层调用方传了什么”。
+        segments.set(name, listSegment(finalOrder, chunks, current?.bucket ?? spec?.bucketOf !== undefined))
       } else {
         segments.set(name, { kind: 'dict', chunks })
       }

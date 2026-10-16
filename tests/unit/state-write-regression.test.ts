@@ -58,11 +58,15 @@ const make = async (options: { onStart?: (role: keyof typeof VALID_OUTPUTS, home
   type State = { delegations: DelegationRecord[]; tasks: TaskRecord[]; contexts: unknown[] }
   const latestCommit = async (): Promise<{ sequence: number; state: State }> => {
     const directory = join(home, 'share', 'dsh-agent-swarm', 'state', await getWorkspaceId(home), digest(root.id))
-    const [snapshotRaw, journalRaw] = await Promise.all([readFile(join(directory, 'snapshot.json'), 'utf8'), readFile(join(directory, 'journal.jsonl'), 'utf8')])
-    const snapshot = JSON.parse(snapshotRaw) as { sequence: number; state: unknown }
+    // 按段快照：meta.json 声明代次与段文件名，段文件按内容指纹命名。
+    const snapshotDirectory = join(directory, 'snapshot')
+    const meta = JSON.parse(await readFile(join(snapshotDirectory, 'meta.json'), 'utf8')) as { sequence: number; segments: Record<string, { file: string }> }
+    const snapshotState: Record<string, unknown> = {}
+    for (const [name, entry] of Object.entries(meta.segments)) snapshotState[name] = JSON.parse(await readFile(join(snapshotDirectory, entry.file), 'utf8'))
+    const journalRaw = await readFile(join(directory, 'journal.jsonl'), 'utf8')
     // 增量日志行只携带变更分片；按与恢复器相同的分片语义回放，而不是把每行当成完整状态。
-    let chunked = ChunkedState.fromState(snapshot.state, SWARM_SEGMENT_SPECS)
-    let sequence = snapshot.sequence
+    let chunked = ChunkedState.fromState(snapshotState, SWARM_SEGMENT_SPECS)
+    let sequence = meta.sequence
     for (const line of journalRaw.split('\n').filter(Boolean)) {
       const entry = JSON.parse(line) as { sequence: number; state?: unknown; changes?: unknown }
       if (entry.sequence <= sequence) continue

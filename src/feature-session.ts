@@ -1,11 +1,11 @@
 import { join } from 'node:path'
-import { lstat, mkdir, readFile } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile } from 'node:fs/promises'
 import type { SwarmConfigInfo } from './config.js'
 import type { DelegationRecord, TaskRecord, TaskStore } from './evidence.js'
 import type { ThreadInfo, ThreadRegistry } from './threads.js'
 import { atomicStateFile, canonicalStateJson, createDurableStateStore, StateStoreError, type DurableStateStore, type StateValidationReport } from './state-store.js'
-import { SWARM_SEGMENT_SPECS, type StatePatch } from './state-chunks.js'
-import { createAgentBindingRegistry, validateBinding, bindingKey, type AgentBindingRegistry } from './agent-binding.js'
+import { SWARM_LAYOUT_OPTIONS, type StatePatch } from './state-chunks.js'
+import { createAgentBindingRegistry, validateBinding, bindingKey, type AgentBinding, type AgentBindingRegistry } from './agent-binding.js'
 import { createMessageBus, type MessageBus, type MessageState } from './message-bus.js'
 import { createExperienceRepository, ExperienceError, type ExperienceEntry, type ExperienceReview, type ExperienceState } from './experience.js'
 import { createExecutionBudget, ExecutionBudgetError, type ExecutionBudget, type ExecutionBudgetSnapshot } from './execution-budget.js'
@@ -357,7 +357,8 @@ export const createFeatureSession = async (input: {
   const configuredLimit = input.config.persistence.maxStateBytes
   const store = await createDurableStateStore({ directory, initialState: handoff === undefined ? initialState : recover(handoff.state), enabled: input.config.persistence.enabled,
     ...(configuredLimit > 0 ? { maxStateBytes: configuredLimit } : input.config.persistence.enabled ? {} : { maxStateBytes: MEMORY_MODE_MAX_STATE_BYTES }),
-    validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }), segments: SWARM_SEGMENT_SPECS, recover })
+    validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }),
+    ...SWARM_LAYOUT_OPTIONS, recover })
   const saved = store.read()
   // Older versions charged planning review reservations against implementation calls.
   // Preserve sent work and observation records, but classify these known reservations correctly.
@@ -422,7 +423,21 @@ export const createFeatureSession = async (input: {
     // 无 sidecar 时兼容旧持久化状态的内嵌健康快照（只读一次，后续健康只写 sidecar）。
     return store.read().routeHealth
   }
-  const bindings = createAgentBindingRegistry(store)
+  // 绑定历史 sidecar：主状态只保留每个 agentId 最近若干条，更老的先落盘再移出状态，
+  // 段内分片数因此不随委派历史线性增长；归档文件只用于审计，不参与恢复与消息校验。
+  const historyDirectory = join(directory, 'history')
+  const archiveBindingHistory = async (entries: readonly AgentBinding[]): Promise<void> => {
+    if (!store.durable) return
+    await mkdir(historyDirectory, { recursive: true, mode: 0o700 })
+    const metadata = await lstat(historyDirectory)
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new StateStoreError('STATE_INVALID', 'Binding history directory is invalid')
+    const handle = await open(join(historyDirectory, 'bindings.jsonl'), 'a', 0o600)
+    try {
+      await handle.writeFile(entries.map((entry) => canonicalStateJson(entry)).join('\n') + '\n', 'utf8')
+      await handle.sync()
+    } finally { await handle.close() }
+  }
+  const bindings = createAgentBindingRegistry(store, { archive: archiveBindingHistory })
   const bus = !input.config.messageBus.enabled ? undefined : createMessageBus({ store, bindings, now: input.now, maxPendingPerTask: input.config.messageBus.maxPending,
     validateArtifactRef: (ref, binding) => {
       try { contexts.Read(binding, ref, { limit: 1 }); return true } catch { return false }
@@ -630,13 +645,13 @@ export const createFeatureSession = async (input: {
       }
       setSegment('tasks', taskEntries)
       removeSegment('tasks', taskDirty.removedTasks)
-      const delegationEntries: Record<string, unknown> = {}
+      // delegations 按任务分桶：一次委派变更只重写该任务的整个桶，段内分片数 = 任务数。
+      const delegationBuckets: Record<string, unknown> = {}
       for (const delegationId of taskDirty.delegations) {
         const record = tasks.getDelegation(delegationId)
-        if (record !== undefined) delegationEntries[delegationId] = record
+        if (record !== undefined) delegationBuckets[record.taskId] = tasks.getTaskDelegations(record.taskId)
       }
-      setSegment('delegations', delegationEntries)
-      removeSegment('delegations', taskDirty.removedDelegations)
+      setSegment('delegations', delegationBuckets)
 
       const threadEntries: Record<string, unknown> = {}
       for (const threadId of threadDirty.threads) {

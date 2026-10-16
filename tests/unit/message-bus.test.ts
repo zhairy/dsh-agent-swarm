@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createDurableStateStore, type DurableStateStore } from '../../src/state-store.js'
 import { createAgentBindingRegistry, type BindingInput } from '../../src/agent-binding.js'
 import { createMessageBus, type MessageState } from '../../src/message-bus.js'
-import { SWARM_SEGMENT_SPECS } from '../../src/state-chunks.js'
+import { SWARM_LAYOUT_OPTIONS } from '../../src/state-chunks.js'
 import { createHash } from 'node:crypto'
 
 const dirs: string[] = []; const stores: DurableStateStore<MessageState>[] = []
@@ -13,7 +13,7 @@ const initial = (): MessageState => ({ bindings: {}, bindingHistory: {}, message
 const input = (agentId: string, overrides: Partial<BindingInput> = {}): BindingInput => ({ agentId, rootSessionId: 'root', workspaceId: 'workspace', taskId: 'task', nodeId: 'node-' + agentId, attemptId: 'attempt-' + agentId, threadId: 'thread-' + agentId, role: 'suan_heng', cardRevision: 1, workflowRevision: 1, permissions: ['message-send', 'message-read'], ...overrides })
 const setup = async (extra: { maxPendingPerTask?: number; now?: () => number } = {}) => {
   const directory = await mkdtemp(join(tmpdir(), 'swarm-bus-test-')); dirs.push(directory)
-  const store = await createDurableStateStore({ directory, initialState: initial(), segments: SWARM_SEGMENT_SPECS }); stores.push(store)
+  const store = await createDurableStateStore({ directory, initialState: initial(), ...SWARM_LAYOUT_OPTIONS }); stores.push(store)
   const bindings = createAgentBindingRegistry(store)
   await bindings.bind(input('a')); await bindings.bind(input('b'))
   const bus = createMessageBus({ store, bindings, ...extra })
@@ -36,7 +36,7 @@ describe('private pull-based peer message bus', () => {
     await bus.ack('b', { messageIds: [id] })
     expect((await bus.pull('b')).messages).toHaveLength(0)
     await store.dispose()
-    const reopened = await createDurableStateStore({ directory, initialState: initial(), segments: SWARM_SEGMENT_SPECS }); stores.push(reopened)
+    const reopened = await createDurableStateStore({ directory, initialState: initial(), ...SWARM_LAYOUT_OPTIONS }); stores.push(reopened)
     const resumedBus = createMessageBus({ store: reopened, bindings: createAgentBindingRegistry(reopened) })
     expect((await resumedBus.pull('b')).messages).toHaveLength(0)
     expect(Object.keys(reopened.read().messages)).toEqual([id])

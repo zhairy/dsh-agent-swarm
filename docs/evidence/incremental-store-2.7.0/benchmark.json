@@ -1,0 +1,459 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-16T15:16:16.560Z",
+  "baselineRef": null,
+  "node": "24.22.0",
+  "cpu": "Intel(R) Core(TM) Ultra 5 125H",
+  "platform": "linux",
+  "kernel": "6.12.111+deb13-amd64",
+  "sampleCount": 12,
+  "warmup": 3,
+  "gcExposed": true,
+  "methodology": "Synthetic ASCII state, memory-only store, no business validator in store timings; alternating baseline/current order in the same process. commit rewrites the whole state; incrementalWhole/incrementalChunk re-encode only the touched chunk and are null for builds without chunked updates. Feature validation measured separately. This is not a NAS, end-to-end, LLM cost, or token-savings benchmark.",
+  "sources": [
+    {
+      "name": "before",
+      "directory": "/data/nas/public/swarm/dsh-agent-swarm/.work/bench-lib-2.6.0",
+      "moduleDigests": {
+        "state-store.js": "d8fb215c360bc5e7ac33b736af998b298dbb787faa919b34674cac5c4c444ca0",
+        "agent-binding.js": "70e6781176bd9f41e74d731be787bc156a7668ebefd345b4096ee6bc8fe86126",
+        "feature-session.js": "a41a85a344204d13cdd137207e9f2932936d72c816e1d8027ee4181b73a55871"
+      }
+    },
+    {
+      "name": "after",
+      "directory": "/data/nas/public/swarm/dsh-agent-swarm/lib",
+      "moduleDigests": {
+        "state-store.js": "4cc4f8a81684878b69fe2e96c2033ef60fbd421520af23df1b2f2a5ae4292ded",
+        "agent-binding.js": "08cd0b5dc914fcb0fc17213e489c387c0e1af08d6233d959d09675a2e9967160",
+        "feature-session.js": "be2009fbe9cf06dfe5cfe3f47f72646aae05bfdfcd5bbfc93840c8859bc0e119"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "variant": "before",
+      "payloadBytes": 262144,
+      "stateBytes": 262909,
+      "read": {
+        "medianMs": 0.2487,
+        "p95Ms": 0.32835,
+        "minMs": 0.16933,
+        "maxMs": 0.32835
+      },
+      "commit": {
+        "medianMs": 2.81659,
+        "p95Ms": 3.21912,
+        "minMs": 1.63725,
+        "maxMs": 3.21912
+      },
+      "bindingLookup": {
+        "medianMs": 0.02754,
+        "p95Ms": 0.03731,
+        "minMs": 0.01423,
+        "maxMs": 0.03731
+      },
+      "incrementalWhole": {
+        "medianMs": 0.05409,
+        "p95Ms": 0.14306,
+        "minMs": 0.04147,
+        "maxMs": 0.14306
+      },
+      "incrementalChunk": {
+        "medianMs": 0.17338,
+        "p95Ms": 0.29383,
+        "minMs": 0.0927,
+        "maxMs": 0.29383
+      }
+    },
+    {
+      "variant": "after",
+      "payloadBytes": 262144,
+      "stateBytes": 262909,
+      "read": {
+        "medianMs": 0.23137,
+        "p95Ms": 0.42431,
+        "minMs": 0.15081,
+        "maxMs": 0.42431
+      },
+      "commit": {
+        "medianMs": 3.19219,
+        "p95Ms": 5.73408,
+        "minMs": 1.42092,
+        "maxMs": 5.73408
+      },
+      "bindingLookup": {
+        "medianMs": 0.0337,
+        "p95Ms": 0.07877,
+        "minMs": 0.01188,
+        "maxMs": 0.07877
+      },
+      "incrementalWhole": {
+        "medianMs": 0.06423,
+        "p95Ms": 0.17513,
+        "minMs": 0.03612,
+        "maxMs": 0.17513
+      },
+      "incrementalChunk": {
+        "medianMs": 0.16571,
+        "p95Ms": 0.30438,
+        "minMs": 0.08343,
+        "maxMs": 0.30438
+      }
+    },
+    {
+      "variant": "before",
+      "payloadBytes": 1048576,
+      "stateBytes": 1049341,
+      "read": {
+        "medianMs": 1.05748,
+        "p95Ms": 1.18723,
+        "minMs": 0.79033,
+        "maxMs": 1.18723
+      },
+      "commit": {
+        "medianMs": 11.22644,
+        "p95Ms": 13.0122,
+        "minMs": 10.66047,
+        "maxMs": 13.0122
+      },
+      "bindingLookup": {
+        "medianMs": 0.05049,
+        "p95Ms": 0.07774,
+        "minMs": 0.03369,
+        "maxMs": 0.07774
+      },
+      "incrementalWhole": {
+        "medianMs": 0.09859,
+        "p95Ms": 0.14123,
+        "minMs": 0.06246,
+        "maxMs": 0.14123
+      },
+      "incrementalChunk": {
+        "medianMs": 0.22511,
+        "p95Ms": 0.34055,
+        "minMs": 0.18847,
+        "maxMs": 0.34055
+      }
+    },
+    {
+      "variant": "after",
+      "payloadBytes": 1048576,
+      "stateBytes": 1049341,
+      "read": {
+        "medianMs": 1.01019,
+        "p95Ms": 1.72247,
+        "minMs": 0.87382,
+        "maxMs": 1.72247
+      },
+      "commit": {
+        "medianMs": 14.00439,
+        "p95Ms": 26.26789,
+        "minMs": 10.20237,
+        "maxMs": 26.26789
+      },
+      "bindingLookup": {
+        "medianMs": 0.04783,
+        "p95Ms": 0.10069,
+        "minMs": 0.03657,
+        "maxMs": 0.10069
+      },
+      "incrementalWhole": {
+        "medianMs": 0.0987,
+        "p95Ms": 0.50667,
+        "minMs": 0.0679,
+        "maxMs": 0.50667
+      },
+      "incrementalChunk": {
+        "medianMs": 0.19027,
+        "p95Ms": 0.40311,
+        "minMs": 0.15247,
+        "maxMs": 0.40311
+      }
+    },
+    {
+      "variant": "before",
+      "payloadBytes": 4194304,
+      "stateBytes": 4195069,
+      "read": {
+        "medianMs": 3.5392,
+        "p95Ms": 7.20913,
+        "minMs": 1.78789,
+        "maxMs": 7.20913
+      },
+      "commit": {
+        "medianMs": 40.45535,
+        "p95Ms": 61.81245,
+        "minMs": 25.06525,
+        "maxMs": 61.81245
+      },
+      "bindingLookup": {
+        "medianMs": 0.07974,
+        "p95Ms": 0.1485,
+        "minMs": 0.05237,
+        "maxMs": 0.1485
+      },
+      "incrementalWhole": {
+        "medianMs": 0.13129,
+        "p95Ms": 0.17261,
+        "minMs": 0.08775,
+        "maxMs": 0.17261
+      },
+      "incrementalChunk": {
+        "medianMs": 0.26533,
+        "p95Ms": 0.32388,
+        "minMs": 0.16184,
+        "maxMs": 0.32388
+      }
+    },
+    {
+      "variant": "after",
+      "payloadBytes": 4194304,
+      "stateBytes": 4195069,
+      "read": {
+        "medianMs": 3.22274,
+        "p95Ms": 4.79624,
+        "minMs": 1.40621,
+        "maxMs": 4.79624
+      },
+      "commit": {
+        "medianMs": 41.96299,
+        "p95Ms": 49.49114,
+        "minMs": 22.87046,
+        "maxMs": 49.49114
+      },
+      "bindingLookup": {
+        "medianMs": 0.06436,
+        "p95Ms": 0.09625,
+        "minMs": 0.04636,
+        "maxMs": 0.09625
+      },
+      "incrementalWhole": {
+        "medianMs": 0.12164,
+        "p95Ms": 0.73128,
+        "minMs": 0.09755,
+        "maxMs": 0.73128
+      },
+      "incrementalChunk": {
+        "medianMs": 0.22236,
+        "p95Ms": 0.35959,
+        "minMs": 0.14341,
+        "maxMs": 0.35959
+      }
+    },
+    {
+      "variant": "before",
+      "payloadBytes": 8388608,
+      "stateBytes": 8389373,
+      "read": {
+        "medianMs": 6.21021,
+        "p95Ms": 7.31117,
+        "minMs": 3.90536,
+        "maxMs": 7.31117
+      },
+      "commit": {
+        "medianMs": 77.93445,
+        "p95Ms": 99.04199,
+        "minMs": 52.98546,
+        "maxMs": 99.04199
+      },
+      "bindingLookup": {
+        "medianMs": 0.06674,
+        "p95Ms": 0.096,
+        "minMs": 0.05375,
+        "maxMs": 0.096
+      },
+      "incrementalWhole": {
+        "medianMs": 0.1044,
+        "p95Ms": 0.19846,
+        "minMs": 0.08919,
+        "maxMs": 0.19846
+      },
+      "incrementalChunk": {
+        "medianMs": 0.22367,
+        "p95Ms": 0.33243,
+        "minMs": 0.1243,
+        "maxMs": 0.33243
+      }
+    },
+    {
+      "variant": "after",
+      "payloadBytes": 8388608,
+      "stateBytes": 8389373,
+      "read": {
+        "medianMs": 6.24581,
+        "p95Ms": 8.08032,
+        "minMs": 3.72372,
+        "maxMs": 8.08032
+      },
+      "commit": {
+        "medianMs": 75.45242,
+        "p95Ms": 81.63071,
+        "minMs": 59.62011,
+        "maxMs": 81.63071
+      },
+      "bindingLookup": {
+        "medianMs": 0.07045,
+        "p95Ms": 0.08152,
+        "minMs": 0.05034,
+        "maxMs": 0.08152
+      },
+      "incrementalWhole": {
+        "medianMs": 0.10788,
+        "p95Ms": 0.13646,
+        "minMs": 0.09025,
+        "maxMs": 0.13646
+      },
+      "incrementalChunk": {
+        "medianMs": 0.18752,
+        "p95Ms": 0.25943,
+        "minMs": 0.11453,
+        "maxMs": 0.25943
+      }
+    },
+    {
+      "variant": "before",
+      "payloadBytes": 16777216,
+      "stateBytes": 16777981,
+      "read": {
+        "medianMs": 8.21199,
+        "p95Ms": 9.3144,
+        "minMs": 4.75139,
+        "maxMs": 9.3144
+      },
+      "commit": {
+        "medianMs": 100.99159,
+        "p95Ms": 170.92208,
+        "minMs": 78.60997,
+        "maxMs": 170.92208
+      },
+      "bindingLookup": {
+        "medianMs": 0.05866,
+        "p95Ms": 0.07181,
+        "minMs": 0.03623,
+        "maxMs": 0.07181
+      },
+      "incrementalWhole": {
+        "medianMs": 0.08606,
+        "p95Ms": 0.11921,
+        "minMs": 0.07029,
+        "maxMs": 0.11921
+      },
+      "incrementalChunk": {
+        "medianMs": 0.13256,
+        "p95Ms": 0.23896,
+        "minMs": 0.09909,
+        "maxMs": 0.23896
+      }
+    },
+    {
+      "variant": "after",
+      "payloadBytes": 16777216,
+      "stateBytes": 16777981,
+      "read": {
+        "medianMs": 8.50241,
+        "p95Ms": 13.60695,
+        "minMs": 5.06069,
+        "maxMs": 13.60695
+      },
+      "commit": {
+        "medianMs": 106.32156,
+        "p95Ms": 174.54914,
+        "minMs": 69.38797,
+        "maxMs": 174.54914
+      },
+      "bindingLookup": {
+        "medianMs": 0.06107,
+        "p95Ms": 0.07887,
+        "minMs": 0.0388,
+        "maxMs": 0.07887
+      },
+      "incrementalWhole": {
+        "medianMs": 0.11037,
+        "p95Ms": 0.13936,
+        "minMs": 0.08072,
+        "maxMs": 0.13936
+      },
+      "incrementalChunk": {
+        "medianMs": 0.14851,
+        "p95Ms": 0.20278,
+        "minMs": 0.09656,
+        "maxMs": 0.20278
+      }
+    }
+  ],
+  "validationRows": [
+    {
+      "variant": "before",
+      "taskCount": 1,
+      "delegationCount": 1000,
+      "stateBytes": 141190,
+      "validation": {
+        "medianMs": 0.94681,
+        "p95Ms": 1.21191,
+        "minMs": 0.60187,
+        "maxMs": 1.21191
+      }
+    },
+    {
+      "variant": "after",
+      "taskCount": 1,
+      "delegationCount": 1000,
+      "stateBytes": 141190,
+      "validation": {
+        "medianMs": 1.1139,
+        "p95Ms": 1.59018,
+        "minMs": 0.618,
+        "maxMs": 1.59018
+      }
+    },
+    {
+      "variant": "before",
+      "taskCount": 1,
+      "delegationCount": 4000,
+      "stateBytes": 570190,
+      "validation": {
+        "medianMs": 3.97002,
+        "p95Ms": 5.62399,
+        "minMs": 2.80642,
+        "maxMs": 5.62399
+      }
+    },
+    {
+      "variant": "after",
+      "taskCount": 1,
+      "delegationCount": 4000,
+      "stateBytes": 570190,
+      "validation": {
+        "medianMs": 4.13646,
+        "p95Ms": 8.21354,
+        "minMs": 2.61657,
+        "maxMs": 8.21354
+      }
+    },
+    {
+      "variant": "before",
+      "taskCount": 100,
+      "delegationCount": 4000,
+      "stateBytes": 597937,
+      "validation": {
+        "medianMs": 3.5906,
+        "p95Ms": 4.90443,
+        "minMs": 1.5583,
+        "maxMs": 4.90443
+      }
+    },
+    {
+      "variant": "after",
+      "taskCount": 100,
+      "delegationCount": 4000,
+      "stateBytes": 597937,
+      "validation": {
+        "medianMs": 2.76665,
+        "p95Ms": 4.59279,
+        "minMs": 1.58597,
+        "maxMs": 4.59279
+      }
+    }
+  ]
+}

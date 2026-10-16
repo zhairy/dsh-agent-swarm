@@ -46,9 +46,13 @@ export const apply = ctx => {
   const children = new Map()
   let rootStep = 0, finished = false, stateDirectory
   const committed = () => {
-    const snapshot = JSON.parse(readFileSync(join(stateDirectory, 'snapshot.json'), 'utf8'))
-    let chunked = ChunkedState.fromState(snapshot.state, SWARM_SEGMENT_SPECS, { verified: true })
-    let sequence = snapshot.sequence
+    // 按段快照：meta.json 声明代次与段文件名，段文件按内容指纹命名。
+    const snapshotDirectory = join(stateDirectory, 'snapshot')
+    const meta = JSON.parse(readFileSync(join(snapshotDirectory, 'meta.json'), 'utf8'))
+    const snapshotState = {}
+    for (const [name, entry] of Object.entries(meta.segments)) snapshotState[name] = JSON.parse(readFileSync(join(snapshotDirectory, entry.file), 'utf8'))
+    let chunked = ChunkedState.fromState(snapshotState, SWARM_SEGMENT_SPECS, { verified: true })
+    let sequence = meta.sequence
     for (const line of readFileSync(join(stateDirectory, 'journal.jsonl'), 'utf8').split('\n').filter(Boolean)) {
       const entry = JSON.parse(line)
       if (entry.sequence <= sequence) continue

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { createDurableStateStore } from '../../src/state-store.js'
 import { createExperienceRepository, type ExperienceReview, type ExperienceState } from '../../src/experience.js'
-import { SWARM_SEGMENT_SPECS } from '../../src/state-chunks.js'
+import { SWARM_LAYOUT_OPTIONS } from '../../src/state-chunks.js'
 
 describe('reviewed reusable experiences', () => {
   it('deduplicates exact live candidates, preserving expired, reviewed and changed-source audit history', async () => {
     let now = 1000
-    const store = await createDurableStateStore<ExperienceState>({ directory: '/unused', initialState: { experiences: {} }, enabled: false, segments: SWARM_SEGMENT_SPECS })
+    const store = await createDurableStateStore<ExperienceState>({ directory: '/unused', initialState: { experiences: {} }, enabled: false, ...SWARM_LAYOUT_OPTIONS })
     const repository = createExperienceRepository(store, { now: () => now, verifyReview: () => true })
     const input = { problemClass: 'numerical', appliesWhen: ['finite'], doesNotApplyWhen: ['symbolic'], conclusion: 'compensated sum', source: { taskId: 'T1', cardRevision: 1, workflowRevision: 1, artifactDigest: 'a'.repeat(64), authorId: 'author' }, verification: ['test'], counterexamples: [], operatorVersions: ['2'], expiresAt: 2000 }
     const first = await repository.addCandidate(input)
@@ -28,7 +28,7 @@ describe('reviewed reusable experiences', () => {
     await store.dispose()
   })
   it('keeps accepted-derived candidates separate and requires trusted independent evidence before promotion', async () => {
-    const store = await createDurableStateStore<ExperienceState>({ directory: '/unused', initialState: { experiences: {} }, enabled: false, segments: SWARM_SEGMENT_SPECS })
+    const store = await createDurableStateStore<ExperienceState>({ directory: '/unused', initialState: { experiences: {} }, enabled: false, ...SWARM_LAYOUT_OPTIONS })
     const repository = createExperienceRepository(store, { now: () => 1000, verifyReview: (_entry, review) => review.reviewArtifactDigest === 'b'.repeat(64) })
     const entry = await repository.addCandidate({ problemClass: 'numerical', appliesWhen: ['finite binary64 vectors'], doesNotApplyWhen: ['exact symbolic theorem'], conclusion: 'Use compensated summation for cancellation', source: { taskId: 'task', cardRevision: 1, workflowRevision: 1, artifactDigest: 'a'.repeat(64), authorId: 'author' }, verification: ['independent cancellation fixture'], counterexamples: [], operatorVersions: ['1'], expiresAt: 2000 })
     expect(repository.list()).toEqual([])
