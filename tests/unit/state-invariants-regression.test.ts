@@ -21,6 +21,28 @@ const fixtureCard = () => ValidateTaskCard({ title: 'epoch fixture', goal: 'pers
   acceptance: ['same snapshot epoch'], scope: [], flags: {} }).card!
 
 describe('whole-state transaction invariants', () => {
+  it('keeps writes that land after the dirty set was taken but before the queued commit lands', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'swarm-dirty-race-'))
+    const tasks = intTaskStore(), threads = intThreadRegistry()
+    const features = await createFeatureSession({ rootSessionId: 'dirty-race-root', cwd: home, dshHome: home,
+      config: getSwarmConfig({ persistence: { enabled: false } }), tasks, threads, now: () => 1 })
+    cleanup.push(async () => { await features.dispose(); await rm(home, { recursive: true, force: true }) })
+    tasks.AddTask({ taskId: 'T-1', sessionId: 'dirty-race-root', workspaceId: features.workspaceId, card: fixtureCard(),
+      gates: [], triage: { source: 'rules', rulesApplied: [] }, delegationIds: [], rounds: 0, createdAt: 1, updatedAt: 1,
+      cardRevision: 1, workflowRevision: 1, requestRevision: 1 })
+    const entered = deferred(), release = deferred()
+    const blocker = features.store.commit('fixture/race-blocker', async () => { entered.resolve(); await release.promise })
+    await entered.promise
+    // 取走脏键之后、排队提交落盘之前发生的新写入：清空若不与取走原子，这批键会被误清而永久漏写。
+    const queued = features.persist('fixture/race-first', tasks, threads)
+    tasks.UpdateTask('T-1', { card: { ...fixtureCard(), title: 'written after the dirty set was taken' } })
+    release.resolve()
+    await blocker
+    await queued
+    await features.persist('fixture/race-second', tasks, threads)
+    expect(features.store.read().tasks[0]?.card.title).toBe('written after the dirty set was taken')
+  })
+
   it('does not combine pre-queue task revisions with later context revisions', async () => {
     const home = await mkdtemp(join(tmpdir(), 'swarm-state-epochs-'))
     const tasks = intTaskStore(), threads = intThreadRegistry()
@@ -102,7 +124,8 @@ describe('whole-state transaction invariants', () => {
     expect(await queuedResult).toEqual({ ok: true })
     expect(validateFeatureState(features.store.read(), { rootSessionId: 'control-epoch-root', workspaceId: features.workspaceId })).toBe(true)
     expect(features.store.read().delegations).toEqual([])
-    expect(features.store.read().agentControls).toEqual([])
+    // 增量提交不写空段：缺失与空集合在 FeatureState 里等价（所有消费者都按 ?? [] 读取）。
+    expect(features.store.read().agentControls ?? []).toEqual([])
     await features.persist('fixture/control-latest', tasks, threads)
     expect(features.store.read().agentControls?.[0]?.delegationId).toBe('D-1')
     expect(features.store.read().delegations[0]?.delegationId).toBe('D-1')

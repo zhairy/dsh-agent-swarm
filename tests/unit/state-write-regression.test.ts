@@ -10,6 +10,7 @@ import type { AgentLike, SubagentStartRequestLike } from '../../src/host-contrac
 import type { EvidenceConsumptionNotice } from '../../src/evidence-assessment.js'
 import type { DelegationRecord, TaskRecord } from '../../src/evidence.js'
 import { validateFeatureState } from '../../src/feature-session.js'
+import { ChunkedState, SWARM_SEGMENT_SPECS } from '../../src/state-chunks.js'
 import { ROLE_TAG_PATTERN } from '../../src/role-registry.js'
 import { VALID_OUTPUTS } from '../fixtures/valid-outputs.js'
 import type { WorkflowDefinition } from '../../src/workflow.js'
@@ -55,11 +56,22 @@ const make = async (options: { onStart?: (role: keyof typeof VALID_OUTPUTS, home
       { id: 'accept', label: '验收', operation: 'accept', dependsOn: ['checkpoint'], gates: [], outputContractVersion: '1' }
     ] } }
   type State = { delegations: DelegationRecord[]; tasks: TaskRecord[]; contexts: unknown[] }
-  const latestCommit = async () => {
+  const latestCommit = async (): Promise<{ sequence: number; state: State }> => {
     const directory = join(home, 'share', 'dsh-agent-swarm', 'state', await getWorkspaceId(home), digest(root.id))
-    const [snapshot, journal] = await Promise.all([readFile(join(directory, 'snapshot.json'), 'utf8'), readFile(join(directory, 'journal.jsonl'), 'utf8')])
-    const envelopes = [JSON.parse(snapshot), ...journal.split('\n').filter(Boolean).map((line) => JSON.parse(line))] as Array<{ sequence: number; state: State }>
-    return envelopes.reduce((latest, entry) => entry.sequence > latest.sequence ? entry : latest)
+    const [snapshotRaw, journalRaw] = await Promise.all([readFile(join(directory, 'snapshot.json'), 'utf8'), readFile(join(directory, 'journal.jsonl'), 'utf8')])
+    const snapshot = JSON.parse(snapshotRaw) as { sequence: number; state: unknown }
+    // 增量日志行只携带变更分片；按与恢复器相同的分片语义回放，而不是把每行当成完整状态。
+    let chunked = ChunkedState.fromState(snapshot.state, SWARM_SEGMENT_SPECS)
+    let sequence = snapshot.sequence
+    for (const line of journalRaw.split('\n').filter(Boolean)) {
+      const entry = JSON.parse(line) as { sequence: number; state?: unknown; changes?: unknown }
+      if (entry.sequence <= sequence) continue
+      chunked = entry.changes === undefined
+        ? ChunkedState.fromState(entry.state, SWARM_SEGMENT_SPECS)
+        : chunked.applyEncoded(entry.changes as Parameters<typeof chunked.applyEncoded>[0])
+      sequence = entry.sequence
+    }
+    return { sequence, state: chunked.materialize() as unknown as State }
   }
   const state = async () => (await latestCommit()).state
   return { service, root, exec, card, state, latestCommit, home, start }

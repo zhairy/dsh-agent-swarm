@@ -23,12 +23,16 @@ const median = (values) => { const sorted = [...values].sort((a, b) => a - b); c
 const summarize = (values) => ({ medianMs: Number(median(values).toFixed(5)), p95Ms: Number([...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1].toFixed(5)), minMs: Number(Math.min(...values).toFixed(5)), maxMs: Number(Math.max(...values).toFixed(5)) })
 const rows = []
 const binding = { agentId: 'audit-agent', rootSessionId: 'audit-root', workspaceId: 'audit-workspace', taskId: 'audit-task', nodeId: 'audit-node', attemptId: 'audit-attempt', threadId: 'audit-thread', role: 'mou_ding', cardRevision: 1, workflowRevision: 1, requestRevision: 1, generation: 1, leaseEpoch: 1, state: 'active', permissions: ['context-read'] }
-for (const payloadBytes of [65536, 262144, 1048576, 2097152]) {
+// 声明段规格后才能测量按分片增量提交；未声明的段保持 whole（整段替换）。
+const segmentSpecs = { bindings: { kind: 'dict' }, bindingHistory: { kind: 'dict' } }
+const probe = { ...binding, agentId: 'benchmark-probe' }
+for (const payloadBytes of [262144, 1048576, 4194304, 8388608, 16777216]) {
   const states = []
   for (const variant of variants) {
     const store = await variant.createDurableStateStore({ directory: '/unused-state-benchmark', enabled: false,
-      initialState: { counter: 0, payload: 'x'.repeat(payloadBytes), bindings: { 'audit-agent': binding }, bindingHistory: {} } })
-    states.push({ variant, store, registry: variant.createAgentBindingRegistry(store), samples: { read: [], commit: [], bindingLookup: [] } })
+      maxStateBytes: payloadBytes * 4 + 1048576, segments: segmentSpecs,
+      initialState: { counter: 0, payload: 'x'.repeat(payloadBytes), bindings: { 'audit-agent': binding, probe }, bindingHistory: {} } })
+    states.push({ variant, store, registry: variant.createAgentBindingRegistry(store), samples: { read: [], commit: [], bindingLookup: [], incrementalWhole: [], incrementalChunk: [] } })
   }
   for (let iteration = 0; iteration < warmup + sampleCount; iteration++) {
     if (iteration === warmup) global.gc?.()
@@ -37,12 +41,24 @@ for (const payloadBytes of [65536, 262144, 1048576, 2097152]) {
       let started = performance.now(); entry.store.read(); const read = performance.now() - started
       started = performance.now(); await entry.store.commit('benchmark/update', (draft) => { draft.counter++ }); const commit = performance.now() - started
       started = performance.now(); entry.registry.get('audit-agent'); const bindingLookup = performance.now() - started
+      // 增量提交只在支持分片的实现上测量：whole 段改一个标量、dict 段改一条记录。
+      let incrementalWhole
+      let incrementalChunk
+      if (entry.store.update !== undefined) {
+        started = performance.now(); await entry.store.update('benchmark/whole', { patch: { whole: { counter: iteration } } }); incrementalWhole = performance.now() - started
+        started = performance.now(); await entry.store.update('benchmark/chunk', { patch: { set: { bindings: { probe: { ...probe, leaseEpoch: iteration + 1 } } } } }); incrementalChunk = performance.now() - started
+      }
       if (iteration >= warmup) { entry.samples.read.push(read); entry.samples.commit.push(commit); entry.samples.bindingLookup.push(bindingLookup) }
+      if (iteration >= warmup && incrementalWhole !== undefined && incrementalChunk !== undefined) {
+        entry.samples.incrementalWhole.push(incrementalWhole); entry.samples.incrementalChunk.push(incrementalChunk)
+      }
     }
   }
   for (const entry of states) {
+    const summarizeIf = (values) => values.length === 0 ? null : summarize(values)
     rows.push({ variant: entry.variant.name, payloadBytes, stateBytes: Buffer.byteLength(JSON.stringify(entry.store.read())),
-      read: summarize(entry.samples.read), commit: summarize(entry.samples.commit), bindingLookup: summarize(entry.samples.bindingLookup) })
+      read: summarize(entry.samples.read), commit: summarize(entry.samples.commit), bindingLookup: summarize(entry.samples.bindingLookup),
+      incrementalWhole: summarizeIf(entry.samples.incrementalWhole), incrementalChunk: summarizeIf(entry.samples.incrementalChunk) })
     await entry.store.dispose()
   }
 }
@@ -69,7 +85,7 @@ for (const [taskCount, delegationCount] of [[1, 1000], [1, 4000], [100, 4000]]) 
 }
 const output = {
   schemaVersion: 1, recordedAt: new Date().toISOString(), baselineRef: option('--baseline-ref') ?? null, node: process.versions.node, cpu: cpus()[0]?.model, platform: platform(), kernel: release(), sampleCount, warmup, gcExposed: typeof global.gc === 'function',
-  methodology: 'Synthetic ASCII state, memory-only store, no business validator in store timings; alternating baseline/current order in the same process. Feature validation measured separately. This is not a NAS, end-to-end, LLM cost, or token-savings benchmark.',
+  methodology: 'Synthetic ASCII state, memory-only store, no business validator in store timings; alternating baseline/current order in the same process. commit rewrites the whole state; incrementalWhole/incrementalChunk re-encode only the touched chunk and are null for builds without chunked updates. Feature validation measured separately. This is not a NAS, end-to-end, LLM cost, or token-savings benchmark.',
   sources: variants.map(({ name, directory, moduleDigests }) => ({ name, directory, moduleDigests })), rows, validationRows
 }
 const encoded = JSON.stringify(output, null, 2) + '\n'

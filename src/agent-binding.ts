@@ -53,7 +53,9 @@ export const createAgentBindingRegistry = <T extends BindingState>(store: Durabl
   const get = (agentId: string) => store.readPath === undefined ? store.read().bindings[agentId] : store.readPath<AgentBinding>(['bindings', agentId])
   const requireActive: AgentBindingRegistry['requireActive'] = (agentId, permission) => {
     const binding = get(agentId)
-    if (binding === undefined || binding.state !== 'active') throw new BindingError('BINDING_INACTIVE', 'No active host-bound attempt for this agent')
+    if (binding === undefined || binding.state !== 'active') {
+      throw new BindingError('BINDING_INACTIVE', 'No active host-bound attempt for this agent')
+    }
     if (permission !== undefined && !binding.permissions.includes(permission)) throw new BindingError('PERMISSION_DENIED', 'Agent lacks capability: ' + permission)
     return binding
   }
@@ -61,43 +63,45 @@ export const createAgentBindingRegistry = <T extends BindingState>(store: Durabl
     get, requireActive,
     bind: async (input) => {
       let binding!: AgentBinding
-      await store.commit('binding/bind', (draft) => {
-        const old = draft.bindings[input.agentId]
+      // 补丁在 store 的互斥区内按冻结基线求值：读取、校验与写入之间没有其它写入者。
+      await store.update('binding/bind', { build: (state) => {
+        const old = state.bindings[input.agentId]
+        const history: Record<string, unknown> = {}
         if (old !== undefined) {
           const revoked: AgentBinding = { ...old, state: 'revoked', revocationReason: 'superseded' }
-          draft.bindingHistory[bindingKey(old)] = revoked
+          history[bindingKey(old)] = revoked
         }
         binding = { ...input, requestRevision: input.requestRevision ?? 1, permissions: [...new Set(input.permissions)], generation: (old?.generation ?? 0) + 1, leaseEpoch: (old?.leaseEpoch ?? 0) + 1, state: 'active' }
         if (!validateBinding(binding)) throw new BindingError('BINDING_INVALID', 'Invalid host binding')
-        draft.bindings[input.agentId] = binding
-        draft.bindingHistory[bindingKey(binding)] = binding
-      })
+        history[bindingKey(binding)] = binding
+        return { set: { bindings: { [input.agentId]: binding }, bindingHistory: history } }
+      } })
       return structuredClone(binding)
     },
     getHistorical: (binding) => store.readPath === undefined ? store.read().bindingHistory[bindingKey(binding)] : store.readPath<AgentBinding>(['bindingHistory', bindingKey(binding)]),
     revoke: async (agentId, reason = 'untrusted') => {
-      await store.commit('binding/revoke', (draft) => {
-        const old = draft.bindings[agentId]
-        if (old === undefined) return
+      await store.update('binding/revoke', { build: (state) => {
+        const old = state.bindings[agentId]
+        if (old === undefined) return {}
         const next: AgentBinding = { ...old, state: 'revoked', revocationReason: reason }
-        draft.bindings[agentId] = next; draft.bindingHistory[bindingKey(old)] = next
-      })
+        return { set: { bindings: { [agentId]: next }, bindingHistory: { [bindingKey(old)]: next } } }
+      } })
     },
     suspend: async (agentId) => {
-      await store.commit('binding/suspend', (draft) => {
-        const old = draft.bindings[agentId]
-        if (old === undefined) return
+      await store.update('binding/suspend', { build: (state) => {
+        const old = state.bindings[agentId]
+        if (old === undefined) return {}
         const next: AgentBinding = { ...old, state: 'suspended' }
-        draft.bindings[agentId] = next; draft.bindingHistory[bindingKey(old)] = next
-      })
+        return { set: { bindings: { [agentId]: next }, bindingHistory: { [bindingKey(old)]: next } } }
+      } })
     },
     completeBlindReview: async (agentId) => {
-      await store.commit('binding/blind-review-complete', (draft) => {
-        const old = draft.bindings[agentId]
+      await store.update('binding/blind-review-complete', { build: (state) => {
+        const old = state.bindings[agentId]
         if (old === undefined || old.state !== 'active') throw new BindingError('BINDING_INACTIVE', 'No active review attempt')
         const next: AgentBinding = { ...old, blindReview: false }
-        draft.bindings[agentId] = next; draft.bindingHistory[bindingKey(old)] = next
-      })
+        return { set: { bindings: { [agentId]: next }, bindingHistory: { [bindingKey(old)]: next } } }
+      } })
     }
   }
 }

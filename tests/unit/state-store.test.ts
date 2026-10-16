@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { canonicalStateJson, createDurableStateStore, markInterruptedOnRecovery, type DurableStateStore } from '../../src/state-store.js'
+import { ChunkedState } from '../../src/state-chunks.js'
 
 const directories: string[] = []
 const stores: DurableStateStore<unknown>[] = []
@@ -106,16 +107,18 @@ describe('durable snapshot and committed journal', () => {
     expect(store.getSequence()).toBe(1)
   })
 
-  it('creates the journal before first commit and keeps the canonical version-1 checksums unchanged', async () => {
+  it('creates the journal before first commit and keeps the canonical version-2 journal line self-verified', async () => {
     const path = await directory()
     const store = track(await createDurableStateStore({ directory: path, initialState: { z: '\nquote"', a: { n: 1 } } }))
     expect(await readFile(join(path, 'journal.jsonl'), 'utf8')).toBe('')
     await store.commit('quoted/event\n', (draft) => { draft.a.n = 2 })
     const raw = await readFile(join(path, 'journal.jsonl'), 'utf8')
-    const entry = JSON.parse(raw) as { entryChecksum: string; checksum: string; state: unknown }
+    const entry = JSON.parse(raw) as { schemaVersion?: number; entryChecksum: string; checksum: string; state: unknown }
     const { entryChecksum, ...payload } = entry
     const hash = (value: unknown) => createHash('sha256').update(canonicalStateJson(value)).digest('hex')
-    expect(entry.checksum).toBe(hash(entry.state))
+    // v2：行内 checksum 是分片根哈希（内容/顺序敏感），entryChecksum 仍保护整行 canonical 字节。
+    expect(entry.schemaVersion).toBe(2)
+    expect(entry.checksum).toBe(ChunkedState.fromState(entry.state).rootChecksum())
     expect(entryChecksum).toBe(hash(payload))
     expect(raw).toBe(canonicalStateJson(entry) + '\n')
   })

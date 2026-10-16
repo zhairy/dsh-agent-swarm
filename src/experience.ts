@@ -55,33 +55,34 @@ export const createExperienceRepository = <T extends ExperienceState>(store: Dur
       for (const key of ['appliesWhen', 'doesNotApplyWhen', 'verification', 'counterexamples', 'operatorVersions'] as const) if (!Array.isArray(input[key]) || input[key].length > 32 || input[key].some((s) => typeof s !== 'string' || s.length > 2000)) throw new ExperienceError('EXPERIENCE_INVALID', 'Invalid bounded experience fields')
       const createdAt = now(), inputIdentity = identity(input)
       let entry: ExperienceEntry = { ...structuredClone(input), id: randomUUID(), status: 'candidate', createdAt }
-      await store.commit('experience/candidate', (draft) => {
+      // 补丁在 store 的互斥区内按冻结基线求值：去重与容量检查对最新的已提交候选成立。
+      await store.update('experience/candidate', { build: (state) => {
         // Only exact, still-live candidates reuse storage; reviewed/deprecated/expired records remain distinct audit facts.
-        const existing = Object.values(draft.experiences).find((candidate) => candidate.status === 'candidate'
+        const existing = Object.values(state.experiences).find((candidate) => candidate.status === 'candidate'
           && candidate.expiresAt > createdAt && identity(candidate) === inputIdentity)
-        if (existing !== undefined) { entry = structuredClone(existing); return }
-        if (Object.keys(draft.experiences).length >= (options.maxEntries ?? 1024)) throw new ExperienceError('EXPERIENCE_INVALID', 'Experience capacity reached; archive first')
-        draft.experiences[entry.id] = entry
-      })
+        if (existing !== undefined) { entry = structuredClone(existing); return {} }
+        if (Object.keys(state.experiences).length >= (options.maxEntries ?? 1024)) throw new ExperienceError('EXPERIENCE_INVALID', 'Experience capacity reached; archive first')
+        return { set: { experiences: { [entry.id]: entry } } }
+      } })
       return entry
     },
     promote: async (id: string, review: ExperienceReview): Promise<ExperienceEntry> => {
       let result!: ExperienceEntry
-      await store.commit('experience/promote', async (draft) => {
-        const entry = draft.experiences[id]
+      await store.update('experience/promote', { build: async (state) => {
+        const entry = state.experiences[id]
         if (entry === undefined || entry.status !== 'candidate' || entry.expiresAt <= now() || !review.evidenceComplete || review.unresolvedSevere !== 0 || !review.applicabilityConfirmed || !review.reviewer || review.reviewer === review.author || (entry.source.authorId !== undefined && entry.source.authorId !== review.author) || !digest.test(review.reviewArtifactDigest) || review.sourceArtifactDigest !== entry.source.artifactDigest || entry.verification.length === 0 || options.verifyReview === undefined || !await options.verifyReview(entry, review)) throw new ExperienceError('EXPERIENCE_REVIEW_REQUIRED', 'Promotion needs independently verified current source evidence, an independent reviewer and no unresolved severe findings')
         result = { ...entry, status: 'validated', reviewer: review.reviewer, reviewArtifactDigest: review.reviewArtifactDigest }
-        draft.experiences[id] = result
-      })
+        return { set: { experiences: { [id]: result } } }
+      } })
       return result
     },
     deprecate: async (id: string, reason: string): Promise<void> => {
       if (typeof reason !== 'string' || reason.trim() === '' || reason.length > 2000) throw new ExperienceError('EXPERIENCE_INVALID', 'Deprecation reason is required')
-      await store.commit('experience/deprecate', (draft) => {
-        const entry = draft.experiences[id]
+      await store.update('experience/deprecate', { build: (state) => {
+        const entry = state.experiences[id]
         if (entry === undefined) throw new ExperienceError('EXPERIENCE_INVALID', 'Unknown experience')
-        draft.experiences[id] = { ...entry, status: 'deprecated', deprecationReason: reason }
-      })
+        return { set: { experiences: { [id]: { ...entry, status: 'deprecated', deprecationReason: reason } } } }
+      } })
     },
     query: (query: MemoryQuery) => queryReviewedExperiences(Object.values(readEntries()), query, now()),
     list: (problemClass?: string, includeCandidates = false): ExperienceEntry[] => Object.values(readEntries()).filter((entry) => entry.expiresAt > now() && entry.status !== 'deprecated' && (includeCandidates || entry.status === 'validated') && (problemClass === undefined || entry.problemClass === problemClass))
