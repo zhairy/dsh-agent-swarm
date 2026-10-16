@@ -198,7 +198,6 @@ export interface TaskStoreDirty {
   readonly tasks: readonly string[]
   readonly delegations: readonly string[]
   readonly removedTasks: readonly string[]
-  readonly removedDelegations: readonly string[]
 }
 
 /**
@@ -212,11 +211,9 @@ export const intTaskStore = (): TaskStore => {
   const dirtyTasks = new Set<string>()
   const dirtyDelegations = new Set<string>()
   const removedTasks = new Set<string>()
-  const removedDelegations = new Set<string>()
   const markTask = (taskId: string): void => { dirtyTasks.add(taskId); removedTasks.delete(taskId) }
-  const markDelegation = (delegationId: string): void => { dirtyDelegations.add(delegationId); removedDelegations.delete(delegationId) }
+  const markDelegation = (delegationId: string): void => { dirtyDelegations.add(delegationId) }
   const markRemovedTask = (taskId: string): void => { dirtyTasks.delete(taskId); removedTasks.add(taskId) }
-  const markRemovedDelegation = (delegationId: string): void => { dirtyDelegations.delete(delegationId); removedDelegations.add(delegationId) }
   const RollbackTask: NonNullable<TaskStore['RollbackTask']> = (taskId, previous, expected) => {
     const current = tasks.get(taskId)
     if (current === undefined || (current.cardRevision ?? 1) !== expected.cardRevision || (current.workflowRevision ?? 1) !== expected.workflowRevision
@@ -281,15 +278,14 @@ export const intTaskStore = (): TaskStore => {
     AddDelegation,
     UpdateDelegation,
     takeDirty: () => {
-      const snapshot: TaskStoreDirty = { tasks: [...dirtyTasks], delegations: [...dirtyDelegations], removedTasks: [...removedTasks], removedDelegations: [...removedDelegations] }
-      dirtyTasks.clear(); dirtyDelegations.clear(); removedTasks.clear(); removedDelegations.clear()
+      const snapshot: TaskStoreDirty = { tasks: [...dirtyTasks], delegations: [...dirtyDelegations], removedTasks: [...removedTasks] }
+      dirtyTasks.clear(); dirtyDelegations.clear(); removedTasks.clear()
       return snapshot
     },
     restoreDirty: (dirty) => {
       for (const id of dirty.tasks) dirtyTasks.add(id)
       for (const id of dirty.delegations) dirtyDelegations.add(id)
       for (const id of dirty.removedTasks) removedTasks.add(id)
-      for (const id of dirty.removedDelegations) removedDelegations.add(id)
     },
     getDelegation: (delegationId) => delegations.get(delegationId),
     getTaskDelegations: (taskId) => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, readFile, writeFile, mkdir, symlink } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, writeFile, mkdir, symlink, cp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -50,9 +50,11 @@ describe('durable snapshot and committed journal', () => {
         await writeFile(join(path, 'journal.jsonl'), raw.replace('"n":1', '"n":2'))
       }
       if (kind === 'version') {
-        const snapshot = JSON.parse(await readFile(join(path, 'snapshot.json'), 'utf8')) as Record<string, unknown>
-        snapshot.schemaVersion = 99
-        await writeFile(join(path, 'snapshot.json'), JSON.stringify(snapshot))
+        // 按段快照的版本声明在 meta.json 里；篡改它必须被拒绝。
+        const metaPath = join(path, 'snapshot', 'meta.json')
+        const meta = JSON.parse(await readFile(metaPath, 'utf8')) as Record<string, unknown>
+        meta.schemaVersion = 99
+        await writeFile(metaPath, JSON.stringify(meta))
       }
       await expect(createDurableStateStore({ directory: path, initialState: { n: 0 } })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
       await expect(readFile(join(path, 'owner.json'))).rejects.toMatchObject({ code: 'ENOENT' })
@@ -76,9 +78,11 @@ describe('durable snapshot and committed journal', () => {
     await expect(store.commit('invalid', () => ({ n: 'wrong' } as unknown as { n: number }))).rejects.toMatchObject({ code: 'STATE_INVALID' })
     await expect(store.commit('secret', () => ({ n: 1, apiKey: 'private-value' }))).rejects.toMatchObject({ code: 'STATE_INVALID' })
     await store.dispose()
-    await rm(join(path, 'snapshot.json'))
     const outside = join(await directory(), 'outside.json'); await writeFile(outside, '{}')
-    await symlink(outside, join(path, 'snapshot.json'))
+    // 段文件与元数据都必须是私有普通文件：符号链接一律拒绝。
+    await rm(join(path, 'snapshot'), { recursive: true })
+    await mkdir(join(path, 'snapshot'), { recursive: true })
+    await symlink(outside, join(path, 'snapshot', 'meta.json'))
     await expect(createDurableStateStore({ directory: path, initialState: { n: 0 } })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
   })
 
@@ -160,16 +164,19 @@ describe('durable snapshot and committed journal', () => {
   it('keeps a journal-committed transaction visible when compaction fails and stops further writes', async () => {
     const path = await directory()
     const store = track(await createDurableStateStore({ directory: path, initialState: { n: 0 }, snapshotEvery: 1 }))
-    const trustedInitialSnapshot = await readFile(join(path, 'snapshot.json'), 'utf8')
-    await rm(join(path, 'snapshot.json'))
-    await mkdir(join(path, 'snapshot.json'))
+    const snapshotDirectory = join(path, 'snapshot')
+    const trustedSnapshot = join(await directory(), 'snapshot-backup')
+    await cp(snapshotDirectory, trustedSnapshot, { recursive: true })
+    await rm(snapshotDirectory, { recursive: true })
+    // meta.json 占位成目录：快照的元数据替换必然失败，用于模拟压缩写入失败。
+    await mkdir(join(snapshotDirectory, 'meta.json'), { recursive: true })
     await expect(store.commit('committed-before-compaction', (draft) => { draft.n = 1 })).resolves.toEqual({ n: 1 })
     expect(store.getSequence()).toBe(1)
     expect(store.read()).toEqual({ n: 1 })
     await expect(store.commit('cannot-continue', (draft) => { draft.n = 2 })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
     await store.dispose()
-    await rm(join(path, 'snapshot.json'), { recursive: true })
-    await writeFile(join(path, 'snapshot.json'), trustedInitialSnapshot)
+    await rm(snapshotDirectory, { recursive: true })
+    await cp(trustedSnapshot, snapshotDirectory, { recursive: true })
     const reopened = track(await createDurableStateStore({ directory: path, initialState: { n: 0 } }))
     expect(reopened.read()).toEqual({ n: 1 })
   })

@@ -198,17 +198,28 @@ await attempt('篡改链哈希或分片编码必须拒绝恢复', async () => {
   return details.join(',')
 })
 
-await attempt('段布局指纹不匹配必须显式拒绝', async () => {
+await attempt('段布局不匹配或版本更高必须显式拒绝', async () => {
   const directory = await tempDirectory()
   const store = await open(directory)
   await store.update('task/add', { patch: { set: { tasks: { 'T-1': { taskId: 'T-1', title: 'v' } } } } })
   await store.dispose()
+  // 同一布局版本但段规格不同：回放重建出的分片与行校验和不符，必须拒绝而不是猜。
   await assert.rejects(
     createDurableStateStore({ directory, segments: {}, initialState: initialState(), validate: () => true }),
-    (error) => error instanceof StateStoreError && error.code === 'RECOVERY_REQUIRED' && /chunk layout/.test(error.message)
+    (error) => error instanceof StateStoreError && error.code === 'RECOVERY_REQUIRED' && /checksum|layout/.test(error.message)
   )
+  // 目录声明的布局比当前代码更新：拒绝打开，避免用旧布局改写。
+  const futureDirectory = await tempDirectory()
+  const future = await createDurableStateStore({ directory: futureDirectory, segments: SPECS, legacySegments: SPECS, layoutVersion: 2, initialState: initialState(), validate: () => true })
+  await future.update('task/add', { patch: { set: { tasks: { 'T-1': { taskId: 'T-1', title: 'future' } } } } })
+  await future.dispose()
+  await assert.rejects(
+    createDurableStateStore({ directory: futureDirectory, segments: SPECS, legacySegments: SPECS, layoutVersion: 1, initialState: initialState(), validate: () => true }),
+    (error) => error instanceof StateStoreError && error.code === 'RECOVERY_REQUIRED' && /newer layout/.test(error.message)
+  )
+  await rm(futureDirectory, { recursive: true, force: true })
   await rm(directory, { recursive: true, force: true })
-  return 'different chunk layout'
+  return 'checksum mismatch + newer layout'
 })
 
 await attempt('v2 行之后出现新的 v1 全量行必须拒绝恢复', async () => {

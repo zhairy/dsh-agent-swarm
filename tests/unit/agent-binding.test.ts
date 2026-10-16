@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import { createDurableStateStore } from '../../src/state-store.js'
-import { createAgentBindingRegistry, type BindingInput, type BindingState } from '../../src/agent-binding.js'
-import { SWARM_SEGMENT_SPECS } from '../../src/state-chunks.js'
+import { createAgentBindingRegistry, type AgentBinding, type BindingInput, type BindingState } from '../../src/agent-binding.js'
+import { SWARM_LAYOUT_OPTIONS } from '../../src/state-chunks.js'
 
 const input: BindingInput = { agentId: 'actual-host-child', rootSessionId: 'root', workspaceId: 'workspace', taskId: 'task', nodeId: 'node', attemptId: 'attempt', threadId: 'thread', role: 'suan_heng', cardRevision: 1, workflowRevision: 1, permissions: ['pure-calc', 'message-read'], blindReview: true }
 describe('host-owned agent binding generations', () => {
+  it('archives binding history beyond the per-agent bound instead of growing the state forever', async () => {
+    const store = await createDurableStateStore<BindingState>({ directory: '/unused', enabled: false, initialState: { bindings: {}, bindingHistory: {} }, ...SWARM_LAYOUT_OPTIONS })
+    const archived: AgentBinding[] = []
+    const registry = createAgentBindingRegistry(store, { maxHistoryPerAgent: 2, archive: async (entries) => { archived.push(...entries) } })
+    for (let index = 0; index < 6; index++) await registry.bind({ ...input, attemptId: 'attempt-' + index })
+    // 主状态里只保留最近 2 代；其余 4 代先归档再移出，段内分片数因此有界。
+    expect(Object.keys(store.read().bindingHistory)).toHaveLength(2)
+    expect(archived).toHaveLength(4)
+    expect(archived.map((entry) => entry.generation)).toEqual([1, 2, 3, 4])
+    // 归档条目仍带完整身份字段，审计可读。
+    expect(archived[0]).toMatchObject({ agentId: input.agentId, state: 'revoked', revocationReason: 'superseded' })
+  })
+
   it('atomically replaces old attempts, keeps history and revokes capabilities on end', async () => {
-    const store = await createDurableStateStore<BindingState>({ directory: '/unused', enabled: false, initialState: { bindings: {}, bindingHistory: {} }, segments: SWARM_SEGMENT_SPECS })
+    const store = await createDurableStateStore<BindingState>({ directory: '/unused', enabled: false, initialState: { bindings: {}, bindingHistory: {} }, ...SWARM_LAYOUT_OPTIONS })
     const registry = createAgentBindingRegistry(store)
     const first = await registry.bind(input)
     expect(registry.requireActive(input.agentId, 'pure-calc')).toEqual(first)
