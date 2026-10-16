@@ -30,10 +30,21 @@ describe('预设构建器', () => {
     const rows = getPresetPlugins('tian_shu', standard)
     const persona = rows.find((row) => row.id === 'persona') as PluginRow
     expect((persona.config as { prefix: string }).prefix).toBe(getPresetPersona('tian_shu'))
-    expect((persona.config as { suffix?: string }).suffix).toContain('{{cwd}}')
+    // 旧版 standard 的 persona 附加 suffix 原样保留；0.2.1-alpha 起宿主不再注册 {{cwd}}，新 fixture 没有 suffix。
+    expect((persona.config as { suffix?: string }).suffix).toBeUndefined()
     expect(ids(rows)).not.toContain('delegation')
     expect(ids(rows)).toEqual(expect.arrayContaining(['tool-pwsh', 'tool-web', 'tool-plugin-manager', 'swarm-tools', 'swarm-runtime']))
     expect(rows.at(-1)).toEqual({ id: 'swarm-runtime', name: 'dsh-agent-swarm/runtime', config: { role: 'tian_shu' } })
+  })
+
+  it('跨版本可移植：不内置旧版 DSH 缺包的宿主行，也不保留已删除的 {{cwd}} 变量', () => {
+    for (const role of ROLE_INFO_LIST) {
+      const rows = getPresetPlugins(role.id, standard)
+      expect(ids(rows)).not.toContain('tool-schedule')
+      expect(JSON.stringify(rows)).not.toContain('{{cwd}}')
+    }
+    // 0.2.0-rc.2 与 0.2.1-alpha.4 都自带 time-context；未知的新行仍按原样跟随。
+    expect(ids(getPresetPlugins('tian_shu', standard))).toContain('time-context')
   })
 
   it('御史：无 shell、无 web、无 swarm 工具', () => {

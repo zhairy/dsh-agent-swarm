@@ -31,6 +31,11 @@ export const SWARM_TOOLS_ROW: PluginRow = { id: 'swarm-tools', name: 'dsh-agent-
 
 /** 委派统一走 swarm_delegate，通用委派组在全部 swarm 预设中移除；swarm 行由构建器自己追加 */
 const DROPPED_ROWS = new Set(['delegation', 'swarm-tools', 'swarm-runtime'])
+/**
+ * 0.2.1-alpha 起才随 DSH 提供的宿主工具行：旧版运行时没有对应包，角色预设保持跨版本可移植，不内置。
+ * 调度工具按宿主自身策略也只对标准模式开放，专家子会话不声明它。
+ */
+const NEW_HOST_ONLY_ROWS = new Set(['tool-schedule'])
 const SHELL_ROWS = new Set(['tool-bash', 'tool-pwsh', 'tool-jobs'])
 const TIAN_SHU_ONLY_ROWS = new Set(['tool-plugin-manager'])
 const ROLE_ORDER_BASE = 20
@@ -67,7 +72,7 @@ export const getPresetPlugins = (role: RoleId, standard: readonly PluginRow[]): 
   const info = getRoleInfo(role)
   const keep = (row: PluginRow): PluginRow[] => {
     const id = row.id ?? ''
-    if (DROPPED_ROWS.has(id)) return []
+    if (DROPPED_ROWS.has(id) || NEW_HOST_ONLY_ROWS.has(id)) return []
     if (id === 'persona') return [{ ...row, config: { ...(isObject(row.config) ? row.config : {}), prefix: getPresetPersona(role) } }]
     if (TIAN_SHU_ONLY_ROWS.has(id)) return role === 'tian_shu' ? [row] : []
     if (SHELL_ROWS.has(id)) return info.capabilities.includes('shell') ? [row] : []

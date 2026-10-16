@@ -28,6 +28,7 @@ import { createQuotaReader, createSubscriptionQuotaInvoker } from './quota.js'
 import { ROLE_INFO_LIST } from './role-registry.js'
 import { getRouteKey } from './routes.js'
 import { getRpcRoutes } from './rpc.js'
+import { ensureRolePresetsForActivationHost } from './preset-registration.js'
 import { intSwarmService, type LoggerLike } from './service.js'
 import { getHostApprovalPolicy, getToolApprovalDecision } from './approval-policy.js'
 import { inspectChildRecovery, inspectRootPreference } from './host-recovery.js'
@@ -104,7 +105,16 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     return pending
   }
   let quotaConnection: ConnectionLike | undefined
-  const quotaInvoke = createSubscriptionQuotaInvoker(() => quotaConnection?.createSharedFetchHandler?.('/api'))
+  let quotaPeer: unknown
+  const quotaInvoke = createSubscriptionQuotaInvoker(() => {
+    const connection = quotaConnection
+    const handler = connection?.createSharedFetchHandler?.('/api')
+    if (connection === undefined || handler === undefined) return undefined
+    // 0.2.1-alpha 起共享 handler 的 fetch 需要被准入的 Peer（精确路由要求 owner 主体）；
+    // 旧实现忽略第二个参数，同一份调用在两个宿主版本上都成立。
+    if (quotaPeer === undefined && connection.createPeer !== undefined) quotaPeer = connection.createPeer({ principal: { kind: 'owner' } })
+    return { fetch: (request: Request) => handler.fetch(request, quotaPeer as never) }
+  })
   const quotaReader = createQuotaReader({ invoke: quotaInvoke })
   const quotaSource = createQuotaRoutingSource({ reader: quotaReader, invoke: quotaInvoke,
     available: () => quotaConnection?.createSharedFetchHandler !== undefined,
@@ -143,8 +153,14 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   ctx.effect(() => ctx.provide(SWARM_SERVICE, service))
   ctx.effect(() => () => { quotaSource.dispose(); return service.dispose() })
   ctx.effect(() => PublishManagedAgents((agent) => service.isManagedAgent(agent as AgentLike)))
+  // 0.2.1-alpha 起子智能体 composition 由 agentPreset 承载；角色预设默认不在模式列表，按需注册。
+  ensureRolePresetsForActivationHost(ctx, getLogger(ctx))
   // 连续会话（continuable）的每一轮结束都经 subagent/end 通知；swarm_delegate 据此取回结果
   ctx.on('subagent/end', (info: SubagentEndInfoLike) => service.OnSubagentEnd(info))
+  // 0.2.1-alpha：子智能体入队工作释放前限制其作用域工具面（旧宿主无该方法，行为不变）。
+  ctx.on('agent/created', (payload: { agent?: AgentLike } | undefined) => {
+    if (payload?.agent !== undefined) service.OnAgentCreated(payload.agent)
+  })
   // 宿主还会把「子智能体已结束」通知投给天枢；结果已由 swarm_delegate 返回，重复的通知在进入上下文前滤掉
   ctx.on('agent/pre-step', async (_payload: unknown, next: () => Promise<PreStepDecisionLike>) => service.FilterPreStep(await next()))
   const tools = ctx.get('tools') as ToolsLike | undefined

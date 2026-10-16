@@ -38,7 +38,7 @@ const main = async () => {
   const standardFile = join(modulesDir, '@deepseek-ai', 'dsh-web-app', 'presets', 'standard.patch.yml')
   if (!existsSync(standardFile)) throw new Error(`找不到 ${standardFile}`)
   const load = (file) => import(pathToFileURL(join(REPO_ROOT, 'lib', file)).href)
-  const { getStandardPlugins, getPresetPatch, getPresetFileName, getBundlePatchList } = await load('preset-builder.js')
+  const { getStandardPlugins, getPresetPatch, getPresetDeclaration, getPresetFileName, getBundlePatchList } = await load('preset-builder.js')
   const { ROLE_INFO_LIST } = await load('role-registry.js')
   const standard = getStandardPlugins(YAML.parse(readFileSync(standardFile, 'utf8'), { customTags: [JS_TAG] }))
   const presetsDir = join(REPO_ROOT, 'presets')
@@ -50,6 +50,10 @@ const main = async () => {
     const text = YAML.stringify(getJsRevived(getPresetPatch(role.id, standard)), { customTags: [JS_TAG], lineWidth: 0 })
     writeFileSync(join(REPO_ROOT, getPresetFileName(role.id)), HEADER + text, 'utf8')
   }
+  // 运行时注册用的声明快照：0.2.1-alpha 起子智能体 composition 需要角色预设已注册，
+  // 而角色预设默认不在模式列表里，插件在宿主提供激活协议时按需注册这份声明。
+  const declarations = ROLE_INFO_LIST.map((role) => getPresetDeclaration(role.id, standard))
+  writeFileSync(join(REPO_ROOT, 'presets', 'declarations.json'), `${JSON.stringify({ schemaVersion: 1, declarations }, null, 2)}\n`, 'utf8')
   const pkgFile = join(REPO_ROOT, 'package.json')
   const pkg = JSON.parse(readFileSync(pkgFile, 'utf8'))
   const next = { ...pkg, dsh: { ...pkg.dsh, bundle: { ...(pkg.dsh?.bundle ?? {}), patch: getBundlePatchList() } } }

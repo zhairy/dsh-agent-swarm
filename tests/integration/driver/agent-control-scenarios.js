@@ -181,7 +181,9 @@ export const apply = (ctx) => {
       }
       if (restartSave) {
         const manifest = { parentSessionId: handle.agent.id, childId, taskId: card.task_id }
-        await ctx.subagents.drainContinuableChildren(handle.agent, [childId])
+        const drain = ctx.subagents.drainChildren ?? ctx.subagents.drainContinuableChildren
+        if (typeof drain !== 'function') throw new Error('host exposes neither drainChildren nor drainContinuableChildren')
+        await drain.call(ctx.subagents, handle.agent, [childId])
         await handle.agent.whenIdle()
         await service.dispose()
         await handle.dispose()

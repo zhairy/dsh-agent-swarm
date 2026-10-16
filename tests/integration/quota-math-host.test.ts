@@ -42,7 +42,14 @@ const fixture = async (options: { partial?: boolean; holdStatus?: Promise<void>;
     new ToolRuntime(ctx, {})
     // The actual admission implementation remains in use; only the private
     // browser-auth store is replaced by an isolated deterministic test owner.
-    new HostConnectionService(ctx, [], { isAuthenticated: (request: { headers: Headers }) => request.headers.get('x-fixture-owner') === 'yes' })
+    // 0.2.0-rc.2 只调用 isAuthenticated；0.2.1-alpha 起认证模型改为 authenticateApi + Peer。
+    // 两个版本共用同一份确定性 owner 判定，未认证请求都得到 401。
+    new HostConnectionService(ctx, [], {
+      isAuthenticated: (request: { headers: Headers }) => request.headers.get('x-fixture-owner') === 'yes',
+      authenticateApi: (request: { headers: Headers }) => request.headers.get('x-fixture-owner') === 'yes' ? 'fixture-operator' : undefined,
+      authorizeIndex: () => false,
+      authenticatedUrl: (url: string) => url
+    } as never)
     ctx.provide('profileContext', { home: directory })
     ctx.provide('llm', { listProviders: () => [{ id: 'codex', name: 'Subscription fixture' }, ...(options.routing ? [{ id: 'claude', name: 'Secondary subscription fixture' }, { id: 'deepseek-official', name: 'API fixture' }] : [])],
       resolveModelInfo: async () => ({ inputModalities: ['text'], context: { contextWindow: 200_000 } }) })
@@ -77,7 +84,8 @@ const fixture = async (options: { partial?: boolean; holdStatus?: Promise<void>;
     const request = new Request(`http://localhost/api/${method}`, { method: 'POST', headers: { host: 'localhost', 'content-type': 'application/json', ...(authenticated ? { 'x-fixture-owner': 'yes' } : {}) }, body: JSON.stringify({ type: 'client-request', rpcId, method, payload }), signal })
     const admission = scoped.connection.admit(request)
     if ('rejection' in admission) return { status: admission.rejection }
-    const response = await scoped.connection.createSharedFetchHandler('/api').fetch(request)
+    // 0.2.1-alpha 起共享 handler 的 fetch 需要显式携带被准入的 Peer；旧实现忽略该参数。
+    const response = await scoped.connection.createSharedFetchHandler('/api').fetch(request, admission.peer)
     return { status: response.status, ...(await response.json()) }
   }
   const request = (resolved: { provider: string; model: string }, step = 0) => scoped.waterfall('agent/request', { agent, turn: 0, step, signal: new AbortController().signal }, async () => resolved)

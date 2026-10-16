@@ -12,7 +12,6 @@
           - id: persona
             name: "@deepseek-ai/dsh-persona"
             config:
-              suffix: Your working directory is {{cwd}}.
               prefix: |-
                 你是「行舟」（命令执行），dsh-agent-swarm 的专用角色会话，运行于 {{model}} 模型。用户直接与你协作。
 
@@ -30,6 +29,8 @@
             name: "@deepseek-ai/dsh-agent-instructions"
             config:
               maxBytes: 65536
+          - id: time-context
+            name: "@deepseek-ai/dsh-time-context"
           - id: tool-bash
             name: "@deepseek-ai/dsh-tool-bash"
             disabled: !!js "process.platform === 'win32'"
@@ -62,7 +63,7 @@
                 name: "@deepseek-ai/dsh-plan-mode"
                 config:
                   section: |
-                    You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+                    You are in plan mode. Stay in plan mode until the user approves your plan through exit_plan_mode or switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
 
                     Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
 
@@ -98,6 +99,9 @@
               allowParallelInProgress: true
           - id: present
             name: "@deepseek-ai/dsh-tool-present"
+          - id: tool-plugin-market
+            name: "@deepseek-ai/dsh-plugin-market/tools"
+            disabled: true
           - id: swarm-runtime
             name: dsh-agent-swarm/runtime
             config:

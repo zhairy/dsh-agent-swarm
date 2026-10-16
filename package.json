@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "description": "DSH 中文多智能体插件：版本化 Mermaid 任务流程、独立规划审核、额度耗尽立即回退、Jev 判断、受限专家协作与纯函数数学验证",
   "keywords": [
     "dsh",
@@ -21,7 +21,7 @@
     "url": "https://github.com/zhairy/dsh-agent-swarm/issues"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -64,12 +64,10 @@
     "jsdom": "26.1.0"
   },
   "dsh": {
-    "minVersion": "0.1.7-alpha.2",
+    "minVersion": "0.2.0-rc.2",
     "testedVersions": [
-      "0.2.0-rc.2",
-      "0.1.7-rc.2",
-      "0.1.7-rc.1",
-      "0.1.7-alpha.2"
+      "0.2.1-alpha.4",
+      "0.2.0-rc.2"
     ],
     "client": {
       "platform": "web",

@@ -128,7 +128,10 @@ class MockAdapter {
     }
     // 连续会话没有 structured_output 工具：以 json 代码块回复；badjson- 模型第一次故意漏掉 json，验证修正重试
     const turn = (this.state.childTurns[key] = (this.state.childTurns[key] ?? 0) + 1)
-    this.state.childMessages.push({ role, sessionId: key, turn, text: getText(options.messages?.filter((m) => m.role === 'user').at(-1)).slice(0, 200) })
+    // 0.2.1-alpha 起宿主会把技能提醒等 user 角色消息排在真实委派文本之后；取最后一条非提醒文本。
+    const userTexts = (options.messages ?? []).filter((m) => m.role === 'user').map(getText)
+    const lastDelegationText = [...userTexts].reverse().find((text) => !text.trimStart().startsWith('<system-reminder>')) ?? userTexts.at(-1)
+    this.state.childMessages.push({ role, sessionId: key, turn, text: String(lastDelegationText ?? '').slice(0, 200) })
     if (options.model.startsWith('badjson') && turn === 1) {
       yield* textChunks('完成了，但这里没有 json')
       return

@@ -116,6 +116,24 @@ export interface SubagentRunLike {
   dispose: () => Promise<void>
 }
 
+/** DSH 0.2.1-alpha 起的一次激活：本地子会话固定为连续会话，结算后由调用方 dispose 实现一次性语义 */
+export interface SubagentActivationLike {
+  childId: string
+  messageId?: string
+  result: Promise<SubagentResultLike>
+  dispose: () => Promise<void>
+}
+
+/** 激活启动请求（0.2.1-alpha 起）：composition 由 agentPreset 选择的预设负责，不再接受 persona/toolFilter */
+export interface SubagentActivationSpecLike {
+  provider: string
+  label: string
+  childId?: string
+  request: Omit<SubagentStartRequestLike, 'label' | 'signal' | 'toolFilter' | 'persona'>
+  signal: AbortSignal
+  delivery: 'parent' | 'caller'
+}
+
 /** 一次性子智能体启动请求 */
 export interface SubagentStartRequestLike {
   label?: string
@@ -148,7 +166,9 @@ export interface SubagentEndInfoLike {
 
 /** ctx.subagents 的最小形状；连续会话相关方法在 DSH 0.1.7-rc.2 起提供，缺失时退回一次性委派 */
 export interface SubagentsLike {
-  start: (name: string, request: SubagentStartRequestLike) => Promise<SubagentRunLike>
+  /** 0.2.0-rc.2 及更早的启动入口；0.2.1-alpha 起由 startActivation 取代 */
+  start?: (name: string, request: SubagentStartRequestLike) => Promise<SubagentRunLike>
+  startActivation?: (spec: SubagentActivationSpecLike) => Promise<SubagentActivationLike>
   getProvider: (name: string) => { capabilities?: Record<string, boolean> } | undefined
   list: () => string[]
   startContinuable?: (spec: ContinuableStartSpecLike) => Promise<{ childId: string; messageId: string }>
@@ -238,7 +258,9 @@ export interface FetchRouteLike {
 /** ctx.connection 的最小形状 */
 export interface ConnectionLike {
   /** Public Host carrier for trusted, already-authenticated internal calls. */
-  createSharedFetchHandler?: (channel: '/api') => { fetch: (request: Request) => Promise<Response> }
+  createSharedFetchHandler?: (channel: '/api') => { fetch: (request: Request, peer?: unknown) => Promise<Response> }
+  /** 0.2.1-alpha 起：为进程内受信调用创建一个被准入的 Peer；旧宿主没有该能力。 */
+  createPeer?: (options: { principal: { kind: 'owner' } }) => unknown
   fetch: { register: (route: FetchRouteLike) => () => void }
 }
 
