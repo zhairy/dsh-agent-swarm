@@ -82,11 +82,40 @@
 
 ### 本机部署
 
-- `dsh-web.service` 于 2026-10-16 17:10 重启并持续运行；重启时点的 lib 已含分片增量路径
-  （17:05 基准可测得 `incrementalWhole` / `incrementalChunk` 非空）。
-- 重启后真实 `swarm.jevHealth` RPC 探针返回 `ok:true`（密钥已配置、真实上游可用）。
-- 当前 lib 已在同一源码上重建两次验证确定性（`lib/state-store.js` sha256 `d8fb215c…`）；
-  服务进程内为重启时点版本，如需与当前构建严格一致需再次重启。
+- `dsh-web.service`（用户级单实例）于 2026-10-16 17:10 与 19:10 两次重启，均 `active`；
+  19:10 的重启使进程加载与发布物一致的构建（`lib/state-store.js` sha256 `d8fb215c360bc5e7…`）。
+- 重启后真实宿主 RPC 探针：`POST /api/swarm.jevHealth` → HTTP 200、`result.ok=true`；
+  `POST /api/swarm.jevStatus` → HTTP 200、`result.ok=true`（密钥来源 `env`）。
+- 启动日志扫描：无 `STATE_TOO_LARGE` / `STATE_INVALID` / `route_health_persist_failed`。
+- 状态目录备份：`~/.dsh/backups/agent-swarm-pre-2.6.0-20261016-170720`（22 MiB）。
+
+### 发布产物校验（v2.6.0）
+
+- **首次上传的资产缺少新增模块**：`npm pack` 打包的是**发布仓库工作区**的 `lib/`，而该目录是构建产物
+  （被 `.gitignore` 忽略），没有随源码同步更新，导致 tarball 里没有 `lib/state-chunks.js` /
+  `lib/state-core.js`。这项缺陷由隔离安装验证发现（`import ... /lib/state-chunks.js` 失败）。
+- 修复：同步 `lib/` 后重新打包、重新生成 `SHA256SUMS` 与 manifest，并用 `gh release upload --clobber` 覆盖。
+- 重新校验：匿名 `curl` 下载的 tarball sha256 `b3c0f70e…` 与本地逐字节一致（3 538 878 字节 / 386 文件）；
+  隔离安装验证版本、`engines.dsh`、上述两个新模块的存在性与 ESM 导入均通过。
+- 流程改进项已写入计划文档 §6：打包前必须先构建或同步 `lib/`。
+
+### 独立审核记录
+
+- 正面与反面两个审核 agent 各自独立复核（测试、集成、基准、升级路径、对抗验证），结论一致：
+  增量提交与状态规模解耦、v1→v2 可恢复、失败保持原状态；未发现阻断发布的缺陷。
+- 两个 agent 都超出了只读约束并向工作区写入了内容：新增 `tests/unit/state-incremental-legacy-window.test.ts`
+  与 `scripts/verify-incremental-adversarial.mjs`，并修复了 3 个**真实缺陷**（升级前压缩崩溃窗口误判、
+  声明段缺席时的 `whole` 补丁、补丁中的 `undefined` 值错误分类）。这些改动已由主持 agent 逐处复核，
+  并重跑全量测试（76 文件 931 用例）与对抗脚本（12/12）后接受。
+- Jev 判断：`jev_health` ok；`jev_check` 6 条事实级命题 0.72–0.94、无 `uncertain`；
+  `jev_ask` 发布就绪度 `publish_with_disclosed_gaps` 0.97（confidence 0.95）；
+  `jev_score` 证据充分性 2.67/3（归一化 0.89，独立审核当时仍在进行）；
+  `jev_classify`（ensemble，agreement true）同为 `publish_with_disclosed_gaps` 0.98；
+  `jev_screen` 对「已彻底消除所有 O(n) 路径、不再需要容量护栏」这一过强声明判定为 `review`
+  （risk 0.01，`claims_authority` 0.42）——因此本发布不使用该表述。
+- `jev_ask` 的 `hidden_write_path_can_lose_state` 返回 noul=0.6：证据不足以排除"仍存在未发现的漏写路径"，
+  故本证据只声明"在已执行的测试、集成、对抗与基准范围内未发现阻断缺陷"，不声明已证明不存在。
+- `jev_match` 未在该版本 jev-mcp 中暴露，无法调用；等价的多选判断由 `jev_ask` 的 `choice` 题型完成。
 
 ## 实现期发现并修复的缺陷
 
