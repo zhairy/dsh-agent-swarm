@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-16T10:25:11.405Z",
+  "node": "v24.22.0",
+  "target": "lib/state-store.js + lib/state-chunks.js (built from src)",
+  "moduleDigests": {
+    "state-store.js": "d8fb215c360bc5e7ac33b736af998b298dbb787faa919b34674cac5c4c444ca0",
+    "state-chunks.js": "68002b528e6938d058354d69ffbee991d8dc07e1c52b1c3ecebf2fffa10fbf6d",
+    "state-core.js": "c577de92f5cccb98329b6b151b7642e5bdaf69a7384ddc55f90377ccfbe792c7"
+  },
+  "script": "scripts/verify-incremental-adversarial.mjs",
+  "summary": {
+    "total": 12,
+    "passed": 12
+  },
+  "results": [
+    {
+      "name": "随机差分：分片日志回放必须等于独立内存镜像",
+      "ok": true,
+      "detail": "120 步差分一致；最大增量行 645B < 全量行 1717B"
+    },
+    {
+      "name": "幂等短路：逐字节相同的 set 不写日志、不消耗序列号",
+      "ok": true,
+      "detail": "序列号保持 1"
+    },
+    {
+      "name": "截断日志（无换行结尾）必须拒绝恢复",
+      "ok": true,
+      "detail": "RECOVERY_REQUIRED"
+    },
+    {
+      "name": "篡改链哈希或分片编码必须拒绝恢复",
+      "ok": true,
+      "detail": "previousChecksum,checksum,chunk"
+    },
+    {
+      "name": "段布局指纹不匹配必须显式拒绝",
+      "ok": true,
+      "detail": "different chunk layout"
+    },
+    {
+      "name": "v2 行之后出现新的 v1 全量行必须拒绝恢复",
+      "ok": true,
+      "detail": "Journal mixes legacy entries after upgraded entries"
+    },
+    {
+      "name": "并发 update 必须串行且全部落盘",
+      "ok": true,
+      "detail": "16/16 落盘"
+    },
+    {
+      "name": "build 形式收到的基线必须冻结（改不动已提交状态）",
+      "ok": true,
+      "detail": "TypeError + 状态未变"
+    },
+    {
+      "name": "journal 超限时先写快照再清空，恢复仍一致",
+      "ok": true,
+      "detail": "sequence=6"
+    },
+    {
+      "name": "legacy 崩溃窗口：快照已写、日志未清空、行号与快照重叠时必须可恢复",
+      "ok": true,
+      "detail": "恢复到 seq=2 并续写 v2"
+    },
+    {
+      "name": "声明的 list 段缺席时，whole 补丁必须显式拒绝而不是固化段类型",
+      "ok": true,
+      "detail": "STATE_INVALID 后段类型保持 list"
+    },
+    {
+      "name": "补丁中的 undefined 值必须以 STATE_INVALID 拒绝且不落盘",
+      "ok": true,
+      "detail": "拒绝码=STATE_INVALID,STATE_INVALID"
+    }
+  ]
+}

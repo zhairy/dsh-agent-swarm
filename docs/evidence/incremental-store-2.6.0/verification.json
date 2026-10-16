@@ -1,0 +1,94 @@
+{
+  "topic": "2.6.0 incremental chunked state store",
+  "checkedAt": "2026-10-16T10:25:11.427903+00:00",
+  "tests": {
+    "typecheck": true,
+    "unit": {
+      "files": 76,
+      "passed": 931,
+      "failed": 0,
+      "command": "npx vitest run"
+    },
+    "hostIntegration": {
+      "files": 8,
+      "passed": 39,
+      "failed": 0,
+      "hosts": [
+        "0.2.1-alpha.4",
+        "0.2.0-rc.2"
+      ],
+      "scope": "real dsh CLI + sandbox profile via vitest.integration.config.ts"
+    },
+    "build": {
+      "ok": true,
+      "command": "npm run build"
+    }
+  },
+  "upgradePath": {
+    "script": ".work/verify-upgrade.mjs（本地一次性；同语义断言已固化在 tests/unit/state-incremental-legacy-window.test.ts）",
+    "legacyJournalVersions": [
+      1,
+      1
+    ],
+    "legacyLineBytes": [
+      530,
+      262708
+    ],
+    "recoveredStateEqual": true,
+    "continuedIncrementalLineBytes": 512,
+    "reopenedOk": true,
+    "materialRoundtrip": true
+  },
+  "complexityBenchmark": {
+    "artifact": "benchmark.json",
+    "artifactSha256": "2fabb5063547d33086d528a20e78e289349cecabb79111515c7bf72a7909e88e",
+    "recordedAt": "2026-10-16T10:19:33.472Z",
+    "method": "memory-only store, 12 samples + 3 warmup with --expose-gc, alternating baseline/current in one process; incrementalWhole/incrementalChunk re-encode a single touched chunk",
+    "incrementalWholeMedianMsRange": [
+      0.029,
+      0.085
+    ],
+    "incrementalChunkMedianMsRange": [
+      0.075,
+      0.122
+    ],
+    "fullCommitRegressionRange": "1.27x-1.54x slower than 2.5.2 full commit across 0.25-16 MiB",
+    "fullCommitMedianMs": {
+      "2.5.2": [
+        1.0635,
+        3.66427,
+        13.32122,
+        26.33671,
+        60.7311
+      ],
+      "2.6.0": [
+        1.63864,
+        5.27589,
+        16.97627,
+        34.49761,
+        87.41113
+      ]
+    },
+    "note": "空闲机器复测；增量列在 0.25-16 MiB 上平坦，全量列线性。"
+  },
+  "adversarialVerification": {
+    "script": "scripts/verify-incremental-adversarial.mjs",
+    "artifact": "adversarial-verification.json",
+    "artifactSha256": "197502e1861ac211fab1a4ca73038f5614c4f042e16824cdef190a06cea68cc9",
+    "summary": {
+      "total": 12,
+      "passed": 12
+    },
+    "moduleDigests": {
+      "state-store.js": "d8fb215c360bc5e7ac33b736af998b298dbb787faa919b34674cac5c4c444ca0",
+      "state-chunks.js": "68002b528e6938d058354d69ffbee991d8dc07e1c52b1c3ecebf2fffa10fbf6d",
+      "state-core.js": "c577de92f5cccb98329b6b151b7642e5bdaf69a7384ddc55f90377ccfbe792c7"
+    }
+  },
+  "realHost": {
+    "service": "dsh-web.service (user) restarted 2026-10-16 17:10 CST, active",
+    "rpc": "POST /api/swarm.jevHealth -> HTTP 200, result.ok=true",
+    "logScan": "no STATE_TOO_LARGE / STATE_INVALID / route_health_persist_failed",
+    "stateBackup": "~/.dsh/backups/agent-swarm-pre-2.6.0-20261016-170720"
+  }
+}
