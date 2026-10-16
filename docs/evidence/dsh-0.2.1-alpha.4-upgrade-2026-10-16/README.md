@@ -5,7 +5,7 @@
 - 本机 DSH 由 **0.2.0-rc.2** 升级到 **0.2.1-alpha.4**（`sudo npm install -g @deepseek-ai/dsh@0.2.1-alpha.4`，
   `dsh --version` 实测 0.2.1-alpha.4）。升级前旧安装整体备份到
   `/usr/lib/node_modules/@deepseek-ai/.dsh-0.2.0-rc.2-rollback`；profile 文件（`cordis.patch.yml`、
-  `compatibility.json`、`package.json`）备份到 `~/.dsh/backups/upgrade-0.2.1a4-20261016-133946/`。
+  `compatibility.json`、`package.json`）备份到 `~/.dsh/backups/upgrade-0.2.1a4-20261016-133912/`。
 - 唯一服务 `dsh-web.service` 停一次、升级后启动一次；启动无跳过的 bundle、无未激活必需插件。
 - 持久化保持关闭：跨版本重启不携带内存态百工会话状态；已脱敏账本仍是只读审计来源。
 
