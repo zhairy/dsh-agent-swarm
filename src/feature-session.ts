@@ -1,8 +1,9 @@
 import { join } from 'node:path'
+import { lstat, mkdir, readFile } from 'node:fs/promises'
 import type { SwarmConfigInfo } from './config.js'
 import type { DelegationRecord, TaskRecord, TaskStore } from './evidence.js'
 import type { ThreadInfo, ThreadRegistry } from './threads.js'
-import { createDurableStateStore, StateStoreError, type DurableStateStore, type StateValidationReport } from './state-store.js'
+import { atomicStateFile, canonicalStateJson, createDurableStateStore, StateStoreError, type DurableStateStore, type StateValidationReport } from './state-store.js'
 import { createAgentBindingRegistry, validateBinding, bindingKey, type AgentBindingRegistry } from './agent-binding.js'
 import { createMessageBus, type MessageBus, type MessageState } from './message-bus.js'
 import { createExperienceRepository, ExperienceError, type ExperienceEntry, type ExperienceReview, type ExperienceState } from './experience.js'
@@ -21,6 +22,15 @@ import { validateAgentControlRecords, type AgentControlRecord } from './agent-co
 import { validateEvidenceAssessment } from './evidence-assessment.js'
 import { ValidateDelegateInput } from './delegate.js'
 import { loadMemoryHandoff } from './memory-handoff.js'
+import { SwarmError } from './util/errors.js'
+
+/**
+ * 内存态（persistence.enabled=false）不写日志与快照，持久化的 4MiB 上限不适用；
+ * 这里给出更大的确定上界，既避免长会话合法增长把状态顶死，也保证每次提交仍然有界。
+ */
+const MEMORY_MODE_MAX_STATE_BYTES = 16 * 1024 * 1024
+/** 单次提交窗口内非材料增长（委派记录、证据评估、线程历史、绑定等）的预留。 */
+const STATE_CAPACITY_RESERVE_BYTES = 512 * 1024
 
 export interface FeatureRuntimeSnapshot {
   rootEditAt: number
@@ -56,7 +66,11 @@ export interface FeatureSession {
   commitRecovery: () => Promise<void>
   /** Existing attempts and exempt Jev observations keep their original accounting handle during hot changes. */
   finishBudgetFor: (task: TaskRecord) => ExecutionBudget
-  persist: (type: string, tasks: TaskStore, threads: ThreadRegistry, routeHealth?: RouteHealthEntry[] | RouteHealthSnapshot) => Promise<void>
+  persist: (type: string, tasks: TaskStore, threads: ThreadRegistry) => Promise<void>
+  /** 路由健康是独立的故障域快照：持久化模式下写有界 sidecar，不再随整份任务状态提交；内存模式为纯进程内状态。 */
+  persistRouteHealth: (snapshot: RouteHealthEntry[] | RouteHealthSnapshot) => Promise<void>
+  /** 优先读 sidecar；旧持久化状态把健康快照内嵌在完整状态里，作为一次性兼容回退。 */
+  readRouteHealth: () => Promise<RouteHealthEntry[] | RouteHealthSnapshot | undefined>
   addContext: (input: Parameters<ContextStore['Add']>[0]) => ContextArtifactInfo
   prepareTaskContexts: (...args: Parameters<ContextStore['PrepareTaskReplace']>) => PreparedTaskContextReplacement
   /** Trusted lifecycle API: all author/reviewer/verification facts are derived from current runtime evidence. */
@@ -299,6 +313,22 @@ const recover = (state: FeatureState): FeatureState => {
   return copy
 }
 
+/** 容量超限时的可操作错误：带上试提交规模与最大字段，绝不静默丢弃证据。 */
+const describeCapacityExceeded = (store: DurableStateStore<FeatureState>, snapshot: Record<string, unknown>): SwarmError => {
+  const mib = (bytes: number): string => `${(bytes / 1048576).toFixed(2)} MiB`
+  let total = 0
+  let top: Array<[string, number]> = []
+  try {
+    const projected = { ...(store.read() as unknown as Record<string, unknown>), ...snapshot }
+    total = Buffer.byteLength(canonicalStateJson(projected), 'utf8')
+    top = Object.entries(projected)
+      .map(([key, value]) => [key, Buffer.byteLength(canonicalStateJson(value), 'utf8')] as [string, number])
+      .sort((left, right) => right[1] - left[1]).slice(0, 3)
+  } catch { /* 归因读数失败不掩盖容量错误本身 */ }
+  const detail = top.length === 0 ? '' : `；最大字段 ${top.map(([key, bytes]) => `${key} ${mib(bytes)}`).join('、')}`
+  return new SwarmError('CAPACITY_EXCEEDED', `会话完整状态超过容量上限（试提交约 ${total === 0 ? '未知' : mib(total)}，上限 ${mib(store.maxStateBytes)}${detail}）。完整状态未被部分写入；请结束当前任务后在新会话中继续，或在设置中提高 persistence.maxStateBytes（内存态默认 16 MiB，持久化默认 4 MiB）`)
+}
+
 export const createFeatureSession = async (input: {
   rootSessionId: string; cwd: string; dshHome: string; config: SwarmConfigInfo;
   getConfig?: () => SwarmConfigInfo;
@@ -313,7 +343,9 @@ export const createFeatureSession = async (input: {
   const handoff = await loadMemoryHandoff<FeatureState>({ dshHome: input.dshHome, rootSessionId: input.rootSessionId, workspaceId,
     persistenceEnabled: input.config.persistence.enabled,
     validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }) })
+  const configuredLimit = input.config.persistence.maxStateBytes
   const store = await createDurableStateStore({ directory, initialState: handoff === undefined ? initialState : recover(handoff.state), enabled: input.config.persistence.enabled,
+    ...(configuredLimit > 0 ? { maxStateBytes: configuredLimit } : input.config.persistence.enabled ? {} : { maxStateBytes: MEMORY_MODE_MAX_STATE_BYTES }),
     validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }), recover })
   const saved = store.read()
   // Older versions charged planning review reservations against implementation calls.
@@ -334,9 +366,49 @@ export const createFeatureSession = async (input: {
     for (const record of saved.delegations) input.tasks.AddDelegation(record)
     for (const thread of saved.threads) input.threads.Add(thread)
   }
-  const contexts = intContextStore()
+  // 材料准入预算 = 状态上限 − 非材料占用 − 预留；只约束净增长，净缩小始终放行（修订任务卡是最直接的收缩救援）。
+  let committedContextBytes = 0
+  const capacityReserve = Math.min(STATE_CAPACITY_RESERVE_BYTES, Math.floor(store.maxStateBytes / 4))
+  const contextByteBudget = (): number =>
+    Math.max(0, store.maxStateBytes - capacityReserve - Math.max(0, store.getStateBytes() - committedContextBytes))
+  const contexts = intContextStore({ getByteBudget: contextByteBudget })
   const contextArtifacts = new Map(saved.contexts.map((artifact) => [artifact.ref, artifact]))
   for (const artifact of saved.contexts) contexts.Restore(artifact, artifact.binding)
+  committedContextBytes = contexts.getTotalEncodedBytes()
+  // 路由健康 sidecar：与任务状态容量解耦；写失败仍然是 fail-closed（由 route-state 的故障域契约决定是否拦截请求）。
+  const healthDirectory = join(directory, 'route-health')
+  const healthPath = join(healthDirectory, 'snapshot.json')
+  const stableHealthSnapshot = (raw: RouteHealthEntry[] | RouteHealthSnapshot): RouteHealthEntry[] | RouteHealthSnapshot =>
+    Array.isArray(raw)
+      ? raw.map(({ halfOpenAgent: _claimant, ...entry }) => entry)
+      : { ...raw, entries: raw.entries.map(({ halfOpenAgent: _claimant, ...entry }) => entry) }
+  const persistRouteHealth = async (snapshot: RouteHealthEntry[] | RouteHealthSnapshot): Promise<void> => {
+    const stable = stableHealthSnapshot(snapshot)
+    if (!validatePersistedRouteHealth(stable)) throw new StateStoreError('STATE_INVALID', 'Invalid durable route health snapshot')
+    if (!store.durable) return
+    await mkdir(healthDirectory, { recursive: true, mode: 0o700 })
+    const metadata = await lstat(healthDirectory)
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new StateStoreError('STATE_INVALID', 'Route health directory is invalid')
+    await atomicStateFile(healthDirectory, 'snapshot.json', canonicalStateJson(stable))
+  }
+  const readRouteHealth = async (): Promise<RouteHealthEntry[] | RouteHealthSnapshot | undefined> => {
+    if (store.durable) {
+      let raw: string | undefined
+      try { raw = await readFile(healthPath, 'utf8') } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') return undefined
+      }
+      if (raw !== undefined) {
+        try {
+          const parsed: unknown = JSON.parse(raw)
+          if (validatePersistedRouteHealth(parsed)) return parsed
+        } catch { /* 损坏的健康快照按冷启动处理 */ }
+        // sidecar 存在但不可用：不回退内嵌旧快照，避免把过期隔离当作当前健康状态。
+        return undefined
+      }
+    }
+    // 无 sidecar 时兼容旧持久化状态的内嵌健康快照（只读一次，后续健康只写 sidecar）。
+    return store.read().routeHealth
+  }
   const bindings = createAgentBindingRegistry(store)
   const bus = !input.config.messageBus.enabled ? undefined : createMessageBus({ store, bindings, now: input.now, maxPendingPerTask: input.config.messageBus.maxPending,
     validateArtifactRef: (ref, binding) => {
@@ -465,17 +537,16 @@ export const createFeatureSession = async (input: {
         }
       }
     },
-    persist: async (type, tasks, threads, routeHealth) => {
+    persistRouteHealth,
+    readRouteHealth,
+    persist: async (type, tasks, threads) => {
       // Capture every owned collection synchronously at the call boundary.
       // Sampling only tasks here and contexts/controls later in the queue mixed
       // different versions. Sampling everything later could publish a different
       // operation's uncommitted task revision before its own commit succeeds.
       const detach = <T>(value: T): T => JSON.parse(getCanonicalJson(value)) as T
       const taskSnapshot = tasks.getTasks()
-      const stableHealth = routeHealth === undefined ? undefined : Array.isArray(routeHealth)
-        ? routeHealth.map(({ halfOpenAgent: _claimant, ...entry }) => entry)
-        : { ...routeHealth, entries: routeHealth.entries.map(({ halfOpenAgent: _claimant, ...entry }) => entry) }
-      if (stableHealth !== undefined && !validatePersistedRouteHealth(stableHealth)) throw new StateStoreError('STATE_INVALID', 'Invalid durable route health snapshot')
+      const contextsSnapshotBytes = contexts.getTotalEncodedBytes()
       const snapshot = detach({
         tasks: taskSnapshot,
         delegations: taskSnapshot.flatMap((task) => tasks.getTaskDelegations(task.taskId)),
@@ -483,12 +554,17 @@ export const createFeatureSession = async (input: {
         budgets: { ...saved.budgets, ...Object.fromEntries([...budgets].map(([key, value]) => [key, value.getSnapshot()])) },
         planningBudgets: { ...saved.planningBudgets, ...Object.fromEntries([...planningBudgets].map(([key, value]) => [key, value.getSnapshot()])) },
         ...(input.getAgentControls === undefined ? {} : { agentControls: input.getAgentControls() }),
-        ...(input.getRuntime === undefined ? {} : { runtime: input.getRuntime() }),
-        ...(stableHealth === undefined ? {} : { routeHealth: stableHealth })
+        ...(input.getRuntime === undefined ? {} : { runtime: input.getRuntime() })
       })
-      await store.commit(type, (draft) => {
-        Object.assign(draft, snapshot)
-      })
+      try {
+        await store.commit(type, (draft) => {
+          Object.assign(draft, snapshot)
+        })
+      } catch (error) {
+        if (error instanceof StateStoreError && error.code === 'STATE_TOO_LARGE') throw describeCapacityExceeded(store, snapshot)
+        throw error
+      }
+      committedContextBytes = contextsSnapshotBytes
     },
     dispose: () => store.dispose()
   }

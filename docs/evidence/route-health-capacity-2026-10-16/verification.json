@@ -1,0 +1,61 @@
+{
+  "topic": "route_health_persist_failed capacity repair",
+  "checkedAt": "2026-10-16T03:24:32.057122+00:00",
+  "tests": {
+    "typecheck": true,
+    "unit": {
+      "files": 74,
+      "passed": 920,
+      "failed": 0,
+      "command": "npx vitest run"
+    },
+    "hostIntegration": {
+      "files": 8,
+      "passed": 39,
+      "failed": 0,
+      "scope": "real dsh CLI + sandbox profile via vitest.integration.config.ts"
+    },
+    "build": {
+      "ok": true,
+      "command": "npm run build"
+    }
+  },
+  "capacityBenchmarkMemoryMode": {
+    "method": "createDurableStateStore(enabled:false) commit of a synthetic state; 25 samples, 5 warmup, gc before sampling",
+    "rows": [
+      {
+        "stateMiB": 4,
+        "medianMs": 14.2,
+        "p95Ms": 18.3
+      },
+      {
+        "stateMiB": 8,
+        "medianMs": 35.0,
+        "p95Ms": 39.9
+      },
+      {
+        "stateMiB": 16,
+        "medianMs": 72.6,
+        "p95Ms": 81.8
+      }
+    ]
+  },
+  "behaviorChecks": [
+    "context admission rejects over-budget material before insertion; rejected artifact absent from List and state; session remains committable",
+    "net-shrink PrepareTaskReplace allowed at budget boundary and frees capacity",
+    "memory-mode persistRouteHealth writes nothing to task state, advances no sequence, and WaitHealthReady cannot produce route_health_persist_failed",
+    "durable-mode route health sidecar persists/restores quarantine, strips halfOpenAgent, rejects invalid snapshots and supports explicit clear",
+    "persist STATE_TOO_LARGE now maps to CAPACITY_EXCEEDED with field-level attribution and no partial write"
+  ],
+  "sourceDigests": {
+    "src/config.ts": "461c916d090f631cb0927a8d0e05a947744cd3f4e979ede8342d3b0c25da11f0",
+    "src/context-store.ts": "80214b267d8dfb74dbbf771249d4febb3e868e171742248f2a375908beea094a",
+    "src/feature-session.ts": "00877bd832d8d1ab85112282bed3279a3b03e41643bc295036ddf17e95207aed",
+    "src/service.ts": "d07389917cd9bfaab0dcf5baa3d1a9beb559f2cd354fd4e04d378408f223665c",
+    "src/state-store.ts": "1763046163b8329cd6e52b12d87ff19e301af47607b269d918e5595cad5c0b12",
+    "src/tools.ts": "48e79e2de28a1ad7bea06935cf5865028afb7550bf199cfd8a52b9c643738211",
+    "src/util/errors.ts": "7b43e63cba7ac8705978375c22486daaaac24feb350ce1335cad65af977b1fcc",
+    "tests/unit/state-capacity-regression.test.ts": "81be355696f9cc4ba5c6bdae0870abf1d856af701ef2c3ec469f2b6dd81c5335",
+    "tests/unit/task-runtime.test.ts": "ff514396dcff0a29783c115727b0a923efa340b26057e6db7f6fcdc9a9428888"
+  }
+}

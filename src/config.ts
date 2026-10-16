@@ -127,8 +127,9 @@ export const Config = Schema.object({
   }).default({}).description('额度/模型池耗尽立即回退；只对临时故障进行短时重试').volatile(),
   persistence: Schema.object({
     enabled: Schema.boolean().default(false),
-    directory: Schema.string().default('')
-  }).default({}).description('完整状态快照与恢复；不以脱敏账本作为恢复真源').volatile(),
+    directory: Schema.string().default(''),
+    maxStateBytes: Schema.natural().default(0)
+  }).default({}).description('完整状态快照与恢复；maxStateBytes=0 按模式自动（持久化 4MiB / 内存 16MiB）；不以脱敏账本作为恢复真源').volatile(),
   messageBus: Schema.object({
     enabled: Schema.boolean().default(false),
     maxPending: Schema.natural().default(128)
@@ -240,7 +241,7 @@ export interface SwarmConfigInfo {
   planningReview: { enabled: boolean; requireJev: boolean; maxFixRounds: number; reviewAbove: number }
   execution: { profile: 'legacy' | 'bounded'; maxCalls: number; maxTokens: number; maxCostUsd: number }
   recovery: { maxTransientRetries: number; maxLogicalAttempts: number; maxShortRetryDelayMs: number; maxTransientWaitMs: number }
-  persistence: { enabled: boolean; directory: string }
+  persistence: { enabled: boolean; directory: string; maxStateBytes: number }
   messageBus: { enabled: boolean; maxPending: number }
   math: MathConfigInfo
   experience: { enabled: boolean }
@@ -352,7 +353,12 @@ export const getSwarmConfig = (raw: unknown): SwarmConfigInfo => {
     planningReview: getMerged(DEFAULT_PLANNING_REVIEW, plain.planningReview),
     execution: getMerged(DEFAULT_EXECUTION_CONFIG, plain.execution),
     recovery: getMerged(DEFAULT_RECOVERY_CONFIG, plain.recovery),
-    persistence: getMerged({ enabled: false, directory: '' }, plain.persistence),
+    persistence: (() => {
+      const merged = getMerged({ enabled: false, directory: '', maxStateBytes: 0 }, plain.persistence)
+      const limit = merged.maxStateBytes
+      return { enabled: merged.enabled === true, directory: typeof merged.directory === 'string' ? merged.directory : '',
+        maxStateBytes: limit === 0 ? 0 : bounded(limit, 262144, 262144, 268435456) }
+    })(),
     messageBus: getMerged({ enabled: false, maxPending: 128 }, plain.messageBus),
     math: getMathConfig(plain.math),
     experience: getMerged({ enabled: false }, plain.experience)

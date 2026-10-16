@@ -259,6 +259,7 @@ export const getStatusText = (result: StatusResult): string => {
     ...(result.threads.length > 0 ? ['连续会话：', ...result.threads.map((t) => `- ${t.threadId} ${t.roleName}${t.mode === undefined ? '' : `·${t.mode === 'research' ? '研算' : '验算'}`} · ${t.rounds} 轮 · ${t.closed ? '已关闭' : t.busy ? '工作中' : '空闲'} · 任务 ${t.taskIds.join('、') || '无'}${t.lastSummary === null ? '' : ` · 最近：${t.lastSummary}`}`)] : []),
     `调用：原生后端 ${result.usage.nativeCalls} 次，Jev 分诊 ${result.usage.jevCalls} 次，衡鉴会话判断 ${result.usage.sessionCalls} 次，衡鉴复评 ${result.usage.reviewCalls} 次`,
     ...(result.diagnostics.length > 0 ? [`宿主降级：${result.diagnostics.join('；')}`] : []),
+    ...(result.persistence.stateBytes === undefined ? [] : [`状态容量：${(result.persistence.stateBytes / 1048576).toFixed(2)} MiB / ${((result.persistence.stateLimitBytes ?? 0) / 1048576).toFixed(0)} MiB（${result.persistence.durable ? '持久化' : '内存态'}）`]),
     `账本：${result.ledgerPath}`
   ].join('\n'))
 }

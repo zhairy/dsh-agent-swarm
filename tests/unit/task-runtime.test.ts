@@ -434,7 +434,7 @@ describe('task execution through the public service', () => {
     } finally { runtime.runs[0]!.release(); await running }
   })
 
-  it('persists and restores stable profile route quarantine without resuming an ephemeral half-open agent', async () => {
+  it('persists and restores stable profile route quarantine in a bounded sidecar without resuming an ephemeral half-open agent', async () => {
     const home = await mkdtemp(join(tmpdir(), 'swarm-route-health-state-')); directories.push(home)
     const config = getSwarmConfig({ persistence: { enabled: true }, planningReview: { enabled: false } })
     const tasks = intTaskStore(); const threads = intThreadRegistry()
@@ -442,24 +442,26 @@ describe('task execution through the public service', () => {
     const feature = await FeatureSessions.createFeatureSession(input)
     let restored: FeatureSessions.FeatureSession | undefined
     try {
-      expect(feature.store.read().routeHealth).toBeUndefined()
+      expect(await feature.readRouteHealth()).toBeUndefined()
       const health: RouteHealthEntry[] = [{ key: 'domain:shared-subscription', aliases: ['domain:shared-subscription', 'route:qwen-token-plan-cn/deepseek-test'], kind: 'quota_exhausted', failedAt: 1000, resetAt: 10000, halfOpenAgent: 'dead-half-open-agent', route: { provider: 'qwen-token-plan-cn', model: 'deepseek-test', policy: { accessMode: 'subscription', quotaDomainId: 'shared-subscription', quotaScope: 'plan' } } }]
-      await feature.persist('route/isolate', tasks, threads, health)
-      const saved = feature.store.read().routeHealth! as RouteHealthEntry[]
+      await feature.persistRouteHealth(health)
+      const saved = await feature.readRouteHealth() as RouteHealthEntry[]
       expect(saved).toHaveLength(1)
       expect(saved[0]).not.toHaveProperty('halfOpenAgent')
       expect(saved[0]).toMatchObject({ kind: 'quota_exhausted', failedAt: 1000, resetAt: 10000 })
+      // 任务状态提交不再内嵌健康快照；健康只写有界 sidecar。
       await feature.persist('unrelated/checkpoint', tasks, threads)
-      expect(feature.store.read().routeHealth).toEqual(saved)
+      expect(feature.store.read().routeHealth).toBeUndefined()
+      expect(await feature.readRouteHealth()).toEqual(saved)
       await feature.dispose()
       restored = await FeatureSessions.createFeatureSession({ ...input, tasks: intTaskStore(), threads: intThreadRegistry() })
-      expect(restored.store.read().routeHealth).toEqual(saved)
+      expect(await restored.readRouteHealth()).toEqual(saved)
       for (const change of [{ kind: 'invented' }, { resetAt: NaN }, { failedAt: -1 }, { key: 'unsafe key' }, { aliases: ['not-a-route-key'] }, { aliases: ['domain:duplicate', 'domain:duplicate'] }, { route: { provider: '', model: 'model' } }]) {
-        await expect(restored.persist('route/invalid', input.tasks, input.threads, [{ ...saved[0]!, ...change } as RouteHealthEntry])).rejects.toThrow()
-        expect(restored.store.read().routeHealth).toEqual(saved)
+        await expect(restored.persistRouteHealth([{ ...saved[0]!, ...change } as RouteHealthEntry])).rejects.toThrow()
+        expect(await restored.readRouteHealth()).toEqual(saved)
       }
-      await restored.persist('route/confirmed-recovery', input.tasks, input.threads, [])
-      expect(restored.store.read().routeHealth).toEqual([])
+      await restored.persistRouteHealth([])
+      expect(await restored.readRouteHealth()).toEqual([])
     } finally { await feature.dispose(); await restored?.dispose() }
   })
 
