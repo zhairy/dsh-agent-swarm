@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { SwarmError } from './util/errors.js'
 import { getValueDigest } from './workflow.js'
+import { canonicalStateJson, StateStoreError } from './state-store.js'
 
 export interface ContextBindingInfo {
   rootSessionId: string
@@ -49,17 +50,22 @@ export interface ContextStore {
   Add: (input: Omit<ContextArtifactInfo, 'ref' | 'digest'>) => ContextArtifactInfo
   PrepareTaskReplace: (binding: ContextBindingInfo, inputs: Array<Omit<ContextArtifactInfo, 'ref' | 'digest' | 'binding'>>) => PreparedTaskContextReplacement
   Restore: (artifact: unknown, expectedBinding?: ContextBindingInfo) => ContextArtifactInfo
+  /** 当前全部存活材料在完整状态里的编码字节数（含 JSON 转义），用于容量准入；只读读数。 */
+  getTotalEncodedBytes: () => number
   Read: (binding: ContextBindingInfo, ref: string, options?: { cursor?: string; limit?: number; expectedDigest?: string }) => ContextPageInfo
   List: (binding: ContextBindingInfo) => Array<Pick<ContextPageInfo, 'ref' | 'digest' | 'layer' | 'kind' | 'totalBytes' | 'cardRevision' | 'workflowRevision' | 'requestRevision'>>
   DelTask: (rootSessionId: string, taskId: string) => void
 }
 
 /** 受控引用读取；ID 不是授权，始终检查根、工作区、任务、版本与盲审权限。 */
-export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactBytes?: number; maxPageChars?: number } = {}): ContextStore => {
+export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactBytes?: number; maxPageChars?: number; getByteBudget?: () => number } = {}): ContextStore => {
   const store = new Map<string, ContextArtifactInfo>()
   // Artifacts remain private immutable values; byte lengths are derived once,
   // never persisted and never used as an authorization cache.
   const byteLengths = new WeakMap<ContextArtifactInfo, number>()
+  // 编码字节数按引用记账：它同时被容量准入和 feature-session 的提交预算使用。
+  const encodedBytes = new Map<string, number>()
+  let totalEncodedBytes = 0
   const byTask = new Map<string, { refs: Set<string>; version: number }>()
   const replacements = new Map<string, symbol>()
   let rollbackSlots = 0
@@ -72,7 +78,17 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
   const mutable = (key: string, token?: symbol) => {
     if (replacements.has(key) && replacements.get(key) !== token) throw new SwarmError('INVALID_ARGS', '当前任务上下文正在提交，请等待本轮合同事务完成')
   }
+  const measureEncodedBytes = (artifact: ContextArtifactInfo): number => {
+    try { return Buffer.byteLength(canonicalStateJson(artifact), 'utf8') } catch (error) {
+      throw error instanceof StateStoreError ? new SwarmError('INVALID_ARGS', '材料编码不合法，不能进入完整状态') : error
+    }
+  }
   const put = (artifact: ContextArtifactInfo) => {
+    const previous = store.get(artifact.ref)
+    if (previous !== undefined) totalEncodedBytes -= encodedBytes.get(artifact.ref) ?? 0
+    const size = encodedBytes.get(artifact.ref) ?? measureEncodedBytes(artifact)
+    encodedBytes.set(artifact.ref, size)
+    totalEncodedBytes += size
     store.set(artifact.ref, artifact)
     const key = taskKey(artifact.binding)
     let group = byTask.get(key)
@@ -81,11 +97,25 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
   }
   const remove = (artifact: ContextArtifactInfo) => {
     store.delete(artifact.ref)
+    totalEncodedBytes -= encodedBytes.get(artifact.ref) ?? 0
+    encodedBytes.delete(artifact.ref)
     const key = taskKey(artifact.binding), group = byTask.get(key)
     if (group) { group.refs.delete(artifact.ref); group.version++; if (group.refs.size === 0) byTask.delete(key) }
   }
   const fits = (removed: number, added: number) => {
     if (store.size + rollbackSlots - removed + added > maxArtifacts) throw new SwarmError('INVALID_ARGS', '上下文材料超过容量上限')
+  }
+  // 只有净增长才受字节预算约束：net-shrink（例如修订任务卡重建材料索引）始终允许，作为已超预算会话的收缩救援路径。
+  const admitBytes = (removed: readonly ContextArtifactInfo[], added: readonly ContextArtifactInfo[]) => {
+    if (limits.getByteBudget === undefined) return
+    const growth = added.reduce((sum, artifact) => sum + (encodedBytes.get(artifact.ref) ?? measureEncodedBytes(artifact)), 0)
+    const released = removed.reduce((sum, artifact) => sum + (encodedBytes.get(artifact.ref) ?? 0), 0)
+    if (growth <= released) return
+    const budget = Math.max(0, limits.getByteBudget())
+    if (totalEncodedBytes - released + growth <= budget) return
+    // 明确的、可操作的容量错误；既不会静默丢弃既有材料，也不会写坏完整状态。
+    const kib = (bytes: number) => Math.ceil(bytes / 1024)
+    throw new SwarmError('CAPACITY_EXCEEDED', `任务材料超出容量预算（现有 ${kib(totalEncodedBytes - released)} KiB，新增 ${kib(growth)} KiB，可用上限 ${kib(budget)} KiB）。请修订任务卡重建材料索引，或结束当前任务后新建任务；也可在设置中提高 persistence.maxStateBytes；既有材料不会被自动丢弃`)
   }
   const requireArtifact = (binding: ContextBindingInfo, ref: string, expectedDigest?: string): ContextArtifactInfo => {
     const artifact = store.get(ref)
@@ -120,6 +150,7 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
     Add: (input) => {
       mutable(taskKey(input.binding)); fits(0, 1)
       const artifact = makeArtifact(input)
+      admitBytes([], [artifact])
       put(artifact)
       return structuredClone(artifact)
     },
@@ -131,6 +162,7 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
       const group = byTask.get(key), version = group?.version
       const replaced = [...(group?.refs ?? [])].flatMap((ref) => { const entry = store.get(ref)!; return sameRevision(entry.binding, binding) ? [] : [entry] })
       fits(replaced.length, artifacts.length)
+      admitBytes(replaced, artifacts)
       const token = Symbol('context-replacement')
       const reserved = Math.max(0, replaced.length - artifacts.length)
       let state: 'prepared' | 'committed' | 'finalized' | 'rolled-back' = 'prepared'
@@ -144,6 +176,7 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
           mutable(key)
           if (byTask.get(key) !== group || group?.version !== version) throw new SwarmError('STALE_EVIDENCE', '任务材料在预检后改变，请重新准备合同替换')
           fits(replaced.length, artifacts.length)
+          admitBytes(replaced, artifacts)
           // Every capacity and schema check precedes this synchronous, task-scoped map mutation.
           for (const artifact of replaced) remove(artifact)
           for (const artifact of artifacts) put(artifact)
@@ -175,9 +208,11 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
         return structuredClone(existing)
       }
       mutable(taskKey(artifact.binding)); fits(0, 1)
+      // 恢复装载不适用准入预算：这些材料已经属于已提交状态，容量已在提交时受控。
       put(artifact)
       return structuredClone(artifact)
     },
+    getTotalEncodedBytes: () => totalEncodedBytes,
     Read: (binding, ref, options = {}) => {
       const artifact = requireArtifact(binding, ref, options.expectedDigest)
       const owner = artifact.binding

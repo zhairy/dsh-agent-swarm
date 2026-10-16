@@ -355,7 +355,11 @@ const getStatusResult = (tasks: ReturnType<typeof getTaskView>[], session: Sessi
   threads: session.threads.list().map(getThreadView),
   ledgerPath: session.ledger.path,
   usage: { nativeCalls: session.counters.native, jevCalls: session.counters.jev, reviewCalls: session.counters.review, sessionCalls: session.counters.session },
-  diagnostics
+  diagnostics,
+  persistence: { durable: session.features?.store.durable ?? false,
+    ...(session.features === undefined ? {} : { stateBytes: session.features.store.getStateBytes(), stateLimitBytes: session.features.store.maxStateBytes,
+      contextBytes: session.features.contexts.getTotalEncodedBytes() }),
+    recovery: '已审计状态可恢复；不自动恢复旧 live thread' }
 })
 
 /**
@@ -421,7 +425,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         counters: { ...session.counters }, rootUpgradeExplicit: [...session.rootUpgradeExplicit] })
     }).then(async (features) => {
       try {
-      routeState.RestoreHealth(features.store.read().routeHealth ?? [])
+      routeState.RestoreHealth((await features.readRouteHealth()) ?? [])
       const runtime = features.getRestoredRuntime()
       if (runtime !== undefined) {
         session.rootEditAt = runtime.rootEditAt
@@ -624,14 +628,14 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     },
     onHealthPersistenceFailure: (event) => deps.logger?.warn(`路由健康状态曾提交失败；后续请求以当前共享持久提交状态为准：${event.agentId}（${event.reason}）`),
     onHealthChange: (entries) => {
-      // The failure domain is shared by roots. Commit it before publishing a recovery action.
-      return Promise.all([...sessions.values()].flatMap((session) => session.features === undefined ? [] : [
-        session.features.persist('route/health', session.store, session.threads, entries).catch((error: unknown) => {
-          const code = error instanceof StateStoreError ? error.code : 'PERSISTENCE_FAILURE'
-          deps.logger?.warn(`路由健康快照提交失败：根会话 ${session.sessionId}，${code}；原始状态未输出`)
-          throw error
-        })
-      ])).then(() => undefined)
+      // 故障域只写有界健康 sidecar；内存态没有落盘故障域，健康快照只留在进程内，不能把任务状态容量事故放大成逐请求失败。
+      const durable = [...sessions.values()].filter((session) => session.features?.store.durable === true)
+      if (durable.length === 0) return undefined
+      return Promise.all(durable.map((session) => session.features!.persistRouteHealth(entries).catch((error: unknown) => {
+        const code = error instanceof StateStoreError ? error.code : 'PERSISTENCE_FAILURE'
+        deps.logger?.warn(`路由健康快照提交失败：根会话 ${session.sessionId}，${code}；原始状态未输出`)
+        throw error
+      }))).then(() => undefined)
     },
     ...(deps.network === undefined ? {} : { network: deps.network }),
     onNetworkWait: (event) => {
@@ -673,7 +677,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     persist: async (records) => {
       for (const parentId of new Set(records.map((record) => record.parentSessionId))) {
         const session = sessions.get(parentId)
-        if (session?.features !== undefined) await session.features.persist('agent/control', session.store, session.threads, routeState.getHealthSnapshot())
+        // 内存态没有跨重启恢复，控制记录只留在进程内；持久化态保持故障域语义。
+        if (session?.features !== undefined && session.features.store.durable) await session.features.persist('agent/control', session.store, session.threads)
       }
     },
     resume: async (binding, options) => {
@@ -708,7 +713,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         input = { ...original, session: 'continue', prompt: [original.prompt,
           '用户显式要求继续未完成部分；先核对当前文件和执行记录，保留已完成工作，不重复已成功的写入或命令。', options?.steering ?? ''].filter(Boolean).join('\n\n') }
         session.ledger.AddLedgerEvent({ type: 'agent/manual-continue', taskId: task.taskId, delegationId: previous.delegationId, data: { childId: binding.childId } })
-        await features.persist('agent/manual-continue', session.store, session.threads, routeState.getHealthSnapshot())
+        await features.persist('agent/manual-continue', session.store, session.threads)
       })
       const requestId = `manual-${randomUUID()}`
       const controller = new AbortController()
@@ -839,7 +844,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           ...(getRoleInfo(role).capabilities.includes('message') && features.bus !== undefined && features.store.durable ? ['message-send', 'message-read'] : [])
         ],
         blindReview: record.reviewPhase !== 'response' && (role === 'yu_shi' || (role === 'suan_heng' && record.mode === 'verify'))
-      }).then(async () => { await features.persist('delegation/started', session.store, session.threads, routeState.getHealthSnapshot()) })
+      }).then(async () => { await features.persist('delegation/started', session.store, session.threads) })
       childReady.set(agentId, ready)
       await ready
     },
@@ -1030,7 +1035,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         if (batch !== undefined) session.store.UpdateTask(record.taskId, {
           contextRefs: batch.artifacts.map(({ ref, digest, layer, kind }) => ({ ref, digest, layer, kind })), contextDelegations: {}
         })
-        await features.persist('task/card', session.store, session.threads, routeState.getHealthSnapshot())
+        await features.persist('task/card', session.store, session.threads)
         batch?.finalize()
       } catch (error) {
         const restored = session.store.RollbackTask?.(record.taskId, existing, getTaskBinding(record))
@@ -1111,7 +1116,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
               nodeId: 'planning-review', attemptId: reservationId, threadId: run.id,
               role: 'yu_shi',
               permissions: ['pure-calc', 'context-read'], blindReview: true })
-              .then(async () => { await features.persist('workflow/review-start', session.store, session.threads, routeState.getHealthSnapshot()) })
+              .then(async () => { await features.persist('workflow/review-start', session.store, session.threads) })
             childReady.set(run.id, ready)
             await ready
             const result = await run.result
@@ -1148,7 +1153,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         if (reviewSnapshot(current).snapshotDigest !== snapshot.snapshotDigest) return { status: 'stale', reason: '审核期间需求、合同、流程或策略已经改变' }
         task = session.store.UpdateTask(task.taskId, { planningReview: record })
         session.ledger.AddLedgerEvent({ type: 'workflow/review', taskId: task.taskId, data: { status: record.status, snapshotDigest: record.snapshotDigest, errors: record.errors } })
-        await features.persist('workflow/review', session.store, session.threads, routeState.getHealthSnapshot())
+        await features.persist('workflow/review', session.store, session.threads)
         return record
       })
     })()
@@ -1190,7 +1195,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       })
       session.store.UpdateTask(task.taskId, { contextRefs: [...(task.contextRefs ?? []), { ref: artifact.ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind }] })
       session.ledger.AddLedgerEvent({ type: 'math/computed', taskId: task.taskId, data: { evidenceKind: 'computed', ref: artifact.ref, ok: result.ok, workUnits: result.workUnits } })
-      await features.persist('math/computed', session.store, session.threads, routeState.getHealthSnapshot())
+      await features.persist('math/computed', session.store, session.threads)
       return { ...result, artifactRef: artifact.ref, task_id: task.taskId }
     })
   }
@@ -1314,7 +1319,6 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     return { ...getStatusResult(views, session, getDiagnostics(exec.agent)),
       scheduling: schedulerFor(session.sessionId).status(),
       roleSuggestions: capabilityRequest.capability_tags === undefined ? [] : suggestRolesByCapabilities(capabilityRequest.capability_tags, { allowWrite: capabilityRequest.allow_write_roles === true }),
-      persistence: { durable: session.features?.store.durable ?? false, recovery: '已审计状态可恢复；不自动恢复旧 live thread' },
       recovery: { quotaEvidence: deps.quotaDiagnostics?.() ?? null, isolatedRoutes: routeState.getHealth(), current: routeState.getRecovery(exec.agent.id) ?? null, nativeInternalRetryCoverage: 'unverified' },
       executionBudgets: session.features === undefined ? [] : tasks.map((task) => ({ task_id: task.taskId, ...session.features!.budgetFor(task).getSnapshot() }))
     }
@@ -1391,7 +1395,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           experienceCandidateId = candidate.id
         } catch (error) { deps.logger?.info(`本次经验未入库：${String(error)}`) }
       }
-      await features.persist('accept/decision', session.store, session.threads, routeState.getHealthSnapshot())
+      await features.persist('accept/decision', session.store, session.threads)
       return {
         result: { task_id: task.taskId, status, missing, roundsUsed: rounds, maxAutoFixRounds: config.budgets.maxAutoFixRounds, gates: check.statuses },
         experienceCandidateId,
@@ -1585,7 +1589,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
             requestIds: { ...prepared.requestIds, [args.request_id]: `pending:${attemptId}` },
             requestInputs: { ...prepared.requestInputs, [args.request_id]: requestDigest }
           })
-          await features.persist('workflow/attempt-reserved', session.store, session.threads, routeState.getHealthSnapshot())
+          await features.persist('workflow/attempt-reserved', session.store, session.threads)
         })
       } catch (error) {
         // No child/lease/model call can have started before admission commits.
@@ -1699,7 +1703,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
             }
           }
           if (args.request_id !== undefined) session.store.UpdateTask(task.taskId, { requestIds: { ...task.requestIds, [args.request_id]: updated.delegationId } })
-          await features.persist('delegation/completed', session.store, session.threads, routeState.getHealthSnapshot())
+          await features.persist('delegation/completed', session.store, session.threads)
           if (!stale) await UpdateRootUpgrade(exec.agent, session, task)
           return session.store.getDelegation(updated.delegationId)!
         })
@@ -1723,7 +1727,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
             delete requestIds[args.request_id]; delete requestInputs[args.request_id]
           }
           session.store.UpdateTask(task.taskId, { workflowState: state, requestIds, requestInputs })
-          await features.persist('workflow/attempt-failed', session.store, session.threads, routeState.getHealthSnapshot())
+          await features.persist('workflow/attempt-failed', session.store, session.threads)
         })
         throw error
       } finally {
@@ -1760,7 +1764,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       return { ...view,
         diagrams: { ...view.diagrams, stateRefreshRequired: task !== stored },
         scheduling: schedulerFor(sessionId).status(),
-        stateRefreshRequired: task !== stored, publishedRevisions: getTaskBinding(stored) }
+        stateRefreshRequired: task !== stored, publishedRevisions: getTaskBinding(stored),
+        ...(session.features === undefined ? {} : { capacity: { durable: session.features.store.durable,
+          stateBytes: session.features.store.getStateBytes(), stateLimitBytes: session.features.store.maxStateBytes,
+          contextBytes: session.features.contexts.getTotalEncodedBytes() } }) }
     }
     ,dispose: () => disposal ??= (async () => {
       closing = true
@@ -1773,7 +1780,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         try {
           features = await session.featuresPromise
           // Persist a complete checkpoint; started work stays charged and never replays.
-          await session.taskLock.run(() => features!.persist('lifecycle/dispose', session.store, session.threads, routeState.getHealthSnapshot()))
+          await session.taskLock.run(() => features!.persist('lifecycle/dispose', session.store, session.threads))
         } catch (error) { errors.push(error) }
         finally { if (features !== undefined) try { await features.dispose() } catch (error) { errors.push(error) } }
       }

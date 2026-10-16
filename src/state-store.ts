@@ -10,6 +10,10 @@ export class StateStoreError extends Error {
 export interface DurableStateStore<T> {
   readonly directory: string
   readonly durable: boolean
+  /** 完整状态的编码字节上限；内存态与持久化态取值不同，由调用方按模式决定。 */
+  readonly maxStateBytes: number
+  /** 最近一次成功提交（或恢复装载）状态的编码字节数；提交失败不改变该读数。 */
+  getStateBytes: () => number
   read: () => T
   readPath?: <R = unknown>(path: readonly (string | number)[]) => R | undefined
   readFields?: <K extends keyof T>(keys: readonly K[]) => Pick<T, K>
@@ -132,18 +136,20 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
   const maxJournalBytes = options.maxJournalBytes ?? 64 * 1024 * 1024
   const snapshotEvery = options.snapshotEvery ?? 16
   if (![maxStateBytes, maxJournalBytes, snapshotEvery].every((n) => Number.isSafeInteger(n) && n > 0)) throw new StateStoreError('STATE_INVALID', 'Invalid state resource limits')
-  const validate = (value: unknown): { value: T; encoded: string } => {
+  const validate = (value: unknown): { value: T; encoded: string; bytes: number } => {
     const encoded = canonicalStateJson(value)
-    if (Buffer.byteLength(encoded, 'utf8') > maxStateBytes) throw new StateStoreError('STATE_TOO_LARGE', 'State exceeds byte limit')
+    const bytes = Buffer.byteLength(encoded, 'utf8')
+    if (bytes > maxStateBytes) throw new StateStoreError('STATE_TOO_LARGE', 'State exceeds byte limit')
     if (options.validate !== undefined) {
       const result = options.validate(value)
       if (result !== true && (typeof result !== 'object' || result === null || result.ok !== true)) throw new StateStoreError('STATE_INVALID', validationFailureMessage(result))
     }
-    return { value: JSON.parse(encoded) as T, encoded }
+    return { value: JSON.parse(encoded) as T, encoded, bytes }
   }
   const initial = validate(options.initialState)
   let state = initial.value
   let stateEncoded = initial.encoded
+  let stateBytes = initial.bytes
   let sequence = 0
   let stateChecksum = checksumText(stateEncoded)
   let journalBytes = 0
@@ -191,7 +197,8 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
         if (!snapshotValid(parsed)) throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot checksum/schema mismatch')
         snapshot = parsed as Snapshot<T>
         const validated = validate(snapshot.state)
-        state = validated.value; stateEncoded = validated.encoded; sequence = snapshot.sequence; stateChecksum = snapshot.checksum
+        state = validated.value; stateEncoded = validated.encoded; stateBytes = validated.bytes
+        sequence = snapshot.sequence; stateChecksum = snapshot.checksum
       } catch (error) { if (!missing(error)) throw error }
       let journal = ''
       let journalPresent = false
@@ -214,7 +221,8 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
         }
         if (entry.sequence !== sequence + 1 || entry.previousChecksum !== stateChecksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal sequence or ancestry mismatch')
         const validated = validate(entry.state)
-        state = validated.value; stateEncoded = validated.encoded; sequence = entry.sequence; stateChecksum = entry.checksum
+        state = validated.value; stateEncoded = validated.encoded; stateBytes = validated.bytes
+        sequence = entry.sequence; stateChecksum = entry.checksum
       }
       if (snapshot === undefined) {
         if (sequence !== 0) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal has no initial trusted snapshot')
@@ -229,7 +237,8 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
     }
   }
   const store: DurableStateStore<T> = {
-    directory, durable: options.enabled !== false,
+    directory, durable: options.enabled !== false, maxStateBytes,
+    getStateBytes: () => stateBytes,
     read: () => { if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed'); return copy(state) },
     readPath: <R = unknown>(path: readonly (string | number)[]): R | undefined => {
       if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed')
@@ -283,7 +292,8 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
           journalBytes += lineBytes
         } catch (error) { failed = true; throw new StateStoreError('RECOVERY_REQUIRED', 'Durable commit failed: ' + (error instanceof Error ? error.message : String(error))) }
       }
-      state = next.value; stateEncoded = next.encoded; sequence++; stateChecksum = nextChecksum
+      state = next.value; stateEncoded = next.encoded; stateBytes = next.bytes
+      sequence++; stateChecksum = nextChecksum
       if (store.durable && sequence % snapshotEvery === 0) {
         // Journal is already durable. Compaction failure must not pretend the committed transaction was rolled back.
         try {
