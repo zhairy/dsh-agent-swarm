@@ -20,6 +20,7 @@ import { getPromptStyle, getStyledTaskPrompt, type PromptStyle } from './model-f
 import { isNetworkSuspect, type NetworkMonitorInfo } from './network.js'
 import { GATE_IDS, GATE_ROLE, ValidateDelegationBudget, type GateId } from './policy.js'
 import type { FallbackEventInfo, RouteStateRegistry } from './route-state.js'
+import { startChild, supportsContinuableSessions } from './subagent-compat.js'
 import {
   getChildPersona,
   getRoleInfo,
@@ -351,6 +352,8 @@ export interface DelegateDepsInfo {
   network?: NetworkMonitorInfo
   onChildStart?: (info: { agentId: string; task: TaskRecord; record: DelegationRecord; role: DelegableRoleId; signal: AbortSignal; persistent?: boolean; input?: DelegateInput; parent?: AgentLike }) => void | Promise<void>
   onChildEnd?: (agentId: string, stopReason?: string) => void | Promise<void>
+  /** 0.2.1-alpha：在启动子智能体前登记角色与 allow_web，供宿主 agent/created 首次装配前限制工具面 */
+  noteChildScope?: (request: { role: DelegableRoleId; allowWeb: boolean }) => void
 }
 
 /** 一次运行（一次性或连续会话的一轮，含自动重试）的结果 */
@@ -515,7 +518,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     let published = false
     try {
       outcome = await runWithSignal(exec, (signal) =>
-        dispatch(exec, () => subagents.start(provider, { label: `${getRoleInfo(input.role).name}·${task.taskId}`, prompt: [{ type: 'text', text }], parent: exec.agent, signal })),
+        dispatch(exec, () => startChild(subagents, { provider, label: `${getRoleInfo(input.role).name}·${task.taskId}`, prompt: [{ type: 'text', text }], parent: exec.agent, signal })),
       { onRun: (run) => { published = true; return deps.onChildStart?.({ agentId: run.id, task, record: running, role: input.role, signal: exec.signal, persistent: false, input, parent: exec.agent }) } })
     } catch (error) {
       if (published) return finish(session, running, { status: 'failed', summary: '已开始的原生调用未能登记，已停止并保留待核对状态；没有另启后端重放', error: getErrorText(error), backend: kind, hardIsolation: false, unresolved: ['核对已开始的原生调用可能产生的改动后再继续'], attempts: [...attempts, { route: provider, backend: kind, outcome: 'failed', reason: `registration: ${getErrorText(error)}` }] })
@@ -642,7 +645,9 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
           // 任务说明与 persona 按这一层路由的模型家族组织
           const style = getStyle(route, config)
           try {
-            const run = await dispatch(exec, () => subagents.start(SPAWN_PROVIDER, {
+            deps.noteChildScope?.({ role: input.role, allowWeb: input.allow_web === true })
+            const run = await dispatch(exec, () => startChild(subagents, {
+              provider: SPAWN_PROVIDER,
               label: `${role.name}·${task.taskId}`,
               prompt: [{ type: 'text', text: getChildPromptText(task, input, record.delegationId, style) + retryNote }, ...images],
               parent: exec.agent,
@@ -650,6 +655,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
               agentOptions: route,
               outputSchema: getOutputSchema(input.role),
               maxDepth: 1,
+              agentPreset: getRoleInfo(input.role).presetId,
               ...(toolFilter === undefined ? {} : { toolFilter }),
               persona: getChildPersona(input.role, input.mode, style)
             }))
@@ -702,8 +708,8 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
    */
   const runThread = async (ctx: RunContext, plan: Exclude<SessionPlan, { kind: 'oneshot' }>): Promise<RunOutcomeInfo | undefined> => {
     const { input, task, record, exec, session, config, subagents, usable, compatibleDeclared, initialQuotaOrder, requireVision, toolFilter, images, attempts, onFallback, retries } = ctx
-    // 宿主方法依赖 this（SubagentRuntime 实例），必须以 subagents.xxx(...) 调用，不能解构
-    if (subagents.startContinuable === undefined || subagents.sendMessage === undefined) return undefined
+    // 旧宿主用 startContinuable，新宿主（0.2.1-alpha 起）用 startActivation 的同 childId 激活；都要求 sendMessage。
+    if (!supportsContinuableSessions(subagents)) return undefined
     const role = getRoleInfo(input.role)
     const key = getRouteKey(input.role, input.mode)
     let appended = plan.kind === 'continue'
@@ -744,20 +750,39 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       try {
         if (started) await dispatch(exec, () => subagents.sendMessage!(exec.agent, threadId, content, { signal: exec.signal }))
         else {
-          await dispatch(exec, () => subagents.startContinuable!({
-            provider: SPAWN_PROVIDER,
-            label: `${role.name}·${task.taskId}`,
-            childId: threadId,
-            signal: exec.signal,
-            request: {
-              prompt: content,
-              parent: exec.agent,
-              agentOptions: usable[0] as RouteInfo,
-              maxDepth: 1,
-              ...(toolFilter === undefined ? {} : { toolFilter }),
-              persona: getChildPersona(input.role, input.mode, style)
-            }
-          }))
+          deps.noteChildScope?.({ role: input.role, allowWeb: input.allow_web === true })
+          await dispatch(exec, async () => {
+            // 旧宿主返回 {childId,messageId}；新宿主返回激活句柄，其结果由 hub 的回合结算通知消费。
+            const run = subagents.startContinuable !== undefined
+              ? await subagents.startContinuable({
+                provider: SPAWN_PROVIDER,
+                label: `${role.name}·${task.taskId}`,
+                childId: threadId,
+                signal: exec.signal,
+                request: {
+                  prompt: content,
+                  parent: exec.agent,
+                  agentOptions: usable[0] as RouteInfo,
+                  maxDepth: 1,
+                  ...(toolFilter === undefined ? {} : { toolFilter }),
+                  persona: getChildPersona(input.role, input.mode, style)
+                }
+              })
+              : await startChild(subagents, {
+                provider: SPAWN_PROVIDER,
+                label: `${role.name}·${task.taskId}`,
+                childId: threadId,
+                prompt: content,
+                parent: exec.agent,
+                signal: exec.signal,
+                agentOptions: usable[0] as RouteInfo,
+                maxDepth: 1,
+                agentPreset: getRoleInfo(input.role).presetId,
+                ...(toolFilter === undefined ? {} : { toolFilter }),
+                persona: getChildPersona(input.role, input.mode, style)
+              })
+            if (run !== undefined && 'result' in run) void run.result.catch(() => undefined)
+          })
           started = true
         }
       } catch (error) {
@@ -936,7 +961,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const compatibleDeclared = chain.filter((route) => !permanentlySkipped.has(route) && (selection.independence !== 'achieved' || !avoid.includes(getModelFamily(route.model))))
     const initialQuotaOrder = manual === undefined && deps.orderQuotaRoutes !== undefined ? quotaChain.filter((route) => compatibleDeclared.includes(route)) : undefined
     const ctx: RunContext = { input, task, record, exec, session, config, subagents, usable: selection.usable, compatibleDeclared, initialQuotaOrder, requireVision, toolFilter, images, attempts, onFallback, retries }
-    const supportsThreads = subagents.startContinuable !== undefined && subagents.sendMessage !== undefined
+    const supportsThreads = supportsContinuableSessions(subagents)
     let outcome = plan.kind === 'oneshot' || !supportsThreads ? undefined : await runThread(ctx, plan)
     if (outcome === undefined) {
       if (plan.kind !== 'oneshot' && supportsThreads) AddRetry(session, record, retries, { attempt: retries.length + 1, reason: '连续会话多次无法建立或投递', action: 'fallback' })

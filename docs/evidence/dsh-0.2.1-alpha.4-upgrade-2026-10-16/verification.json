@@ -1,0 +1,46 @@
+{
+  "topic": "DSH 0.2.0-rc.2 to 0.2.1-alpha.4 upgrade and plugin adaptation",
+  "checkedAt": "2026-10-16T05:48:49.114830+00:00",
+  "dsh": {
+    "from": "0.2.0-rc.2",
+    "to": "0.2.1-alpha.4",
+    "rollback": "/usr/lib/node_modules/@deepseek-ai/.dsh-0.2.0-rc.2-rollback",
+    "profileBackup": "/home/zhairy/.dsh/backups/upgrade-0.2.1a4-20261016-133946"
+  },
+  "pluginVersion": "2.5.2",
+  "tests": {
+    "unit": {
+      "files": 74,
+      "passed": 921,
+      "failed": 0,
+      "host": "0.2.1-alpha.4"
+    },
+    "integration021a4": {
+      "files": 8,
+      "passed": 39,
+      "failed": 0
+    },
+    "integration020rc2": {
+      "files": 8,
+      "passed": 39,
+      "failed": 0
+    }
+  },
+  "liveChecks": {
+    "service": "dsh-web.service active, single instance",
+    "startup": "no skipped bundles, no inactive required plugins",
+    "swarmJevStatus": "ok",
+    "swarmQuotaView": "real dsh-plugin-subscriptions data (status=reported, plan=prolite, windows present)"
+  },
+  "profileChanges": {
+    "connectionOverride": "inject webRuntime -> webStartup (keep webServer)",
+    "compatibilityExemptions": [
+      "@deepseek-ai/dsh-tool-calculator@0.0.1",
+      "dsh-plugin-finance-data@0.3.2",
+      "dsh-plugin-subscriptions@0.9.9",
+      "dsh-browser-playwright@0.1.1",
+      "dsh-quant@0.90.0"
+    ],
+    "dshAtFile": "disabled (host half calls ctx.settings.register; absent in both hosts, fatal on 0.2.1)"
+  }
+}

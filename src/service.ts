@@ -11,6 +11,7 @@ import { realpathSync } from 'node:fs'
 import { resolve, relative, isAbsolute, sep, dirname } from 'node:path'
 import { getRoleRoute, type SwarmConfigInfo } from './config.js'
 import { DispatchAdmissionError, intDelegator, getToolFilter, type DelegateExecInfo, type DelegateSessionInfo, type PlanSessionInput } from './delegate.js'
+import { startChild, supportsContinuableSessions } from './subagent-compat.js'
 import { intLedger, intTaskStore, type AcceptanceRecord, type AssessmentInfo, type DelegationRecord, type TaskRecord, type TriageRecord } from './evidence.js'
 import {
   SPAWN_PROVIDER,
@@ -47,12 +48,12 @@ import {
   type TaskCard
 } from './policy.js'
 import { intRouteStateRegistry, type RouteStateRegistry } from './route-state.js'
-import { FindRoleByPresetId, getPermissionLabel, getRoleInfo, isWriteAllowed, type RoleId } from './role-registry.js'
+import { FindRoleByPresetId, getPermissionLabel, getRoleInfo, isWriteAllowed, type DelegableRoleId, type RoleId } from './role-registry.js'
 import { getRouteKey, getRouteLabel, createRouteMetadataCache, createRouteFailureObserver, intRouteProbe, type RouteInfo, type RouteProbe } from './routes.js'
 import { ParseSessionPlan, getRuleSessionPlan, getSessionQuestions, getSessionState, intChildEndHub, intThreadRegistry, type SessionPlan, type ThreadInfo } from './threads.js'
 import { getUpgradeReasons, getUpgradedChain } from './upgrade.js'
 import { ACCEPTANCE_QUESTIONS, ParseAssessment, VERDICT_LABELS, getAcceptanceState, getReviewQuestions, getReviewState } from './review.js'
-import { SwarmError } from './util/errors.js'
+import { getErrorText, SwarmError } from './util/errors.js'
 import { getGitStatus, type GitStatusInfo } from './util/git.js'
 import { intMutex } from './util/mutex.js'
 import { getTaskIntent, getSemanticCardDigest, getCurrentDelegations, digest, getTaskBinding, getTaskContextBinding, isTaskVersionCurrent } from './task-model.js'
@@ -224,6 +225,13 @@ export interface SwarmService {
   ControlAgentForRpc: (input: AgentControlRpcInput) => Promise<unknown>
   dispose: () => Promise<void>
   WaitAgentReady: (agent: AgentLike) => Promise<void>
+  /** 0.2.1-alpha 起：按角色在子智能体作用域限制继承的工具面；旧宿主是空实现（由启动期 toolFilter 承担）。 */
+  ApplyChildToolScope: (agent: AgentLike, role: DelegableRoleId, allowWeb?: boolean) => void
+  ChildAllowWebFor: (agentId: string) => boolean | undefined
+  /** 委派侧在启动子智能体前登记角色与 allow_web，供 agent/created 在首次装配前限制工具面。 */
+  NoteChildScope: (request: { role: DelegableRoleId; allowWeb: boolean }) => void
+  /** 宿主 agent/created：子智能体入队工作释放前限制其作用域工具面。 */
+  OnAgentCreated: (agent: AgentLike) => void
 }
 
 /** 验收结果 */
@@ -647,6 +655,55 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   })
 
   const hub = intChildEndHub()
+  /**
+   * 0.2.1-alpha 起宿主不再接受启动期 toolFilter：在子智能体自己的作用域上 restrict 继承面，
+   * 复现旧宿主的「角色所需工具 ∩ 当前可见工具」边界（本层注册的 structured_output 不受影响）。
+   * allow_web 由 onChildStart 登记；同一子智能体只在更宽（获准 web）时重设一次，限制不会叠加残留。
+   */
+  const childAllowWeb = new Map<string, boolean>()
+  const childToolScopes = new Map<string, { dispose: () => void; allowWeb: boolean }>()
+  /** 子智能体创建前登记的 composition 意图：agent/created 早于 onChildStart，用它给首次装配正确的 allow_web。 */
+  const pendingChildScopes: Array<{ role: DelegableRoleId; allowWeb: boolean }> = []
+  const NoteChildScope = (request: { role: DelegableRoleId; allowWeb: boolean }): void => {
+    pendingChildScopes.push(request)
+    if (pendingChildScopes.length > 64) pendingChildScopes.shift()
+  }
+  const ApplyChildToolScope = (agent: AgentLike, role: DelegableRoleId, allowWeb?: boolean): void => {
+    const subagents = deps.getSubagents()
+    if (subagents === undefined || typeof subagents.startActivation !== 'function') return
+    const effective = childAllowWeb.get(agent.id) === true || allowWeb === true
+    const existing = childToolScopes.get(agent.id)
+    if (existing !== undefined && (existing.allowWeb === effective || (existing.allowWeb && !effective))) return
+    const scoped = agent as AgentLike & { ctx?: { get?: (name: string) => unknown } }
+    const tools = scoped.ctx?.get?.('tools') as { restrict?: (filter: { allow?: string[]; deny?: string[] }) => () => void } | undefined
+    if (tools?.restrict === undefined) return
+    const visible = deps.getTools()?.schemas(agent).map((schema) => schema.name) ?? []
+    const filter = getToolFilter(role, visible, effective)
+    if (filter === undefined) return
+    try {
+      const dispose = tools.restrict(filter)
+      existing?.dispose()
+      childToolScopes.set(agent.id, { dispose, allowWeb: effective })
+    } catch (error) { deps.logger?.warn(`子智能体工具范围限制失败：${getErrorText(error)}`) }
+  }
+  const ChildAllowWebFor = (agentId: string): boolean | undefined => childAllowWeb.get(agentId)
+  /**
+   * agent/created 在排队工作释放前触发：在这里限制子智能体作用域，首次工具装配就已受限。
+   * 角色由子会话头的 agentPreset 映射；未登记意图时按角色 web 策略保守取值。
+   */
+  const OnAgentCreated = (agent: AgentLike): void => {
+    if (typeof deps.getSubagents()?.startActivation !== 'function') return
+    const header = getAgentHeader(agent)
+    if (header.parentSession === undefined) return
+    const presetId = typeof (header as { agentPreset?: unknown }).agentPreset === 'string' ? (header as { agentPreset: string }).agentPreset : undefined
+    const role = FindRoleByPresetId(presetId)?.id
+    if (role === undefined || role === 'tian_shu') return
+    const index = pendingChildScopes.findIndex((entry) => entry.role === role)
+    const pending = index < 0 ? undefined : pendingChildScopes.splice(index, 1)[0]
+    const allowWeb = pending?.allowWeb ?? getRoleInfo(role).web === 'always'
+    childAllowWeb.set(agent.id, allowWeb)
+    ApplyChildToolScope(agent, role, allowWeb)
+  }
   const requireLiveParent = (parentSessionId: string): AgentLike => {
     const parent = deps.getAgent?.(parentSessionId) ?? sessions.get(parentSessionId)?.rootAgent
     if (parent === undefined || parent.id !== parentSessionId || !isRootTianShu(parent)) throw new SwarmError('SERVICE_UNAVAILABLE', '父会话尚未在宿主加载，请先打开百工父会话')
@@ -803,6 +860,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const delegator = intDelegator({
     getConfig: deps.getConfig,
     getSubagents: deps.getSubagents,
+    noteChildScope: NoteChildScope,
     getTools: () => {
       const tools = deps.getTools()
       if (tools === undefined) return undefined
@@ -831,6 +889,11 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const session = getSession(task.sessionId)
       childOwners.set(agentId, task.sessionId)
       childSignals.set(agentId, signal)
+      // 新宿主没有启动期 toolFilter：登记 allow_web，并尽力在子智能体作用域上限制继承的工具面；
+      // 子智能体首次模型请求仍会经 runtime 的 agent/request 复核一次（那里一定能拿到 agent 作用域）。
+      childAllowWeb.set(agentId, input?.allow_web === true)
+      const liveChild = deps.getAgent?.(agentId)
+      if (liveChild !== undefined) ApplyChildToolScope(liveChild, role, input?.allow_web === true)
       const features = await ensureFeatures(session, session.rootAgent ?? { id: task.sessionId })
       if (input !== undefined) session.store.UpdateDelegation(record.delegationId, { continuationInput: structuredClone(input) })
       agentControl.Register({ childId: agentId, parentSessionId: task.sessionId,
@@ -1089,7 +1152,11 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           const subagents = deps.getSubagents()
           const visible = deps.getTools()?.schemas(exec.agent).map((tool) => tool.name) ?? []
           const capabilities = subagents?.getProvider(SPAWN_PROVIDER)?.capabilities
-          if (!subagents || !capabilities || !['agentOptions', 'outputSchema', 'toolFilter', 'persona', 'depthLimit'].every((key) => capabilities[key as keyof typeof capabilities] === true) || visible.length === 0) return { reason: '独立只读审核后端或工具过滤能力不可用' }
+          const needsPreset = subagents !== undefined && typeof subagents.startActivation === 'function'
+          const required = needsPreset
+            ? ['agentOptions', 'outputSchema', 'depthLimit', 'agentPreset']
+            : ['agentOptions', 'outputSchema', 'toolFilter', 'persona', 'depthLimit']
+          if (!subagents || !capabilities || !required.every((key) => capabilities[key as keyof typeof capabilities] === true) || visible.length === 0) return { reason: '独立只读审核后端或工具过滤能力不可用' }
           const budget = features.planningBudgetFor(task)
           const reservationId = `plan-${randomUUID()}`
           budget.reserve({ id: reservationId, source: 'delegate' })
@@ -1101,14 +1168,18 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           budget.start(reservationId)
           const route = candidates[0]!
           const allowed = getToolFilter('yu_shi', visible, false)?.allow?.filter((name) => !name.startsWith('jev_') && !name.startsWith('swarm_message_')) ?? []
-          let run: Awaited<ReturnType<SubagentsLike['start']>> | undefined
+          let run: Awaited<ReturnType<typeof startChild>> | undefined
           try {
-            run = await subagents.start(SPAWN_PROVIDER, {
+            run = await startChild(subagents, {
+              provider: SPAWN_PROVIDER,
               label: `规划审核·${task.taskId}`, parent: exec.agent, signal: exec.signal,
               prompt: [{ type: 'text', text: prompt }], outputSchema: schema, maxDepth: 1,
+              agentPreset: getRoleInfo('yu_shi').presetId,
               toolFilter: { allow: allowed }, agentOptions: { provider: route.provider, model: route.model, ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}) },
               persona: '你是独立只读的规划审查者。审核原始用户需求、目标、流程和源码，严禁写入、shell或自行委派。[[swarm:role=yu_shi]]\n' + getLanguageInstruction(deps.getConfig().agents.language)
             })
+            const liveReviewer = deps.getAgent?.(run.id)
+            if (liveReviewer !== undefined) ApplyChildToolScope(liveReviewer, 'yu_shi', false)
             childOwners.set(run.id, session.sessionId)
             childSignals.set(run.id, exec.signal)
             routeState.AddChild(run.id, { chain: candidates, role: 'yu_shi', logicalRequestId: reservationId })
@@ -1296,7 +1367,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (deps.getTools() === undefined) out.push('ctx.tools 不可用：无法计算子智能体工具白名单')
     const spawn = deps.getSubagents()?.getProvider(SPAWN_PROVIDER)
     const capabilities = spawn?.capabilities ?? {}
-    const required = ['agentOptions', 'outputSchema', 'toolFilter', 'persona', 'depthLimit']
+    // 0.2.1-alpha 起 composition 由角色预设承担：要求 agentPreset；旧宿主继续要求 persona/toolFilter。
+    const required = deps.getSubagents() !== undefined && typeof deps.getSubagents()!.startActivation === 'function'
+      ? ['agentOptions', 'outputSchema', 'depthLimit', 'agentPreset']
+      : ['agentOptions', 'outputSchema', 'toolFilter', 'persona', 'depthLimit']
     if (spawn === undefined) out.push('spawn 子智能体后端不可用：无法委派')
     else if (required.some((cap) => capabilities[cap] !== true)) out.push(`spawn 后端缺少能力：${required.filter((cap) => capabilities[cap] !== true).join(', ')}`)
     if (deps.getAttachments() === undefined) out.push('附件服务不可用：观象无法接收工作区图片')
@@ -1801,5 +1875,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       }
       if (closing || childSignals.get(agent.id)?.aborted) throw new SwarmError('RECOVERY_REQUIRED', '专家已取消或宿主停止，延迟模型请求被拒绝')
     }
+    ,ApplyChildToolScope
+    ,ChildAllowWebFor
+    ,NoteChildScope
+    ,OnAgentCreated
   }
 }

@@ -45,6 +45,11 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   })
   ctx.on('agent/request', async (payload: { agent: AgentLike; turn?: number; step?: number; signal?: AbortSignal }, next: () => Promise<CallConfigLike>) => {
     await service.WaitAgentReady(payload.agent)
+    // 0.2.1-alpha 起宿主不再接受启动期 toolFilter：子智能体的第一次请求在这里按角色限制继承工具面，
+    // 发生在工具清单装配之前；旧宿主该方法为空实现，启动期 toolFilter 仍然生效。
+    if (presetRole !== undefined && presetRole !== 'tian_shu' && getAgentHeader(payload.agent).parentSession !== undefined) {
+      service.ApplyChildToolScope(payload.agent, presetRole, service.ChildAllowWebFor(payload.agent.id))
+    }
     if (isTracked(payload.agent)) await service.routeState.WaitHealthReady(payload.agent.id, payload.signal)
     if (isTracked(payload.agent) && payload.turn !== undefined && payload.step !== undefined) service.routeState.BeginRequestStep(payload.agent.id, payload.turn, payload.step)
     const resolved = await next()
