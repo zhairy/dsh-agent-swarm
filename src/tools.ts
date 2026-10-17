@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { getLanguageInstruction, type OutputLanguage } from './language.js'
 import { DELEGATE_BACKENDS } from './delegate.js'
 import type { DelegationRecord } from './evidence.js'
@@ -18,6 +21,24 @@ import { SwarmError } from './util/errors.js'
 import type { JsonSchemaObject } from './util/json-schema.js'
 
 /** 预设行：只挂在天枢预设上，注册 4 个百工工具、7 个 Jev 判断工具与 2 个内嵌技能，并按模型家族补充天枢的调度说明 */
+
+/**
+ * 插件自身的位置与版本。
+ * agent 排查问题时经常要定位实现文件，这里给出确定性答案：源码在 `src/`、构建产物在 `lib/`，
+ * 本仓库不使用 `dist/`（猜成 `dist/*.js` 或宿主 `packages/` 下的路径都会让搜索命令直接失败）。
+ */
+export const getPluginInfo = (): { readonly root: string; readonly version: string; readonly sourceDir: string; readonly buildDir: string } => {
+  // 同一个模块既可能从 lib/（宿主加载）也可能从 src/（源码内测试）执行：
+  // 这里按仓库约定返回两个目录，而不是把「当前文件所在目录」当成构建产物目录。
+  const here = dirname(fileURLToPath(import.meta.url))
+  const root = dirname(here)
+  let version = 'unknown'
+  try {
+    version = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { version?: string }).version ?? 'unknown'
+  } catch { /* 版本读不到不影响其余信息 */ }
+  return { root, version, sourceDir: join(root, 'src'), buildDir: join(root, 'lib') }
+}
+const PLUGIN_INFO = getPluginInfo()
 export const name = 'dsh-agent-swarm-tools'
 export const inject = [SWARM_SERVICE, 'tools']
 
@@ -260,7 +281,9 @@ export const getStatusText = (result: StatusResult): string => {
     `调用：原生后端 ${result.usage.nativeCalls} 次，Jev 分诊 ${result.usage.jevCalls} 次，衡鉴会话判断 ${result.usage.sessionCalls} 次，衡鉴复评 ${result.usage.reviewCalls} 次`,
     ...(result.diagnostics.length > 0 ? [`宿主降级：${result.diagnostics.join('；')}`] : []),
     ...(result.persistence.stateBytes === undefined ? [] : [`状态容量：${(result.persistence.stateBytes / 1048576).toFixed(2)} MiB / ${((result.persistence.stateLimitBytes ?? 0) / 1048576).toFixed(0)} MiB（${result.persistence.durable ? '持久化' : '内存态'}）`]),
-    `账本：${result.ledgerPath}`
+    `账本：${result.ledgerPath}`,
+    // 排查实现时先看这一行，不要再猜路径：本插件源码与构建产物分别在 src/ 与 lib/。
+    `插件：dsh-agent-swarm ${PLUGIN_INFO.version}（源码 ${PLUGIN_INFO.sourceDir}；构建产物 ${PLUGIN_INFO.buildDir}；本仓库没有 dist 目录）`
   ].join('\n'))
 }
 
@@ -295,7 +318,7 @@ export const getSwarmToolDefinitions = (service: SwarmService): ToolDefinitionLi
   }),
   getToolDefinition<unknown, StatusResult>({
     name: 'swarm_status',
-    description: '只读查询当前会话任务的版本、规划审核、门禁、委派状态/路由/证据、调用用量与宿主降级。优先用本工具核对流程；Web taskView RPC 需要宿主认证，不能用匿名 curl 代替。',
+    description: '只读查询当前会话任务的版本、规划审核、门禁、委派状态/路由/证据、调用用量与宿主降级，并给出版本、源码目录与构建产物目录。需要读插件实现时先看输出的「插件：」行，不要猜宿主 packages/ 或 dist/ 路径——本仓库的源码在 src/、构建产物在 lib/。Web taskView RPC 需要宿主认证，不能用匿名 curl 代替。',
     parameters: STATUS_PARAMETERS,
     execute: async (args, exec) => service.getStatus(args, getExec(exec)),
     render: (_args, value) => getStatusText(value) + (value.roleSuggestions.length ? '\n角色能力建议（不授予权限）：' + JSON.stringify(value.roleSuggestions) : '')

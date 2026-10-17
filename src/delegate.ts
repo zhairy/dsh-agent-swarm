@@ -1011,7 +1011,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const input = parsed.input === undefined ? undefined : { ...parsed.input, language: parsed.input.languageExplicit === false ? deps.getConfig().agents.language : parsed.input.language ?? deps.getConfig().agents.language, languageExplicit: parsed.input.languageExplicit ?? parsed.input.language !== undefined, ...(parsed.input.context_paths === undefined ? {} : { context_paths: deduplicateContextPaths(parsed.input.context_paths) }) }
     if (input === undefined) throw new SwarmError('INVALID_ARGS', errors.join('；'))
     const task = exec.admission?.task ?? session.store.getTask(input.task_id)
-    if (task === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${input.task_id}，请先调用 swarm_task_card`)
+    if (task === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${input.task_id}。请先用 swarm_status 确认当前会话的任务，再用 swarm_task_card 创建或修订；任务卡按根会话与工作区隔离。`)
     const role = getRoleInfo(input.role)
     const mode = input.role === 'suan_heng' ? (input.mode ?? 'research') : undefined
     const normalized: DelegateInput = mode === undefined ? input : { ...input, mode }
