@@ -10,6 +10,7 @@ import { getMathToolDefinitions } from './math-tools.js'
 import { getCollaborationToolDefinitions } from './collaboration-tools.js'
 import { PROMPT_STYLE_LABELS, getOrchestratorStyleSection, getPromptStyle, type PromptStylePolicy } from './model-family.js'
 import { FLAG_KEYS, GATE_IDS, type FlagKey } from './policy.js'
+import { COMPLEXITY_LABELS, DIMENSION_LABELS } from './orchestration.js'
 import { ROLE_TAG_PATTERN, getDelegableRoleIds, getRoleCatalogText, getRoleInfo, isDelegableRoleId } from './role-registry.js'
 import { getAssessmentText } from './review.js'
 import { getRouteDisplay } from './routes.js'
@@ -264,6 +265,7 @@ export const getStatusText = (result: StatusResult): string => {
   const tasks = result.tasks.flatMap((task) => [
     `任务 ${task.task_id}：${task.title}（修复轮次 ${task.rounds}；委派 ${task.budget.used}${task.budget.max > 0 ? `/${task.budget.max}` : ' 次（不限）'}）`,
     `需求版本：${task.requestRevision}；合同版本：${task.cardRevision}；流程版本：${task.workflowRevision}；规划审核：${task.planningReview?.status ?? 'pending'}`,
+    ...(task.orchestration === null || task.orchestration === undefined ? [] : [`编排：${COMPLEXITY_LABELS[task.orchestration.complexity]}；拆分角度 ${task.orchestration.dimensions.map((d) => DIMENSION_LABELS[d]).join('、')}；子任务 ${task.orchestration.subtasks.map((s) => `${s.id}→${s.role}`).join('、')}；${task.orchestration.parallelGroups.filter((g) => g.length > 1).length === 0 ? '串行执行' : `可并行：${task.orchestration.parallelGroups.filter((g) => g.length > 1).map((g) => g.join('+')).join('；')}`}（来源 ${task.orchestration.source}）`]),
     ...(task.stateRefreshRequired ? [`只读投影待同步：已登记需求 ${task.publishedRevisions.requestRevision} / 合同 ${task.publishedRevisions.cardRevision} / 流程 ${task.publishedRevisions.workflowRevision}；调用 swarm_review_plan 显式同步审核。`] : []),
     ...(task.planningRecovery.automaticReviewPaused ? ['自动规划审核已暂停；任务卡仍可修改，修订后调用 swarm_review_plan 显式复审。'] : []),
     ...task.gates.map((g) => `${g.satisfied ? '✓' : '✗'} ${g.gate} ${g.label}${g.satisfied ? `（${g.by ?? ''}）` : `：${g.missing ?? ''}`}${g.notes.length > 0 ? `；${g.notes.join('；')}` : ''}`),

@@ -1,6 +1,7 @@
 import { suggestRolesByCapabilities } from './role-registry.js'
 import { getLanguageInstruction } from './language.js'
 import { getTaskDiagrams } from './task-diagrams.js'
+import { getOrchestrationQuestions, getRuleOrchestration, ParseOrchestrationPlan, type OrchestrationPlan } from './orchestration.js'
 import { createDelegationScheduler } from './scheduler.js'
 import { formatMemoryReferences } from './memory.js'
 import { randomUUID } from 'node:crypto'
@@ -31,7 +32,7 @@ import {
   type ToolExecutionLike,
   type ToolsLike
 } from './host-contract.js'
-import { isJevAvailabilityFailure, getJevFailureKind, getRedactedText, type JevOutcome } from './jev.js'
+import { getJevFailureKind, getJevState, getRedactedText, isJevAvailabilityFailure, type JevOutcome } from './jev.js'
 import { intJevHub, type JevHub } from './jev-hub.js'
 import { SleepWithSignal, type NetworkMonitorInfo } from './network.js'
 import {
@@ -338,6 +339,8 @@ const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: 
     contextRefs: (task.contextRefs ?? []).map((material) => material.ref),
     contextArtifacts: task.contextRefs ?? [],
     diagrams: getTaskDiagrams(task, delegations),
+    // 编排方案随任务视图一起下发：状态文本与图表都从这里取，避免各自推算。
+    orchestration: task.orchestration ?? null,
     flow: task.workflowDefinition === undefined ? null : {
       definition: task.workflowDefinition, state: task.workflowState, digest: task.workflowDigest,
       mermaid: getWorkflowMermaid(task.workflowDefinition)
@@ -936,6 +939,22 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     ...(deps.network === undefined ? {} : { network: deps.network })
   })
 
+
+  /**
+   * 执行前的编排决策：规则给出确定性基线，Jev 只在中小型以上任务上判断复杂度与拆分倾向。
+   * 关闭 Jev 或调用失败时保留规则结果并把来源标成 jev-fallback，绝不假装判过。
+   */
+  const getOrchestration = async (card: TaskCard, session: SessionStateInfo, signal: AbortSignal): Promise<OrchestrationPlan> => {
+    const base = getRuleOrchestration(card, card.flags)
+    if (!deps.getConfig().jev.enabled || base.complexity === 'small') return base
+    session.counters.jev += 1
+    const outcome = await jev.getClient().ask(getJevState(card), getOrchestrationQuestions(), signal)
+    session.ledger.AddLedgerEvent({ type: 'jev/call', data: outcome.ok
+      ? { ok: true, purpose: 'orchestration', attempts: outcome.attempts, answers: outcome.answers }
+      : { ok: false, purpose: 'orchestration', reason: outcome.reason, attempts: outcome.attempts } })
+    return (outcome.ok ? ParseOrchestrationPlan(outcome.answers, card, card.flags) : undefined) ?? { ...base, source: 'jev-fallback' }
+  }
+
   const getTriage = async (card: TaskCard, gates: GateRequirement[], session: SessionStateInfo, signal: AbortSignal) => {
     const config = deps.getConfig()
     const rulesApplied = gates.map((gate) => `${gate.gate}：${gate.reason}`)
@@ -1099,6 +1118,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         intentSource: intent.source, intentSourceRef: intent.sourceRef, intentLastDigest: intent.digest,
         workflowDefinition: check.definition, workflowDigest,
         workflowState: changed || existing?.workflowState === undefined ? intWorkflowState(check.definition, existing?.rounds ?? 0) : existing.workflowState,
+        orchestration: await getOrchestration(card, session, exec.signal),
         ...(changed ? { acceptance: undefined, planningReview: undefined,
           planningAutoReviewRuns: intentChanged ? 0 : getPlanningRecovery(existing ?? {}, deps.getConfig().planningReview.maxFixRounds).automaticReviews,
           planningFixRounds: intentChanged ? 0 : (existing?.planningFixRounds ?? 0) + (existing?.planningReview?.status === 'changes_requested' ? 1 : 0)

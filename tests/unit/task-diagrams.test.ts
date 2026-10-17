@@ -30,7 +30,8 @@ describe('单一版本源派生的五图与进度', () => {
     const { task } = fixture()
     const before = JSON.stringify(task)
     const result = getTaskDiagrams(task, [])
-    expect(result.views.map((view) => view.kind)).toEqual(TASK_DIAGRAM_KINDS)
+    // 编排视角只在任务记录了编排方案时产出：本 fixture 没有编排，因此按无编排的期望集合比对。
+    expect(result.views.map((view) => view.kind)).toEqual(TASK_DIAGRAM_KINDS.filter((kind) => kind !== 'orchestration'))
     expect(result.progress).toMatchObject({ total: 3, completed: 0, percent: 0, accepted: false })
     expect(result.views.find((view) => view.kind === 'sequence')!.mermaid).toContain('无可用执行时间记录')
     expect(getArchifyTaskDiagrams(result).diagrams.find((view) => view.kind === 'sequence')).toMatchObject({ ir: null, reason: expect.any(String) })
@@ -126,7 +127,7 @@ describe('单一版本源派生的五图与进度', () => {
     const { task, record } = fixture()
     const exported = getArchifyTaskDiagrams(getTaskDiagrams(task, [record]))
     expect(exported.contract).toMatchObject({ version: '3.0.1', commit: expect.stringMatching(/^[0-9a-f]{40}$/) })
-    expect(exported.diagrams.map((view) => view.ir?.diagram_type)).toEqual(TASK_DIAGRAM_KINDS)
+    expect(exported.diagrams.map((view) => view.ir?.diagram_type)).toEqual(TASK_DIAGRAM_KINDS.filter((kind) => kind !== 'orchestration'))
     for (const { kind, ir } of exported.diagrams) expect(ir).toMatchObject({ schema_version: ['workflow', 'lifecycle'].includes(kind) ? 2 : 1, meta: { output: `${kind}.html`, animation: 'none', quality_profile: 'standard' } })
     // Explicit test fixture export, never production task/state.
     if (process.env.SWARM_DIAGRAM_FIXTURE_OUTPUT) {

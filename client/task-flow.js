@@ -16,8 +16,8 @@ Object.assign(zh, { planningReview: '规划审核', goalDimension: '目标', des
 Object.assign(en, { planningReview: 'Planning review', goalDimension: 'Goal', designDimension: 'Workflow design', mermaidDimension: 'Mermaid', agentOpinion: 'Independent Agent', jevOpinion: 'Jev judgment', syntaxCheck: 'Syntax', projectionCheck: 'Projection', semanticCheck: 'Semantics', notReviewed: 'Not reviewed', checkPass: 'Pass', checkFail: 'Failed', reviewIssues: 'Review findings and errors' })
 Object.assign(zh, { reviewUnavailable: '未审核（服务不可用）' })
 Object.assign(en, { reviewUnavailable: 'Not reviewed (service unavailable)' })
-Object.assign(zh, { diagramType: '图表视角', workflow: '工作流', architecture: '委派架构', sequence: '委派记录时序', dataflow: '合同与证据流', lifecycle: '生命周期快照', progress: '当前有效完成的委派节点', progressUnknown: '无委派节点，进度不适用', progressBoundary: '节点比例不表示工时、正确率或验收通过；失败、阻塞与跳过单独统计。', exportSnapshot: '导出图表快照 JSON', deviations: '状态偏移诊断', omitted: '更早记录未展示', diagramBindingMismatch: '图表版本不一致，保留原流程；请刷新状态' })
-Object.assign(en, { diagramType: 'Diagram view', workflow: 'Workflow', architecture: 'Delegation topology', sequence: 'Recorded call sequence', dataflow: 'Contract and evidence', lifecycle: 'Lifecycle snapshot', progress: 'Current completed delegation nodes', progressUnknown: 'No delegation nodes; progress is not applicable', progressBoundary: 'Node ratio does not measure effort, correctness, or acceptance; failures, blocks and skips remain separate.', exportSnapshot: 'Export diagram snapshot JSON', deviations: 'State deviation diagnostics', omitted: 'Older records omitted', diagramBindingMismatch: 'Diagram revision mismatch; retaining the original flow. Refresh status.' })
+Object.assign(zh, { diagramType: '图表视角', workflow: '工作流', orchestration: '执行前编排', architecture: '委派架构', sequence: '委派记录时序', dataflow: '合同与证据流', lifecycle: '生命周期快照', progress: '当前有效完成的委派节点', progressUnknown: '无委派节点，进度不适用', progressBoundary: '节点比例不表示工时、正确率或验收通过；失败、阻塞与跳过单独统计。', exportSnapshot: '导出图表快照 JSON', deviations: '状态偏移诊断', omitted: '更早记录未展示', diagramBindingMismatch: '图表版本不一致，保留原流程；请刷新状态' })
+Object.assign(en, { diagramType: 'Diagram view', workflow: 'Workflow', orchestration: 'Pre-execution orchestration', architecture: 'Delegation topology', sequence: 'Recorded call sequence', dataflow: 'Contract and evidence', lifecycle: 'Lifecycle snapshot', progress: 'Current completed delegation nodes', progressUnknown: 'No delegation nodes; progress is not applicable', progressBoundary: 'Node ratio does not measure effort, correctness, or acceptance; failures, blocks and skips remain separate.', exportSnapshot: 'Export diagram snapshot JSON', deviations: 'State deviation diagnostics', omitted: 'Older records omitted', diagramBindingMismatch: 'Diagram revision mismatch; retaining the original flow. Refresh status.' })
 Object.assign(zh, { unknownNode: '状态未知', projectionPending: '这是待同步的只读投影；图表刷新不会批准新版本执行。' })
 Object.assign(en, { unknownNode: 'Unknown state', projectionPending: 'This is a read projection awaiting synchronization. Refreshing diagrams does not authorize the new revision.' })
 
@@ -72,6 +72,22 @@ const validateSource = (source) => {
     return
   }
   if (lines[0] !== 'flowchart TD' && lines[0] !== 'flowchart LR') throw new Error('Unsupported diagram')
+  // 执行前编排图是另一种有界 flowchart：节点只有 root/recon/slice-N/parN，连线只有依赖边与「同时开工」提示。
+  if (/^\s*root\["任务：/.test(lines[1] ?? '')) {
+    const ids = new Set()
+    const links = []
+    for (const line of lines.slice(1)) {
+      const node = /^\s*(root|recon|slice-\d{1,3}|par\d{1,3})\["(?:[^"\\<>]|<br\/>)*"\]\s*$/.exec(line)
+      if (node !== null) { if (ids.has(node[1])) throw new Error('Duplicate orchestration node'); ids.add(node[1]); continue }
+      const edge = /^\s*(root|recon|slice-\d{1,3}) --> (recon|slice-\d{1,3})\s*$/.exec(line)
+      if (edge !== null) { links.push([edge[1], edge[2]]); continue }
+      const parallel = /^\s*(par\d{1,3}) -\. 同时开工 \.- (recon|slice-\d{1,3})\s*$/.exec(line)
+      if (parallel !== null) { links.push([parallel[1], parallel[2]]); continue }
+      throw new Error('Unsupported orchestration directive')
+    }
+    if (ids.size === 0 || ids.size > 32 || links.length > 64 || links.some(([from, to]) => !ids.has(from) || !ids.has(to))) throw new Error('Invalid orchestration nodes or edges')
+    return
+  }
   const ids = new Set()
   const edges = []
   const classes = []
@@ -146,9 +162,12 @@ const getDiagramBundle = (view) => {
   if (bundle?.format !== 'dsh-agent-swarm/task-diagrams' || bundle.schemaVersion !== 1 || !Array.isArray(bundle.views)) return null
   const binding = bundle.binding
   if (typeof view?.task_id !== 'string' || binding?.taskId !== view.task_id || ['cardRevision', 'workflowRevision', 'requestRevision'].some((key) => binding[key] !== (view[key] ?? 1))) return null
-  const kinds = ['workflow', 'architecture', 'sequence', 'dataflow', 'lifecycle']
-  if (!/^[a-f0-9]{64}$/.test(bundle.snapshotDigest) || bundle.views.length !== kinds.length || new Set(bundle.views.map((item) => item?.kind)).size !== kinds.length
-    || bundle.views.some((item) => !kinds.includes(item?.kind) || typeof item?.mermaid !== 'string' || item.mermaid.length > 32768 || typeof item.basis !== 'string' || !Number.isSafeInteger(item.truncated) || item.truncated < 0)
+  // 编排视角是可选追加图：旧快照仍是五图，记录过执行前编排的任务多一张；未知视角与重复视角仍然拒绝。
+  const requiredKinds = ['workflow', 'architecture', 'sequence', 'dataflow', 'lifecycle']
+  const allowedKinds = [...requiredKinds, 'orchestration']
+  if (!/^[a-f0-9]{64}$/.test(bundle.snapshotDigest) || new Set(bundle.views.map((item) => item?.kind)).size !== bundle.views.length
+    || requiredKinds.some((kind) => !bundle.views.some((item) => item?.kind === kind))
+    || bundle.views.some((item) => !allowedKinds.includes(item?.kind) || typeof item?.mermaid !== 'string' || item.mermaid.length > 32768 || typeof item.basis !== 'string' || !Number.isSafeInteger(item.truncated) || item.truncated < 0)
     || !Array.isArray(bundle.diagnostics) || bundle.diagnostics.some((item) => typeof item?.code !== 'string' || typeof item?.message !== 'string')) return null
   const progress = bundle.progress
   if (progress === undefined || !Number.isSafeInteger(progress.total) || progress.total < 0 || !Number.isSafeInteger(progress.completed) || progress.completed < 0 || progress.completed > progress.total

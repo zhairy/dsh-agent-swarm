@@ -4,6 +4,7 @@ import type { EvidenceItem } from './contracts.js'
 import type { FindingResolution, GateDelegationView, GateRequirement, TaskCard, TriageAnswers } from './policy.js'
 import type { RouteInfo } from './routes.js'
 import { SwarmError } from './util/errors.js'
+import type { OrchestrationPlan } from './orchestration.js'
 import type { PromptStyle } from './model-family.js'
 import type { WorkflowDefinition, WorkflowStateInfo } from './workflow.js'
 import type { PlanningReviewRecord } from './planning-review.js'
@@ -143,6 +144,8 @@ export interface TaskRecord {
   workflowState?: WorkflowStateInfo
   workflowDigest?: string
   planningReview?: PlanningReviewRecord
+  /** 执行前的编排方案（复杂度、拆分维度、子任务与并行组）；旧状态没有这个字段。 */
+  orchestration?: OrchestrationPlan
   planningFixRounds?: number
   /** Automatic review admission per human request revision; contract edits never consume execution budget. */
   planningAutoReviewRuns?: number
