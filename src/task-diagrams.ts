@@ -4,7 +4,14 @@ import { getRoleInfo } from './role-registry.js'
 import { getCanonicalWorkflow, getMermaidLabel, getValueDigest, getWorkflowDigest, getWorkflowMermaid, type WorkflowNodeStatus } from './workflow.js'
 
 export const TASK_DIAGRAM_VERSION = '1'
-export const TASK_DIAGRAM_KINDS = ['workflow', 'architecture', 'sequence', 'dataflow', 'lifecycle'] as const
+export const TASK_DIAGRAM_KINDS = [
+  'workflow',
+  'architecture',
+  'sequence',
+  'dataflow',
+  'lifecycle',
+  'orchestration'
+] as const
 export type TaskDiagramKind = typeof TASK_DIAGRAM_KINDS[number]
 export type TaskDiagramStatus = WorkflowNodeStatus | 'unknown'
 export const TASK_DIAGRAM_LIMITS = Object.freeze({ history: 32, sourceBytes: 32768, exportBytes: 1048576 })
@@ -93,6 +100,7 @@ export const getTaskDiagrams = (task: TaskRecord, records: DelegationRecord[]): 
   const binding = getTaskBinding(task)
   const snapshotDigest = getValueDigest({ binding, workflowDigest, source })
   const views: TaskDiagramView[] = []
+  // 编排视图来自执行前的拆分决策，与执行进度无关：没有编排时这一段不产出视图。
   const add = (kind: TaskDiagramKind, title: string, basis: string, mermaid: string, omitted = 0): void => {
     if (Buffer.byteLength(mermaid, 'utf8') > TASK_DIAGRAM_LIMITS.sourceBytes) throw new Error('Bounded task diagram exceeded its source limit')
     views.push({ kind, title, basis, mermaid, sourceDigest: getValueDigest(mermaid), truncated: omitted })
@@ -100,6 +108,11 @@ export const getTaskDiagrams = (task: TaskRecord, records: DelegationRecord[]): 
   const workflow = definition === undefined ? labelledFlow([{ id: 'unknown', label: '未提供版本化流程' }], [], 'TD') : [getWorkflowMermaid(definition),
     ...STATUSES.map((status) => `  classDef ${status} fill:${COLORS[status]},stroke:#475569,color:#0f172a`),
     ...nodes.map((node) => `  class n_${node.id} ${node.status}`)].join('\n')
+  // 编排视图来自执行前的拆分决策，与执行进度无关：没有编排记录时不产出该视图。
+  const orchestration = task.orchestration
+  if (orchestration !== undefined) {
+    add('orchestration', '执行前编排', `复杂度 ${orchestration.complexity}（来源 ${orchestration.source}）；拆分角度 ${orchestration.dimensions.join('/')}；并行组 ${orchestration.parallelGroups.filter((group) => group.length > 1).length} 个；不表示执行进度或验收结论`, orchestration.mermaid)
+  }
   add('workflow', '工作流', '当前版本 DAG；颜色来自节点状态，完成数另需有效交付；不等于验收', workflow)
   const roles = [...new Set(delegations.map((record) => record.role))].sort()
   add('architecture', '委派架构', '仅本任务已记录的根代理与角色关系；不表示外部服务或部署架构', labelledFlow([
@@ -130,8 +143,11 @@ export const ValidateTaskDiagrams = (raw: unknown): string[] => {
   if (raw === null || typeof raw !== 'object') return ['缺少任务图表快照']
   const value = raw as TaskDiagrams
   if (value.format !== 'dsh-agent-swarm/task-diagrams' || value.schemaVersion !== 1 || value.generatorVersion !== TASK_DIAGRAM_VERSION) return ['不支持的图表格式或版本']
+  // 编排视角是可选追加：只有任务记录了执行前编排方案时才产出，其余五个视角始终必需。
+  const required = TASK_DIAGRAM_KINDS.filter((kind) => kind !== 'orchestration')
   if (!value.binding || !value.source || !Array.isArray(value.source.nodes) || !Array.isArray(value.source.delegations) || !Array.isArray(value.views)
-    || value.views.length !== TASK_DIAGRAM_KINDS.length || new Set(value.views.map((view) => view.kind)).size !== TASK_DIAGRAM_KINDS.length) return ['图表快照结构不完整']
+    || new Set(value.views.map((view) => view.kind)).size !== value.views.length
+    || required.some((kind) => !value.views.some((view) => view.kind === kind))) return ['图表快照结构不完整']
   try {
     if (getValueDigest({ binding: value.binding, workflowDigest: value.workflowDigest, source: value.source }) !== value.snapshotDigest) return ['图表快照摘要不一致']
     if (value.views.some((view) => !TASK_DIAGRAM_KINDS.includes(view.kind) || typeof view.mermaid !== 'string' || Buffer.byteLength(view.mermaid, 'utf8') > TASK_DIAGRAM_LIMITS.sourceBytes || getValueDigest(view.mermaid) !== view.sourceDigest)) return ['图表源码或摘要不一致']

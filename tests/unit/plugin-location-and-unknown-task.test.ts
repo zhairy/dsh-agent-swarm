@@ -3,7 +3,9 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getPluginInfo, getStatusText } from '../../src/tools.js'
 import { intTaskStore } from '../../src/evidence.js'
-import type { StatusResult } from '../../src/service.js'
+
+// 从函数签名取参数类型：避免为了一个测试夹具把内部类型导出成公共 API。
+type StatusResult = Parameters<typeof getStatusText>[0]
 
 describe('plugin location disclosure', () => {
   it('reports its own root, source and build directories without guessing a dist layout', () => {
