@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { ValidateTaskCard } from '../../src/policy.js'
-import { getOrchestrationMermaid, getOrchestrationQuestions, getRuleComplexity, getRuleDimensions, getRuleOrchestration, ParseOrchestrationPlan } from '../../src/orchestration.js'
+import { FLAG_KEYS, ValidateTaskCard } from '../../src/policy.js'
+import { getOrchestrationMermaid, getOrchestrationQuestions, getRuleComplexity, getRuleDimensions, getRuleOrchestration, ORCHESTRATION_DIMENSIONS, ParseOrchestrationPlan } from '../../src/orchestration.js'
+import { isDelegableRoleId } from '../../src/role-registry.js'
 
 const card = (overrides: Record<string, unknown> = {}) => ValidateTaskCard({
   title: '编排测试', goal: '验证拆分决策', acceptance: ['给出可检验的交付'], scope: [], flags: {}, ...overrides
@@ -62,6 +63,56 @@ describe('orchestration complexity and dimensions', () => {
     const plain = card({ flags: { changesCode: true } })
     expect(getRuleOrchestration(plain, plain.flags).risks).toEqual([])
   })
+
+  it('covers every dependency edge with real serialized chains', () => {
+    const target = card({ scope: ['a', 'b', 'c'], acceptance: ['x', 'y', 'z'], flags: { crossModuleArchitecture: true, changesCode: true } })
+    const plan = getRuleOrchestration(target, target.flags)
+    const edges = plan.subtasks.flatMap((item) => item.dependsOn.map((dependency) => `${dependency}->${item.id}`))
+    const chains = plan.serialized.flatMap((chain) => chain.slice(1).map((id, index) => `${chain[index]}->${id}`))
+    expect(edges.length).toBeGreaterThan(0)
+    expect(new Set(chains)).toEqual(new Set(edges))
+    // 同层切片可并行，串行链不能把它们排成先后顺序。
+    expect(plan.serialized.every((chain) => chain.filter((id) => id.startsWith('slice-')).length <= 1)).toBe(true)
+  })
+
+  it('keeps dependencies acyclic and parallel groups free of transitive dependencies for every flag combination', () => {
+    const ancestors = (plan: ReturnType<typeof getRuleOrchestration>, from: string): Set<string> => {
+      const seen = new Set<string>()
+      const queue = [from]
+      while (queue.length > 0) {
+        const current = queue.shift()!
+        for (const dependency of plan.subtasks.find((item) => item.id === current)?.dependsOn ?? []) {
+          if (!seen.has(dependency)) { seen.add(dependency); queue.push(dependency) }
+        }
+      }
+      return seen
+    }
+    const issues: string[] = []
+    for (let mask = 0; mask < 2 ** FLAG_KEYS.length; mask += 1) {
+      const flags = Object.fromEntries(FLAG_KEYS.map((key, index) => [key, (mask & (1 << index)) !== 0]))
+      const target = card({ flags, scope: ['a', 'b', 'c'], acceptance: ['x', 'y', 'z'] })
+      const plan = getRuleOrchestration(target, target.flags)
+      const ids = plan.subtasks.map((item) => item.id)
+      if (new Set(ids).size !== ids.length) issues.push('子任务 id 重复')
+      if (plan.dimensions.length > 5 || new Set(plan.dimensions).size !== plan.dimensions.length) issues.push('维度超过 5 或重复')
+      if (plan.dimensions.some((dimension) => !ORCHESTRATION_DIMENSIONS.includes(dimension))) issues.push('维度越界')
+      if (plan.subtasks.some((item) => !plan.dimensions.includes(item.dimension))) issues.push('子任务维度不在 dimensions 内')
+      if (plan.subtasks.some((item) => !isDelegableRoleId(item.role))) issues.push('子任务角色不可委派')
+      if (plan.subtasks.some((item) => ancestors(plan, item.id).has(item.id))) issues.push('依赖成环')
+      for (const group of plan.parallelGroups) for (const left of group) for (const right of group) {
+        if (left !== right && (ancestors(plan, left).has(right) || ancestors(plan, right).has(left))) issues.push('并行组含传递依赖')
+      }
+      for (const item of plan.subtasks) for (const peer of item.parallelWith) {
+        const other = plan.subtasks.find((candidate) => candidate.id === peer)
+        if (other === undefined || !other.parallelWith.includes(item.id) || item.dependsOn.includes(peer)
+          || ancestors(plan, item.id).has(peer) || ancestors(plan, peer).has(item.id)) issues.push('parallelWith 与依赖不自洽')
+      }
+      const edges = plan.subtasks.flatMap((item) => item.dependsOn.map((dependency) => `${dependency}->${item.id}`))
+      const chains = plan.serialized.flatMap((chain) => chain.slice(1).map((id, index) => `${chain[index]}->${id}`))
+      if (edges.some((edge) => !chains.includes(edge))) issues.push('serialized 未覆盖全部依赖边')
+    }
+    expect([...new Set(issues)]).toEqual([])
+  })
 })
 
 describe('Jev orchestration answers', () => {
@@ -88,6 +139,16 @@ describe('Jev orchestration answers', () => {
     expect(ParseOrchestrationPlan({ complexity: { choice: 'huge', confidence: 0.9 }, split: { noul: 0.5 } }, target, target.flags)).toBeUndefined()
     expect(ParseOrchestrationPlan({ complexity: { choice: 'medium', confidence: 0.9 } }, target, target.flags)).toBeUndefined()
     expect(ParseOrchestrationPlan({ complexity: { choice: 'medium', confidence: 0.9 }, split: { noul: 1.5 } }, target, target.flags)).toBeUndefined()
+  })
+
+  it('rejects type-confused answers and keeps extra fields out of the decision', () => {
+    const target = card({ crossModuleArchitecture: true, changesCode: true })
+    expect(ParseOrchestrationPlan({ complexity: { choice: 'Medium' }, split: { noul: 0.6 } }, target, target.flags)).toBeUndefined()
+    expect(ParseOrchestrationPlan({ complexity: { choice: 'medium' }, split: { noul: '0.6' } }, target, target.flags)).toBeUndefined()
+    expect(ParseOrchestrationPlan({ complexity: { choice: 'medium' }, split: { noul: true } }, target, target.flags)).toBeUndefined()
+    expect(ParseOrchestrationPlan({ complexity: { choice: { value: 'medium' } }, split: { noul: 0.6 } }, target, target.flags)).toBeUndefined()
+    expect(ParseOrchestrationPlan({ complexity: { choice: 'medium', extra: true }, split: { noul: 0.6, extra: 'x' } }, target, target.flags)?.source).toBe('jev')
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined()
   })
 
   it('asks two bounded questions with closed criteria', () => {

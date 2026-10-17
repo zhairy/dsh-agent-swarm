@@ -136,7 +136,8 @@ export const getRuleOrchestration = (card: TaskCard, flags: TaskFlags): Orchestr
   const slices: OrchestrationDimension[] = unique<OrchestrationDimension>([...dimensions, 'vertical-slice']).slice(0, complexity.level === 'large' ? 4 : complexity.level === 'medium' ? 3 : 1)
   slices.forEach((dimension, index) => {
     const pick = roleFor(dimension, complexity.level)
-    const dependsOn = recon === undefined || (index === 0 && dimension === recon) ? [] : ['recon']
+    // 所有切片都依赖考察：先确立事实与边界，再并行开工，避免第一个切片凭猜测先动。
+    const dependsOn = recon === undefined ? [] : ['recon']
     subtasks.push({
       id: `slice-${index + 1}`,
       title: titleOf(dimension),
@@ -229,7 +230,8 @@ export const ParseOrchestrationPlan = (answers: Record<string, unknown>, card: T
   if (level === undefined || !isJevProbability(split)) return undefined
   const base = getRuleOrchestration(card, flags)
   // Jev 只调整投入级别：small 且不建议拆分时收敛为单点；large 时保留规则给出的全部切片。
-  if (level === 'small' && split < 0.5) {
+  // Jev 判小即收敛为单点：保留「小型」标签却给多子任务会让投入级别与结构自相矛盾。
+  if (level === 'small') {
     const pick = roleFor('vertical-slice', 'small')
     const single: Omit<OrchestrationPlan, 'mermaid'> = {
       ...base, complexity: 'small', source: 'jev', reason: `Jev：${COMPLEXITY_LABELS.small}（拆分倾向 ${split.toFixed(2)}）`,
