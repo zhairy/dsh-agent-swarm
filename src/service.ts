@@ -371,6 +371,20 @@ const getStatusResult = (tasks: ReturnType<typeof getTaskView>[], session: Sessi
 })
 
 /**
+ * 未知任务的统一诊断。
+ * 只给「未知任务：T-1」时，无法判断是 ID 拼错、DSH 重启后内存态任务丢失，还是切了会话；
+ * 这里补上当前会话已知任务与任务卡的隔离语义，让调用方一步定位而不是继续猜。
+ */
+const describeUnknownTask = (session: SessionStateInfo, taskId: string): string => {
+  const known = session.store.getTasks().map((task) => task.taskId)
+  const shown = known.slice(0, 5)
+  const listing = known.length === 0
+    ? '当前会话还没有任务卡'
+    : `当前会话的任务：${shown.join('、')}${known.length > shown.length ? `…（共 ${known.length} 个）` : ''}`
+  return `未知任务：${taskId}。${listing}。任务卡按根会话与工作区隔离：DSH 重启或切换会话后需要用 swarm_task_card 重新创建；swarm_status 可以列出当前会话的全部任务。`
+}
+
+/**
  * 创建 SwarmService
  * @param {SwarmServiceDepsInfo} deps - 依赖
  * @returns {SwarmService} 服务
@@ -1057,7 +1071,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const task = await session.taskLock.run(async () => {
       const requestedId = (raw as { task_id?: unknown }).task_id
       const existing = typeof requestedId === 'string' ? session.store.getTask(requestedId) : undefined
-      if (typeof requestedId === 'string' && existing === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${requestedId}`)
+      if (typeof requestedId === 'string' && existing === undefined) throw new SwarmError('UNKNOWN_TASK', describeUnknownTask(session, requestedId))
       const expected = (raw as { expected_card_revision?: unknown }).expected_card_revision
       if (expected !== undefined && expected !== (existing?.cardRevision ?? 1)) throw new SwarmError('INVALID_ARGS', '任务合同版本已改变，请读取最新任务卡')
       const ruleGates = getRuleGates(card)
@@ -1118,7 +1132,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
 
   const getTaskOrThrow = (session: SessionStateInfo, taskId: string): TaskRecord => {
     const task = session.store.getTask(taskId)
-    if (task === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${taskId}`)
+    if (task === undefined) throw new SwarmError('UNKNOWN_TASK', describeUnknownTask(session, taskId))
     return task
   }
 

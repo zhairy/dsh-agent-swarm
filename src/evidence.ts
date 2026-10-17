@@ -200,6 +200,10 @@ export interface TaskStoreDirty {
   readonly removedTasks: readonly string[]
 }
 
+/** 存储层的未知任务提示：这里没有会话上下文，只给出定位入口与任务卡的隔离语义。 */
+const unknownTaskHint = (taskId: string): string =>
+  `未知任务：${taskId}。任务卡按根会话与工作区隔离（DSH 重启或切换会话后需要用 swarm_task_card 重新创建）；swarm_status 可列出当前会话的全部任务。`
+
 /**
  * 创建内存存储；更新总是替换为新对象，旧引用保持不变
  * @returns {TaskStore} 存储
@@ -231,7 +235,7 @@ export const intTaskStore = (): TaskStore => {
 
   const UpdateTask = (taskId: string, patch: Partial<TaskRecord>): TaskRecord => {
     const current = tasks.get(taskId)
-    if (current === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${taskId}`)
+    if (current === undefined) throw new SwarmError('UNKNOWN_TASK', unknownTaskHint(taskId))
     if ((patch.taskId !== undefined && patch.taskId !== taskId) || (patch.sessionId !== undefined && patch.sessionId !== current.sessionId)) throw new SwarmError('INVALID_ARGS', '任务身份不能通过更新迁移')
     if (patch.delegationIds !== undefined && (patch.delegationIds.length !== current.delegationIds.length || patch.delegationIds.some((id, index) => id !== current.delegationIds[index]))) throw new SwarmError('INVALID_ARGS', '委派关联只能由 AddDelegation 原子更新')
     const next = { ...current, ...patch, updatedAt: Date.now() }
@@ -242,7 +246,7 @@ export const intTaskStore = (): TaskStore => {
 
   const AddDelegation = (record: DelegationRecord): void => {
     const task = tasks.get(record.taskId)
-    if (task === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${record.taskId}`)
+    if (task === undefined) throw new SwarmError('UNKNOWN_TASK', unknownTaskHint(record.taskId))
     if (delegations.has(record.delegationId) || task.delegationIds.includes(record.delegationId)) throw new SwarmError('INVALID_ARGS', `重复委派：${record.delegationId}`)
     // Prepare both records before either Map changes; one synchronous commit cannot expose an orphan.
     const nextTask = { ...task, delegationIds: [...task.delegationIds, record.delegationId], updatedAt: Date.now() }
