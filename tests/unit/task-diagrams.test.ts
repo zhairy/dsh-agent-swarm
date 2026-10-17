@@ -5,9 +5,10 @@ import type { DelegationRecord, TaskRecord } from '../../src/evidence.js'
 import { getTaskDiagrams, getArchifyTaskDiagrams, ValidateTaskDiagrams, TASK_DIAGRAM_KINDS, TASK_DIAGRAM_LIMITS } from '../../src/task-diagrams.js'
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
 import { getDefaultWorkflow, getWorkflowDigest, intWorkflowState, intOfficialMermaidParser } from '../../src/workflow.js'
+import { getRuleOrchestration } from '../../src/orchestration.js'
 
-const fixture = () => {
-  const card = ValidateTaskCard({ title: '合同与图表', goal: '保持真实证据', acceptance: ['分别展示完成和验收'], scope: [], flags: { changesCode: true } }).card!
+const fixture = (flags: Record<string, boolean> = { changesCode: true }) => {
+  const card = ValidateTaskCard({ title: '合同与图表', goal: '保持真实证据', acceptance: ['分别展示完成和验收'], scope: [], flags }).card!
   const gates = getRuleGates(card)
   const workflowDefinition = getDefaultWorkflow(card, gates)
   const task: TaskRecord = { taskId: 'T-1', sessionId: 'session-1', card, gates, triage: { source: 'rules', rulesApplied: [] }, delegationIds: [], rounds: 0, createdAt: 1000, updatedAt: 1000,
@@ -122,6 +123,26 @@ describe('单一版本源派生的五图与进度', () => {
     expect(client().getDiagramBundle(view)).toBe(bundle)
     expect(client().getDiagramBundle({ ...view, workflowRevision: 4 })).toBeNull()
     for (const source of ['sequenceDiagram\nparticipant p_root as Root\nclick p_root https://evil', 'sequenceDiagram\nparticipant p_root as Root\np_root->>p_9: unknown', 'stateDiagram-v2\nstate "<img>" as s_pending', 'flowchart LR\nn_a["ok"]\nclassDef ready fill:url(evil),stroke:#475569,color:#0f172a']) expect(() => client().validateSource(source)).toThrow()
+  })
+  it('含执行前编排的六图快照被客户端接受，未知或缺失视角仍拒绝', () => {
+    const { task } = fixture({ crossModuleArchitecture: true, changesCode: true })
+    task.orchestration = getRuleOrchestration(task.card, task.card.flags)
+    const before = JSON.stringify(task)
+    const bundle = getTaskDiagrams(task, [])
+    expect(JSON.stringify(task)).toBe(before)
+    expect(bundle.views).toHaveLength(6)
+    expect(new Set(bundle.views.map((view) => view.kind))).toEqual(new Set(TASK_DIAGRAM_KINDS))
+    expect(ValidateTaskDiagrams(bundle)).toEqual([])
+    const view = { task_id: task.taskId, cardRevision: 2, workflowRevision: 3, requestRevision: 4, diagrams: bundle }
+    expect(client().getDiagramBundle(view)).toBe(bundle)
+    const orchestration = bundle.views.find((item) => item.kind === 'orchestration')!
+    expect(orchestration.mermaid).toContain('同时开工')
+    expect(() => client().validateSource(orchestration.mermaid)).not.toThrow()
+    const unknown = { ...bundle, views: [...bundle.views, { ...orchestration, kind: 'unknown' }] }
+    expect(client().getDiagramBundle({ ...view, diagrams: unknown })).toBeNull()
+    const missing = { ...bundle, views: bundle.views.filter((item) => item.kind !== 'lifecycle') }
+    expect(client().getDiagramBundle({ ...view, diagrams: missing })).toBeNull()
+    expect(() => client().validateSource(`${orchestration.mermaid}\n  x["<script>"]`)).toThrow()
   })
   it('导出真正Archify五种IR且时序几何不冒充耗时比例', () => {
     const { task, record } = fixture()
