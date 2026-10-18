@@ -5,7 +5,7 @@
   "typecheck": true,
   "unit": {
     "files": 89,
-    "passed": 1115,
+    "passed": 1117,
     "skipped": 2,
     "failed": 0
   },
@@ -17,7 +17,17 @@
     ],
     "filesEach": 8,
     "passedEach": 42,
-    "generation": "fixtures; actual native question/tool/message lifecycle"
+    "generation": "fixtures; actual native question/tool/message lifecycle",
+    "baselineCodeCommit": "52f6ee559ddc68dc948efba31c60cc1e201bf812",
+    "finalFeedbackRecheck": {
+      "hosts": [
+        "0.2.1-rc.2",
+        "0.2.1-alpha.4",
+        "0.2.0-rc.2"
+      ],
+      "passedEach": 4,
+      "unselectedEach": 9
+    }
   },
   "sourceSha256": {
     "src/agent-binding.ts": "0a34806f80c912f8c2833dc3a51bfc57d3ed60f0b04e7e549b090004776dc9ec",
@@ -56,7 +66,7 @@
     "src/model-family.ts": "f16ef24000c4cc692f33253b426ffc8b23d5f8969ba6105ebb535e259bdc59b7",
     "src/network.ts": "ecccff1b469f26e7aa98e66349bbb2219014cb46a514f3496be2b669a1b50c33",
     "src/orchestration.ts": "a45254fd1ae00ce9f6a671a594b6d8106c4560f138da0364b9c9043c848b98b7",
-    "src/planning-recovery.ts": "96318850a43a577f34e0498fbfde02d7a17ca4c124d3c343efb39231527c84b6",
+    "src/planning-recovery.ts": "afaadc9ac65cc0ec1c4b11fef5c88e53816a8d8fc2e9d2bed4bc1a8cda786f2d",
     "src/planning-review.ts": "ba7088c7523bad91d72463652260bcd40ac4212ecc89c17c15330c753c65ab96",
     "src/planning-wait.ts": "4dbfccaca7b4779131cdde20dffd09e4b5909bc66b934769d95f8d836df67d2e",
     "src/policy.ts": "3d30f462c0a99fb6ac7e9c290a562230f978ee6b7c24953429f08dd967882089",
@@ -86,7 +96,7 @@
     "src/task-tools.ts": "52d933a6c6d144bdcd0b20b38945b794d0463c3a865f149b4a9b751b4db95cfd",
     "src/threads.ts": "7eca7bd43ca07000672c22c35112c14190ec80c9895713b8d43a6e9d73b69ef5",
     "src/tool-shape.ts": "7ba65a147476ba812d4b3bead4637b4fc4765a39054bd47442e0e5835faed272",
-    "src/tools.ts": "f7c34e0be99860c27eee8b2c8f6ca2e5d0d3e3c1cd6b8ac85a992b3c667030f3",
+    "src/tools.ts": "98d866e40300934ce7e35cd43f2a53ec0c937c8d9d54a341a616568c48e84bb4",
     "src/upgrade.ts": "9dbcaa1f64b47c95a29f773c4c7616463f235aa59c4ece8384861bfacf1d357a",
     "src/util/errors.ts": "7b43e63cba7ac8705978375c22486daaaac24feb350ce1335cad65af977b1fcc",
     "src/util/failure-hint.ts": "db5f67fe6775e1d605fbc66c0b1193b88f3b8679ef17683805ab7026573266d3",
@@ -98,6 +108,13 @@
     "src/vision.ts": "20e6deb5786a0743626550cca5c94dbf86341d89445ec6a24368c425b4ee1227",
     "src/workflow.ts": "8f891b1a4df05286ac0ac525b78830424265db56bd9cb15d478ab9134d07749e"
   },
-  "production": "pending controlled local deployment",
-  "manualTest": "pending user validation before any GitHub release"
+  "production": "deployed; see production.json",
+  "manualTest": "pending user validation before any GitHub release",
+  "validatedCodeCommit": "492c6e3a4df3265291dcea05f2d01793f6eb9e34",
+  "jev": "jev-1.14.0 seven tools and pre/post health completed; redacted facts only; screen=review",
+  "browser": "browser/final-browser-verification.json",
+  "deployedLib": {
+    "files": 232,
+    "matchesCandidate": true
+  }
 }

@@ -1,0 +1,831 @@
+{
+  "formatVersion": 1,
+  "startedAt": "2026-10-18T14:27:19.271125+00:00",
+  "requestedModel": "jev-1.14.0",
+  "payloadSha256": "3b547cf289dc27b9d115daceae147a5d7d096868f8207b265addadf9b0ce62f2",
+  "purpose": "release-evidence-review",
+  "interpretation": "Tool success is availability, not code correctness. Health supplies no code evidence.",
+  "runs": [
+    {
+      "tool": "jev_health",
+      "startedAt": "2026-10-18T14:27:22.056554+00:00",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+          "name": "jev_health",
+          "arguments": {}
+        }
+      },
+      "finishedAt": "2026-10-18T14:27:22.688156+00:00",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"models\": [\n      {\n        \"name\": \"jev-latest\",\n        \"description\": \"The latest iteration of TypeSafe's System One Model: Jev\",\n        \"release_date\": \"2026-09-10T18:38:01.391457+00:00\"\n      },\n      {\n        \"name\": \"jev-preview\",\n        \"description\": \"A preview version of `jev-latest`: should be better in most ways\",\n        \"release_date\": \"2026-09-10T18:39:06.057655+00:00\"\n      }\n    ],\n    \"round_trip_latency_ms\": 627.043\n  },\n  \"usage\": {\n    \"input_tokens\": 0,\n    \"output_tokens\": 0,\n    \"est_cost_usd\": 0.0\n  },\n  \"latency_ms\": 627.053\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "models": [
+                {
+                  "name": "jev-latest",
+                  "description": "The latest iteration of TypeSafe's System One Model: Jev",
+                  "release_date": "2026-09-10T18:38:01.391457+00:00"
+                },
+                {
+                  "name": "jev-preview",
+                  "description": "A preview version of `jev-latest`: should be better in most ways",
+                  "release_date": "2026-09-10T18:39:06.057655+00:00"
+                }
+              ],
+              "round_trip_latency_ms": 627.043
+            },
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "est_cost_usd": 0.0
+            },
+            "latency_ms": 627.053
+          }
+        }
+      },
+      "toolOk": true,
+      "modelMatches": true
+    },
+    {
+      "tool": "jev_ask",
+      "startedAt": "2026-10-18T14:27:22.692427+00:00",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+          "name": "jev_ask",
+          "arguments": {
+            "questions": {
+              "bounded_recovery": {
+                "type": "noul",
+                "instructions": "所给事实摘要是否支持：本机宿主版本统一、模型与MCP连接及独立只读闭环得到有限验证，旧180秒总截止不再误杀该次249秒审核？只评价摘要是否支持有限结论，不将它当成源码独立证明。"
+              },
+              "honest_business_boundary": {
+                "type": "noul",
+                "instructions": "结论是否明确区分维护链路恢复和原业务任务完成，并承认原规划仍未取得准入、人工验收待完成？"
+              },
+              "blind_review_boundary": {
+                "type": "noul",
+                "instructions": "所提供的skipSubagentSessions配置、安装源码入口说明及生产origin观测，是否支持避免子会话自动记忆注入这一有限结论，同时没有宣称所有第三方上下文通道均已形式验证？"
+              }
+            },
+            "state": {
+              "reviewKind": "用户要求的本机修复结论复核，仅提供脱敏机制、测试和生产事实摘要；没有源码、日志、凭据或私有业务正文。",
+              "evidenceBasis": "由主持者汇总的最终生产验证，加上独立维护者执行的后端与兼容副本测试；本次模型不能独立重放源码测试。",
+              "host": {
+                "version": "0.2.1-rc.2",
+                "singleOfficialInstallation": true,
+                "duplicateUserPrefixInstallationRemoved": true,
+                "cliAndProductionWebUseSameVersion": true,
+                "productionWebPort": 3080,
+                "verificationPluginRemovedAfterUse": true,
+                "currentSessionIdle": true
+              },
+              "planning": {
+                "configuredTimeoutMs": 0,
+                "timeoutMeaning": "不设置规划总墙钟硬截止，允许真实复杂审核超过旧180秒；保留用户取消，不等于保证任意上游都能自动结束。",
+                "originalTaskObservedDurationMs": 249118,
+                "originalTaskResult": "审核完整返回，仍为unknown/changes_requested，Jev图表达维度0.71；没有实施原业务任务。",
+                "readonlySmoke": {
+                  "planningDurationMs": 155063,
+                  "planningVerdict": "pass",
+                  "experts": 2,
+                  "bothExpertsActuallyReadAuthorizedContextAndFiles": true,
+                  "acceptance": "accepted"
+                },
+                "tasksRetainedAcrossSecondSwitch": 7,
+                "retainedTaskComposition": "原有6张任务卡加1张独立只读smoke任务卡；并不代表用户早先手动重启前的全部内存历史完整可恢复。",
+                "gatesStillEnforced": true,
+                "businessExecutionResumed": false
+              },
+              "modelAndMcp": {
+                "codexModelCatalogCount": 8,
+                "codexCatalogContainsSelectedModel": true,
+                "actualGeneration": "codex/gpt-6.1-sol，low推理，返回预设测试标识HOST_RC2_CODEX_OK，没有发生fallback。",
+                "actualDshMcpHealthAndListIsError": false,
+                "openVikingToolsRegistered": 20
+              },
+              "openViking": {
+                "serverVersion": "0.5.0",
+                "localEmbedding": "BGE小型中文模型，512维，无embedding API费用；模型文件摘要已校验。",
+                "vlm": "用户明确授权复用DeepSeek官方API，并知晓产生调用费用；实际可用模型目录已核验。",
+                "isolatedValidation": "真实抽取2条合成记忆，语义检索及摘要读取命中合成事实；匿名访问401、跨账户访问404；测试账户及数据已清理。",
+                "listener": "仅本机loopback，独立服务启用自动启动，ready检查通过。",
+                "pending": "原旧pending未读取、未回放；本次接入采用新的pending和state目录。",
+                "blindReview": "启用插件已有skipSubagentSessions选项；安装源码在startup/profile、pre-step recall、capture/commit、flush入口跳过origin=subagent。生产子会话origin已实测为subagent；手动MCP挂载保留。"
+              },
+              "compatibility": {
+                "localForks": 5,
+                "allActivatedInSameProductionHost": true,
+                "isolatedApiRegistrationChecksCompleted": true,
+                "calculatorAndFinanceChecks": "真实rc.2 SystemPrompt/ToolRuntime注册和32项无外部调用检查通过；禁止从旧profile及pnpm虚拟路径解析依赖后再次通过；没有SDK副本。",
+                "licenseAndNamespacePreserved": true,
+                "hostCompatibilityCheckBypassed": false
+              },
+              "regressions": {
+                "unitPassed": 1115,
+                "legacyUnitSkipped": 2,
+                "hostVersions": [
+                  "0.2.0-rc.2",
+                  "0.2.1-alpha.4",
+                  "0.2.1-rc.2"
+                ],
+                "integrationPassedPerHost": 42
+              },
+              "limitations": [
+                "只支持上述有限机制与已实测链路的修复结论，不证明所有未来任务绝不卡住。",
+                "没有全面验证所有订阅账号额度、所有工具、所有业务任务。",
+                "原复杂业务规划仍不具备执行准入，业务未执行，不能报告完整业务交付。",
+                "用户人工测试和最终验收待完成。",
+                "这次仅本机维护，不发布GitHub。",
+                "完整源码云端审核没有进行；摘要审核不能替代代码审计或原任务的宿主规划门禁。"
+              ]
+            }
+          }
+        }
+      },
+      "finishedAt": "2026-10-18T14:27:23.173692+00:00",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"bounded_recovery\": {\n      \"type\": \"noul\",\n      \"noul\": 0.85\n    },\n    \"honest_business_boundary\": {\n      \"type\": \"noul\",\n      \"noul\": 0.96\n    },\n    \"blind_review_boundary\": {\n      \"type\": \"noul\",\n      \"noul\": 0.92\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 1894,\n    \"output_tokens\": 60,\n    \"est_cost_usd\": 0.000079548\n  },\n  \"latency_ms\": 476.486\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "bounded_recovery": {
+                "type": "noul",
+                "noul": 0.85
+              },
+              "honest_business_boundary": {
+                "type": "noul",
+                "noul": 0.96
+              },
+              "blind_review_boundary": {
+                "type": "noul",
+                "noul": 0.92
+              }
+            },
+            "usage": {
+              "input_tokens": 1894,
+              "output_tokens": 60,
+              "est_cost_usd": 7.9548e-05
+            },
+            "latency_ms": 476.486
+          }
+        }
+      },
+      "toolOk": true,
+      "modelMatches": true
+    },
+    {
+      "tool": "jev_check",
+      "startedAt": "2026-10-18T14:27:23.177726+00:00",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+          "name": "jev_check",
+          "arguments": {
+            "propositions": {
+              "bounded": "结论范围限于提供的回归和实际链路，未证明普遍正确性。",
+              "same_host": "摘要提供了CLI和唯一正式Web宿主均使用rc.2且五个兼容插件同宿主激活的事实。",
+              "pending_isolated": "旧pending没有回放，接入使用新pending/state目录。",
+              "unlimited_is_not_termination_guarantee": "取消180秒规划总截止，并不保证所有永久无响应上游都会自动结束。",
+              "business_done": "原复杂业务已经完成并通过最终人工验收。",
+              "all_quotas_verified": "已经全面验证所有账号额度和所有工具。"
+            },
+            "state": {
+              "reviewKind": "用户要求的本机修复结论复核，仅提供脱敏机制、测试和生产事实摘要；没有源码、日志、凭据或私有业务正文。",
+              "evidenceBasis": "由主持者汇总的最终生产验证，加上独立维护者执行的后端与兼容副本测试；本次模型不能独立重放源码测试。",
+              "host": {
+                "version": "0.2.1-rc.2",
+                "singleOfficialInstallation": true,
+                "duplicateUserPrefixInstallationRemoved": true,
+                "cliAndProductionWebUseSameVersion": true,
+                "productionWebPort": 3080,
+                "verificationPluginRemovedAfterUse": true,
+                "currentSessionIdle": true
+              },
+              "planning": {
+                "configuredTimeoutMs": 0,
+                "timeoutMeaning": "不设置规划总墙钟硬截止，允许真实复杂审核超过旧180秒；保留用户取消，不等于保证任意上游都能自动结束。",
+                "originalTaskObservedDurationMs": 249118,
+                "originalTaskResult": "审核完整返回，仍为unknown/changes_requested，Jev图表达维度0.71；没有实施原业务任务。",
+                "readonlySmoke": {
+                  "planningDurationMs": 155063,
+                  "planningVerdict": "pass",
+                  "experts": 2,
+                  "bothExpertsActuallyReadAuthorizedContextAndFiles": true,
+                  "acceptance": "accepted"
+                },
+                "tasksRetainedAcrossSecondSwitch": 7,
+                "retainedTaskComposition": "原有6张任务卡加1张独立只读smoke任务卡；并不代表用户早先手动重启前的全部内存历史完整可恢复。",
+                "gatesStillEnforced": true,
+                "businessExecutionResumed": false
+              },
+              "modelAndMcp": {
+                "codexModelCatalogCount": 8,
+                "codexCatalogContainsSelectedModel": true,
+                "actualGeneration": "codex/gpt-6.1-sol，low推理，返回预设测试标识HOST_RC2_CODEX_OK，没有发生fallback。",
+                "actualDshMcpHealthAndListIsError": false,
+                "openVikingToolsRegistered": 20
+              },
+              "openViking": {
+                "serverVersion": "0.5.0",
+                "localEmbedding": "BGE小型中文模型，512维，无embedding API费用；模型文件摘要已校验。",
+                "vlm": "用户明确授权复用DeepSeek官方API，并知晓产生调用费用；实际可用模型目录已核验。",
+                "isolatedValidation": "真实抽取2条合成记忆，语义检索及摘要读取命中合成事实；匿名访问401、跨账户访问404；测试账户及数据已清理。",
+                "listener": "仅本机loopback，独立服务启用自动启动，ready检查通过。",
+                "pending": "原旧pending未读取、未回放；本次接入采用新的pending和state目录。",
+                "blindReview": "启用插件已有skipSubagentSessions选项；安装源码在startup/profile、pre-step recall、capture/commit、flush入口跳过origin=subagent。生产子会话origin已实测为subagent；手动MCP挂载保留。"
+              },
+              "compatibility": {
+                "localForks": 5,
+                "allActivatedInSameProductionHost": true,
+                "isolatedApiRegistrationChecksCompleted": true,
+                "calculatorAndFinanceChecks": "真实rc.2 SystemPrompt/ToolRuntime注册和32项无外部调用检查通过；禁止从旧profile及pnpm虚拟路径解析依赖后再次通过；没有SDK副本。",
+                "licenseAndNamespacePreserved": true,
+                "hostCompatibilityCheckBypassed": false
+              },
+              "regressions": {
+                "unitPassed": 1115,
+                "legacyUnitSkipped": 2,
+                "hostVersions": [
+                  "0.2.0-rc.2",
+                  "0.2.1-alpha.4",
+                  "0.2.1-rc.2"
+                ],
+                "integrationPassedPerHost": 42
+              },
+              "limitations": [
+                "只支持上述有限机制与已实测链路的修复结论，不证明所有未来任务绝不卡住。",
+                "没有全面验证所有订阅账号额度、所有工具、所有业务任务。",
+                "原复杂业务规划仍不具备执行准入，业务未执行，不能报告完整业务交付。",
+                "用户人工测试和最终验收待完成。",
+                "这次仅本机维护，不发布GitHub。",
+                "完整源码云端审核没有进行；摘要审核不能替代代码审计或原任务的宿主规划门禁。"
+              ]
+            }
+          }
+        }
+      },
+      "finishedAt": "2026-10-18T14:27:23.446746+00:00",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"probabilities\": {\n      \"bounded\": 0.96,\n      \"same_host\": 0.95,\n      \"pending_isolated\": 0.96,\n      \"unlimited_is_not_termination_guarantee\": 0.95,\n      \"business_done\": 0.02,\n      \"all_quotas_verified\": 0.03\n    },\n    \"flags\": [\n      \"bounded\",\n      \"same_host\",\n      \"pending_isolated\",\n      \"unlimited_is_not_termination_guarantee\"\n    ],\n    \"uncertain\": []\n  },\n  \"usage\": {\n    \"input_tokens\": 1859,\n    \"output_tokens\": 119,\n    \"est_cost_usd\": 0.00007807800000000001\n  },\n  \"latency_ms\": 264.597\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "probabilities": {
+                "bounded": 0.96,
+                "same_host": 0.95,
+                "pending_isolated": 0.96,
+                "unlimited_is_not_termination_guarantee": 0.95,
+                "business_done": 0.02,
+                "all_quotas_verified": 0.03
+              },
+              "flags": [
+                "bounded",
+                "same_host",
+                "pending_isolated",
+                "unlimited_is_not_termination_guarantee"
+              ],
+              "uncertain": []
+            },
+            "usage": {
+              "input_tokens": 1859,
+              "output_tokens": 119,
+              "est_cost_usd": 7.807800000000001e-05
+            },
+            "latency_ms": 264.597
+          }
+        }
+      },
+      "toolOk": true,
+      "modelMatches": true
+    },
+    {
+      "tool": "jev_classify",
+      "startedAt": "2026-10-18T14:27:23.450757+00:00",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+          "name": "jev_classify",
+          "arguments": {
+            "question": "所给事实最支持哪种最终状态？",
+            "labels": {
+              "bounded_local_recovery": "本机维护及列出的链路有验证，原业务仍受规划门禁约束，等待人工测试。",
+              "business_complete": "所有原业务已完成并验收。",
+              "universal_reliability": "整个系统及全部账号工具已经证明永不失败。",
+              "insufficient_for_any_claim": "完全没有提供可用于有限维护结论的测试或事实。"
+            },
+            "state": {
+              "reviewKind": "用户要求的本机修复结论复核，仅提供脱敏机制、测试和生产事实摘要；没有源码、日志、凭据或私有业务正文。",
+              "evidenceBasis": "由主持者汇总的最终生产验证，加上独立维护者执行的后端与兼容副本测试；本次模型不能独立重放源码测试。",
+              "host": {
+                "version": "0.2.1-rc.2",
+                "singleOfficialInstallation": true,
+                "duplicateUserPrefixInstallationRemoved": true,
+                "cliAndProductionWebUseSameVersion": true,
+                "productionWebPort": 3080,
+                "verificationPluginRemovedAfterUse": true,
+                "currentSessionIdle": true
+              },
+              "planning": {
+                "configuredTimeoutMs": 0,
+                "timeoutMeaning": "不设置规划总墙钟硬截止，允许真实复杂审核超过旧180秒；保留用户取消，不等于保证任意上游都能自动结束。",
+                "originalTaskObservedDurationMs": 249118,
+                "originalTaskResult": "审核完整返回，仍为unknown/changes_requested，Jev图表达维度0.71；没有实施原业务任务。",
+                "readonlySmoke": {
+                  "planningDurationMs": 155063,
+                  "planningVerdict": "pass",
+                  "experts": 2,
+                  "bothExpertsActuallyReadAuthorizedContextAndFiles": true,
+                  "acceptance": "accepted"
+                },
+                "tasksRetainedAcrossSecondSwitch": 7,
+                "retainedTaskComposition": "原有6张任务卡加1张独立只读smoke任务卡；并不代表用户早先手动重启前的全部内存历史完整可恢复。",
+                "gatesStillEnforced": true,
+                "businessExecutionResumed": false
+              },
+              "modelAndMcp": {
+                "codexModelCatalogCount": 8,
+                "codexCatalogContainsSelectedModel": true,
+                "actualGeneration": "codex/gpt-6.1-sol，low推理，返回预设测试标识HOST_RC2_CODEX_OK，没有发生fallback。",
+                "actualDshMcpHealthAndListIsError": false,
+                "openVikingToolsRegistered": 20
+              },
+              "openViking": {
+                "serverVersion": "0.5.0",
+                "localEmbedding": "BGE小型中文模型，512维，无embedding API费用；模型文件摘要已校验。",
+                "vlm": "用户明确授权复用DeepSeek官方API，并知晓产生调用费用；实际可用模型目录已核验。",
+                "isolatedValidation": "真实抽取2条合成记忆，语义检索及摘要读取命中合成事实；匿名访问401、跨账户访问404；测试账户及数据已清理。",
+                "listener": "仅本机loopback，独立服务启用自动启动，ready检查通过。",
+                "pending": "原旧pending未读取、未回放；本次接入采用新的pending和state目录。",
+                "blindReview": "启用插件已有skipSubagentSessions选项；安装源码在startup/profile、pre-step recall、capture/commit、flush入口跳过origin=subagent。生产子会话origin已实测为subagent；手动MCP挂载保留。"
+              },
+              "compatibility": {
+                "localForks": 5,
+                "allActivatedInSameProductionHost": true,
+                "isolatedApiRegistrationChecksCompleted": true,
+                "calculatorAndFinanceChecks": "真实rc.2 SystemPrompt/ToolRuntime注册和32项无外部调用检查通过；禁止从旧profile及pnpm虚拟路径解析依赖后再次通过；没有SDK副本。",
+                "licenseAndNamespacePreserved": true,
+                "hostCompatibilityCheckBypassed": false
+              },
+              "regressions": {
+                "unitPassed": 1115,
+                "legacyUnitSkipped": 2,
+                "hostVersions": [
+                  "0.2.0-rc.2",
+                  "0.2.1-alpha.4",
+                  "0.2.1-rc.2"
+                ],
+                "integrationPassedPerHost": 42
+              },
+              "limitations": [
+                "只支持上述有限机制与已实测链路的修复结论，不证明所有未来任务绝不卡住。",
+                "没有全面验证所有订阅账号额度、所有工具、所有业务任务。",
+                "原复杂业务规划仍不具备执行准入，业务未执行，不能报告完整业务交付。",
+                "用户人工测试和最终验收待完成。",
+                "这次仅本机维护，不发布GitHub。",
+                "完整源码云端审核没有进行；摘要审核不能替代代码审计或原任务的宿主规划门禁。"
+              ]
+            }
+          }
+        }
+      },
+      "finishedAt": "2026-10-18T14:27:23.689196+00:00",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"choice\": \"bounded_local_recovery\",\n    \"confidence\": 1.0,\n    \"probabilities\": {\n      \"bounded_local_recovery\": 1.0,\n      \"business_complete\": 0.0,\n      \"universal_reliability\": 0.0,\n      \"insufficient_for_any_claim\": 0.0,\n      \"other\": 0.0\n    },\n    \"band\": \"act\"\n  },\n  \"usage\": {\n    \"input_tokens\": 1864,\n    \"output_tokens\": 73,\n    \"est_cost_usd\": 0.000078288\n  },\n  \"latency_ms\": 233.076\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "choice": "bounded_local_recovery",
+              "confidence": 1.0,
+              "probabilities": {
+                "bounded_local_recovery": 1.0,
+                "business_complete": 0.0,
+                "universal_reliability": 0.0,
+                "insufficient_for_any_claim": 0.0,
+                "other": 0.0
+              },
+              "band": "act"
+            },
+            "usage": {
+              "input_tokens": 1864,
+              "output_tokens": 73,
+              "est_cost_usd": 7.8288e-05
+            },
+            "latency_ms": 233.076
+          }
+        }
+      },
+      "toolOk": true,
+      "modelMatches": true
+    },
+    {
+      "tool": "jev_match",
+      "startedAt": "2026-10-18T14:27:23.693903+00:00",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+          "name": "jev_match",
+          "arguments": {
+            "query": "一个本机维护完成了1115单测、三个宿主各42集成检查，真实只读smoke accepted，MCP真实健康正常；原业务审核运行249秒完整返回但仍unknown/changes_requested且业务未执行。哪个结论准确？",
+            "candidates": {
+              "bounded": "维护恢复了已验证链路，保留业务审核拒绝与待人工验收边界。",
+              "auto_approve": "维护成功就可以跳过原业务规划审核。",
+              "all_done": "原业务与所有未来任务均已完成和证明可靠。",
+              "ignore_evidence": "因为原业务未通过，所以此前所有宿主和连接验证均不存在。"
+            }
+          }
+        }
+      },
+      "finishedAt": "2026-10-18T14:27:24.035523+00:00",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"best_id\": \"bounded\",\n    \"best_text\": \"维护恢复了已验证链路，保留业务审核拒绝与待人工验收边界。\",\n    \"confidence\": 1.0,\n    \"abstain_probability\": 0.0,\n    \"exists\": 0.89,\n    \"windows\": 1,\n    \"exists_by_window\": [\n      0.89\n    ],\n    \"top3\": [\n      {\n        \"id\": \"bounded\",\n        \"probability\": 1.0\n      },\n      {\n        \"id\": \"all_done\",\n        \"probability\": 0.0\n      },\n      {\n        \"id\": \"auto_approve\",\n        \"probability\": 0.0\n      }\n    ],\n    \"band\": \"match\"\n  },\n  \"usage\": {\n    \"input_tokens\": 744,\n    \"output_tokens\": 75,\n    \"est_cost_usd\": 0.000031248\n  },\n  \"latency_ms\": 336.731\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "best_id": "bounded",
+              "best_text": "维护恢复了已验证链路，保留业务审核拒绝与待人工验收边界。",
+              "confidence": 1.0,
+              "abstain_probability": 0.0,
+              "exists": 0.89,
+              "windows": 1,
+              "exists_by_window": [
+                0.89
+              ],
+              "top3": [
+                {
+                  "id": "bounded",
+                  "probability": 1.0
+                },
+                {
+                  "id": "all_done",
+                  "probability": 0.0
+                },
+                {
+                  "id": "auto_approve",
+                  "probability": 0.0
+                }
+              ],
+              "band": "match"
+            },
+            "usage": {
+              "input_tokens": 744,
+              "output_tokens": 75,
+              "est_cost_usd": 3.1248e-05
+            },
+            "latency_ms": 336.731
+          }
+        }
+      },
+      "toolOk": true,
+      "modelMatches": true
+    },
+    {
+      "tool": "jev_score",
+      "startedAt": "2026-10-18T14:27:24.038794+00:00",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+          "name": "jev_score",
+          "arguments": {
+            "question": "仅按所给脱敏摘要，本机有限维护恢复的证据程度如何？这里的评分不是系统正确率。",
+            "levels": [
+              "没有实际验证证据。",
+              "只有模拟或静态声明，没有真实宿主连接验证。",
+              "存在真实宿主或连接验证，但关键边界或生产结果仍不明确。",
+              "有限范围的回归、生产连接、独立只读闭环均有证据，明确保留原业务门禁和人工验收边界。"
+            ],
+            "state": {
+              "reviewKind": "用户要求的本机修复结论复核，仅提供脱敏机制、测试和生产事实摘要；没有源码、日志、凭据或私有业务正文。",
+              "evidenceBasis": "由主持者汇总的最终生产验证，加上独立维护者执行的后端与兼容副本测试；本次模型不能独立重放源码测试。",
+              "host": {
+                "version": "0.2.1-rc.2",
+                "singleOfficialInstallation": true,
+                "duplicateUserPrefixInstallationRemoved": true,
+                "cliAndProductionWebUseSameVersion": true,
+                "productionWebPort": 3080,
+                "verificationPluginRemovedAfterUse": true,
+                "currentSessionIdle": true
+              },
+              "planning": {
+                "configuredTimeoutMs": 0,
+                "timeoutMeaning": "不设置规划总墙钟硬截止，允许真实复杂审核超过旧180秒；保留用户取消，不等于保证任意上游都能自动结束。",
+                "originalTaskObservedDurationMs": 249118,
+                "originalTaskResult": "审核完整返回，仍为unknown/changes_requested，Jev图表达维度0.71；没有实施原业务任务。",
+                "readonlySmoke": {
+                  "planningDurationMs": 155063,
+                  "planningVerdict": "pass",
+                  "experts": 2,
+                  "bothExpertsActuallyReadAuthorizedContextAndFiles": true,
+                  "acceptance": "accepted"
+                },
+                "tasksRetainedAcrossSecondSwitch": 7,
+                "retainedTaskComposition": "原有6张任务卡加1张独立只读smoke任务卡；并不代表用户早先手动重启前的全部内存历史完整可恢复。",
+                "gatesStillEnforced": true,
+                "businessExecutionResumed": false
+              },
+              "modelAndMcp": {
+                "codexModelCatalogCount": 8,
+                "codexCatalogContainsSelectedModel": true,
+                "actualGeneration": "codex/gpt-6.1-sol，low推理，返回预设测试标识HOST_RC2_CODEX_OK，没有发生fallback。",
+                "actualDshMcpHealthAndListIsError": false,
+                "openVikingToolsRegistered": 20
+              },
+              "openViking": {
+                "serverVersion": "0.5.0",
+                "localEmbedding": "BGE小型中文模型，512维，无embedding API费用；模型文件摘要已校验。",
+                "vlm": "用户明确授权复用DeepSeek官方API，并知晓产生调用费用；实际可用模型目录已核验。",
+                "isolatedValidation": "真实抽取2条合成记忆，语义检索及摘要读取命中合成事实；匿名访问401、跨账户访问404；测试账户及数据已清理。",
+                "listener": "仅本机loopback，独立服务启用自动启动，ready检查通过。",
+                "pending": "原旧pending未读取、未回放；本次接入采用新的pending和state目录。",
+                "blindReview": "启用插件已有skipSubagentSessions选项；安装源码在startup/profile、pre-step recall、capture/commit、flush入口跳过origin=subagent。生产子会话origin已实测为subagent；手动MCP挂载保留。"
+              },
+              "compatibility": {
+                "localForks": 5,
+                "allActivatedInSameProductionHost": true,
+                "isolatedApiRegistrationChecksCompleted": true,
+                "calculatorAndFinanceChecks": "真实rc.2 SystemPrompt/ToolRuntime注册和32项无外部调用检查通过；禁止从旧profile及pnpm虚拟路径解析依赖后再次通过；没有SDK副本。",
+                "licenseAndNamespacePreserved": true,
+                "hostCompatibilityCheckBypassed": false
+              },
+              "regressions": {
+                "unitPassed": 1115,
+                "legacyUnitSkipped": 2,
+                "hostVersions": [
+                  "0.2.0-rc.2",
+                  "0.2.1-alpha.4",
+                  "0.2.1-rc.2"
+                ],
+                "integrationPassedPerHost": 42
+              },
+              "limitations": [
+                "只支持上述有限机制与已实测链路的修复结论，不证明所有未来任务绝不卡住。",
+                "没有全面验证所有订阅账号额度、所有工具、所有业务任务。",
+                "原复杂业务规划仍不具备执行准入，业务未执行，不能报告完整业务交付。",
+                "用户人工测试和最终验收待完成。",
+                "这次仅本机维护，不发布GitHub。",
+                "完整源码云端审核没有进行；摘要审核不能替代代码审计或原任务的宿主规划门禁。"
+              ]
+            }
+          }
+        }
+      },
+      "finishedAt": "2026-10-18T14:27:24.271155+00:00",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"score\": 2.99,\n    \"confidence\": 0.99,\n    \"probabilities\": {\n      \"0\": 0.0,\n      \"1\": 0.0,\n      \"2\": 0.01,\n      \"3\": 0.99\n    },\n    \"legend\": {\n      \"0\": \"没有实际验证证据。\",\n      \"1\": \"只有模拟或静态声明，没有真实宿主连接验证。\",\n      \"2\": \"存在真实宿主或连接验证，但关键边界或生产结果仍不明确。\",\n      \"3\": \"有限范围的回归、生产连接、独立只读闭环均有证据，明确保留原业务门禁和人工验收边界。\"\n    },\n    \"normalized\": 0.9966666666666667\n  },\n  \"usage\": {\n    \"input_tokens\": 1836,\n    \"output_tokens\": 17,\n    \"est_cost_usd\": 0.000077112\n  },\n  \"latency_ms\": 226.861\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "score": 2.99,
+              "confidence": 0.99,
+              "probabilities": {
+                "0": 0.0,
+                "1": 0.0,
+                "2": 0.01,
+                "3": 0.99
+              },
+              "legend": {
+                "0": "没有实际验证证据。",
+                "1": "只有模拟或静态声明，没有真实宿主连接验证。",
+                "2": "存在真实宿主或连接验证，但关键边界或生产结果仍不明确。",
+                "3": "有限范围的回归、生产连接、独立只读闭环均有证据，明确保留原业务门禁和人工验收边界。"
+              },
+              "normalized": 0.9966666666666667
+            },
+            "usage": {
+              "input_tokens": 1836,
+              "output_tokens": 17,
+              "est_cost_usd": 7.7112e-05
+            },
+            "latency_ms": 226.861
+          }
+        }
+      },
+      "toolOk": true,
+      "modelMatches": true
+    },
+    {
+      "tool": "jev_screen",
+      "startedAt": "2026-10-18T14:27:24.275513+00:00",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {
+          "name": "jev_screen",
+          "arguments": {
+            "source": "用户授权的最终本机维护机制、测试计数与边界摘要",
+            "text": "审核材料（健康检查不代表代码正确性）：\n{\"reviewKind\": \"用户要求的本机修复结论复核，仅提供脱敏机制、测试和生产事实摘要；没有源码、日志、凭据或私有业务正文。\", \"evidenceBasis\": \"由主持者汇总的最终生产验证，加上独立维护者执行的后端与兼容副本测试；本次模型不能独立重放源码测试。\", \"host\": {\"version\": \"0.2.1-rc.2\", \"singleOfficialInstallation\": true, \"duplicateUserPrefixInstallationRemoved\": true, \"cliAndProductionWebUseSameVersion\": true, \"productionWebPort\": 3080, \"verificationPluginRemovedAfterUse\": true, \"currentSessionIdle\": true}, \"planning\": {\"configuredTimeoutMs\": 0, \"timeoutMeaning\": \"不设置规划总墙钟硬截止，允许真实复杂审核超过旧180秒；保留用户取消，不等于保证任意上游都能自动结束。\", \"originalTaskObservedDurationMs\": 249118, \"originalTaskResult\": \"审核完整返回，仍为unknown/changes_requested，Jev图表达维度0.71；没有实施原业务任务。\", \"readonlySmoke\": {\"planningDurationMs\": 155063, \"planningVerdict\": \"pass\", \"experts\": 2, \"bothExpertsActuallyReadAuthorizedContextAndFiles\": true, \"acceptance\": \"accepted\"}, \"tasksRetainedAcrossSecondSwitch\": 7, \"retainedTaskComposition\": \"原有6张任务卡加1张独立只读smoke任务卡；并不代表用户早先手动重启前的全部内存历史完整可恢复。\", \"gatesStillEnforced\": true, \"businessExecutionResumed\": false}, \"modelAndMcp\": {\"codexModelCatalogCount\": 8, \"codexCatalogContainsSelectedModel\": true, \"actualGeneration\": \"codex/gpt-6.1-sol，low推理，返回预设测试标识HOST_RC2_CODEX_OK，没有发生fallback。\", \"actualDshMcpHealthAndListIsError\": false, \"openVikingToolsRegistered\": 20}, \"openViking\": {\"serverVersion\": \"0.5.0\", \"localEmbedding\": \"BGE小型中文模型，512维，无embedding API费用；模型文件摘要已校验。\", \"vlm\": \"用户明确授权复用DeepSeek官方API，并知晓产生调用费用；实际可用模型目录已核验。\", \"isolatedValidation\": \"真实抽取2条合成记忆，语义检索及摘要读取命中合成事实；匿名访问401、跨账户访问404；测试账户及数据已清理。\", \"listener\": \"仅本机loopback，独立服务启用自动启动，ready检查通过。\", \"pending\": \"原旧pending未读取、未回放；本次接入采用新的pending和state目录。\", \"blindReview\": \"启用插件已有skipSubagentSessions选项；安装源码在startup/profile、pre-step recall、capture/commit、flush入口跳过origin=subagent。生产子会话origin已实测为subagent；手动MCP挂载保留。\"}, \"compatibility\": {\"localForks\": 5, \"allActivatedInSameProductionHost\": true, \"isolatedApiRegistrationChecksCompleted\": true, \"calculatorAndFinanceChecks\": \"真实rc.2 SystemPrompt/ToolRuntime注册和32项无外部调用检查通过；禁止从旧profile及pnpm虚拟路径解析依赖后再次通过；没有SDK副本。\", \"licenseAndNamespacePreserved\": true, \"hostCompatibilityCheckBypassed\": false}, \"regressions\": {\"unitPassed\": 1115, \"legacyUnitSkipped\": 2, \"hostVersions\": [\"0.2.0-rc.2\", \"0.2.1-alpha.4\", \"0.2.1-rc.2\"], \"integrationPassedPerHost\": 42}, \"limitations\": [\"只支持上述有限机制与已实测链路的修复结论，不证明所有未来任务绝不卡住。\", \"没有全面验证所有订阅账号额度、所有工具、所有业务任务。\", \"原复杂业务规划仍不具备执行准入，业务未执行，不能报告完整业务交付。\", \"用户人工测试和最终验收待完成。\", \"这次仅本机维护，不发布GitHub。\", \"完整源码云端审核没有进行；摘要审核不能替代代码审计或原任务的宿主规划门禁。\"]}"
+          }
+        }
+      },
+      "finishedAt": "2026-10-18T14:27:24.812691+00:00",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"verdict\": \"review\",\n    \"risk\": 0.25,\n    \"risk_confidence\": 0.73,\n    \"reasons\": {\n      \"addresses_agent\": 0.35,\n      \"claims_authority\": 0.37\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 2194,\n    \"output_tokens\": 129,\n    \"est_cost_usd\": 0.00009214800000000001\n  },\n  \"latency_ms\": 531.088\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "verdict": "review",
+              "risk": 0.25,
+              "risk_confidence": 0.73,
+              "reasons": {
+                "addresses_agent": 0.35,
+                "claims_authority": 0.37
+              }
+            },
+            "usage": {
+              "input_tokens": 2194,
+              "output_tokens": 129,
+              "est_cost_usd": 9.214800000000001e-05
+            },
+            "latency_ms": 531.088
+          }
+        }
+      },
+      "toolOk": true,
+      "modelMatches": true
+    },
+    {
+      "tool": "jev_health",
+      "startedAt": "2026-10-18T14:27:24.818562+00:00",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {
+          "name": "jev_health",
+          "arguments": {}
+        }
+      },
+      "finishedAt": "2026-10-18T14:27:25.932171+00:00",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"models\": [\n      {\n        \"name\": \"jev-latest\",\n        \"description\": \"The latest iteration of TypeSafe's System One Model: Jev\",\n        \"release_date\": \"2026-09-10T18:38:01.391457+00:00\"\n      },\n      {\n        \"name\": \"jev-preview\",\n        \"description\": \"A preview version of `jev-latest`: should be better in most ways\",\n        \"release_date\": \"2026-09-10T18:39:06.057655+00:00\"\n      }\n    ],\n    \"round_trip_latency_ms\": 1107.841\n  },\n  \"usage\": {\n    \"input_tokens\": 0,\n    \"output_tokens\": 0,\n    \"est_cost_usd\": 0.0\n  },\n  \"latency_ms\": 1107.85\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "models": [
+                {
+                  "name": "jev-latest",
+                  "description": "The latest iteration of TypeSafe's System One Model: Jev",
+                  "release_date": "2026-09-10T18:38:01.391457+00:00"
+                },
+                {
+                  "name": "jev-preview",
+                  "description": "A preview version of `jev-latest`: should be better in most ways",
+                  "release_date": "2026-09-10T18:39:06.057655+00:00"
+                }
+              ],
+              "round_trip_latency_ms": 1107.841
+            },
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "est_cost_usd": 0.0
+            },
+            "latency_ms": 1107.85
+          }
+        }
+      },
+      "toolOk": true,
+      "modelMatches": true
+    }
+  ],
+  "diagnostics": {
+    "stderrBytes": 0,
+    "safeExceptionTypes": [],
+    "otherMessages": 0
+  },
+  "initializeRequest": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2025-11-25",
+      "capabilities": {},
+      "clientInfo": {
+        "name": "swarm-release-review",
+        "version": "2.9.2"
+      }
+    }
+  },
+  "initializeResponse": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "capabilities": {
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "protocolVersion": "2025-11-25",
+      "serverInfo": {
+        "description": "Typed judgments over a closed answer set.",
+        "name": "jev",
+        "version": "0.2.1"
+      }
+    }
+  },
+  "finishedAt": "2026-10-18T14:27:25.950386+00:00",
+  "allToolsReturnedOk": true,
+  "reviewVerdict": "not-computed; assess the recorded answers against the supplied evidence"
+}

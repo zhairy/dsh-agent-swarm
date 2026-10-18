@@ -40,3 +40,13 @@ flowchart TD
 ## 回滚
 
 部署前保留源码提交、编译文件、profile 与各 owner 状态。回滚需停派发并导出当前内存任务，再恢复前一编译产物与配置；不得重放旧业务写操作。保留原业务 goal 与批准状态，不人为改成通过。
+
+## 本轮追加范围与配置
+
+用户明确要求仅保留`/usr/lib/node_modules/@deepseek-ai/dsh`，已升级到0.2.1-rc.2并精确移除用户目录中的另一份DSH。3080 Web仍使用原web profile；所有启用插件均由该/usr宿主加载，保留插件独立安装目录与凭据命名空间。五个旧插件采用经过rc.2真实API测试的本机兼容副本，不关闭宿主版本检查，不改其他包的版本。DSH核心依赖版本变化仅在全局安装中，百工自身package.json没有新增依赖。
+
+用户已授权新建OpenViking本机后端，采用本地512维embedding及已有DeepSeek官方API进行摘要/抽取。后端仅监听127.0.0.1:1933，客户端使用独立账户和pending/state目录，旧pending未回放，子Agent自动记忆关闭。敏感值仅保存在用户私有0600环境文件，不进入仓库。
+
+配置路径：`~/.config/systemd/user/dsh-web.service.d/20-openviking.conf`声明可选启动顺序与环境文件；`~/.config/systemd/user/openviking-dsh.service`管理本机后端；`~/.local/share/openviking-dsh/config/ov.conf`引用环境变量；`~/.dsh/profiles/web`关联五个本机兼容副本并保留原订阅目录。未改变百工persistence=false。内存任务通过受控导出/恢复交接；用户此前手动重启丢失的最新完整历史无法全部恢复。
+
+最终验证、限制与未通过的原业务规划见[本机证据](../docs/evidence/local-planning-recovery-2026-10-18/README.md)。本轮不发布GitHub、不自动恢复原交易goal，等待用户人工测试。
