@@ -232,7 +232,7 @@ describe('规划审核活性与否定判断稳定性', () => {
     const snapshot = runtime.snapshots[0]!
     expect(isPlanningReviewCurrent(record, snapshot)).toBe(true)
     expect(isPlanningReviewReusable(record, snapshot)).toBe(true)
-    for (const questionVersion of ['old-question', '', 'future-question']) {
+    for (const questionVersion of ['1', '2', '3', 'old-question', '', 'future-question']) {
       expect(isPlanningReviewCurrent({ ...record, questionVersion }, snapshot)).toBe(false)
       expect(isPlanningReviewReusable({ ...record, questionVersion }, snapshot)).toBe(false)
     }

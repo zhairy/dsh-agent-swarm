@@ -1187,7 +1187,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     let task = await session.taskLock.run(async () => reconcileTask(session, refreshIntent(session, getTaskOrThrow(session, requested), exec.agent)))
     const snapshot = reviewSnapshot(task)
     const jevConfig = deps.getConfig().jev
-    const requestChars = JSON.stringify({ model: jevConfig.model, state: getPlanningReviewState(snapshot), questions: getPlanningReviewQuestions() }).length
+    const requestChars = JSON.stringify({ model: jevConfig.model, state: getPlanningReviewState(snapshot), questions: getPlanningReviewQuestions(snapshot) }).length
     if (jevConfig.enabled && requestChars > jevConfig.maxRequestChars) throw new SwarmError('INVALID_ARGS', `任务 ${task.taskId} 规划审核输入为 ${requestChars} 字符，超过 Jev 单次传输保护 ${jevConfig.maxRequestChars}；未调用审核模型、未截断需求。请由维护者核对 maxRequestChars 配置或整理有来源的阶段合同，重复复审不会解决此错误。`)
     // bypass_cache 可以刷新批准或故障，但不能把同一负结论反复抽样直到通过。
     if (isPlanningReviewReusable(task.planningReview, snapshot)

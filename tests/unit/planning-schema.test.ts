@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
 import {
-  getPlanningReviewPrompt, getPlanningReviewQuestions, getPlanningReviewSchema, getReviewSnapshot,
+  getPlanningReviewDiagnostics, getPlanningReviewPrompt, getPlanningReviewQuestions, getPlanningReviewSchema, getPlanningReviewState, getReviewSnapshot,
   RunPlanningReview, ValidatePlanningReviewResult, type PlanningReviewResult, type ReviewSnapshot
 } from '../../src/planning-review.js'
 import { getDefaultWorkflow, MERMAID_PARSER_VERSION } from '../../src/workflow.js'
@@ -34,6 +34,79 @@ const property = (schema: JsonSchemaObject, name: string): JsonSchemaObject => {
 }
 
 describe('规划输出 schema 与宿主引用校验一致', () => {
+  it('阶段与完整需求使用不同覆盖判据，完整任务不继承阶段要求', () => {
+    const phase = snapshotFor()
+    const { planningScope: _phase, ...card } = phase.card
+    const whole = getReviewSnapshot({ ...phase, card, requirements: undefined })
+    const phaseCoverage = getPlanningReviewQuestions(phase).requirement_coverage
+    const wholeCoverage = getPlanningReviewQuestions(whole).requirement_coverage
+    expect(phaseCoverage).not.toEqual(wholeCoverage)
+    expect(phaseCoverage).toMatchObject({ instructions: expect.stringContaining('本阶段每项 deliverable') })
+    expect(wholeCoverage).toMatchObject({ instructions: expect.stringContaining('完整需求的执行前规划，不是阶段任务') })
+  })
+
+  it('实际 Jev 题目与审核记录及低分诊断保存同一阶段判据', async () => {
+    const snapshot = snapshotFor()
+    let sentQuestions: Record<string, unknown> | undefined
+    const record = await RunPlanningReview(snapshot, {
+      parser: async () => ({ ok: true, version: MERMAID_PARSER_VERSION }),
+      reviewAgent: async (seen) => ({ result: goodResult(seen),
+        reviewer: { agentId: 'fresh-reviewer', role: 'yu_shi', fresh: true, readOnly: true, authorAgentIds: ['author'] } }),
+      reviewJev: async (_seen, questions) => {
+        sentQuestions = structuredClone(questions)
+        return { status: 'ok', answers: Object.fromEntries(Object.keys(questions).map((key) => [key, {
+          noul: key === 'requirement_coverage' ? 0.35 : 0.95
+        }])) }
+      }
+    })
+    expect(record.status).toBe('review_required')
+    expect(sentQuestions).toEqual(getPlanningReviewQuestions(snapshot))
+    expect(record.questions).toEqual(sentQuestions)
+    const blocker = getPlanningReviewDiagnostics(record).find((item) => item.dimension === 'requirement_coverage')
+    expect(blocker).toMatchObject({ probability: 0.35, threshold: 0.8, question: sentQuestions!.requirement_coverage })
+    expect(blocker?.question).not.toEqual(getPlanningReviewQuestions().requirement_coverage)
+  })
+
+  it('unresolved 保持自由说明文本，不被 evidenceRefs 的枚举污染', () => {
+    const snapshot = snapshotFor()
+    const schema = getPlanningReviewSchema(snapshot)
+    const unresolved = property(schema, 'unresolved')
+    expect(unresolved.items?.type).toBe('string')
+    expect(unresolved.items?.enum).toBeUndefined()
+    const result = goodResult(snapshot)
+    result.verdict = 'needs-clarification'
+    result.goalReview.verdict = 'needs-clarification'
+    result.unresolved = ['当前阶段尚未确认可修改的目录，需要核对明确授权范围。']
+    expect(ValidateJsonValue(schema, result)).toEqual([])
+    expect(ValidatePlanningReviewResult(snapshot, result)).toEqual([])
+    for (const dimension of ['goalReview', 'designReview', 'mermaidReview']) {
+      const references = property(property(schema, dimension), 'evidenceRefs')
+      expect(references).not.toBe(unresolved)
+      expect(references.items?.enum).not.toContain(result.unresolved[0])
+    }
+  })
+
+  it('自由阻塞说明不是通过许可，有 unresolved 的 pass 仍由宿主拒绝', () => {
+    const snapshot = snapshotFor()
+    const result = goodResult(snapshot)
+    result.unresolved = ['没有证据确认新增写入范围属于当前授权。']
+    expect(ValidateJsonValue(getPlanningReviewSchema(snapshot), result)).toEqual([])
+    expect(ValidatePlanningReviewResult(snapshot, result).join(' ')).toContain('不能通过')
+  })
+
+  it('实质需求即使等于原始全文也保留 text，只有重复出处可使用 textRef', () => {
+    const phase = snapshotFor()
+    const { planningScope: _phase, ...card } = phase.card
+    const snapshot = getReviewSnapshot({ ...phase, card, requirements: undefined,
+      requestRefs: [{ source: 'original-human', text: phase.requestText }] })
+    const state = getPlanningReviewState(snapshot)
+    expect(state.requirements[0]!.text).toBe(phase.requestText)
+    expect(state.requirements[0]).not.toHaveProperty('textRef')
+    expect(state.requestRefs?.[0]).toMatchObject({ source: 'original-human', textRef: 'requestText' })
+    expect(state.requestText).toBe(phase.requestText)
+    expect(state.snapshotDigest).toBe(snapshot.snapshotDigest)
+  })
+
   it('三个维度都明确枚举当前快照的全部合法引用', () => {
     const snapshot = snapshotFor()
     const schema = getPlanningReviewSchema(snapshot)
