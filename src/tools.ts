@@ -238,6 +238,7 @@ export const getTaskCardText = (result: TaskCardResult): string => {
     `衡鉴：${triage.source}${triage.fallbackReason === undefined ? '' : `（回退原因：${triage.fallbackReason}）`}${answers}`,
     `预算：每任务 ${result.budgets.maxDelegationsPerTask || '不限'} 次委派；每角色 ${result.budgets.maxCallsPerRole || '不限'} 次（铸剑 ${result.budgets.maxCallsZhuJian || '不限'} 次）；自动修复最多 ${result.budgets.maxAutoFixRounds} 轮`,
     `需求版本：${result.requestRevision}；合同版本：${result.cardRevision}；流程版本：${result.workflowRevision}；规划审核：${result.planningReview?.status ?? 'pending'}`,
+    `流程控制模式：${result.workflowMode}；用户明确要求的审核、角色权限与验收门禁仍须遵守。`,
     ...getPlanningRecoveryText(result.planningRecovery),
     ...(result.planningScope === null ? [] : [`阶段任务：${result.planningScope.rationale}；延期：${result.planningScope.deferred.join('；')}。本任务验收不代表整体目标完成。`]),
     ...(result.planningRecovery.automaticReviewPaused && !['pass', 'pass_with_degradation'].includes(result.planningReview?.status ?? '')
@@ -294,6 +295,7 @@ export const getStatusText = (result: StatusResult): string => {
   const tasks = result.tasks.flatMap((task) => [
     `任务 ${task.task_id}：${task.title}（修复轮次 ${task.rounds}；委派 ${task.budget.used}${task.budget.max > 0 ? `/${task.budget.max}` : ' 次（不限）'}）`,
     `需求版本：${task.requestRevision}；合同版本：${task.cardRevision}；流程版本：${task.workflowRevision}；规划审核：${task.planningReview?.status ?? 'pending'}`,
+    `流程控制模式：${task.workflowMode}；进行中的审核或服务故障不代表宿主长期 goal 已被修改。`,
     ...getPlanningRecoveryText(task.planningRecovery),
     ...(task.intentHistoryNote === null ? [] : [`需求历史提示：${task.intentHistoryNote}`]),
     ...(task.card.planningScope === undefined ? [] : [`阶段验收范围：${task.card.planningScope.deliverables.join('；')}；延期：${task.card.planningScope.deferred.join('；')}；不代表整体目标完成。`]),
@@ -310,6 +312,7 @@ export const getStatusText = (result: StatusResult): string => {
   ])
   return clip([
     ...(tasks.length > 0 ? tasks : ['本会话还没有任务卡']),
+    ...(result.planningRuns ?? []).map((run) => `正在审核 ${run.task_id}：独立 Agent ${run.agentStage}，Jev ${run.jevStage}；已等待 ${Math.floor(run.elapsedMs / 1000)} 秒；总截止 ${run.timeoutMs === 0 ? '不限（可取消）' : `${run.timeoutMs}ms`}${run.route ? `；模型 ${run.route}` : ''}。进行中不代表批准。`),
     ...getRootUpgradeLines(result.rootUpgrade),
     ...(result.threads.length > 0 ? ['连续会话：', ...result.threads.map((t) => `- ${t.threadId} ${t.roleName}${t.mode === undefined ? '' : `·${t.mode === 'research' ? '研算' : '验算'}`} · ${t.rounds} 轮 · ${t.closed ? '已关闭' : t.busy ? '工作中' : '空闲'} · 任务 ${t.taskIds.join('、') || '无'}${t.lastSummary === null ? '' : ` · 最近：${t.lastSummary}`}`)] : []),
     `调用：原生后端 ${result.usage.nativeCalls} 次，Jev 分诊 ${result.usage.jevCalls} 次，衡鉴会话判断 ${result.usage.sessionCalls} 次，衡鉴复评 ${result.usage.reviewCalls} 次`,
@@ -376,7 +379,8 @@ const TOOL_RECOVERY_TEXT = [
   '- 核对任务用 swarm_status，授权材料用 swarm_context_read；只读 Web RPC 仍需登录认证，401 不能证明任务数据损坏，不通过读取私有状态绕过。',
   '- read 的 offset 是从 1 开始的行号；超出总行数时按当前文件重新定位或从 offset:1 读取，不复用旧行号重试。',
   '- 参数校验失败先核对工具 schema 再修正；jev_check 的 state 与 propositions 必须在顶级并列。agent-browser 截图路径是位置参数（screenshot ./page.png），先用 screenshot --help 核对当前 CLI。',
-  '- 持久状态校验失败时保留错误及 swarm_status 中的版本，停止重复写入并报告维护问题；重启不等于已修复，规划未批准时不能开始执行。'
+  '- 持久状态校验失败时保留错误及 swarm_status 中的版本，停止重复写入并报告维护问题；重启不等于已修复。',
+  '- 按任务返回的 workflowMode 识别实际规则：enforced 必须当前规划通过才派发；advisory 提供规划建议，不能谎称宿主已强制拦截。始终遵守用户明确的先审后执行要求、角色授权、版本及验收门禁。审核服务故障不自动撤销用户授权，也不自动修改宿主长期 goal。'
 ].join('\n')
 
 /**

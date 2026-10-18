@@ -3,6 +3,8 @@ import { SwarmError } from './util/errors.js'
 import { getValueDigest } from './workflow.js'
 import { canonicalStateJson, StateStoreError } from './state-store.js'
 
+export const DEFAULT_CONTEXT_PAGE_CHARS = 8000
+
 export interface ContextBindingInfo {
   rootSessionId: string
   workspaceId: string
@@ -35,6 +37,12 @@ export interface ContextPageInfo {
   cardRevision: number
   workflowRevision: number
   requestRevision?: number
+  requestedLimit: number
+  effectiveLimit: number
+  maxPageChars: number
+  limitClamped: boolean
+  returnedChars: number
+  charUnit: 'utf16-code-units'
 }
 export interface PreparedTaskContextReplacement {
   /** Detached snapshots; the live store is unchanged until commit succeeds. */
@@ -83,7 +91,7 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
   const markRemoved = (ref: string): void => { dirtyRefs.delete(ref); removedRefs.add(ref) }
   const maxArtifacts = limits.maxArtifacts ?? 512
   const maxArtifactBytes = limits.maxArtifactBytes ?? 1024 * 1024
-  const maxPageChars = limits.maxPageChars ?? 8000
+  const maxPageChars = limits.maxPageChars ?? DEFAULT_CONTEXT_PAGE_CHARS
   const taskKey = (owner: Pick<ContextBindingInfo, 'rootSessionId' | 'taskId'>) => JSON.stringify([owner.rootSessionId, owner.taskId])
   const sameRevision = (a: ContextBindingInfo, b: ContextBindingInfo) => a.rootSessionId === b.rootSessionId && a.workspaceId === b.workspaceId && a.taskId === b.taskId
     && a.cardRevision === b.cardRevision && a.workflowRevision === b.workflowRevision && (a.requestRevision ?? 1) === (b.requestRevision ?? 1)
@@ -234,13 +242,15 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
       if (!/^\d+$/.test(cursor) || !Number.isSafeInteger(Number(cursor))) throw new SwarmError('INVALID_ARGS', 'cursor 必须是合法偏移')
       let start = Number(cursor)
       if (start > artifact.text.length) throw new SwarmError('INVALID_ARGS', 'cursor 超出材料范围')
-      const limit = options.limit ?? maxPageChars
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > maxPageChars) throw new SwarmError('INVALID_ARGS', '上下文页大小不合法')
+      const requestedLimit = options.limit ?? maxPageChars
+      if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) throw new SwarmError('INVALID_ARGS', `limit 必须是正安全整数，单位为 UTF-16 字符单元；默认及有效页上限 ${maxPageChars}，超过上限会自动分页`)
+      const limit = Math.min(requestedLimit, maxPageChars)
       // UTF-16 页边界不拆开代理对；游标仍是字符偏移，不伪装成字节。
       if (start > 0 && /[\uDC00-\uDFFF]/.test(artifact.text[start] ?? '') && /[\uD800-\uDBFF]/.test(artifact.text[start - 1] ?? '')) start -= 1
       let end = Math.min(artifact.text.length, start + limit)
       if (end < artifact.text.length && /[\uD800-\uDBFF]/.test(artifact.text[end - 1] ?? '') && /[\uDC00-\uDFFF]/.test(artifact.text[end] ?? '')) end += 1
-      return { ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind, text: artifact.text.slice(start, end), cursor: String(start), nextCursor: end < artifact.text.length ? String(end) : null, truncated: start > 0 || end < artifact.text.length, totalBytes: byteLengths.get(artifact)!, cardRevision: owner.cardRevision, workflowRevision: owner.workflowRevision, requestRevision: owner.requestRevision ?? 1 }
+      return { ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind, text: artifact.text.slice(start, end), cursor: String(start), nextCursor: end < artifact.text.length ? String(end) : null, truncated: start > 0 || end < artifact.text.length, totalBytes: byteLengths.get(artifact)!, cardRevision: owner.cardRevision, workflowRevision: owner.workflowRevision, requestRevision: owner.requestRevision ?? 1,
+        requestedLimit, effectiveLimit: limit, maxPageChars, limitClamped: requestedLimit > maxPageChars, returnedChars: end - start, charUnit: 'utf16-code-units' }
     },
     List: (binding) => [...(byTask.get(taskKey(binding))?.refs ?? [])].flatMap((ref) => {
       try {

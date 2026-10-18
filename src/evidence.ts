@@ -137,6 +137,8 @@ export interface TaskRecord {
   workflowRevision?: number
   requestRevision?: number
   intentText?: string
+  /** 真实逐条消息出处；旧记录缺失时只能作为明确标注的聚合材料恢复。 */
+  intentRefs?: Array<{ source: string; text: string }>
   intentSource?: 'host' | 'declared'
   intentSourceRef?: string
   intentLastDigest?: string

@@ -99,7 +99,7 @@ const makeRuntime = (initial: { hang?: HangPoint; lowScores?: boolean; timeoutMs
     getTools: () => ({ register: () => () => undefined, guard: () => () => undefined,
       schemas: () => ['read', 'write', 'edit', 'bash', 'glob', 'grep'].map((name) => ({ name })) }),
     getAttachments: () => undefined, getCredentials: () => ({ resolve: async () => ({ value: 'fixture-key' }) }),
-    dshHome: home, fetch: fetchMock as typeof fetch,
+    dshHome: home, fetch: fetchMock as typeof fetch, now: () => Date.now(),
     probe: async () => ({ ok: true, vision: true }), gitStatus: async () => undefined
   })
   const releaseLateWork = () => {
@@ -289,8 +289,58 @@ describe('规划审核活性与否定判断稳定性', () => {
     expect(runtime.start).toHaveBeenCalledTimes(1)
   })
 
+  it('规划总等待为0时超过旧180秒仍在审核，能观测进度并正常结算', async () => {
+    const runtime = makeRuntime({ hang: 'result', timeoutMs: 0 })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const pending = runtime.service.AddTaskCard(runtime.card(), runtime.exec())
+      await runtime.started.promise
+      await new Promise((resolve) => setImmediate(resolve))
+      await vi.advanceTimersByTimeAsync(180_001)
+      expect(runtime.requests[0]!.signal.aborted).toBe(false)
+      const status = runtime.service.getStatus({ task_id: 'T-1' }, runtime.exec())
+      expect(status.planningRuns).toHaveLength(1)
+      expect(status.planningRuns![0]).toMatchObject({ task_id: 'T-1', timeoutMs: 0, agentStage: 'reviewing', jevStage: 'settled', route: 'fixture/reviewer' })
+      expect(status.planningRuns![0]!.elapsedMs).toBeGreaterThanOrEqual(180_001)
+      runtime.releaseLateWork()
+      expect((await pending).planningReview?.status).toBe('pass')
+      expect(runtime.service.getStatus({}, runtime.exec()).planningRuns).toEqual([])
+    } finally { vi.useRealTimers() }
+  })
+
+  it('无限总等待仍支持用户取消，并移除审核状态和迟到权限', async () => {
+    const runtime = makeRuntime({ hang: 'result', timeoutMs: 0 })
+    const controller = new AbortController()
+    const pending = runtime.service.AddTaskCard(runtime.card(), { ...runtime.exec(), signal: controller.signal })
+    await within(runtime.started.promise)
+    controller.abort()
+    const result = await within(pending)
+    expect(['pass', 'pass_with_degradation']).not.toContain(result.planningReview?.status)
+    expect(runtime.requests[0]!.signal.aborted).toBe(true)
+    expect(runtime.service.getStatus({}, runtime.exec()).planningRuns).toEqual([])
+    runtime.releaseLateWork()
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(['pass', 'pass_with_degradation']).not.toContain(runtime.getReview()?.status)
+  })
+
+  it('未取得审核结果的故障不伪报作者自审违规，仍不授予执行权限', async () => {
+    const runtime = makeRuntime({ hang: 'result' })
+    const result = await within(runtime.service.AddTaskCard(runtime.card(), runtime.exec()))
+    expect(result.planningReview?.status).toBe('unavailable')
+    expect(result.planningReview?.errors.join(' ')).toContain('总截止')
+    expect(result.planningReview?.errors.join(' ')).not.toContain('必须使用非作者')
+    await expect(runtime.service.delegate({ task_id: result.task_id, role: 'mou_ding', prompt: '不能绕过未完成审核' }, runtime.exec())).rejects.toThrow(/审核/)
+  })
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2147483648])('非法总截止 %s 明确拒绝，不触发模型或Node计时器溢出', async (timeoutMs) => {
+    const runtime = makeRuntime({ timeoutMs })
+    await expect(runtime.service.AddTaskCard(runtime.card(), runtime.exec())).rejects.toThrow(/timeoutMs|JSON|finite|有限/)
+    expect(runtime.start).not.toHaveBeenCalled()
+    expect(runtime.service.getStatus({}, runtime.exec()).planningRuns).toEqual([])
+  })
+
   it('关闭期间取消正在等待的审核，迟到结果不再发布批准', async () => {
-    const runtime = makeRuntime({ hang: 'result', timeoutMs: 30_000 })
+    const runtime = makeRuntime({ hang: 'result', timeoutMs: 0 })
     const pending = runtime.service.AddTaskCard(runtime.card(), runtime.exec()).then(
       (result) => ({ ok: true as const, result }), (error: unknown) => ({ ok: false as const, error })
     )

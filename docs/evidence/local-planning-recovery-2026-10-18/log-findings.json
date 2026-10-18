@@ -1,0 +1,84 @@
+{
+  "rootLogSha256": "1e24da02eb45fd848f6f7985070e534a397eab217c04b0ae57824b2f4921c8d9",
+  "exportFiles": 60,
+  "rawLogsCopied": false,
+  "logPathProvidedByUser": true,
+  "reviews": [
+    {
+      "child": "a13166b8-f857-47a4-9ca7-2b9df956fe33",
+      "rootCallResultLines": [
+        1797,
+        1799
+      ],
+      "childLastOutputCancelLines": [
+        96,
+        98
+      ],
+      "durationMs": 179391,
+      "lastActivityBeforeCancelMs": 695,
+      "toolCalls": 25,
+      "sha256": "3cdf34bee06af714203ec5b32dfccfe765ae7886ae72b2944643f426b76b4f9a"
+    },
+    {
+      "child": "8e635f9a-2c3d-48cd-b028-bdd14f90a9c6",
+      "rootCallResultLines": [
+        1803,
+        1805
+      ],
+      "childLastOutputCancelLines": [
+        91,
+        93
+      ],
+      "durationMs": 179054,
+      "lastActivityBeforeCancelMs": 75,
+      "toolCalls": 25,
+      "sha256": "b7432790834d7a45363cd952eceac011ef0761ea02077478317a28b7e594ac98"
+    },
+    {
+      "child": "c11cbe4b-419c-48b6-b330-eafd95533c80",
+      "rootCallResultLines": [
+        1848,
+        1850
+      ],
+      "childLastOutputCancelLines": [
+        79,
+        81
+      ],
+      "durationMs": 179401,
+      "lastActivityBeforeCancelMs": 79,
+      "toolCalls": 18,
+      "sha256": "4f7fae3b5f21e716b818b5cf6eb5d22ccd0d0346ea03003b8e0caf1c443e2bdf"
+    },
+    {
+      "child": "3925580b-9446-43c9-805c-6db61a035d96",
+      "rootCallResultLines": [
+        1855,
+        1857
+      ],
+      "childLastOutputCancelLines": [
+        94,
+        96
+      ],
+      "durationMs": 179099,
+      "lastActivityBeforeCancelMs": 43440,
+      "toolCalls": 25,
+      "sha256": "0b5827eeb29005257c79c41e070d915277ed6b2284982fcc6bb8bbd02f8b9f27"
+    }
+  ],
+  "goalBlockedCalls": [
+    {
+      "rootLine": 1691,
+      "operation": "update_goal blocked"
+    },
+    {
+      "rootLine": 1884,
+      "operation": "update_goal blocked"
+    }
+  ],
+  "confirmedQuestionResultLines": [
+    312,
+    936,
+    1792
+  ],
+  "conclusion": "180秒总截止中断仍在正常输出的独立审核；主持者在连续门禁失败后主动blocked，目标原文未改变。问答确认位于tool/result，旧实现漏读。"
+}

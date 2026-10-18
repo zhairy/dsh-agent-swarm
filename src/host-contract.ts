@@ -60,7 +60,7 @@ export interface AgentLike {
   id: string
   session?: {
     header?: SessionHeaderLike
-    deriveMessages?: () => readonly { id?: string; role?: string; source?: { kind?: string }; content?: readonly ContentBlockLike[] }[]
+    deriveMessages?: () => readonly { id?: string; role?: string; source?: { kind?: string; callId?: string; outcome?: string }; toolCallId?: string; isError?: boolean; content?: readonly ContentBlockLike[] }[]
     surface?: { replaceGeneration: number }
     requestHeader?: () => { config: CallConfigLike } | undefined
   }

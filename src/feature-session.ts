@@ -121,6 +121,11 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
     for (const [index, task] of state.tasks.entries()) {
       at(`$.tasks[${index}]`, 'TASK_FORMAT')
       if (!object(task) || !identifier(task.taskId) || tasks.has(task.taskId) || task.sessionId !== expected.rootSessionId || (task.workspaceId !== undefined && task.workspaceId !== expected.workspaceId) || ValidateTaskCard(task.card).card === undefined || !strings(task.delegationIds) || new Set(task.delegationIds).size !== task.delegationIds.length || !Number.isSafeInteger(task.rounds) || task.rounds < 0 || !Number.isFinite(task.createdAt) || !Number.isFinite(task.updatedAt) || ![task.cardRevision, task.workflowRevision, task.requestRevision].every(optionalRevision) || (task.intentLastDigest !== undefined && !/^[a-f0-9]{64}$/.test(task.intentLastDigest))) return invalid()
+      at(`$.tasks[${index}].intentRefs`, 'INTENT_REFERENCE_FORMAT')
+      if (task.intentRefs !== undefined && (!Array.isArray(task.intentRefs) || task.intentRefs.length === 0
+        || task.intentRefs.some(ref => !object(ref) || Object.keys(ref).some(key => !['source', 'text'].includes(key))
+          || typeof ref.source !== 'string' || ref.source.trim() === '' || typeof ref.text !== 'string' || ref.text.trim() === '')
+        || new Set(task.intentRefs.map(ref => ref.source)).size !== task.intentRefs.length)) return invalid()
       at(`$.tasks[${index}].gates`, 'GATE_FORMAT')
       if (!Array.isArray(task.gates) || task.gates.some((gate) => !object(gate) || !GATE_IDS.includes(gate.gate) || GATE_ROLE[gate.gate].role !== gate.role || GATE_ROLE[gate.gate].mode !== gate.mode || !['rule', 'jev', 'jev-fallback'].includes(gate.source) || typeof gate.reason !== 'string')) return invalid()
       at(`$.tasks[${index}].triage`, 'TRIAGE_FORMAT')
