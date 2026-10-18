@@ -3,8 +3,8 @@
   "date": "2026-10-18",
   "typecheck": true,
   "unit": {
-    "files": 84,
-    "passed": 1030,
+    "files": 86,
+    "passed": 1061,
     "failed": 0,
     "skipped": 2,
     "skipReason": "仅旧0.1.7宿主专用重试协作用例；当前engines最低0.2.0-rc.2"
@@ -22,25 +22,6 @@
     "real": "host lifecycle, permissions, tools, state and schema"
   },
   "sourceSha256": {
-    "client/model-display.js": "4817f5c592b8f8ab599da5b9c668be336f29f4dd3a45a7eb6b2731cb2026c9b2",
-    "client/settings-page.js": "1cbe2e450e0aeff8d1cdfa8ebdf5eeaed618f190034e375ff080671e4b73a8be",
-    "client/task-flow.js": "078eedf152f644f9d021c8986621cf758051fc8fc1a76ebc12b7c2358213efcc",
-    "package-lock.json": "2c5962a17598134bc6e162698aa7d8b0380afd8c2c5c38af416377a7ece53382",
-    "package.json": "19e4e8abddf98dc250f8ffff61f0b9548056f28d6755cc7aba8d126fa393e210",
-    "presets/bo-wen.patch.yml": "d8bc39cae321ab0bd8c2d66fea2ae99a59c1dcd7ad89333849e43d1e277abfb7",
-    "presets/declarations.json": "273e29807ee1f9524eb77c6dfc85124b45be748ce6d90304f745ee6fe4baa262",
-    "presets/fu-he.patch.yml": "c1a81ef7c85b25155cae6b73b1943dd2e15111848724351f310df9369e5c5234",
-    "presets/guan-xiang.patch.yml": "03f87d2648a10f8a6dffb653b9f9547f1fdf6dc40758aa073fc67f9b353ce05c",
-    "presets/ji-feng.patch.yml": "fba538097ae7f05d638781390351569af6b500b312942897e94a5369ba61b3e8",
-    "presets/miao-bi.patch.yml": "d2843b648f1a2f5eb64a866ac2ff360864732e84e24f4f291a2af13a9a461f31",
-    "presets/mou-ding.patch.yml": "6b401e25637b92121c7a9d04e20eeaaf53413c3b87937a6d1e61cea4754d1eaf",
-    "presets/shu-ji.patch.yml": "2f98e223384fd25abe6d1d922adcd8a206df2d7bbdfa90e5de389cd65b747b48",
-    "presets/suan-heng.patch.yml": "698fa6045990928410686e4d85abcc30e05ab3e7a2af66fb9786a1385d79db41",
-    "presets/tan-wei.patch.yml": "d8ce643c22c6e674f50e438fc1687a380ae2f2b5a5fce76ccc9086b01381ade0",
-    "presets/tian-shu.patch.yml": "7f64fb487c49be25aef931251fa308bc25cc345e49e60fb831d9056e5f7668a8",
-    "presets/xing-zhou.patch.yml": "ad1e0fb1ced9d2923c87a3023d7376fd8345bd8036044ce3d26e1729160f4ed0",
-    "presets/yu-shi.patch.yml": "e07cd80775d450a71ea886b20c331f4594c3a9cfd5c1c3b2caede28a3e586c90",
-    "presets/zhu-jian.patch.yml": "5775366650feabaf2d382b41c08fe5c54183ee51ba37991357d070c8a0956bca",
     "src/agent-binding.ts": "0a34806f80c912f8c2833dc3a51bfc57d3ed60f0b04e7e549b090004776dc9ec",
     "src/agent-control.ts": "753d2c44d28833b16684eb185e3a03ab28d03ac83b3c290d70e9f571c20f3891",
     "src/approval-policy.ts": "970c6906da972fefcd041bf57919fd8c0cd398c499cf3501b45bee717389524e",
@@ -56,6 +37,7 @@
     "src/evidence.ts": "d041083690b0e0fa435010b40f764b11c1e89bb23067b348d806a420814166b9",
     "src/execution-budget.ts": "6efa9d19c1ae02bd3a594161dda897caa7ca2155ecfe47694017bd211a704991",
     "src/experience.ts": "3cf347dadacbbf1c05f08382d15a9bfad051d49feee071aa0f7cc2c3e953fbf6",
+    "src/expert-tools.ts": "9fc5d1c01379cae3d7c1a472437433b2be6721b0fdce9ee37eb633096345877e",
     "src/feature-session.ts": "ab24c181132815fd30fd9f1f53092748e0aa74802948a00c6e8379c45db1dc8b",
     "src/host-contract.ts": "14ddb21e9fed26ebb9a0149888dee469c352f232072246e318c9fe867d1287e3",
     "src/host-recovery.ts": "64795e7cf3b8a08b04ee38213b2aa8110f2c9e68f0c135e16c833083c6f3dc84",
@@ -70,17 +52,17 @@
     "src/math/operators.ts": "0739854944b18c2cd77c2bf4935bda9d8b309d1d287ee54ceaa1104d2e372a4e",
     "src/math/schema.ts": "4610343a35c9ee0624917fc98894aa028ce53ebc25991f92e1e95320a2033d04",
     "src/math-tools.ts": "576f90eae3828185e9ee7abab42f36de8f21c4af81abe4a7d5a75292d749c1a0",
-    "src/memory-handoff.ts": "d2c2632586c2a1b038e4ffb2cf609ee33a73b900026ddb3b3601f7830e569694",
+    "src/memory-handoff.ts": "7180795329b9d3a7078b4aa5e1e0b104d29a4f13af8044c51aa8234830c8b27e",
     "src/memory.ts": "e2f275eb23a794b11fec7fde9e5f1b86c9aa22fdbca292e9c57966e28ec04874",
     "src/message-bus.ts": "fe64be3e995670712c06c92ea1461b17e6572124025e777f110b1d656bc86075",
     "src/model-family.ts": "f16ef24000c4cc692f33253b426ffc8b23d5f8969ba6105ebb535e259bdc59b7",
     "src/network.ts": "ecccff1b469f26e7aa98e66349bbb2219014cb46a514f3496be2b669a1b50c33",
     "src/orchestration.ts": "a45254fd1ae00ce9f6a671a594b6d8106c4560f138da0364b9c9043c848b98b7",
     "src/planning-recovery.ts": "e3b15226215cbc4c538b4b3a9712a82a241bf6a671f9c942e336469bc334f12c",
-    "src/planning-review.ts": "b98e34d0529458eeb4a68d3f81005bf16dfafe80f8346647cd0d5fae37f2609c",
+    "src/planning-review.ts": "19bebce9cb6803a56ba6e8a18232f6f630af8fbb8f4025cf906b4ec97e714dc5",
     "src/planning-wait.ts": "4dbfccaca7b4779131cdde20dffd09e4b5909bc66b934769d95f8d836df67d2e",
     "src/policy.ts": "3d30f462c0a99fb6ac7e9c290a562230f978ee6b7c24953429f08dd967882089",
-    "src/preset-builder.ts": "308906c34a73d0c82abecff00ce8f4234bf1c371fc645de4eafa1b504797107c",
+    "src/preset-builder.ts": "dddaa885a6caad26f1c2d1b4cdde3096a65fcaeec384b78a5598a903b4dbbd8f",
     "src/preset-registration.ts": "10e41b49428049211e548191e1abd2b834c50cc22225da06e2e562b3bda2f73a",
     "src/project-discovery.ts": "ed2504b64c8b31ab47a5a5c88a19eb791a7b5a72a1f30150925d626358ad4086",
     "src/provider-policy.ts": "44c73d8aba297f74ea307062b8d7e56390787cdc4d3b0585db0c7ac74d19e96b",
@@ -95,7 +77,7 @@
     "src/rpc.ts": "7de98fdd730e4c97e886472db7915e44b9bb9dd76c4425f90a849eaeb6ce640f",
     "src/runtime.ts": "d6cb4ab83d6ae56eae37e343dbcd92749ee5d0249c01630b3de15a3641701d87",
     "src/scheduler.ts": "472a349584093dc9f0113bef18e5a4e3207cd983b6b7c6bcf9e42e64ea989159",
-    "src/service.ts": "3a281fa928598c7bc4cbcdee28b0d85ba99ccecfa7861509243945d4a3d6f4b0",
+    "src/service.ts": "3bfb7cfe713c8911d4534bddc074976a155f7f2dbd9ede10b4d78026f24419ff",
     "src/skills.ts": "c8b9728777fe9a82f1cb01e31f44d814699102dceb44d9d1b4e2b3376da36ecd",
     "src/state-chunks.ts": "c87273ef0906e5b1570a7f393c814bab5575622b94ff0ca02b3eff6edf38949b",
     "src/state-core.ts": "19f66677377c4c2d3f16aefbac366cc1507dcf41e59e49ce90acb99daf0ee2fa",
@@ -103,9 +85,10 @@
     "src/subagent-compat.ts": "6986b69c59aa356339c2779bb25e372c29dff4168a5887d2ed48e182e59b9c34",
     "src/task-diagrams.ts": "caf13e1290bdc54d0dbd65c3fabad0397493392ab540a217900d58b7fdd4cf9f",
     "src/task-model.ts": "d2ca7aa87b5271145b114cd317278a46d008021503f419588e7a0bb969a8e7f9",
+    "src/task-tools.ts": "e524aa36d334bde16d79c52ea349a0622fdb27ed9ddc63ead7f2d3c4e3c92c4e",
     "src/threads.ts": "7eca7bd43ca07000672c22c35112c14190ec80c9895713b8d43a6e9d73b69ef5",
     "src/tool-shape.ts": "7ba65a147476ba812d4b3bead4637b4fc4765a39054bd47442e0e5835faed272",
-    "src/tools.ts": "085e9a8530ca5d5f5dd40d0d3f36037750d769f418ff9feeb407e1771f2090ae",
+    "src/tools.ts": "5d3eb19268650f8b11ceca0bfb11c7ca9e58418271310f4b35ed07aae8366134",
     "src/upgrade.ts": "9dbcaa1f64b47c95a29f773c4c7616463f235aa59c4ece8384861bfacf1d357a",
     "src/util/errors.ts": "7b43e63cba7ac8705978375c22486daaaac24feb350ce1335cad65af977b1fcc",
     "src/util/failure-hint.ts": "db5f67fe6775e1d605fbc66c0b1193b88f3b8679ef17683805ab7026573266d3",
@@ -115,14 +98,149 @@
     "src/util/mutex.ts": "c6d5ca8b77143bc2201ae8b85edc4d98b701539d076f80674d73b2849611147b",
     "src/util/workspace-lease.ts": "f7f93abeb7ccb4b00449298c85caf31693e2cb8861520772265ff1f264d2622a",
     "src/vision.ts": "20e6deb5786a0743626550cca5c94dbf86341d89445ec6a24368c425b4ee1227",
-    "src/workflow.ts": "29bc60036b57201ca93613530191f69405e3d9bb528da94932b9897db5dd24ad"
+    "src/workflow.ts": "8f891b1a4df05286ac0ac525b78830424265db56bd9cb15d478ab9134d07749e",
+    "client/model-display.js": "4817f5c592b8f8ab599da5b9c668be336f29f4dd3a45a7eb6b2731cb2026c9b2",
+    "client/settings-page.js": "1cbe2e450e0aeff8d1cdfa8ebdf5eeaed618f190034e375ff080671e4b73a8be",
+    "client/task-flow.js": "078eedf152f644f9d021c8986621cf758051fc8fc1a76ebc12b7c2358213efcc",
+    "presets/bo-wen.patch.yml": "1a1ab1336f4e000cdd955e3aff36a2428adfa391c0656802dc3ba24413db4c9e",
+    "presets/declarations.json": "ac0823efca27f3846cbd299b6f035f708dab9287cfb4d2f9294ac6f5c6a5aa7a",
+    "presets/fu-he.patch.yml": "a20a8d597590f0f4519269d3eec29234ac6728c01db5001ac3b7fe9dad6ad56b",
+    "presets/guan-xiang.patch.yml": "473f19aa8a02e385b9813fc47fd00654b47430c424cb6b025bdd682a41847e3e",
+    "presets/ji-feng.patch.yml": "a9359e241686fb69facc1aafccb54afaf60ac5416777b322d196b82fa707cd32",
+    "presets/miao-bi.patch.yml": "30e61df8a61b463eca5f731ab253d111b9360658fc2acf8a9135971dca8f8071",
+    "presets/mou-ding.patch.yml": "43e29f753663c739e2a17bf0457467b1f8ac902963400843efdb57bd16ba20f9",
+    "presets/shu-ji.patch.yml": "104e5c8a826dd0b1685c0457f003f8562c022df2b3f0567703f20323c723f54f",
+    "presets/suan-heng.patch.yml": "b32f952fe6519ea2487694495ba7ac22a78762ffa1293042756411359f5b9d5d",
+    "presets/tan-wei.patch.yml": "becaa7c29a56305286e91fbb7b8544108c46033ad9734e28a668444571a59346",
+    "presets/tian-shu.patch.yml": "7f64fb487c49be25aef931251fa308bc25cc345e49e60fb831d9056e5f7668a8",
+    "presets/xing-zhou.patch.yml": "b8a8be77d855d8deb7fea14f964d1b6eef711c65875d68918f24126f1fb0b48d",
+    "presets/yu-shi.patch.yml": "1d8a612f9094d904eb0a3fade2cd73fd2434c69bf70aa44f09887ded32c7f4e0",
+    "presets/zhu-jian.patch.yml": "71806ace2d6b186120e18c67dffd3c6c9ddcff6d75f003f435019e44ba9d6ff4",
+    "package.json": "ad102c68f88b3929006a54de34b0a57646ab79753bebf22bc335b0354c57c1f8",
+    "package-lock.json": "2c5962a17598134bc6e162698aa7d8b0380afd8c2c5c38af416377a7ece53382",
+    "scripts/pack-release.mjs": "92274a401755423d61e8b06ce7b6407efd12ea6f15a7eb3482d48c25db91b7b9"
   },
   "production": {
-    "status": "pending"
+    "version": "2.9.2",
+    "questionVersion": "4",
+    "host": "0.2.1-rc.2",
+    "service": "active",
+    "originalTasksPreserved": {
+      "taskCount": 6,
+      "delegationCount": 0,
+      "contractsAndReviewsPreserved": true,
+      "T5": {
+        "card": 6,
+        "workflow": 7,
+        "request": 6,
+        "status": "review_required",
+        "questionVersion": "1"
+      }
+    },
+    "config": {
+      "workflow": "advisory",
+      "planningReview": {
+        "enabled": true,
+        "requireJev": false,
+        "maxFixRounds": 2,
+        "reviewAbove": 0.8,
+        "timeoutMs": 180000
+      },
+      "jevModel": "jev-1.14.0",
+      "persistence": false
+    },
+    "profilePreserved": true,
+    "configPreserved": true,
+    "temporaryEntryRemoved": true,
+    "idleAfterVerification": true,
+    "smoke": {
+      "scope": "new isolated readonly task; original business goal not resumed",
+      "planningStatus": "pass",
+      "planningErrors": [],
+      "agentVerdict": "pass",
+      "jev": {
+        "status": "ok",
+        "answers": {
+          "goal_alignment": {
+            "type": "noul",
+            "noul": 0.94
+          },
+          "requirement_coverage": {
+            "type": "noul",
+            "noul": 0.87
+          },
+          "acceptance_testability": {
+            "type": "noul",
+            "noul": 0.94
+          },
+          "design_sufficiency": {
+            "type": "noul",
+            "noul": 0.93
+          },
+          "execution_boundaries": {
+            "type": "noul",
+            "noul": 0.93
+          },
+          "failure_bounds": {
+            "type": "noul",
+            "noul": 0.87
+          },
+          "mermaid_expression": {
+            "type": "noul",
+            "noul": 0.88
+          }
+        },
+        "model": "jev-1.14.0"
+      },
+      "readsByStep": {
+        "analysis": 1,
+        "verification": 1
+      },
+      "contextReadsByStep": {
+        "analysis": 3,
+        "verification": 2
+      },
+      "markerReported": true,
+      "fileUnchanged": true,
+      "delegationUnresolved": [],
+      "verificationUnresolved": [],
+      "acceptance": {
+        "task_id": "T-1",
+        "status": "accepted",
+        "missing": [],
+        "roundsUsed": 0,
+        "maxAutoFixRounds": 2,
+        "gates": [],
+        "completionScope": "request",
+        "deferred": [],
+        "assessment": {
+          "status": "ok",
+          "verdict": "trusted",
+          "reliability": 0.7999999999999999,
+          "confidence": 0.38,
+          "checks": {
+            "supported": 0.91,
+            "complete": 0.92
+          },
+          "model": "jev-1.14.0"
+        }
+      }
+    },
+    "privateBackup": "~/.dsh/backups/swarm-2.9.0-pre-2.9.2-20261018-1630",
+    "businessToolsExecuted": 0
   },
   "review": {
     "pro": "bounded approval",
     "con": "bounded approval",
-    "jev": "redacted conclusion review completed; full-source MCP denied by approval; screen=review"
-  }
+    "jev": "redacted conclusion review completed; full-source MCP denied by approval; screen=review",
+    "jevFinal": {
+      "file": "jev-final-review.json",
+      "model": "jev-1.14.0",
+      "allRequestedToolsCalled": true,
+      "screen": "review",
+      "sourceReview": "blocked by approval; only redacted conclusion state was sent"
+    }
+  },
+  "questionVersion": "4",
+  "validatedCodeCommit": "f9fd59f"
 }

@@ -42,3 +42,7 @@ SWARM_DSH_VERSION=0.2.1-rc.2 npx vitest run --config vitest.integration.config.t
 ```
 
 具体计数和部署记录见本目录 README 与 verification.json。真实宿主测试使用真实会话、工具和权限协议，生成模型/Jev 为固定夹具；实际 Jev 请求另列原始 payload 与响应。受控内存交接只保护本次升级，不将默认内存模式变成持久化模式。
+
+## 5. 本机追查后的最终补充
+
+真实执行追加确认并修复：默认节点泛化、引用Schema缺目录、共享Schema数组污染unresolved、新宿主专家工具入口缺失。完整/阶段判据分开，协议版本4，实际题目留存在审核记录。专家只暴露受绑定工具；旧host允许的Jev继承保留，新入口不新增全局Jev，规划盲审继续隔离。各项均有负向与真实宿主回归，最终生产两个专家实际完成上下文与文件读取，未解决项为空，验收accepted。原业务任务没有因此被放行。
