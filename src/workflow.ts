@@ -72,11 +72,25 @@ export const getWorkflowDigest = (definition: WorkflowDefinition): string => get
 export const getWorkflowMode = (card: TaskCard): WorkflowMode => card.flags.changesAlgorithm ? 'algorithm'
   : RISK_KEYS.some((key) => card.flags[key]) || card.scope.length > 3 ? 'standard' : 'quick'
 
+const getContractNodeLabel = (text: string): string => {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= WORKFLOW_LIMITS.labelChars) return normalized
+  const suffix = '…（完整目标与验收以任务卡为准）'
+  // 标签只是有界提示；不截断合同，也不把被截断的 UTF-16 代理项写进 Mermaid。
+  const prefix = normalized.slice(0, WORKFLOW_LIMITS.labelChars - suffix.length).replace(/[\uD800-\uDBFF]$/, '')
+  return prefix + suffix
+}
+
 /** 从有效门禁生成小流程。没有代码改动时不强拉修改或运行角色。 */
 export const getDefaultWorkflow = (card: TaskCard, gates: readonly GateRequirement[]): WorkflowDefinition => {
   const nodes: WorkflowNodeInfo[] = []
   const add = (id: string, role: DelegableRoleId, dependsOn: string[], nodeGates: GateId[] = [], mathMode?: SuanHengMode): void => {
-    nodes.push({ id, label: mathMode === undefined ? `${getRoleInfo(role).name}：${getRoleInfo(role).title}` : `算衡·${mathMode === 'research' ? '研算' : '验算'}`, operation: 'delegate', role, ...(mathMode === undefined ? {} : { mathMode }), dependsOn, gates: nodeGates, outputContractVersion: '1' })
+    const info = getRoleInfo(role)
+    let label = mathMode === undefined ? `${info.name}：${info.title}` : `算衡·${mathMode === 'research' ? '研算' : '验算'}`
+    if (id === 'analysis') label = `${info.name}：完成只读任务并提交结果证据：${card.goal}；逐条回应任务卡验收`
+    else if (id === 'implementation') label = `${info.name}：实现并交付：${card.goal}；按任务卡全部验收提交改动证据`
+    else if (id === 'verification') label = `${info.name}：按全部验收逐条验证目标：${card.goal}；验收：${card.acceptance.map((text, index) => `A${index + 1} ${text}`).join('；')}`
+    nodes.push({ id, label: getContractNodeLabel(label), operation: 'delegate', role, ...(mathMode === undefined ? {} : { mathMode }), dependsOn, gates: nodeGates, outputContractVersion: '1' })
   }
   const suggested = getSuggestedRoles(card, [...gates])
   const analysis = suggested.filter(({ role }) => !EDIT_ROLES.includes(role) && !['fu_he', 'yu_shi', 'suan_heng', 'xing_zhou'].includes(role))

@@ -8,7 +8,7 @@ import { canonicalStateJson } from '../../src/state-store.js'
 
 const homes: string[] = []
 afterEach(async () => { await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true }))) })
-const setup = async (sourceVersion: '2.3.0' | '2.3.1' | '2.3.2' | '2.4.0' | '2.9.0' = '2.3.0') => {
+const setup = async (sourceVersion: '2.3.0' | '2.3.1' | '2.3.2' | '2.4.0' | '2.9.0' | '2.9.2' = '2.3.0') => {
   const dshHome = await mkdtemp(join(tmpdir(), 'swarm-memory-handoff-')); homes.push(dshHome)
   const rootSessionId = 'handoff-root', workspaceId = 'a'.repeat(64)
   const maintenance = join(dshHome, 'share', 'dsh-agent-swarm', 'maintenance')
@@ -24,7 +24,7 @@ const setup = async (sourceVersion: '2.3.0' | '2.3.1' | '2.3.2' | '2.4.0' | '2.9
 }
 
 describe('trusted one-time memory handoff', () => {
-  it.each(['2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.9.0'] as const)('loads %s without consuming, preserves a failed initializer, then consumes exactly once', async (sourceVersion) => {
+  it.each(['2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.9.0', '2.9.2'] as const)('loads %s without consuming, preserves a failed initializer, then consumes exactly once', async (sourceVersion) => {
     const fixture = await setup(sourceVersion)
     const before = await readFile(fixture.pending, 'utf8')
     const loaded = await loadMemoryHandoff<typeof fixture.state>(fixture.input)
