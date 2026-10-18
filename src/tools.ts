@@ -21,9 +21,10 @@ import { SwarmError } from './util/errors.js'
 import type { JsonSchemaObject } from './util/json-schema.js'
 import type { PlanningRecoveryInfo } from './planning-recovery.js'
 
-const getPlanningRecoveryText = (recovery: PlanningRecoveryInfo): string[] => recovery.blockers.length === 0 && recovery.errors.length === 0 ? [] : [
-  `规划阻塞：${recovery.blockers.map((item) => `${item.dimension}=${item.probability ?? '无有效答案'}（门槛 ${item.threshold}）`).join('；')}`,
+const getPlanningRecoveryText = (recovery: PlanningRecoveryInfo): string[] => recovery.blockers.length === 0 && recovery.errors.length === 0 && !recovery.findings?.length ? [] : [
+  ...(recovery.blockers.length ? [`规划阻塞：${recovery.blockers.map((item) => `${item.dimension}=${item.probability ?? '无有效答案'}（门槛 ${item.threshold}）`).join('；')}`] : []),
   ...recovery.errors.map((error) => `审核反馈：${error}`),
+  ...(recovery.findings ?? []).map(finding => `审核发现（诊断材料，不是批准）${finding.location}：${finding.issue}\n依据：${finding.evidence}\n建议：${finding.suggestion}`),
   recovery.guidance
 ]
 
