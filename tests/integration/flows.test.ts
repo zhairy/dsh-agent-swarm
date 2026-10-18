@@ -153,7 +153,7 @@ describe('衡鉴 Jev', () => {
     expect(run.results[0]?.text).toContain('G_MATH_RESEARCH')
     const request = requests.at(-1)
     expect(request?.auth).toBe('Bearer test-key')
-    expect(request?.body.model).toBe('jev-latest')
+    expect(request?.body.model).toBe('jev-1.14.0')
     expect(Object.keys((request?.body.state ?? {}) as object).sort()).toEqual(['acceptance_count', 'flags', 'goal', 'profile', 'scope_count', 'task'])
   })
 

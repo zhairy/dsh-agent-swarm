@@ -3,6 +3,15 @@ import type { AssessmentInfo, DelegationRecord, TaskRecord } from './evidence.js
 import { getRedactedText, isJevProbability, isJevScore } from './jev.js'
 import type { DelegableRoleId, SuanHengMode } from './role-registry.js'
 
+const getPhaseReviewState = (task: TaskRecord) => task.card.planningScope === undefined ? {} : {
+  completion_scope: 'phase', whole_goal_completed: false,
+  planning_scope: {
+    rationale: getRedactedText(task.card.planningScope.rationale),
+    deliverables: task.card.planningScope.deliverables.map((item) => getRedactedText(item, 300)),
+    deferred: task.card.planningScope.deferred.map((item) => getRedactedText(item, 300))
+  }
+}
+
 /**
  * 衡鉴复评：每位专家交付后、以及天枢验收时，把交付的结构化摘要交给 Jev，
  * 回答「结论有依据吗」「回应完整吗」「角色专项要求达到了吗」并给出四档可信度。
@@ -95,6 +104,7 @@ const getEvidenceView = (evidence: EvidenceItem[]) => evidence.slice(0, MAX_EVID
  * @returns {object} state
  */
 export const getReviewState = (task: TaskRecord, record: DelegationRecord, request?: string) => ({
+  ...getPhaseReviewState(task),
   role: record.roleName,
   ...(record.mode === undefined ? {} : { mode: record.mode === 'research' ? '研算' : '验算' }),
   task_goal: getRedactedText(task.card.goal),
@@ -116,7 +126,7 @@ export const ACCEPTANCE_QUESTIONS: Record<string, unknown> = {
   },
   complete: {
     type: 'noul',
-    instructions: '验收覆盖了任务的每一条验收标准，未解决的问题如实列出'
+    instructions: '验收覆盖了当前任务的每一条验收标准，未解决的问题如实列出。completion_scope=phase 时只验收本阶段，延期事项不是已完成，不得据此宣称整个长期目标完成。'
   },
   reliability: { type: 'score', instructions: '这次验收结论整体可以信赖的程度', criteria: [...RELIABILITY_LEVELS] }
 }
@@ -133,6 +143,7 @@ export const getAcceptanceState = (
   delegations: DelegationRecord[],
   acceptance: { summary: string; unresolved: string[]; gates: Array<{ gate: string; satisfied: boolean }> }
 ) => ({
+  ...getPhaseReviewState(task),
   task_goal: getRedactedText(task.card.goal),
   acceptance_criteria: task.card.acceptance.slice(0, 8).map((item) => getRedactedText(item, 200)),
   gates: acceptance.gates.map((gate) => ({ gate: gate.gate, satisfied: gate.satisfied })),

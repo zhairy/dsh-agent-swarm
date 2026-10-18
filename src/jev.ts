@@ -19,7 +19,7 @@ export const DEFAULT_JEV_CONFIG: JevConfigInfo = {
   enabled: true,
   apiKeyEnv: 'TYPESAFE_API_KEY',
   baseUrl: 'https://api.typesafe.ai',
-  model: 'jev-latest',
+  model: 'jev-1.14.0',
   timeoutMs: 10000,
   maxRetries: 4,
   maxRequestsPerSecond: 0,

@@ -41,6 +41,25 @@ export interface BenchmarkMeasurement {
   rawArtifactRef: string
 }
 
+export const PLANNING_SCOPE_MAX_ITEMS = 32
+export const PLANNING_SCOPE_MAX_TEXT_LENGTH = 4096
+
+export interface PlanningCoverageInfo {
+  /** 对应 deliverables 的 1-based 序号，不允许把必需交付降为可选。 */
+  deliverable: number
+  acceptanceIds: string[]
+  nodeIds: string[]
+}
+
+/** 阶段合同保留整体需求，只说明当前交付及仍欠缺的工作；不是执行或总体验收豁免。 */
+export interface PlanningScopeInfo {
+  kind: 'phase'
+  deliverables: string[]
+  deferred: string[]
+  rationale: string
+  coverage?: PlanningCoverageInfo[]
+}
+
 /** 经校验的任务卡 */
 export interface TaskCard {
   title: string
@@ -52,6 +71,7 @@ export interface TaskCard {
   flags: TaskFlags
   workflow?: WorkflowDefinition
   intent?: { text: string; sourceRef?: string }
+  planningScope?: PlanningScopeInfo
 }
 
 export type GateSource = 'rule' | 'jev' | 'jev-fallback'
@@ -145,6 +165,75 @@ const getConstraints = (raw: unknown, errors: string[]): TaskCard['constraints']
   return raw as TaskCard['constraints']
 }
 
+const getPlanningCoverage = (raw: unknown, count: number, errors: string[]): PlanningCoverageInfo[] | undefined => {
+  if (raw === undefined) return undefined
+  const path = 'planningScope.coverage'
+  if (!Array.isArray(raw) || raw.length !== count || raw.length < 1 || raw.length > PLANNING_SCOPE_MAX_ITEMS) {
+    errors.push(`${path} 必须为每个 deliverable 恰好提供一条映射，最多 ${PLANNING_SCOPE_MAX_ITEMS} 条`)
+    return undefined
+  }
+  const initialErrors = errors.length
+  const seen = new Set<number>()
+  const coverage: PlanningCoverageInfo[] = []
+  for (const [index, row] of raw.entries()) {
+    if (!isPlainObject(row)) { errors.push(`${path}[${index}] 必须是对象`); continue }
+    for (const key of Object.keys(row)) if (!['deliverable', 'acceptanceIds', 'nodeIds'].includes(key)) errors.push(`${path}[${index}].${key} 不是允许的字段`)
+    if (typeof row.deliverable !== 'number' || !Number.isSafeInteger(row.deliverable) || row.deliverable < 1 || row.deliverable > count || seen.has(row.deliverable)) {
+      errors.push(`${path}[${index}].deliverable 必须为 1–${count} 中不重复的整数`)
+    } else seen.add(row.deliverable)
+    const getRefs = (key: 'acceptanceIds' | 'nodeIds'): string[] => {
+      const refs = row[key]
+      if (!Array.isArray(refs) || refs.length < 1 || refs.length > PLANNING_SCOPE_MAX_ITEMS
+        || refs.some(ref => typeof ref !== 'string' || ref.trim() === '' || ref.length > 64)) {
+        errors.push(`${path}[${index}].${key} 必须包含 1–${PLANNING_SCOPE_MAX_ITEMS} 个非空 ID，每个不超过 64 字符`)
+        return []
+      }
+      const normalized = (refs as string[]).map(ref => ref.trim())
+      if (new Set(normalized).size !== normalized.length) errors.push(`${path}[${index}].${key} 不能重复`)
+      return normalized
+    }
+    coverage.push({ deliverable: row.deliverable as number, acceptanceIds: getRefs('acceptanceIds'), nodeIds: getRefs('nodeIds') })
+  }
+  return errors.length === initialErrors ? coverage.sort((a, b) => a.deliverable - b.deliverable) : undefined
+}
+
+const getPlanningScope = (raw: unknown, errors: string[]): PlanningScopeInfo | undefined => {
+  if (raw === undefined) return undefined
+  if (!isPlainObject(raw)) {
+    errors.push('planningScope 必须是对象')
+    return undefined
+  }
+  const initialErrors = errors.length
+  if (raw.kind !== 'phase') errors.push('planningScope.kind 必须是 phase')
+  for (const key of Object.keys(raw)) {
+    if (!['kind', 'deliverables', 'deferred', 'rationale', 'coverage'].includes(key)) errors.push(`planningScope.${key} 不是允许的字段`)
+  }
+  const getPhaseItems = (key: 'deliverables' | 'deferred'): string[] => {
+    const values = raw[key]
+    if (!Array.isArray(values) || values.length < 1 || values.length > PLANNING_SCOPE_MAX_ITEMS) {
+      errors.push(`planningScope.${key} 必须包含 1–${PLANNING_SCOPE_MAX_ITEMS} 项`)
+      return []
+    }
+    if (values.some((value) => typeof value !== 'string' || value.trim() === '' || value.length > PLANNING_SCOPE_MAX_TEXT_LENGTH)) {
+      errors.push(`planningScope.${key} 每项必须是非空字符串且不超过 ${PLANNING_SCOPE_MAX_TEXT_LENGTH} 字符`)
+      return []
+    }
+    const items = (values as string[]).map((value) => value.trim())
+    if (new Set(items).size !== items.length) errors.push(`planningScope.${key} 不能包含重复事项`)
+    return items
+  }
+  const deliverables = getPhaseItems('deliverables')
+  const deferred = getPhaseItems('deferred')
+  const coverage = getPlanningCoverage(raw.coverage, deliverables.length, errors)
+  const delivered = new Set(deliverables)
+  if (deferred.some((item) => delivered.has(item))) errors.push('planningScope 同一事项不能同时列为本阶段交付和延期')
+  if (typeof raw.rationale !== 'string' || raw.rationale.trim() === '' || raw.rationale.length > PLANNING_SCOPE_MAX_TEXT_LENGTH) {
+    errors.push(`planningScope.rationale 必须是非空字符串且不超过 ${PLANNING_SCOPE_MAX_TEXT_LENGTH} 字符`)
+  }
+  if (errors.length > initialErrors) return undefined
+  return { kind: 'phase', deliverables, deferred, rationale: (raw.rationale as string).trim(), ...(coverage === undefined ? {} : { coverage }) }
+}
+
 /**
  * 校验并规范化任务卡输入
  * @param {unknown} input - swarm_task_card 的参数
@@ -167,6 +256,7 @@ export const ValidateTaskCard = (input: unknown): { card?: TaskCard; errors: str
   const flags = getFlags(input.flags, errors)
   const perf = getPerf(input.perf, errors)
   const constraints = getConstraints(input.constraints, errors)
+  const planningScope = getPlanningScope(input.planningScope, errors)
   const intent = input.intent
   if (intent !== undefined && (!isPlainObject(intent) || typeof intent.text !== 'string' || intent.text.trim() === '')) errors.push('intent.text 必须是原始需求非空文本')
   if (errors.length > 0) return { errors }
@@ -175,6 +265,7 @@ export const ValidateTaskCard = (input: unknown): { card?: TaskCard; errors: str
       title, goal, acceptance, scope, flags,
       ...(perf === undefined ? {} : { perf }),
       ...(constraints === undefined ? {} : { constraints })
+      ,...(planningScope === undefined ? {} : { planningScope })
       ,...(input.workflow === undefined ? {} : { workflow: input.workflow as WorkflowDefinition })
       ,...(intent === undefined ? {} : { intent: intent as TaskCard['intent'] })
     },

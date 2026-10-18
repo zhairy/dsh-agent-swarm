@@ -6,10 +6,9 @@ import { DELEGATE_BACKENDS } from './delegate.js'
 import type { DelegationRecord } from './evidence.js'
 import { SWARM_SERVICE, type PluginContextLike, type PromptAssemblyLike, type SkillsLike, type ToolsLike } from './host-contract.js'
 import { getJevToolDefinitions } from './jev-tools.js'
-import { getMathToolDefinitions } from './math-tools.js'
-import { getCollaborationToolDefinitions } from './collaboration-tools.js'
+import { getBoundTaskToolDefinitions } from './task-tools.js'
 import { PROMPT_STYLE_LABELS, getOrchestratorStyleSection, getPromptStyle, type PromptStylePolicy } from './model-family.js'
-import { FLAG_KEYS, GATE_IDS, type FlagKey } from './policy.js'
+import { FLAG_KEYS, GATE_IDS, PLANNING_SCOPE_MAX_ITEMS, PLANNING_SCOPE_MAX_TEXT_LENGTH, type FlagKey } from './policy.js'
 import { COMPLEXITY_LABELS, DIMENSION_LABELS } from './orchestration.js'
 import { ROLE_TAG_PATTERN, getDelegableRoleIds, getRoleCatalogText, getRoleInfo, isDelegableRoleId } from './role-registry.js'
 import { getAssessmentText } from './review.js'
@@ -20,6 +19,13 @@ import type { AcceptResultInfo, SwarmService } from './service.js'
 import { getToolDefinition, type ToolDefinitionLike, type ToolExecLike } from './tool-shape.js'
 import { SwarmError } from './util/errors.js'
 import type { JsonSchemaObject } from './util/json-schema.js'
+import type { PlanningRecoveryInfo } from './planning-recovery.js'
+
+const getPlanningRecoveryText = (recovery: PlanningRecoveryInfo): string[] => recovery.blockers.length === 0 && recovery.errors.length === 0 ? [] : [
+  `规划阻塞：${recovery.blockers.map((item) => `${item.dimension}=${item.probability ?? '无有效答案'}（门槛 ${item.threshold}）`).join('；')}`,
+  ...recovery.errors.map((error) => `审核反馈：${error}`),
+  recovery.guidance
+]
 
 /** 预设行：只挂在天枢预设上，注册 4 个百工工具、7 个 Jev 判断工具与 2 个内嵌技能，并按模型家族补充天枢的调度说明 */
 
@@ -83,6 +89,27 @@ export const TASK_CARD_PARAMETERS: JsonSchemaObject = {
     goal: { type: 'string', description: '目标与期望结果' },
     acceptance: strList('可核对的验收标准（至少 1 条）'),
     scope: strList('涉及的文件或模块路径；未知可留空'),
+    planningScope: {
+      type: 'object',
+      description: '可选阶段合同：保持原始用户目标，明确本阶段交付与延期理由；仍需独立规划审核，阶段通过不代表整体目标完成，也不扩大权限',
+      properties: {
+        kind: { type: 'string', enum: ['phase'] },
+        deliverables: strList(`本阶段实际交付，1–${PLANNING_SCOPE_MAX_ITEMS} 项，每项非空且不超过 ${PLANNING_SCOPE_MAX_TEXT_LENGTH} 字符；须由当前验收与执行节点覆盖`),
+        deferred: strList(`整体目标中仍待后续交付的事项，1–${PLANNING_SCOPE_MAX_ITEMS} 项，每项非空且不超过 ${PLANNING_SCOPE_MAX_TEXT_LENGTH} 字符；不能记作已完成`),
+        rationale: { type: 'string', description: `阶段拆分的依据与对整体目标的关系，非空且不超过 ${PLANNING_SCOPE_MAX_TEXT_LENGTH} 字符；不能撤销安全约束或以自述代替用户授权` },
+        coverage: {
+          type: 'array',
+          description: `可选精确覆盖映射；提供时必须为每个 deliverable 恰好列一条，最多 ${PLANNING_SCOPE_MAX_ITEMS} 条。宿主检查引用存在，不能将交付降为可选或删除原始需求`,
+          items: { type: 'object', properties: {
+            deliverable: { type: 'number', description: 'deliverables 中从 1 开始的整数序号，每个序号恰好一次' },
+            acceptanceIds: strList(`对应验收 ID，如 A1；1–${PLANNING_SCOPE_MAX_ITEMS} 个不重复非空 ID，每个不超过 64 字符`),
+            nodeIds: strList(`实际产生交付的 workflow 节点 ID；1–${PLANNING_SCOPE_MAX_ITEMS} 个不重复非空 ID，每个不超过 64 字符`)
+          }, required: ['deliverable', 'acceptanceIds', 'nodeIds'], additionalProperties: false }
+        }
+      },
+      required: ['kind', 'deliverables', 'deferred', 'rationale'],
+      additionalProperties: false
+    },
     constraints: {
       type: 'object',
       properties: {
@@ -211,6 +238,8 @@ export const getTaskCardText = (result: TaskCardResult): string => {
     `衡鉴：${triage.source}${triage.fallbackReason === undefined ? '' : `（回退原因：${triage.fallbackReason}）`}${answers}`,
     `预算：每任务 ${result.budgets.maxDelegationsPerTask || '不限'} 次委派；每角色 ${result.budgets.maxCallsPerRole || '不限'} 次（铸剑 ${result.budgets.maxCallsZhuJian || '不限'} 次）；自动修复最多 ${result.budgets.maxAutoFixRounds} 轮`,
     `需求版本：${result.requestRevision}；合同版本：${result.cardRevision}；流程版本：${result.workflowRevision}；规划审核：${result.planningReview?.status ?? 'pending'}`,
+    ...getPlanningRecoveryText(result.planningRecovery),
+    ...(result.planningScope === null ? [] : [`阶段任务：${result.planningScope.rationale}；延期：${result.planningScope.deferred.join('；')}。本任务验收不代表整体目标完成。`]),
     ...(result.planningRecovery.automaticReviewPaused && !['pass', 'pass_with_degradation'].includes(result.planningReview?.status ?? '')
       ? ['自动规划审核已暂停；任务卡与 scope 仍可修改。完成修订后调用 swarm_review_plan 显式复审，不能复用旧批准。'] : []),
     `上下文引用：${result.contextRefs.join(', ')}`,
@@ -265,6 +294,9 @@ export const getStatusText = (result: StatusResult): string => {
   const tasks = result.tasks.flatMap((task) => [
     `任务 ${task.task_id}：${task.title}（修复轮次 ${task.rounds}；委派 ${task.budget.used}${task.budget.max > 0 ? `/${task.budget.max}` : ' 次（不限）'}）`,
     `需求版本：${task.requestRevision}；合同版本：${task.cardRevision}；流程版本：${task.workflowRevision}；规划审核：${task.planningReview?.status ?? 'pending'}`,
+    ...getPlanningRecoveryText(task.planningRecovery),
+    ...(task.intentHistoryNote === null ? [] : [`需求历史提示：${task.intentHistoryNote}`]),
+    ...(task.card.planningScope === undefined ? [] : [`阶段验收范围：${task.card.planningScope.deliverables.join('；')}；延期：${task.card.planningScope.deferred.join('；')}；不代表整体目标完成。`]),
     ...(task.orchestration === null || task.orchestration === undefined ? [] : [`编排：${COMPLEXITY_LABELS[task.orchestration.complexity]}；拆分角度 ${task.orchestration.dimensions.map((d) => DIMENSION_LABELS[d]).join('、')}；子任务 ${task.orchestration.subtasks.map((s) => `${s.id}→${s.role}`).join('、')}；${task.orchestration.parallelGroups.filter((g) => g.length > 1).length === 0 ? '串行执行' : `可并行：${task.orchestration.parallelGroups.filter((g) => g.length > 1).map((g) => g.join('+')).join('；')}`}（来源 ${task.orchestration.source}）`]),
     ...(task.stateRefreshRequired ? [`只读投影待同步：已登记需求 ${task.publishedRevisions.requestRevision} / 合同 ${task.publishedRevisions.cardRevision} / 流程 ${task.publishedRevisions.workflowRevision}；调用 swarm_review_plan 显式同步审核。`] : []),
     ...(task.planningRecovery.automaticReviewPaused ? ['自动规划审核已暂停；任务卡仍可修改，修订后调用 swarm_review_plan 显式复审。'] : []),
@@ -292,6 +324,7 @@ export const getStatusText = (result: StatusResult): string => {
 export const getAcceptText = (result: AcceptResultInfo): string =>
   clip([
     `验收结果：${result.status}`,
+    ...(result.completionScope === 'phase' ? [`验收范围：仅当前阶段；整体目标尚未完成。延期事项：${(result.deferred ?? []).join('；')}`] : []),
     ...(result.missing.length > 0 ? ['缺少：', ...result.missing.map((m) => `- ${m}`)] : []),
     `修复轮次：${result.roundsUsed}/${result.maxAutoFixRounds}`,
     ...[getAssessmentText(result.assessment)].filter((line): line is string => line !== undefined).map((line) => line.replace('衡鉴复评', '衡鉴复评（验收结论）'))
@@ -379,17 +412,10 @@ export const apply = (ctx: PluginContextLike): void => {
   const taskParameters: JsonSchemaObject = { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'], additionalProperties: false }
   const definitions = [
     ...getSwarmToolDefinitions(service), ...getJevToolDefinitions(() => service.jev.tools),
-    ...getMathToolDefinitions({ calculate: (args, exec) => service.Calculate(args, exec) }),
-    ...getCollaborationToolDefinitions({ send: service.MessageSend, read: service.MessageRead, acknowledge: service.MessageAck }),
-    getToolDefinition({ name: 'swarm_review_plan', description: '独立只读 Agent 与 Jev 复审当前目标、流程设计和 Mermaid 源码。结果绑定原始需求及当前版本，不能代替实现后验证。',
+    ...getBoundTaskToolDefinitions(service),
+    getToolDefinition({ name: 'swarm_review_plan', description: '独立只读 Agent 与 Jev 复审当前目标、流程设计和 Mermaid。返回具体阻塞维度；同一负结论复用，须修正实质合同而非刷分。bypass_cache 仅刷新通过结论；故障可重试。不能代替实现后验证。',
       parameters: { ...taskParameters, properties: { ...taskParameters.properties, bypass_cache: { type: 'boolean' } } },
       execute: (args, exec) => service.ReviewPlan(args, getExec(exec)), render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => false }),
-    getToolDefinition({ name: 'swarm_context_read', description: '不传 ref 时列出当前任务授权材料与执行摘要；传 ref 分页读取。始终校验任务/版本，不读取其他任务或盲审禁止的作者过程。',
-      parameters: { type: 'object', properties: { task_id: { type: 'string' }, ref: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'number' }, expectedDigest: { type: 'string' } }, additionalProperties: false },
-      execute: service.ReadContext, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true }),
-    getToolDefinition({ name: 'swarm_project_files', description: '只列举当前任务工作区实际存在的文件；query为文件名或路径片段。先发现再read/grep；无匹配返回正常空结果和真实候选，不猜测或自动改写路径。',
-      parameters: { type: 'object', properties: { task_id: { type: 'string' }, query: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'number' } }, additionalProperties: false },
-      execute: service.ProjectFiles, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true }),
     getToolDefinition({ name: 'swarm_experience', description: '检索最多三条有出处、版本与失效条件的经验；候选不能当作已验证事实，盲审不能读取经验。',
       parameters: { type: 'object', properties: { task_id: { type: 'string' }, problemClass: { type: 'string' }, includeCandidates: { type: 'boolean' } }, additionalProperties: false },
       execute: service.Experience, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true })

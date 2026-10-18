@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
-import { ParseWorkflowMermaid, ReconcileWorkflow, UpdateWorkflowNode, ValidateMermaidProjection, ValidateWorkflow, getDefaultWorkflow, getMatchingNode, getReadyNodes, getTaskCardMarkdown, getWorkflowDigest, getWorkflowMermaid, intOfficialMermaidParser, intWorkflowState } from '../../src/workflow.js'
+import { ParseWorkflowMermaid, ReconcileWorkflow, UpdateWorkflowNode, ValidateMermaidProjection, ValidateWorkflow, WORKFLOW_LIMITS, getDefaultWorkflow, getMatchingNode, getReadyNodes, getTaskCardMarkdown, getWorkflowDigest, getWorkflowMermaid, intOfficialMermaidParser, intWorkflowState } from '../../src/workflow.js'
 
 const card = (flags = {}, scope = ['src/a.ts']) => ValidateTaskCard({ title: '改任务', goal: '满足真实合同', acceptance: ['边界行为一致'], scope, flags }).card!
 
@@ -26,6 +26,48 @@ describe('有界任务 DAG', () => {
     const bad = structuredClone(graph)
     bad.nodes.find((node) => node.id === 'implementation')!.dependsOn = ['tan_wei']
     expect(ValidateWorkflow(bad, algorithm, gates).errors.join()).toContain('必须依赖已完成研算')
+  })
+
+  it('只读默认节点明确交付真实目标，不停留在抽象需求分析或宣称已经完成', () => {
+    const task = ValidateTaskCard({ title: '只读标记核对', goal: '读取 README.md 的 marker 并如实回报', acceptance: ['marker 与实际文件一致'], flags: {}, scope: ['README.md'] }).card!
+    const graph = getDefaultWorkflow(task, [])
+    expect(graph.nodes.map(({ label: _label, ...node }) => node)).toEqual([
+      { id: 'analysis', operation: 'delegate', role: 'mou_ding', dependsOn: [], gates: [], outputContractVersion: '1' },
+      { id: 'checkpoint', operation: 'checkpoint', dependsOn: ['analysis'], gates: [], outputContractVersion: '1' },
+      { id: 'accept', operation: 'accept', dependsOn: ['checkpoint'], gates: [], outputContractVersion: '1' }
+    ])
+    expect(graph.nodes[0]!.label).toContain(task.goal)
+    expect(graph.nodes[0]!.label).toContain('提交结果证据')
+    expect(graph.nodes[0]!.label).toContain('任务卡验收')
+    expect(intWorkflowState(graph).nodes.analysis?.status).toBe('ready')
+    expect(ValidateWorkflow(graph, task, []).errors).toEqual([])
+  })
+
+  it('默认实施与验证节点明确目标和验收，同时保留门禁依赖', () => {
+    const task = card({ changesCode: true })
+    const graph = getDefaultWorkflow(task, getRuleGates(task))
+    const implementation = graph.nodes.find(node => node.id === 'implementation')!
+    const verification = graph.nodes.find(node => node.id === 'verification')!
+    expect(implementation.label).toContain(`实现并交付：${task.goal}`)
+    expect(verification.label).toContain(task.goal)
+    expect(verification.label).toContain('A1 边界行为一致')
+    expect(implementation.dependsOn).toEqual([])
+    expect(verification.dependsOn).toEqual(['implementation'])
+    expect(verification.gates).toEqual(['G_VERIFY'])
+    expect(intWorkflowState(graph).nodes.verification?.status).toBe('pending')
+  })
+
+  it('长目标与验收标签有界且显式引用完整合同，不截断原始合同或 Unicode 代理对', () => {
+    const task = { ...card({ changesCode: true }), goal: '验算📈'.repeat(100), acceptance: ['边界🧪'.repeat(100)] }
+    const original = structuredClone(task)
+    const graph = getDefaultWorkflow(task, getRuleGates(task))
+    for (const node of graph.nodes.filter(node => ['implementation', 'verification'].includes(node.id))) {
+      expect(node.label.length).toBeLessThanOrEqual(WORKFLOW_LIMITS.labelChars)
+      expect(node.label.endsWith('…（完整目标与验收以任务卡为准）')).toBe(true)
+      expect(node.label).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u)
+    }
+    expect(task).toEqual(original)
+    expect(ValidateWorkflow(graph, task, getRuleGates(task)).errors).toEqual([])
   })
 
   it('拒绝重复 ID、环、缺依赖、角色冒用、遗漏门禁与断开的验收路径', () => {
@@ -78,6 +120,16 @@ describe('有界任务 DAG', () => {
 })
 
 describe('Mermaid 唯一派生视图', () => {
+  it('来自任务目标与验收的特殊字符仍按现有规范转义并可被官方 parser 解析', async () => {
+    const task = { ...card({ changesCode: true }), goal: '读取 "marker" <script>\nclick bad', acceptance: ['保留 "值" & 不执行 <tag>'] }
+    const graph = getDefaultWorkflow(task, getRuleGates(task))
+    const source = getWorkflowMermaid(graph)
+    expect(source).toContain('#34;marker#34;')
+    expect(source).not.toContain('<script>')
+    expect(source).not.toContain('<tag>')
+    expect(source.split('\n').some(line => line.trimStart().startsWith('click'))).toBe(false)
+    expect(await ParseWorkflowMermaid(graph, source)).toMatchObject({ parseVerdict: 'pass', projectionVerdict: 'pass' })
+  }, 20000)
   it('可见任务说明包括合同字段、同源图和不限预算', () => {
     const task = card({ changesCode: true })
     const graph = getDefaultWorkflow(task, getRuleGates(task))

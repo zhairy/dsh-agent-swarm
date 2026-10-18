@@ -47,10 +47,20 @@ describe('预设构建器', () => {
     expect(ids(getPresetPlugins('tian_shu', standard))).toContain('time-context')
   })
 
-  it('御史：无 shell、无 web、无 swarm 工具', () => {
+  it('御史：无 shell、无 web、无编排工具，保留受绑定约束的专家工具', () => {
     const rows = ids(getPresetPlugins('yu_shi', standard))
     for (const id of ['tool-bash', 'tool-pwsh', 'tool-jobs', 'tool-web', 'swarm-tools', 'tool-plugin-manager', 'delegation']) expect(rows).not.toContain(id)
-    expect(rows).toEqual(expect.arrayContaining(['persona', 'tool-fs', 'tool-fs-search', 'swarm-runtime']))
+    expect(rows).toEqual(expect.arrayContaining(['persona', 'tool-fs', 'tool-fs-search', 'swarm-expert-tools', 'swarm-runtime']))
+  })
+
+  it('所有独立专家预设各注册一次专家入口，根只注册原编排入口', () => {
+    for (const role of ROLE_INFO_LIST) {
+      const rows = getPresetPlugins(role.id, [...standard,
+        { id: 'swarm-tools', name: 'old-root-tools' }, { id: 'swarm-expert-tools', name: 'old-expert-tools' }])
+      const root = role.id === 'tian_shu'
+      expect(rows.filter(row => row.id === 'swarm-tools')).toEqual(root ? [{ id: 'swarm-tools', name: 'dsh-agent-swarm/tools' }] : [])
+      expect(rows.filter(row => row.id === 'swarm-expert-tools')).toEqual(root ? [] : [{ id: 'swarm-expert-tools', name: 'dsh-agent-swarm/expert-tools' }])
+    }
   })
 
   it('博闻有 web；复核有 shell 无 web；未知的新行原样保留', () => {
@@ -85,6 +95,7 @@ describe('已提交的 bundle 文件与生成器一致', () => {
   it('package.json 的 dsh.bundle.patch 列出宿主补丁与 13 个预设', () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
     expect(pkg.dsh.bundle.patch).toEqual(getBundlePatchList())
+    expect(pkg.exports['./expert-tools']).toBe('./lib/expert-tools.js')
   })
 
   it('宿主补丁插入 swarm-core、4 个可选原生实例，并把默认预设设为天枢', () => {

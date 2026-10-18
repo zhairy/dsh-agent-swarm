@@ -126,7 +126,7 @@ describe('intJevClient', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe(`https://api.typesafe.ai${JEV_PATH}`)
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer k1')
-    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'jev-latest', questions: { need_benchmark: { type: 'noul' } } })
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'jev-1.14.0', questions: { need_benchmark: { type: 'noul' } } })
   })
 
   it('未启用或没有密钥时不调用', async () => {

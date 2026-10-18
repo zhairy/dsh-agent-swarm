@@ -22,11 +22,15 @@ if (!args.includes('--skip-build')) {
 const root = resolve('.')
 const entry = join(root, 'lib', 'index.js')
 if (!existsSync(entry)) throw new Error('缺少构建产物 lib/index.js：先运行 npm run build')
+const packageInfo = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+const entries = [...new Set([entry, ...Object.values(packageInfo.exports ?? {})
+  .filter((value) => typeof value === 'string' && value.startsWith('./') && value.endsWith('.js') && !value.includes('*'))
+  .map((value) => resolve(root, value))])]
 
 /** 递归收集入口的相对依赖闭包；缺文件立即失败，而不是等安装后才暴露。 */
-const collectClosure = (entryPath) => {
+const collectClosure = (entryPaths) => {
   const seen = new Set()
-  const queue = [entryPath]
+  const queue = [...entryPaths]
   while (queue.length > 0) {
     const current = queue.pop()
     if (seen.has(current)) continue
@@ -38,7 +42,7 @@ const collectClosure = (entryPath) => {
   return seen
 }
 
-const closure = collectClosure(entry)
+const closure = collectClosure(entries)
 /** npm 在不同版本下把 pack 结果输出为数组或「包名 → 结果」的对象，这里两种都接受。 */
 const firstPackResult = (text) => {
   const parsed = JSON.parse(text)
@@ -54,7 +58,7 @@ if (missing.length > 0) {
   throw new Error(`tarball 将缺少 ${missing.length} 个入口依赖文件，例如：\n  ${missing.slice(0, 10).join('\n  ')}`)
 }
 process.stdout.write(JSON.stringify({
-  entry: relative(root, entry), closureFiles: closure.size, packagedFiles: packed.size, missing: 0
+  entry: relative(root, entry), entries: entries.map((path) => relative(root, path)), closureFiles: closure.size, packagedFiles: packed.size, missing: 0
 }, null, 2) + '\n')
 
 if (checkOnly) process.exit(0)
