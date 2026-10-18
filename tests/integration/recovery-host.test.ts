@@ -17,6 +17,8 @@ interface RecoveryRun extends ScenarioRunInfo {
   planningStatus?: { tasks: Array<{ planningReview?: unknown; acceptance?: { status: string } }> }
   hostApis?: { start: boolean; startActivation: boolean }
   analysisReadResult?: string
+  analysisContext?: { taskId: string; crossTaskId: string; tools: string[]; indexResult: string; indexIsError: boolean;
+    readResult: string; readIsError: boolean; crossTaskResult: string; crossTaskIsError: boolean }
 }
 const RECOVERY_BASE = {
   jev: { enabled: false }, planningReview: { enabled: false }, workflow: { mode: 'advisory' },
@@ -135,8 +137,10 @@ describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () =>
       expect(reviewer.model).toBe('role-yu_shi')
       expect(reviewer.outputSchemaProperties).toEqual(expect.arrayContaining(['snapshotDigest', 'goalReview', 'designReview', 'mermaidReview', 'requirementCoverage']))
       expect(reviewer.tools).toContain('structured_output')
+      expect(reviewer.tools).toContain('swarm_context_read')
       expect(reviewer.tools).not.toEqual(expect.arrayContaining(['write']))
-      expect(reviewer.tools.some((name) => ['write', 'edit', 'bash', 'pwsh', 'swarm_delegate'].includes(name) || name.startsWith('jev_') || name.startsWith('swarm_message_'))).toBe(false)
+      const governanceTools = ['swarm_task_card', 'swarm_delegate', 'swarm_accept', 'swarm_review_plan', 'swarm_status']
+      expect(reviewer.tools.some((name) => ['write', 'edit', 'bash', 'pwsh', ...governanceTools].includes(name) || name.startsWith('jev_') || name.startsWith('swarm_message_'))).toBe(false)
       expect(reviewer.seesAgentResult || reviewer.seesJevResult).toBe(false)
       expect(reviewer.readResult).toContain('recovery fixture')
       expect(reviewer.mutationIsError, reviewer.mutationResult).toBe(true)
@@ -168,6 +172,29 @@ describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () =>
         expect(run.planningStatus?.tasks[0]?.acceptance?.status).toBe('blocked')
       } else {
         expect(run.results[0]?.text).toContain('pass')
+        const expert = run.children.find((child) => child.role === 'mou_ding')
+        expect(expert?.tools).toEqual(expect.arrayContaining(['swarm_context_read', 'swarm_project_files']))
+        expect(expert?.tools.some((name) => governanceTools.includes(name))).toBe(false)
+        // 旧 start 按角色能力过滤父工具，谋定原本允许 Jev；独立 preset
+        // 的新 startActivation 路径只挂任务绑定工具，不新增全局 Jev。
+        if (run.hostApis?.start === false && run.hostApis.startActivation) {
+          expect(expert?.tools.some((name) => name.startsWith('jev_'))).toBe(false)
+        } else {
+          expect(run.hostApis?.start).toBe(true)
+          expect(expert?.tools).toEqual(expect.arrayContaining(['jev_ask', 'jev_check', 'jev_classify', 'jev_health', 'jev_match', 'jev_score', 'jev_screen']))
+        }
+        const context = run.analysisContext!
+        expect(context, run.error ?? run.stderr).toBeDefined()
+        expect(context.taskId).toBe(run.taskId)
+        expect(context.indexIsError, context.indexResult).toBe(false)
+        expect(JSON.parse(context.indexResult)).toMatchObject({ task_id: run.taskId,
+          materials: expect.arrayContaining([expect.objectContaining({ kind: 'contract', ref: expect.any(String), digest: expect.any(String) })]) })
+        expect(context.readIsError, context.readResult).toBe(false)
+        expect(JSON.parse(context.readResult).text).toContain('README.md')
+        expect(context.crossTaskId).not.toBe(run.taskId)
+        expect(context.crossTaskIsError, context.crossTaskResult).toBe(true)
+        // 校验任务绑定拒绝，不把“不存在任务”或“工具缺失”冒充权限隔离。
+        expect(context.crossTaskResult).toContain('专家不能访问其他任务')
         expect(run.analysisReadResult).toContain('recovery fixture')
         expect(run.ledgerEvents.find((event) => event.type === 'workflow/review')?.data).toMatchObject({ status: 'pass' })
         expect(run.planningStatus?.tasks[0]?.planningReview).toMatchObject({ status: 'pass', goalReview: { verdict: 'pass' }, designReview: { verdict: 'pass' },

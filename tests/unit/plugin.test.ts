@@ -125,9 +125,11 @@ describe('工具插件', () => {
     expect(registered.map((d) => d.name)).toEqual([
       'swarm_task_card', 'swarm_delegate', 'swarm_status', 'swarm_accept',
       'jev_ask', 'jev_check', 'jev_classify', 'jev_score', 'jev_match', 'jev_screen', 'jev_health',
-      'swarm_calculate', 'swarm_message_send', 'swarm_message_read', 'swarm_message_ack',
-      'swarm_review_plan', 'swarm_context_read', 'swarm_project_files', 'swarm_experience'
+      'swarm_context_read', 'swarm_project_files', 'swarm_calculate',
+      'swarm_review_plan', 'swarm_experience'
     ])
+    expect(service.getConfig().persistence.enabled).toBe(false)
+    expect(registered.some((definition) => definition.name.startsWith('swarm_message_'))).toBe(false)
     const byName = (name: string) => registered.find((d) => d.name === name) as ToolDefinitionLike
     const exec = { agent: { id: 'root', session: { header: { agentPreset: 'tian-shu', cwd: hostHarness.home } } }, signal: new AbortController().signal }
 

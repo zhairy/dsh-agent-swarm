@@ -23,14 +23,15 @@ export const PRESET_PACKAGE = '@deepseek-ai/dsh-agent-preset'
 export const BAIGONG_NAME = '百工模式'
 export const BAIGONG_DESCRIPTION = '以天枢统御百工：建立含 Mermaid 执行流程的版本化任务卡，由独立专家与 Jev 审核目标和流程，按风险选用谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔 12 位专家；通过短检查点、按需材料、受限 P2P 邮箱及纯函数计算辅助协作。各专家可配置模型链、推理强度与容灾升级；交付由衡鉴复评，最终以当前版本的真实证据与硬门禁验收。'
 /**
- * 12 个单角色预设默认停用，不出现在模式列表中（委派子智能体不依赖它们）。
+ * 12 个单角色预设默认不出现在模式列表；新宿主委派时按需注册同源独立预设。
  * 需要把某个专家单独作为主会话使用时，设置环境变量 DSH_SWARM_ROLE_PRESETS=1 后重启 dsh。
  */
 export const ROLE_PRESETS_DISABLED = "process.env.DSH_SWARM_ROLE_PRESETS !== '1'"
 export const SWARM_TOOLS_ROW: PluginRow = { id: 'swarm-tools', name: 'dsh-agent-swarm/tools' }
+export const SWARM_EXPERT_TOOLS_ROW: PluginRow = { id: 'swarm-expert-tools', name: 'dsh-agent-swarm/expert-tools' }
 
 /** 委派统一走 swarm_delegate，通用委派组在全部 swarm 预设中移除；swarm 行由构建器自己追加 */
-const DROPPED_ROWS = new Set(['delegation', 'swarm-tools', 'swarm-runtime'])
+const DROPPED_ROWS = new Set(['delegation', 'swarm-tools', 'swarm-expert-tools', 'swarm-runtime'])
 /**
  * 0.2.1-alpha 起才随 DSH 提供的宿主工具行：旧版运行时没有对应包，角色预设保持跨版本可移植，不内置。
  * 调度工具按宿主自身策略也只对标准模式开放，专家子会话不声明它。
@@ -79,7 +80,7 @@ export const getPresetPlugins = (role: RoleId, standard: readonly PluginRow[]): 
     if (id === 'tool-web') return info.web === 'never' ? [] : [row]
     return [row]
   }
-  return [...standard.flatMap(keep), ...(role === 'tian_shu' ? [SWARM_TOOLS_ROW] : []), getRuntimeRow(role)]
+  return [...standard.flatMap(keep), role === 'tian_shu' ? SWARM_TOOLS_ROW : SWARM_EXPERT_TOOLS_ROW, getRuntimeRow(role)]
 }
 
 export const getPresetDescription = (role: RoleId): string => {

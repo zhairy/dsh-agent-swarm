@@ -6,8 +6,7 @@ import { DELEGATE_BACKENDS } from './delegate.js'
 import type { DelegationRecord } from './evidence.js'
 import { SWARM_SERVICE, type PluginContextLike, type PromptAssemblyLike, type SkillsLike, type ToolsLike } from './host-contract.js'
 import { getJevToolDefinitions } from './jev-tools.js'
-import { getMathToolDefinitions } from './math-tools.js'
-import { getCollaborationToolDefinitions } from './collaboration-tools.js'
+import { getBoundTaskToolDefinitions } from './task-tools.js'
 import { PROMPT_STYLE_LABELS, getOrchestratorStyleSection, getPromptStyle, type PromptStylePolicy } from './model-family.js'
 import { FLAG_KEYS, GATE_IDS, PLANNING_SCOPE_MAX_ITEMS, PLANNING_SCOPE_MAX_TEXT_LENGTH, type FlagKey } from './policy.js'
 import { COMPLEXITY_LABELS, DIMENSION_LABELS } from './orchestration.js'
@@ -413,17 +412,10 @@ export const apply = (ctx: PluginContextLike): void => {
   const taskParameters: JsonSchemaObject = { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'], additionalProperties: false }
   const definitions = [
     ...getSwarmToolDefinitions(service), ...getJevToolDefinitions(() => service.jev.tools),
-    ...getMathToolDefinitions({ calculate: (args, exec) => service.Calculate(args, exec) }),
-    ...getCollaborationToolDefinitions({ send: service.MessageSend, read: service.MessageRead, acknowledge: service.MessageAck }),
+    ...getBoundTaskToolDefinitions(service),
     getToolDefinition({ name: 'swarm_review_plan', description: '独立只读 Agent 与 Jev 复审当前目标、流程设计和 Mermaid。返回具体阻塞维度；同一负结论复用，须修正实质合同而非刷分。bypass_cache 仅刷新通过结论；故障可重试。不能代替实现后验证。',
       parameters: { ...taskParameters, properties: { ...taskParameters.properties, bypass_cache: { type: 'boolean' } } },
       execute: (args, exec) => service.ReviewPlan(args, getExec(exec)), render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => false }),
-    getToolDefinition({ name: 'swarm_context_read', description: '不传 ref 时列出当前任务授权材料与执行摘要；传 ref 分页读取。始终校验任务/版本，不读取其他任务或盲审禁止的作者过程。',
-      parameters: { type: 'object', properties: { task_id: { type: 'string' }, ref: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'number' }, expectedDigest: { type: 'string' } }, additionalProperties: false },
-      execute: service.ReadContext, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true }),
-    getToolDefinition({ name: 'swarm_project_files', description: '只列举当前任务工作区实际存在的文件；query为文件名或路径片段。先发现再read/grep；无匹配返回正常空结果和真实候选，不猜测或自动改写路径。',
-      parameters: { type: 'object', properties: { task_id: { type: 'string' }, query: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'number' } }, additionalProperties: false },
-      execute: service.ProjectFiles, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true }),
     getToolDefinition({ name: 'swarm_experience', description: '检索最多三条有出处、版本与失效条件的经验；候选不能当作已验证事实，盲审不能读取经验。',
       parameters: { type: 'object', properties: { task_id: { type: 'string' }, problemClass: { type: 'string' }, includeCandidates: { type: 'boolean' } }, additionalProperties: false },
       execute: service.Experience, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true })

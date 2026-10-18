@@ -278,6 +278,10 @@
           "disabled": true
         },
         {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
+        },
+        {
           "id": "swarm-runtime",
           "name": "dsh-agent-swarm/runtime",
           "config": {
@@ -409,6 +413,10 @@
           "id": "tool-plugin-market",
           "name": "@deepseek-ai/dsh-plugin-market/tools",
           "disabled": true
+        },
+        {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
         },
         {
           "id": "swarm-runtime",
@@ -544,6 +552,10 @@
           "disabled": true
         },
         {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
+        },
+        {
           "id": "swarm-runtime",
           "name": "dsh-agent-swarm/runtime",
           "config": {
@@ -667,6 +679,10 @@
           "id": "tool-plugin-market",
           "name": "@deepseek-ai/dsh-plugin-market/tools",
           "disabled": true
+        },
+        {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
         },
         {
           "id": "swarm-runtime",
@@ -802,6 +818,10 @@
           "disabled": true
         },
         {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
+        },
+        {
           "id": "swarm-runtime",
           "name": "dsh-agent-swarm/runtime",
           "config": {
@@ -925,6 +945,10 @@
           "id": "tool-plugin-market",
           "name": "@deepseek-ai/dsh-plugin-market/tools",
           "disabled": true
+        },
+        {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
         },
         {
           "id": "swarm-runtime",
@@ -1070,6 +1094,10 @@
           "disabled": true
         },
         {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
+        },
+        {
           "id": "swarm-runtime",
           "name": "dsh-agent-swarm/runtime",
           "config": {
@@ -1211,6 +1239,10 @@
           "id": "tool-plugin-market",
           "name": "@deepseek-ai/dsh-plugin-market/tools",
           "disabled": true
+        },
+        {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
         },
         {
           "id": "swarm-runtime",
@@ -1356,6 +1388,10 @@
           "disabled": true
         },
         {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
+        },
+        {
           "id": "swarm-runtime",
           "name": "dsh-agent-swarm/runtime",
           "config": {
@@ -1479,6 +1515,10 @@
           "id": "tool-plugin-market",
           "name": "@deepseek-ai/dsh-plugin-market/tools",
           "disabled": true
+        },
+        {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
         },
         {
           "id": "swarm-runtime",
@@ -1624,6 +1664,10 @@
           "disabled": true
         },
         {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
+        },
+        {
           "id": "swarm-runtime",
           "name": "dsh-agent-swarm/runtime",
           "config": {
@@ -1755,6 +1799,10 @@
           "id": "tool-plugin-market",
           "name": "@deepseek-ai/dsh-plugin-market/tools",
           "disabled": true
+        },
+        {
+          "id": "swarm-expert-tools",
+          "name": "dsh-agent-swarm/expert-tools"
         },
         {
           "id": "swarm-runtime",

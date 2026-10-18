@@ -178,9 +178,32 @@ export const apply = (ctx) => {
       const tools = (options.tools ?? []).map((tool) => tool.name)
       if (step === 0) state.children.push({ role, model: options.model, tools, images: false })
       if (scenario.planning && role === 'mou_ding') {
-        if (step === 0) { yield* toolChunks('read', { file_path: 'README.md' }); return }
-        state.analysisReadResult = textOf(options.messages?.at(-1))
-        if (step > 1) throw new Error('真实宿主未接受执行 structured_output')
+        const last = options.messages?.findLast(message => message.role === 'tool')
+        if (step === 0) {
+          state.analysisContext = { taskId: state.taskId, crossTaskId: 'T-999999', tools }
+          yield* toolChunks('swarm_context_read', { task_id: state.taskId }); return
+        }
+        if (step === 1) {
+          state.analysisContext.indexResult = textOf(last)
+          state.analysisContext.indexIsError = last?.isError === true
+          if (state.analysisContext.indexIsError) throw new Error('真实专家未能列出自己任务的授权上下文')
+          const index = JSON.parse(state.analysisContext.indexResult)
+          const contract = index.materials?.find(item => item.kind === 'contract')
+          if (!contract?.ref || !contract.digest) throw new Error('专家上下文索引缺少有摘要的合同引用')
+          yield* toolChunks('swarm_context_read', { task_id: state.taskId, ref: contract.ref, expectedDigest: contract.digest }); return
+        }
+        if (step === 2) {
+          state.analysisContext.readResult = textOf(last)
+          state.analysisContext.readIsError = last?.isError === true
+          yield* toolChunks('swarm_context_read', { task_id: state.analysisContext.crossTaskId }); return
+        }
+        if (step === 3) {
+          state.analysisContext.crossTaskResult = textOf(last)
+          state.analysisContext.crossTaskIsError = last?.isError === true
+          yield* toolChunks('read', { file_path: 'README.md' }); return
+        }
+        state.analysisReadResult = textOf(last)
+        if (step > 4) throw new Error('真实宿主未接受执行 structured_output')
         yield* submit({ summary: 'README.md 第一行声明 recovery fixture；结论依据已读取的文件', unresolved: [], constraints: ['结论引用 README.md'],
           options: [{ name: '按文件事实报告', summary: '读取并核对第一行', pros: ['证据可复查'], cons: [] }],
           decisions: [{ point: '输入是什么', recommendation: '测试恢复工作区', reason: 'README.md:1 为 # recovery fixture' }], dependencies: [] })

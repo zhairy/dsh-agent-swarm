@@ -26,6 +26,7 @@
   "exports": {
     ".": "./lib/index.js",
     "./tools": "./lib/tools.js",
+    "./expert-tools": "./lib/expert-tools.js",
     "./runtime": "./lib/runtime.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json",
