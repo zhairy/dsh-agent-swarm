@@ -140,6 +140,9 @@ export interface TaskRecord {
   intentSource?: 'host' | 'declared'
   intentSourceRef?: string
   intentLastDigest?: string
+  intentHistoryNote?: string
+  intentHistoryUnavailable?: boolean
+  intentHistoryIncomplete?: boolean
   workflowDefinition?: WorkflowDefinition
   workflowState?: WorkflowStateInfo
   workflowDigest?: string

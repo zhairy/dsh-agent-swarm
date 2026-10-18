@@ -59,7 +59,8 @@ import { getGitStatus, type GitStatusInfo } from './util/git.js'
 import { intMutex } from './util/mutex.js'
 import { getTaskIntent, getSemanticCardDigest, getCurrentDelegations, digest, getTaskBinding, getTaskContextBinding, isTaskVersionCurrent } from './task-model.js'
 import { getDefaultWorkflow, ValidateWorkflow, getWorkflowDigest, getWorkflowMermaid, getTaskCardMarkdown, intWorkflowState, ReconcileWorkflow, getReadyNodes, getMatchingNode, UpdateWorkflowNode, getValueDigest } from './workflow.js'
-import { RunPlanningReview, getReviewSnapshot, isPlanningReviewCurrent, type PlanningAgentAssessmentInfo, type ReviewSnapshot } from './planning-review.js'
+import { RunPlanningReview, getReviewSnapshot, getPlanningReviewState, getPlanningReviewQuestions, isPlanningReviewCurrent, isPlanningReviewReusable, getPlanningReviewDiagnostics, type PlanningAgentAssessmentInfo, type ReviewSnapshot } from './planning-review.js'
+import { waitForPlanning } from './planning-wait.js'
 import { getArtifactSnapshot } from './artifacts.js'
 import { getToolApprovalDenial, getHostApprovalPolicy, getApprovalPolicyDiagnostics } from './approval-policy.js'
 import { getCheckpoint } from './checkpoint.js'
@@ -245,6 +246,8 @@ export interface AcceptResultInfo {
   gates: ReturnType<typeof getAcceptanceCheck>['statuses']
   /** 衡鉴对天枢验收结论的复评（只在 decision=accept 时执行） */
   assessment?: AssessmentInfo
+  completionScope?: 'phase' | 'request'
+  deferred?: string[]
 }
 
 const getGateView = (gate: GateRequirement) => ({
@@ -262,6 +265,7 @@ const getTaskCardResult = (task: TaskRecord, card: TaskCard, config: SwarmConfig
   rootUpgrade: rootUpgrade ?? null,
   title: card.title,
   goal: card.goal, acceptance: card.acceptance, scope: card.scope, perf: card.perf ?? null,
+  planningScope: card.planningScope ?? null,
   cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1,
   contextRefs: (task.contextRefs ?? []).map((material) => material.ref),
   contextArtifacts: task.contextRefs ?? [],
@@ -333,6 +337,7 @@ const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: 
     cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1,
     stateRefreshRequired: false, publishedRevisions: getTaskBinding(task),
     requestRevision: task.requestRevision ?? 1, intentSource: task.intentSource ?? 'declared',
+    intentHistoryNote: task.intentHistoryNote ?? null,
     planningReview: task.planningReview ?? null, checkpoint: task.checkpoint ?? null,
     planningRecovery: getPlanningRecovery(task, config.planningReview.maxFixRounds),
     recovered: task.recovered ?? false,
@@ -549,12 +554,15 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     rootSessionId: task.sessionId, workspaceId: task.workspaceId ?? '',
     ...getTaskBinding(task),
     requestText: task.intentText ?? task.card.goal, requestSource: task.intentSource ?? 'declared',
+    ...(task.intentHistoryUnavailable ? { requestHistoryUnavailable: true } : {}),
+    ...(task.intentHistoryIncomplete ? { requestHistoryNote: task.intentHistoryNote } : {}),
     requestRefs: [{ source: task.intentSourceRef ?? 'declared', text: task.intentText ?? task.card.goal }],
     card: task.card, workflow: task.workflowDefinition ?? getDefaultWorkflow(task.card, task.gates), gates: task.gates,
     parserVersion: '11.12.0',
     reviewPolicy: { requireJev: deps.getConfig().planningReview.requireJev, reviewAbove: deps.getConfig().planningReview.reviewAbove }
     ,executionPolicy: { maxAutoFixRounds: deps.getConfig().budgets.maxAutoFixRounds,
       maxPlanningReviewFixRounds: deps.getConfig().planningReview.maxFixRounds,
+      planningReviewTimeoutMs: deps.getConfig().planningReview.timeoutMs, workflowMode: deps.getConfig().workflow.mode,
       ...deps.getConfig().execution, delegationLimit: deps.getConfig().budgets.maxDelegationsPerTask }
   })
   const prepareContractContexts = (session: SessionStateInfo, task: TaskRecord) => {
@@ -564,6 +572,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     return features.prepareTaskContexts(binding, [{ layer: 'L0', kind: 'contract', text: JSON.stringify({
       goal: task.card.goal, acceptance: task.card.acceptance, scope: task.card.scope, flags: task.card.flags,
       perf: task.card.perf, gates: task.gates, workflowRevision: task.workflowRevision
+      ,planningScope: task.card.planningScope
     }) }, { layer: 'L1', kind: 'source', text: task.intentText ?? task.card.goal }])
   }
   /** Publish a version change only after its context batch can be committed.
@@ -610,11 +619,19 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       contextRefs: [], contextDelegations: {} }
   }
   const deriveIntentRefresh = (task: TaskRecord, agent: AgentLike): TaskRecord => {
-    const latest = getTaskIntent(agent, task.card)
-    if (latest.source !== 'host' || (latest.sourceRef === task.intentSourceRef && latest.digest === task.intentLastDigest)) return task
+    const latest = getTaskIntent(agent, task.card, task)
+    const unavailable = task.intentSource === 'host' && latest.historyCoverage === 'unavailable'
+    const incomplete = task.intentHistoryIncomplete === true || (latest.historyCoverage === 'latest-visible' && latest.historyNote !== undefined)
+    const historyNote = latest.historyNote ?? (incomplete ? task.intentHistoryNote : undefined)
+    if (latest.source !== 'host' || (latest.sourceRef === task.intentSourceRef && latest.digest === task.intentLastDigest)) {
+      return (task.intentHistoryUnavailable ?? false) === unavailable && task.intentHistoryNote === historyNote
+        ? task : { ...task, intentHistoryUnavailable: unavailable, intentHistoryIncomplete: incomplete, intentHistoryNote: historyNote }
+    }
     return { ...task,
       intentText: `${task.intentText ?? task.card.goal}\n\n用户后续要求（${latest.sourceRef}）：\n${latest.text}`,
       intentSourceRef: latest.sourceRef, intentSource: 'host', intentLastDigest: latest.digest,
+      intentHistoryNote: historyNote, intentHistoryIncomplete: incomplete,
+      intentHistoryUnavailable: unavailable,
       requestRevision: (task.requestRevision ?? 1) + 1, planningReview: undefined, acceptance: undefined,
       planningAutoReviewRuns: 0, planningFixRounds: 0, contextRefs: [], contextDelegations: {},
       workflowState: task.workflowDefinition === undefined ? undefined : intWorkflowState(task.workflowDefinition, task.rounds)
@@ -1103,7 +1120,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const workflowDigest = getWorkflowDigest(check.definition)
       const semanticChanged = existing !== undefined && getSemanticCardDigest(existing.card) !== getSemanticCardDigest(card)
       const workflowChanged = existing !== undefined && existing.workflowDigest !== workflowDigest
-      const intent = getTaskIntent(exec.agent, card)
+      const intent = getTaskIntent(exec.agent, card, existing)
       const intentChanged = existing !== undefined && (existing.intentLastDigest !== intent.digest || existing.intentSourceRef !== intent.sourceRef)
       const changed = semanticChanged || workflowChanged || intentChanged
       const record: TaskRecord = {
@@ -1116,6 +1133,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           : intentChanged && existing?.intentSource === 'host' && intent.source === 'host'
             ? `${existing.intentText ?? existing.card.goal}\n\n用户后续要求（${intent.sourceRef}）：\n${intent.text}` : intent.text,
         intentSource: intent.source, intentSourceRef: intent.sourceRef, intentLastDigest: intent.digest,
+        intentHistoryNote: intent.historyNote ?? (existing?.intentHistoryIncomplete ? existing.intentHistoryNote : undefined),
+        intentHistoryIncomplete: existing?.intentHistoryIncomplete === true || (intent.historyCoverage === 'latest-visible' && intent.historyNote !== undefined),
+        intentHistoryUnavailable: existing?.intentSource === 'host' && intent.historyCoverage === 'unavailable',
         workflowDefinition: check.definition, workflowDigest,
         workflowState: changed || existing?.workflowState === undefined ? intWorkflowState(check.definition, existing?.rounds ?? 0) : existing.workflowState,
         orchestration: await getOrchestration(card, session, exec.signal),
@@ -1157,15 +1177,31 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   }
 
   const reviewRuns = new Map<string, Promise<unknown>>()
+  const reviewControllers = new Map<string, AbortController>()
   const runReviewPlan = async (raw: unknown, exec: DelegateExecInfo, automatic: boolean): Promise<unknown> => {
+    if (closing || exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '百工已停止或调用已取消，未启动规划审核')
     const session = getSession(exec.agent.id)
     const features = await ensureFeatures(session, exec.agent)
     const requested = (raw as { task_id?: unknown })?.task_id
     if (typeof requested !== 'string') throw new SwarmError('INVALID_ARGS', '规划审核必须指定 task_id')
     let task = await session.taskLock.run(async () => reconcileTask(session, refreshIntent(session, getTaskOrThrow(session, requested), exec.agent)))
     const snapshot = reviewSnapshot(task)
-    if ((raw as { bypass_cache?: boolean })?.bypass_cache !== true && isPlanningReviewCurrent(task.planningReview, snapshot)) return task.planningReview
-    if (reviewRuns.has(snapshot.snapshotDigest)) return reviewRuns.get(snapshot.snapshotDigest)!
+    const jevConfig = deps.getConfig().jev
+    const requestChars = JSON.stringify({ model: jevConfig.model, state: getPlanningReviewState(snapshot), questions: getPlanningReviewQuestions() }).length
+    if (jevConfig.enabled && requestChars > jevConfig.maxRequestChars) throw new SwarmError('INVALID_ARGS', `任务 ${task.taskId} 规划审核输入为 ${requestChars} 字符，超过 Jev 单次传输保护 ${jevConfig.maxRequestChars}；未调用审核模型、未截断需求。请由维护者核对 maxRequestChars 配置或整理有来源的阶段合同，重复复审不会解决此错误。`)
+    // bypass_cache 可以刷新批准或故障，但不能把同一负结论反复抽样直到通过。
+    if (isPlanningReviewReusable(task.planningReview, snapshot)
+      && ((raw as { bypass_cache?: boolean })?.bypass_cache !== true || !isPlanningReviewCurrent(task.planningReview, snapshot))) return { ...task.planningReview, cached: true, diagnostics: getPlanningReviewDiagnostics(task.planningReview!) }
+    if (reviewRuns.has(snapshot.snapshotDigest)) return waitForPlanning(reviewRuns.get(snapshot.snapshotDigest)!, exec.signal)
+    const controller = new AbortController()
+    const cancel = () => controller.abort(new SwarmError('RECOVERY_REQUIRED', '规划审核已取消'))
+    exec.signal.addEventListener('abort', cancel, { once: true })
+    if (exec.signal.aborted) cancel()
+    const configuredTimeout = deps.getConfig().planningReview.timeoutMs
+    const timeoutMs = Number.isSafeInteger(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 180000
+    const timer = setTimeout(() => controller.abort(new SwarmError('RECOVERY_REQUIRED', `规划审核超时（${timeoutMs}ms）；未授予执行权限。检查审核模型及网络后显式复审。`)), timeoutMs)
+    reviewControllers.set(snapshot.snapshotDigest, controller)
+    const reviewSignal = controller.signal
     const operation = (async () => {
       const config = deps.getConfig()
       const paused = automatic && getPlanningRecovery(task, config.planningReview.maxFixRounds).automaticReviewPaused
@@ -1180,7 +1216,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         if (!admitted) return { status: 'stale', reason: '规划审核开始前合同已改变，未启动旧版模型或 Jev 调用' }
       }
       const record = await RunPlanningReview(snapshot, {
-        now, policy: config.planningReview,
+        now, policy: config.planningReview, signal: reviewSignal,
         reviewAgent: async (_snapshot, schema, prompt): Promise<PlanningAgentAssessmentInfo> => {
           if (paused) return { reason: pauseReason }
           const subagents = deps.getSubagents()
@@ -1193,38 +1229,48 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           if (!subagents || !capabilities || !required.every((key) => capabilities[key as keyof typeof capabilities] === true) || visible.length === 0) return { reason: '独立只读审核后端或工具过滤能力不可用' }
           const budget = features.planningBudgetFor(task)
           const reservationId = `plan-${randomUUID()}`
-          budget.reserve({ id: reservationId, source: 'delegate' })
           const chain = getRoleRoute(config, 'yu_shi').chain
           const candidates: RouteInfo[] = []
-          const availability = await Promise.all(chain.map(async (route) => routeState.isRouteAvailable(route) && (await probe(route)).ok))
+          const availability = await waitForPlanning(Promise.all(chain.map(async (route) => routeState.isRouteAvailable(route) && (await probe(route, reviewSignal)).ok)), reviewSignal)
           candidates.push(...chain.filter((_route, index) => availability[index]))
-          if (candidates.length === 0) { budget.cancel(reservationId); return { reason: '没有当前可用的独立审核模型' } }
+          if (candidates.length === 0) return { reason: '没有当前可用的独立审核模型' }
+          budget.reserve({ id: reservationId, source: 'delegate' })
           budget.start(reservationId)
           const route = candidates[0]!
           const allowed = getToolFilter('yu_shi', visible, false)?.allow?.filter((name) => !name.startsWith('jev_') && !name.startsWith('swarm_message_')) ?? []
           let run: Awaited<ReturnType<typeof startChild>> | undefined
           try {
-            run = await startChild(subagents, {
+            const started = startChild(subagents, {
               provider: SPAWN_PROVIDER,
-              label: `规划审核·${task.taskId}`, parent: exec.agent, signal: exec.signal,
+              label: `规划审核·${task.taskId}`, parent: exec.agent, signal: reviewSignal,
               prompt: [{ type: 'text', text: prompt }], outputSchema: schema, maxDepth: 1,
               agentPreset: getRoleInfo('yu_shi').presetId,
               toolFilter: { allow: allowed }, agentOptions: { provider: route.provider, model: route.model, ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}) },
               persona: '你是独立只读的规划审查者。审核原始用户需求、目标、流程和源码，严禁写入、shell或自行委派。[[swarm:role=yu_shi]]\n' + getLanguageInstruction(deps.getConfig().agents.language)
             })
+            // 启动 API 也可能忽略取消；迟到的 child 不绑定任何任务权限，并主动关闭。
+            void started.then((late) => {
+              if (reviewSignal.aborted) {
+                childOwners.set(late.id, session.sessionId)
+                childSignals.set(late.id, reviewSignal)
+                void late.result.catch(() => undefined)
+                void late.dispose().catch((error: unknown) => deps.logger?.warn(`迟到规划审核清理失败 ${task.taskId}: ${getErrorText(error)}`))
+              }
+            }, () => undefined)
+            run = await waitForPlanning(started, reviewSignal)
             const liveReviewer = deps.getAgent?.(run.id)
             if (liveReviewer !== undefined) ApplyChildToolScope(liveReviewer, 'yu_shi', false)
             childOwners.set(run.id, session.sessionId)
-            childSignals.set(run.id, exec.signal)
+            childSignals.set(run.id, reviewSignal)
             routeState.AddChild(run.id, { chain: candidates, role: 'yu_shi', logicalRequestId: reservationId })
             const ready = features.bindings.bind({ agentId: run.id, ...getTaskContextBinding(task, features.workspaceId),
               nodeId: 'planning-review', attemptId: reservationId, threadId: run.id,
               role: 'yu_shi',
               permissions: ['pure-calc', 'context-read'], blindReview: true })
-              .then(async () => { await features.persist('workflow/review-start', session.store, session.threads) })
+              .then(async () => { if (!closing && !reviewSignal.aborted) await features.persist('workflow/review-start', session.store, session.threads) })
             childReady.set(run.id, ready)
-            await ready
-            const result = await run.result
+            await waitForPlanning(ready, reviewSignal)
+            const result = await waitForPlanning(run.result, reviewSignal)
             const observedModel = routeState.getLastRoute(run.id)?.model
             return { result: result.structured, reviewer: { agentId: run.id, role: 'yu_shi', ...(observedModel === undefined ? {} : { model: observedModel }),
               fresh: true, readOnly: true, authorAgentIds: [exec.agent.id, ...session.store.getTaskDelegations(task.taskId).filter((d) => ['ji_feng', 'zhu_jian'].includes(d.role)).flatMap((d) => d.childId ? [d.childId] : [])] } }
@@ -1232,9 +1278,12 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           finally {
             budget.settle(reservationId)
             if (run !== undefined) {
-              await run.dispose().catch(() => undefined)
-              await features.bindings.revoke(run.id, exec.signal.aborted ? 'cancelled' : 'completed')
+              // 先撤销能力，再有界清理；清理卡死不能阻塞本轮结果与后续审核。
+              await features.bindings.revoke(run.id, reviewSignal.aborted ? 'cancelled' : 'completed')
               routeState.DelAgent(run.id)
+              childReady.delete(run.id)
+              try { await waitForPlanning(run.dispose(), AbortSignal.timeout(1000)) }
+              catch (error) { deps.logger?.warn(`规划审核清理未确认 ${task.taskId}/${run.id}: ${getErrorText(error)}`) }
             }
             routeState.FinishLogicalRequest(reservationId)
           }
@@ -1243,7 +1292,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           if (paused) return { status: 'unknown', reason: pauseReason }
           if (!config.jev.enabled) return { status: 'unavailable', reason: 'Jev 已关闭' }
           session.counters.review += 1
-          const outcome = await jev.getClient().ask(state, questions, exec.signal)
+          const outcome = await waitForPlanning(jev.getClient().ask(getPlanningReviewState(state), questions, reviewSignal), reviewSignal)
           features.planningBudgetFor(task).observeJev(outcome.ok ? outcome.usage : undefined, outcome.attempts)
           return outcome.ok ? { status: 'ok', answers: outcome.answers, model: outcome.model }
             : { status: isJevAvailabilityFailure(outcome) ? 'unavailable' : 'unknown', reason: outcome.reason }
@@ -1254,16 +1303,26 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         record.errors.push(pauseReason)
       }
       return session.taskLock.run(async () => {
+        if (closing || exec.signal.aborted) return { status: 'unavailable', reason: '宿主停止或调用取消，未发布规划审核结论' }
+        if (reviewSignal.aborted && ['pass', 'pass_with_degradation'].includes(record.status)) {
+          record.status = 'unavailable'
+          record.errors.push('规划审核截止后不能发布批准，请检查模型与网络后重试')
+        }
         const current = refreshIntent(session, getTaskOrThrow(session, task.taskId), exec.agent)
         if (reviewSnapshot(current).snapshotDigest !== snapshot.snapshotDigest) return { status: 'stale', reason: '审核期间需求、合同、流程或策略已经改变' }
         task = session.store.UpdateTask(task.taskId, { planningReview: record })
         session.ledger.AddLedgerEvent({ type: 'workflow/review', taskId: task.taskId, data: { status: record.status, snapshotDigest: record.snapshotDigest, errors: record.errors } })
         await features.persist('workflow/review', session.store, session.threads)
-        return record
+        return { ...record, diagnostics: getPlanningReviewDiagnostics(record) }
       })
     })()
     reviewRuns.set(snapshot.snapshotDigest, operation)
-    try { return await operation } finally { reviewRuns.delete(snapshot.snapshotDigest) }
+    try { return await operation } finally {
+      clearTimeout(timer)
+      exec.signal.removeEventListener('abort', cancel)
+      reviewControllers.delete(snapshot.snapshotDigest)
+      reviewRuns.delete(snapshot.snapshotDigest)
+    }
   }
   const ReviewPlan: SwarmService['ReviewPlan'] = (raw, exec) => runReviewPlan(raw, exec, false)
 
@@ -1505,7 +1564,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       }
       await features.persist('accept/decision', session.store, session.threads)
       return {
-        result: { task_id: task.taskId, status, missing, roundsUsed: rounds, maxAutoFixRounds: config.budgets.maxAutoFixRounds, gates: check.statuses },
+        result: { task_id: task.taskId, status, missing, roundsUsed: rounds, maxAutoFixRounds: config.budgets.maxAutoFixRounds, gates: check.statuses,
+          completionScope: task.card.planningScope?.kind ?? 'request' as const, deferred: task.card.planningScope?.deferred ?? [] },
         experienceCandidateId,
         taskBinding: getTaskBinding(task), acceptanceDigest: getValueDigest(acceptance),
         assessmentState: getAcceptanceState(session.store.getTask(task.taskId)!, delegations, { summary: input.summary, unresolved: input.unresolved, gates: check.statuses })
@@ -1563,6 +1623,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         const currentTask = session.store.getTask(binding.taskId)
         const task = currentTask === undefined ? undefined : deriveReconciledTask(session, deriveIntentRefresh(currentTask, session.rootAgent ?? execution.agent))
         if (task === undefined || !isTaskVersionCurrent(task, binding)) return '专家绑定的是旧任务版本，不能继续执行工具'
+        if (task.intentHistoryUnavailable) return '宿主需求历史不可读取，无法确认最新授权，暂停专家工具调用'
       }
       if (['read', 'read_image', 'glob', 'grep', 'write', 'edit'].includes(execution.name)) {
         const canonical = (path: string): string => {
@@ -1880,6 +1941,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     ,dispose: () => disposal ??= (async () => {
       closing = true
       for (const scheduler of schedulers.values()) scheduler.dispose()
+      for (const controller of reviewControllers.values()) controller.abort(new SwarmError('RECOVERY_REQUIRED', '宿主正在停止规划审核'))
+      await Promise.allSettled([...reviewRuns.values()])
       for (const { controller } of manualRuns.values()) controller.abort()
       await Promise.allSettled([...manualRuns.values()].map(({ run }) => run))
       const errors: unknown[] = []

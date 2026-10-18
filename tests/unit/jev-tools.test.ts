@@ -185,7 +185,7 @@ describe('jev_match', () => {
 describe('jev_health 与工具定义', () => {
   it('health：返回模型列表，不计费；失败时映射状态码', async () => {
     const { tools } = makeClient([])
-    expect(await tools.health()).toMatchObject({ ok: true, model: 'jev-latest', answers: { models: [{ name: 'jev-1.13.0', release_date: '2026-09-01' }], round_trip_latency_ms: 120 }, usage: { est_cost_usd: 0 } })
+    expect(await tools.health()).toMatchObject({ ok: true, model: 'jev-1.14.0', answers: { models: [{ name: 'jev-1.13.0', release_date: '2026-09-01' }], round_trip_latency_ms: 120 }, usage: { est_cost_usd: 0 } })
     const down = makeClient([], { ok: false, reason: 'network', status: 503 })
     expect(await down.tools.health()).toEqual({ ok: false, status: 503, error: 'TypeSafe service unavailable', reason: 'network', failure_kind: 'availability' })
   })

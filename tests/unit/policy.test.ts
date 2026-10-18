@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import { getSemanticCardDigest } from '../../src/task-model.js'
+import { TASK_CARD_PARAMETERS } from '../../src/tools.js'
+import { ValidateJsonValue } from '../../src/util/json-schema.js'
 import {
   AddTriageGates,
   DEFAULT_BUDGETS,
   DEFAULT_TRIAGE_THRESHOLDS,
+  PLANNING_SCOPE_MAX_ITEMS,
+  PLANNING_SCOPE_MAX_TEXT_LENGTH,
   ValidateDelegationBudget,
   ValidateTaskCard,
   getAcceptanceCheck,
@@ -61,6 +66,93 @@ describe('ValidateTaskCard', () => {
     expect(hasPerfBudget({ p95Ms: '待测' })).toBe(false)
     expect(hasPerfBudget({ p99Ms: 20 })).toBe(true)
     expect(hasPerfBudget({ throughput: '1k/s' })).toBe(true)
+  })
+
+  it('阶段合同保留整体原始需求并规范化阶段边界', () => {
+    const card = makeCard({ changesCode: true }, {
+      intent: { text: '修复编排后完成自动交易系统，禁止自动启用实盘' },
+      planningScope: { kind: 'phase', deliverables: [' 修复规划审核及回归测试 '], deferred: ['完整交易系统联调'], rationale: ' 先解除编排阻塞，保留用户全部权限约束 ' }
+    })
+    expect(card.intent?.text).toBe('修复编排后完成自动交易系统，禁止自动启用实盘')
+    expect(card.planningScope).toEqual({ kind: 'phase', deliverables: ['修复规划审核及回归测试'], deferred: ['完整交易系统联调'], rationale: '先解除编排阻塞，保留用户全部权限约束' })
+    expect(getRuleGates(card).map((gate) => gate.gate)).toContain('G_VERIFY')
+    expect(ValidateJsonValue(TASK_CARD_PARAMETERS, card)).toEqual([])
+    const revised = { ...card, planningScope: { ...card.planningScope!, deferred: ['完整交易系统联调', '部署'] } }
+    expect(getSemanticCardDigest(revised)).not.toBe(getSemanticCardDigest(card))
+  })
+
+  it.each([
+    null,
+    {},
+    { kind: 'whole' },
+    { deliverables: [] },
+    { deferred: [] },
+    { deliverables: [' '] },
+    { deferred: [12] },
+    { deliverables: ['重复', ' 重复 '] },
+    { deferred: ['重复', '重复'] },
+    { deferred: ['当前交付'] },
+    { rationale: ' ' },
+    { rationale: 'x'.repeat(PLANNING_SCOPE_MAX_TEXT_LENGTH + 1) },
+    { deliverables: ['x'.repeat(PLANNING_SCOPE_MAX_TEXT_LENGTH + 1)] },
+    { deferred: Array.from({ length: PLANNING_SCOPE_MAX_ITEMS + 1 }, (_, index) => `延期 ${index}`) },
+    { bypassReview: true }
+  ])('拒绝缺失、无界或冲突的阶段合同：%j', (invalid) => {
+    const scope = invalid === null || Object.keys(invalid).length === 0 ? invalid : {
+      kind: 'phase', deliverables: ['当前交付'], deferred: ['后续交付'], rationale: '分阶段实施', ...invalid
+    }
+    const result = ValidateTaskCard({ title: '维护阶段', goal: '修复编排', acceptance: ['回归通过'], flags: {}, planningScope: scope })
+    expect(result.card).toBeUndefined()
+    expect(result.errors.some((error) => error.startsWith('planningScope'))).toBe(true)
+  })
+
+  it('兼容没有阶段合同的旧任务卡', () => {
+    expect(makeCard().planningScope).toBeUndefined()
+  })
+
+  it('精确阶段覆盖按交付序号规范化并绑定合同摘要', () => {
+    const phase = { kind: 'phase' as const, deliverables: ['实施修复', '独立复核'], deferred: ['业务联调'], rationale: '先修复编排',
+      coverage: [{ deliverable: 2, acceptanceIds: [' A2 '], nodeIds: ['review'] }, { deliverable: 1, acceptanceIds: ['A1'], nodeIds: ['implement'] }] }
+    const card = makeCard({ changesCode: true }, { acceptance: ['修复回归', '独立复核'], planningScope: phase })
+    expect(card.planningScope?.coverage).toEqual([
+      { deliverable: 1, acceptanceIds: ['A1'], nodeIds: ['implement'] },
+      { deliverable: 2, acceptanceIds: ['A2'], nodeIds: ['review'] }
+    ])
+    expect(ValidateJsonValue(TASK_CARD_PARAMETERS, card)).toEqual([])
+    const revised = { ...card, planningScope: { ...card.planningScope!, coverage: [{ deliverable: 1, acceptanceIds: ['A1'], nodeIds: ['other'] }, phase.coverage[0]!] } }
+    expect(getSemanticCardDigest(revised)).not.toBe(getSemanticCardDigest(card))
+  })
+
+  it.each([
+    null, {}, [], [null], [{ deliverable: 1 }],
+    [{ deliverable: 0, acceptanceIds: ['A1'], nodeIds: ['analysis'] }],
+    [{ deliverable: 2, acceptanceIds: ['A1'], nodeIds: ['analysis'] }],
+    [{ deliverable: 1.5, acceptanceIds: ['A1'], nodeIds: ['analysis'] }],
+    [{ deliverable: '1', acceptanceIds: ['A1'], nodeIds: ['analysis'] }],
+    [{ deliverable: 1, acceptanceIds: [], nodeIds: ['analysis'] }],
+    [{ deliverable: 1, acceptanceIds: ['A1'], nodeIds: [] }],
+    [{ deliverable: 1, acceptanceIds: [' '], nodeIds: ['analysis'] }],
+    [{ deliverable: 1, acceptanceIds: ['A1'], nodeIds: [false] }],
+    [{ deliverable: 1, acceptanceIds: ['A1', ' A1 '], nodeIds: ['analysis'] }],
+    [{ deliverable: 1, acceptanceIds: ['A1'], nodeIds: ['analysis', 'analysis'] }],
+    [{ deliverable: 1, acceptanceIds: ['A1'], nodeIds: ['x'.repeat(65)] }],
+    [{ deliverable: 1, acceptanceIds: Array.from({ length: PLANNING_SCOPE_MAX_ITEMS + 1 }, (_, index) => `A${index + 1}`), nodeIds: ['analysis'] }],
+    [{ deliverable: 1, acceptanceIds: ['A1'], nodeIds: ['analysis'], required: false }]
+  ])('拒绝非法精确覆盖：%j', (coverage) => {
+    const result = ValidateTaskCard({ title: '维护', goal: '修复', acceptance: ['回归通过'], flags: {},
+      planningScope: { kind: 'phase', deliverables: ['修复'], deferred: ['业务联调'], rationale: '分阶段', coverage } })
+    expect(result.card).toBeUndefined()
+    expect(result.errors.some(error => error.startsWith('planningScope.coverage'))).toBe(true)
+  })
+
+  it('精确覆盖不能遗漏或重复任何阶段交付', () => {
+    const row = { deliverable: 1, acceptanceIds: ['A1'], nodeIds: ['analysis'] }
+    for (const coverage of [[row], [row, row]]) {
+      const result = ValidateTaskCard({ title: '维护', goal: '修复', acceptance: ['回归通过'], flags: {},
+        planningScope: { kind: 'phase', deliverables: ['实施', '复核'], deferred: ['业务联调'], rationale: '分阶段', coverage } })
+      expect(result.card).toBeUndefined()
+      expect(result.errors.some(error => error.startsWith('planningScope.coverage'))).toBe(true)
+    }
   })
 })
 

@@ -63,7 +63,7 @@ export const Config = Schema.object({
     enabled: Schema.boolean().default(true),
     apiKeyEnv: Schema.string().default('TYPESAFE_API_KEY'),
     baseUrl: Schema.string().default('https://api.typesafe.ai'),
-    model: Schema.string().default('jev-latest'),
+    model: Schema.string().default('jev-1.14.0'),
     timeoutMs: Schema.natural().default(10000),
     maxRetries: Schema.natural().default(4).description('单次 Jev 请求失败后的重试次数；Jev 调用不设会话额度'),
     maxRequestsPerSecond: Schema.natural().default(0).description('兼容旧配置；Jev 不设插件侧限流，所有入口实际按不限处理'),
@@ -111,6 +111,7 @@ export const Config = Schema.object({
     enabled: Schema.boolean().default(true),
     requireJev: Schema.boolean().default(false),
     maxFixRounds: Schema.natural().default(2).description('自动规划修正轮数；达到上限仅暂停自动审核，任务卡仍可编辑并显式复审'),
+    timeoutMs: Schema.natural().default(180000).description('单轮规划审核等待上限（毫秒）；超时返回可诊断阻塞，不产生批准'),
     reviewAbove: Schema.number().default(0.8)
   }).default({}).description('生成后独立审核目标、流程设计与 Mermaid 代码').volatile(),
   execution: Schema.object({
@@ -238,7 +239,7 @@ export interface SwarmConfigInfo {
   budgets: BudgetInfo
   ledgerDir: string
   workflow: { mode: 'off' | 'advisory' | 'enforced'; maxNodes: number; maxEdges: number }
-  planningReview: { enabled: boolean; requireJev: boolean; maxFixRounds: number; reviewAbove: number }
+  planningReview: { enabled: boolean; requireJev: boolean; maxFixRounds: number; reviewAbove: number; timeoutMs: number }
   execution: { profile: 'legacy' | 'bounded'; maxCalls: number; maxTokens: number; maxCostUsd: number }
   recovery: { maxTransientRetries: number; maxLogicalAttempts: number; maxShortRetryDelayMs: number; maxTransientWaitMs: number }
   persistence: { enabled: boolean; directory: string; maxStateBytes: number }
@@ -248,7 +249,7 @@ export interface SwarmConfigInfo {
 }
 
 export const DEFAULT_WORKFLOW_CONFIG: SwarmConfigInfo['workflow'] = { mode: 'advisory', maxNodes: 32, maxEdges: 64 }
-export const DEFAULT_PLANNING_REVIEW: SwarmConfigInfo['planningReview'] = { enabled: true, requireJev: false, maxFixRounds: 2, reviewAbove: 0.8 }
+export const DEFAULT_PLANNING_REVIEW: SwarmConfigInfo['planningReview'] = { enabled: true, requireJev: false, maxFixRounds: 2, reviewAbove: 0.8, timeoutMs: 180000 }
 export const DEFAULT_EXECUTION_CONFIG: SwarmConfigInfo['execution'] = { profile: 'legacy', maxCalls: 0, maxTokens: 0, maxCostUsd: 0 }
 export const DEFAULT_RECOVERY_CONFIG: SwarmConfigInfo['recovery'] = { maxTransientRetries: 1, maxLogicalAttempts: 8, maxShortRetryDelayMs: 2000, maxTransientWaitMs: 5000 }
 

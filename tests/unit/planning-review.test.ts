@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
-import { RunPlanningReview, ValidatePlanningReviewResult, getPlanningReviewQuestions, getPlanningReviewRecord, getReviewSnapshot, intPlanningReviewStore, isPlanningReviewCurrent, type PlanningReviewResult, type ReviewSnapshot } from '../../src/planning-review.js'
+import { RunPlanningReview, ValidateReviewSnapshot, ValidatePlanningReviewResult, getPlanningReviewQuestions, getPlanningReviewRecord, getReviewSnapshot, intPlanningReviewStore, isPlanningReviewCurrent, type PlanningReviewResult, type ReviewSnapshot } from '../../src/planning-review.js'
 import { getDefaultWorkflow } from '../../src/workflow.js'
 
 const makeSnapshot = (revision = 1) => {
@@ -20,6 +20,18 @@ const reviewer = { agentId: 'fresh-expert', role: 'yu_shi' as const, fresh: true
 const jev = () => ({ status: 'ok' as const, model: 'jev', answers: Object.fromEntries(Object.keys(getPlanningReviewQuestions()).map((id) => [id, { noul: 0.95 }])) })
 
 describe('独立规划审核与 CAS', () => {
+  it('阶段精确映射参与批准摘要，并拒绝不存在的验收/节点引用', () => {
+    const initial = makeSnapshot()
+    const card = { ...initial.card, planningScope: { kind: 'phase' as const, deliverables: ['局部边界修复'], deferred: ['其余模块迭代'], rationale: '先修阻塞问题', coverage: [{ deliverable: 1, acceptanceIds: ['A1'], nodeIds: ['implementation', 'verification'] }] } }
+    const snapshot = getReviewSnapshot({ ...initial, card, requirements: undefined })
+    expect(ValidateReviewSnapshot(snapshot)).toEqual([])
+    expect(snapshot.requirements.find((r) => r.id === 'R1')?.nodeIds).toEqual(['implementation', 'verification'])
+    const badCard = structuredClone(card)
+    badCard.planningScope.coverage[0]!.nodeIds = ['missing-node']
+    const invalid = getReviewSnapshot({ ...initial, card: badCard, requirements: undefined })
+    expect(invalid.snapshotDigest).not.toBe(snapshot.snapshotDigest)
+    expect(ValidateReviewSnapshot(invalid).join()).toContain('不存在')
+  })
   it('parser/策略变化需要新审核，伪造非空依据引用不会通过', () => {
     const snapshot = makeSnapshot()
     const base = { rootSessionId: snapshot.rootSessionId, workspaceId: snapshot.workspaceId, taskId: snapshot.taskId, requestRevision: snapshot.requestRevision, requestText: snapshot.requestText, requestSource: snapshot.requestSource, cardRevision: snapshot.cardRevision, workflowRevision: snapshot.workflowRevision, card: snapshot.card, workflow: snapshot.workflow, gates: snapshot.gates }

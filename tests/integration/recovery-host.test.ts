@@ -6,15 +6,16 @@ import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import YAML from 'yaml'
 import { getRoutesOverlay, type ScenarioRunInfo } from './helpers.js'
-import { REPO_ROOT, DRIVER_DIR, SANDBOX_ROOT, PROFILE, ensureProfile, runDshAsync } from '../../scripts/sandbox.mjs'
+import { REPO_ROOT, DRIVER_DIR, SANDBOX_ROOT, PROFILE, ensureProfile, getTestedVersion, runDshAsync } from '../../scripts/sandbox.mjs'
 
 interface RecoveryRun extends ScenarioRunInfo {
   recoveryRequests: Array<{ provider?: string; model: string; sessionId: string; at: number }>
   recoveryEvents: Array<{ type: string; data?: unknown }>
   recoveryTerminal?: string
   agentErrors?: Array<{ message?: string; code?: string }>
-  planningReviewers?: Array<{ sessionId: string; model: string; tools: string[]; outputSchemaProperties: string[]; snapshotDigest: string; requestText: string; mermaid: string; workflow: unknown; seesAgentResult: boolean; seesJevResult: boolean; readResult?: string; mutationResult?: string; mutationIsError?: boolean }>
-  planningStatus?: { tasks: Array<{ planningReview?: unknown }> }
+  planningReviewers?: Array<{ sessionId: string; model: string; tools: string[]; outputSchemaProperties: string[]; snapshotDigest: string; requestText: string; mermaid: string; workflow: unknown; planningScope?: { kind: string; deferred: string[] }; seesAgentResult: boolean; seesJevResult: boolean; readResult?: string; mutationResult?: string; mutationIsError?: boolean }>
+  planningStatus?: { tasks: Array<{ planningReview?: unknown; acceptance?: { status: string } }> }
+  hostApis?: { start: boolean; startActivation: boolean }
   analysisReadResult?: string
 }
 const RECOVERY_BASE = {
@@ -100,7 +101,7 @@ describe('真实 AgentLoop：pool exhausted 9060669ms 与终态恢复', () => {
 })
 
 describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () => {
-  it('官方parser、独立spawn custom schema及Jev mock双审通过后，依赖仍生效并完成验收', async () => {
+  it.each(['planning-enforced', 'planning-phase-pass', 'planning-phase-low'])('%s：真实宿主自动规划、阶段验收与低分收敛（Jev 为本机固定响应）', async (scenario) => {
     const requests: Array<{ model: string; state: Record<string, unknown>; questions: Record<string, { type: string; criteria?: unknown[] | Record<string, unknown> }> }> = []
     const server = createServer(async (request, response) => {
       try {
@@ -112,7 +113,7 @@ describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () =>
           const question = value as { type: string; criteria?: unknown[] | Record<string, unknown> }
           return [id, question.type === 'score' ? { type: 'score', score: Math.max(0, (question.criteria as unknown[])?.length - 1), confidence: 0.99 }
             : question.type === 'choice' ? { type: 'choice', choice: Object.keys(question.criteria ?? {})[0], confidence: 0.99 }
-              : { type: 'noul', noul: 0.99 }]
+              : { type: 'noul', noul: scenario === 'planning-phase-low' && id === 'requirement_coverage' ? 0.35 : scenario === 'planning-phase-low' && id === 'execution_boundaries' ? 0.79 : 0.99 }]
         }))
         response.writeHead(200, { 'content-type': 'application/json' })
         response.end(JSON.stringify({ model: 'jev-host-planning-mock', answers, usage: { input_tokens: 20, output_tokens: 8 } }))
@@ -123,8 +124,8 @@ describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () =>
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
     const port = (server.address() as AddressInfo).port
     try {
-      const run = await runRecovery('planning-enforced', getRoutesOverlay(), 'normal', undefined, {
-        config: { workflow: { mode: 'enforced' }, planningReview: { requireJev: true },
+      const run = await runRecovery(scenario, getRoutesOverlay(), 'normal', undefined, {
+        config: { workflow: { mode: 'enforced' }, planningReview: { enabled: true, requireJev: true, reviewAbove: 0.8, timeoutMs: 20000 },
           jev: { enabled: true, apiKeyEnv: 'SWARM_PLANNING_JEV_KEY', baseUrl: `http://127.0.0.1:${port}`, maxRetries: 0 } },
         env: { SWARM_PLANNING_JEV_KEY: 'planning-fixture-key' }
       })
@@ -140,18 +141,44 @@ describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () =>
       expect(reviewer.readResult).toContain('recovery fixture')
       expect(reviewer.mutationIsError, reviewer.mutationResult).toBe(true)
       expect(existsSync(join(run.workspace, 'planner-should-not-write.txt'))).toBe(false)
-      expect(reviewer.requestText).toBe('分析 README.md 并提交有证据的结论')
       expect(reviewer.mermaid).toContain('flowchart TD')
-      expect(run.results[0]?.text).toContain('pass')
-      expect(run.results[1]?.isError).toBe(true) // 没有将规划通过当成依赖通过。
-      expect(run.results[2]?.text).toContain('blocked')
-      expect(run.results[3]?.text).toContain('completed')
-      expect(run.analysisReadResult).toContain('recovery fixture')
-      expect(run.results[3]?.text).toContain('README.md')
-      expect(run.results[4]?.text).toContain('accepted')
-      expect(run.ledgerEvents.find((event) => event.type === 'workflow/review')?.data).toMatchObject({ status: 'pass' })
-      expect(run.planningStatus?.tasks[0]?.planningReview).toMatchObject({ status: 'pass', goalReview: { verdict: 'pass' }, designReview: { verdict: 'pass' },
-        mermaidReview: { parseVerdict: 'pass', projectionVerdict: 'pass', parserVersion: '11.12.0' } })
+      if (getTestedVersion() === '0.2.1-rc.2') expect(run.hostApis).toEqual({ start: false, startActivation: true })
+      if (scenario === 'planning-enforced') {
+        expect(reviewer.requestText).toBe('分析 README.md 并提交有证据的结论')
+        expect(run.results[1]?.isError).toBe(true)
+        expect(run.results[2]?.text).toContain('blocked')
+        expect(run.results[3]?.text).toContain('completed')
+        expect(run.results[3]?.text).toContain('README.md')
+        expect(run.results[4]?.text).toContain('accepted')
+      } else {
+        expect(reviewer.requestText).toContain('完整系统')
+        expect(reviewer.planningScope).toMatchObject({ kind: 'phase', deferred: ['后续实施完整系统'] })
+      }
+      if (scenario === 'planning-phase-low') {
+        expect(run.children).toEqual([])
+        for (const result of run.results.slice(1, 4)) {
+          expect(JSON.parse(result.text)).toMatchObject({ cached: true, status: 'review_required', diagnostics: [
+            { dimension: 'requirement_coverage', probability: 0.35, threshold: 0.8 },
+            { dimension: 'execution_boundaries', probability: 0.79, threshold: 0.8 }
+          ] })
+        }
+        expect(run.results[4]?.isError).toBe(true)
+        expect(run.results[5]?.text).toContain('blocked')
+        expect(run.planningStatus?.tasks[0]?.planningReview).toMatchObject({ status: 'review_required' })
+        expect(run.planningStatus?.tasks[0]?.acceptance?.status).toBe('blocked')
+      } else {
+        expect(run.results[0]?.text).toContain('pass')
+        expect(run.analysisReadResult).toContain('recovery fixture')
+        expect(run.ledgerEvents.find((event) => event.type === 'workflow/review')?.data).toMatchObject({ status: 'pass' })
+        expect(run.planningStatus?.tasks[0]?.planningReview).toMatchObject({ status: 'pass', goalReview: { verdict: 'pass' }, designReview: { verdict: 'pass' },
+          mermaidReview: { parseVerdict: 'pass', projectionVerdict: 'pass', parserVersion: '11.12.0' } })
+        if (scenario === 'planning-phase-pass') {
+          expect(run.results[1]?.text).toContain('completed')
+          expect(run.results[2]?.text).toContain('accepted')
+          expect(run.results[2]?.text).toContain('整体目标尚未完成')
+          expect(run.planningStatus?.tasks[0]?.acceptance?.status).toBe('accepted')
+        }
+      }
       const planning = requests.filter((request) => Object.hasOwn(request.questions, 'goal_alignment'))
       expect(planning).toHaveLength(1)
       expect(Object.keys(planning[0]!.questions)).toEqual(expect.arrayContaining(['goal_alignment', 'design_sufficiency', 'mermaid_expression']))

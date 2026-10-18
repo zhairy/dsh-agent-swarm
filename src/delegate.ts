@@ -170,6 +170,7 @@ export const getTaskBrief = (task: TaskRecord, input: DelegateInput, delegationI
     ] : []),
     `任务标题：${card.title}`,
     `目标：${card.goal}`,
+    ...(card.planningScope === undefined ? [] : [`阶段合同：${JSON.stringify(card.planningScope)}。只交付当前阶段；延期不是已完成，原始需求中的安全限制始终生效。`]),
     `验收标准：\n${card.acceptance.map((item) => `- ${item}`).join('\n')}`,
     `范围：${card.scope.length > 0 ? card.scope.join('、') : '未指定'}`,
     ...((task.contextRefs ?? []).length > 0 ? [`授权材料索引：${task.contextRefs!.slice(0, 4).map((item) => `${item.ref}(${item.layer}/${item.kind})`).join('、')}`] : []),

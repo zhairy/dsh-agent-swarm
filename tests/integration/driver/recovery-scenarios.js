@@ -4,8 +4,31 @@ const taskCard = {
   args: { title: '模型故障恢复集成', goal: '验证恢复不会重复执行副作用', acceptance: ['故障路由只请求一次，备用继续原步骤'], scope: ['hello.txt'], flags: {} }
 }
 const delegate = (role, session) => ({ tool: 'swarm_delegate', args: { task_id: '$TASK', role, session, prompt: role === 'ji_feng' ? '创建 hello.txt，提交实际改动证据' : '检查 README.md，提交结构化结论' } })
+const phaseCard = { title: '阶段规划活性集成', goal: '本阶段只读分析 README.md 并报告依据', acceptance: ['结论引用 README.md 的真实内容'], scope: ['README.md'], flags: {},
+  planningScope: { kind: 'phase', deliverables: ['只读分析 README.md 并报告依据'], deferred: ['后续实施完整系统'], rationale: '先确认源码证据，再实施完整系统；始终禁止自动启用实盘' } }
 
 export const RECOVERY_SCENARIOS = {
+  'planning-phase-pass': {
+    planning: true, preset: 'tian-shu', userText: '实现完整系统；本阶段先只读分析 README.md，完整实施留待后续，禁止自动启用实盘。',
+    root: [
+      { tool: 'swarm_task_card', args: phaseCard },
+      { tool: 'swarm_delegate', args: { task_id: '$TASK', node_id: 'analysis', role: 'mou_ding', prompt: '真实读取 README.md，交付本阶段依据', backend: 'api', session: 'oneshot' } },
+      { tool: 'swarm_accept', args: { task_id: '$TASK', decision: 'accept', summary: '本阶段只读分析完成，完整实施仍延期', stopReason: '仅本阶段完成' } },
+      { tool: 'swarm_status', args: { task_id: '$TASK', verbose: true } },
+      { text: 'PHASE DONE' }
+    ]
+  },
+  'planning-phase-low': {
+    planning: true, preset: 'tian-shu', userText: '实现完整系统；本阶段先只读分析 README.md，完整实施留待后续，禁止自动启用实盘。',
+    root: [
+      { tool: 'swarm_task_card', args: phaseCard },
+      ...Array.from({ length: 3 }, () => ({ tool: 'swarm_review_plan', args: { task_id: '$TASK', bypass_cache: true } })),
+      { tool: 'swarm_delegate', args: { task_id: '$TASK', node_id: 'analysis', role: 'mou_ding', prompt: '低分时不得开始实施', backend: 'api', session: 'oneshot' } },
+      { tool: 'swarm_accept', args: { task_id: '$TASK', decision: 'accept', summary: '不能绕过审核', stopReason: '检查门禁' } },
+      { tool: 'swarm_status', args: { task_id: '$TASK', verbose: true } },
+      { text: 'LOW SCORE DONE' }
+    ]
+  },
   'planning-enforced': {
     planning: true, preset: 'tian-shu', userText: '分析 README.md 并提交有证据的结论',
     root: [
@@ -76,7 +99,8 @@ export const apply = (ctx) => {
   if (!scenarioName) return
   const scenario = RECOVERY_SCENARIOS[scenarioName]
   const out = process.env.SWARM_DRIVER_OUT
-  const state = { scenario: scenarioName, recoveryRequests: [], recoveryEvents: [], agentErrors: [], results: [], children: [], rootTools: [], failQuotaHits: 0, childMessages: [], rootNotices: 0, planningReviewers: [] }
+  const state = { scenario: scenarioName, recoveryRequests: [], recoveryEvents: [], agentErrors: [], results: [], children: [], rootTools: [], failQuotaHits: 0, childMessages: [], rootNotices: 0, planningReviewers: [],
+    hostApis: { start: typeof ctx.subagents.start === 'function', startActivation: typeof ctx.subagents.startActivation === 'function' } }
   let finished = false
   const finish = (status, extra = {}) => {
     if (finished) return
@@ -97,6 +121,7 @@ export const apply = (ctx) => {
     async *stream (options) {
       if (options.purpose !== undefined) { yield* textChunks('Recovery test'); return }
       recordRecoveryRequest(state, options)
+      const submit = value => toolChunks('structured_output', options.tools?.find(item => item.name === 'structured_output')?.parameters?.properties?.value ? { value } : value)
       const failure = getRecoveryFailure(options.model)
       if (failure) { state.failQuotaHits += failure.code === 'QUOTA' ? 1 : 0; yield { type: 'finish', reason: { kind: 'error', failure } }; return }
       const reviewPrompt = (options.messages ?? []).map(textOf).find((text) => text.includes('快照（完整当前合同与源码）：'))
@@ -112,8 +137,8 @@ export const apply = (ctx) => {
         let reviewer = state.planningReviewers.find((item) => item.sessionId === options.sessionId)
         if (reviewer === undefined) {
           reviewer = { sessionId: options.sessionId, model: options.model, tools,
-            outputSchemaProperties: Object.keys(outputSchema?.properties ?? {}), snapshotDigest: snapshot.snapshotDigest,
-            requestText: snapshot.requestText, mermaid: snapshot.mermaid, workflow: snapshot.workflow,
+            outputSchemaProperties: Object.keys(outputSchema?.properties?.value?.properties ?? outputSchema?.properties ?? {}), snapshotDigest: snapshot.snapshotDigest,
+            requestText: snapshot.requestText, mermaid: snapshot.mermaid, workflow: snapshot.workflow, planningScope: snapshot.card.planningScope,
             seesAgentResult: Object.hasOwn(snapshot, 'agent'), seesJevResult: Object.hasOwn(snapshot, 'jev') }
           state.planningReviewers.push(reviewer)
         }
@@ -124,16 +149,18 @@ export const apply = (ctx) => {
         }
         reviewer.mutationResult = textOf(options.messages?.at(-1))
         reviewer.mutationIsError = options.messages?.at(-1)?.isError === true
+        if (step > 2) throw new Error('真实宿主未接受规划 structured_output，停止而非重复提交')
         const dimension = { verdict: 'pass', summary: '独立对照 R1/A1/analysis：分析步骤产出对应结论，源码箭头与冻结流程相同', evidenceRefs: ['R1', 'A1', 'analysis', 'workflow', 'mermaid'] }
-        yield* toolChunks('structured_output', { snapshotDigest: snapshot.snapshotDigest, verdict: 'pass',
+        yield* submit({ snapshotDigest: snapshot.snapshotDigest, verdict: 'pass',
           goalReview: dimension, designReview: dimension, mermaidReview: dimension,
-          requirementCoverage: snapshot.requirements.map((requirement) => ({ requirementId: requirement.id, covered: true, evidence: 'analysis 读取 README.md 后形成 A1 要求的结论' })),
+          requirementCoverage: snapshot.requirements.map((requirement) => ({ requirementId: requirement.id, covered: requirement.required, evidence: requirement.required ? 'analysis 读取 README.md 后形成 A1 要求的结论' : '明确延期，不声称阶段完成即整体完成' })),
           findings: [], assumptions: [], unresolved: [] })
         return
       }
       const role = /^(?:role|writer)-([a-z_]+)$/.exec(options.model)?.[1]
       if (role === undefined) {
-        const last = options.messages?.at(-1)
+        // 新宿主可在工具结果后追加技能提醒；按消息角色取结果，不能把提醒误作结果缺失。
+        const last = options.messages?.findLast(message => message.role === 'tool')
         if (last?.role === 'tool') {
           const text = textOf(last)
           state.results.push({ step: rootStep - 1, isError: last.isError === true, text })
@@ -153,7 +180,8 @@ export const apply = (ctx) => {
       if (scenario.planning && role === 'mou_ding') {
         if (step === 0) { yield* toolChunks('read', { file_path: 'README.md' }); return }
         state.analysisReadResult = textOf(options.messages?.at(-1))
-        yield* toolChunks('structured_output', { summary: 'README.md 第一行声明 recovery fixture；结论依据已读取的文件', unresolved: [], constraints: ['结论引用 README.md'],
+        if (step > 1) throw new Error('真实宿主未接受执行 structured_output')
+        yield* submit({ summary: 'README.md 第一行声明 recovery fixture；结论依据已读取的文件', unresolved: [], constraints: ['结论引用 README.md'],
           options: [{ name: '按文件事实报告', summary: '读取并核对第一行', pros: ['证据可复查'], cons: [] }],
           decisions: [{ point: '输入是什么', recommendation: '测试恢复工作区', reason: 'README.md:1 为 # recovery fixture' }], dependencies: [] })
         return
@@ -164,7 +192,7 @@ export const apply = (ctx) => {
         yield* toolChunks('write', { [keys.find((key) => /path|file/i.test(key)) ?? 'path']: 'hello.txt', [keys.find((key) => /content|text|data/i.test(key)) ?? 'content']: 'hello swarm\n' })
         return
       }
-      if (tools.includes('structured_output')) yield* toolChunks('structured_output', VALID[role])
+      if (tools.includes('structured_output')) yield* submit(VALID[role])
       else yield* textChunks('```json\n' + JSON.stringify(VALID[role]) + '\n```')
     }
   }

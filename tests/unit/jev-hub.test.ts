@@ -66,7 +66,7 @@ describe('intJevHub', () => {
       fetch: fetch as unknown as typeof globalThis.fetch
     })
     const health = await hub.getHealth()
-    expect(health).toMatchObject({ enabled: true, model: 'jev-latest', key: { configured: true }, result: { ok: true, answers: { models: [{ name: 'jev-1.13.0' }] } } })
+    expect(health).toMatchObject({ enabled: true, model: 'jev-1.14.0', key: { configured: true }, result: { ok: true, answers: { models: [{ name: 'jev-1.13.0' }] } } })
     expect(fetch.mock.calls[0]?.[0]).toBe('https://api.typesafe.ai/v1/models')
   })
 

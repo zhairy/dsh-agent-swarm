@@ -1,0 +1,8 @@
+{
+  "fixture": "40000 ASCII characters, same original text repeated through requestRefs and default R1",
+  "beforeChars": 124017,
+  "afterChars": 44110,
+  "reductionRatio": 0.644322955723812,
+  "fullOriginalPreserved": true,
+  "snapshotDigestUnchanged": true
+}
