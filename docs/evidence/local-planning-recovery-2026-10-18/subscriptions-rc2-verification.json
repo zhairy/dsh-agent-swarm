@@ -1,0 +1,114 @@
+{
+  "plugin": "dsh-plugin-subscriptions",
+  "upstreamVersion": "0.9.9",
+  "localVersion": "0.9.9+local.rc2.1",
+  "candidate": "/home/zhairy/.dsh/local-bundles/dsh-plugin-subscriptions-rc2",
+  "host": "0.2.1-rc.2",
+  "hostExecutable": "/usr/lib/node_modules/@deepseek-ai/dsh/lib/bin.js",
+  "enginesDsh": "0.2.1-rc.2",
+  "copiedUpstreamFiles": 139,
+  "changedUpstreamFiles": [
+    "package.json"
+  ],
+  "originalChangedFiles": [],
+  "hardlinkedToOriginal": [],
+  "baseline": {
+    "ok": false,
+    "error": "Error: Provider not registered: codex",
+    "stack": "Error: Provider not registered: codex\n    at Timeout._onTimeout (file:///tmp/subscriptions-rc2-compat-yp8kaaud/probe.mjs:11:81)"
+  },
+  "candidateTest": {
+    "ok": true,
+    "agentLifecycle": "create-dispose passed",
+    "scopedToolCount": 28,
+    "host": "0.2.1-rc.2",
+    "providers": [
+      "codex",
+      "claude",
+      "grok",
+      "copilot",
+      "antigravity",
+      "deepseek-official",
+      "deepseek-account"
+    ],
+    "registeredTools": [
+      "x_search",
+      "video_generate",
+      "image_generate"
+    ],
+    "catalogs": {
+      "codex": [
+        {
+          "provider": "codex",
+          "id": "compat-codex",
+          "name": "Compatibility fixture codex"
+        }
+      ],
+      "claude": [],
+      "grok": [],
+      "copilot": [],
+      "antigravity": []
+    },
+    "resolved": {
+      "provider": "codex",
+      "id": "compat-codex",
+      "name": "Compatibility fixture codex",
+      "inputModalities": [
+        "text"
+      ],
+      "context": {
+        "contextWindow": 32000
+      },
+      "defaultMaxTokens": 4096,
+      "reasoning": {
+        "efforts": [
+          {
+            "id": "minimal",
+            "name": "Minimal"
+          },
+          {
+            "id": "low",
+            "name": "Low"
+          },
+          {
+            "id": "medium",
+            "name": "Medium"
+          },
+          {
+            "id": "high",
+            "name": "High"
+          },
+          {
+            "id": "xhigh",
+            "name": "Extra High"
+          }
+        ],
+        "defaultEffort": "high"
+      }
+    },
+    "credentialSource": "isolated synthetic fixture only",
+    "modelGenerationAttempted": false
+  },
+  "strictCompatibilityExemptionUsed": false,
+  "productionProfileChanged": false,
+  "productionCredentialsRead": false,
+  "credentialNamespace": "DSH_HOME/plugins/subscriptions",
+  "isolatedEvidenceDirectory": "/tmp/subscriptions-rc2-compat-yp8kaaud",
+  "limits": [
+    "No production model generation was attempted",
+    "Web UI interactions and OAuth refresh require post-switch verification by root",
+    "Synthetic catalog override exists only in the isolated profile"
+  ],
+  "independentRuntimeDependencies": {
+    "passed": true,
+    "oldProfileRequired": false,
+    "oldPnpmStoreRequired": false,
+    "runtimeRoot": "/home/zhairy/.dsh/local-bundles/dsh-plugin-subscriptions-rc2/.runtime-deps",
+    "lockSha256": "7bf5aa36aec4b5ea5d2ae0cbc7eaee7a6cddd010fd87dc7c9db58c4807a9e4af",
+    "undiciVersion": "7.29.1",
+    "sdkRoot": "/usr/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai",
+    "sdkVersion": "0.2.1-rc.2",
+    "schemasteryVersion": "3.18.5",
+    "rebuildScript": "/home/zhairy/.dsh/local-bundles/dsh-plugin-subscriptions-rc2/rebuild-runtime.mjs"
+  }
+}

@@ -292,7 +292,8 @@ export const getPlanningReviewRecord = (snapshot: ReviewSnapshot, input: { struc
   if (input.structure.sourceDigest !== snapshot.mermaidDigest || input.structure.generatorVersion !== snapshot.generatorVersion || input.structure.parserVersion !== snapshot.parserVersion) errors.push('结构检查没有绑定当前源码、生成器与 parser 版本')
   const agentErrors = input.agent.result === undefined ? [input.agent.reason ?? '独立规划 Agent 不可用'] : ValidatePlanningReviewResult(snapshot, input.agent.result)
   const reviewer = input.agent.reviewer
-  if (reviewer === undefined || !reviewer.fresh || !reviewer.readOnly || !['mou_ding', 'shu_ji', 'yu_shi'].includes(reviewer.role) || reviewer.authorAgentIds?.includes(reviewer.agentId)) agentErrors.push('规划评审必须使用非作者的新会话只读专家')
+  // 未取得结果的服务故障不等于已发现作者自审；有结果仍必须完整核对独立身份。
+  if ((reviewer !== undefined || input.agent.result !== undefined) && (reviewer === undefined || !reviewer.fresh || !reviewer.readOnly || !['mou_ding', 'shu_ji', 'yu_shi'].includes(reviewer.role) || reviewer.authorAgentIds?.includes(reviewer.agentId))) agentErrors.push('规划评审必须使用非作者的新会话只读专家')
   const raw = input.agent.result as PlanningReviewResult | undefined
   const structureOk = input.structure.parseVerdict === 'pass' && input.structure.projectionVerdict === 'pass' && errors.length === 0
   const reviewPolicy = { requireJev: input.policy?.requireJev ?? snapshot.reviewPolicy.requireJev, reviewAbove: input.policy?.reviewAbove ?? snapshot.reviewPolicy.reviewAbove }

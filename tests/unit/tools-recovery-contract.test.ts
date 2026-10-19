@@ -36,7 +36,9 @@ describe('tool recovery contracts', () => {
     expect(recovery.text).toContain('只读 Web RPC 仍需登录认证')
     expect(recovery.text).toContain('offset:1')
     expect(recovery.text).toContain('screenshot ./page.png')
-    expect(recovery.text).toContain('规划未批准时不能开始执行')
+    expect(recovery.text).toContain('enforced 必须当前规划通过才派发')
+    expect(recovery.text).toContain('advisory 提供规划建议')
+    expect(recovery.text).toContain('始终遵守用户明确的先审后执行要求')
     expect(assembled.sections.at(-1)?.text).toContain('Orchestration style (GPT)')
     expect(getStyledAssembly(assembled, 'auto')).toBe(assembled)
     const child = { ...base, sections: [{ name: 'persona', text: '[[swarm:role=yu_shi]]' }] }

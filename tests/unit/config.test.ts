@@ -16,6 +16,8 @@ describe('Config schema', () => {
     expect(config.thresholds).toEqual(DEFAULT_TRIAGE_THRESHOLDS)
     expect(config.budgets).toEqual(DEFAULT_BUDGETS)
     expect(config.routes).toEqual({})
+    expect(config.planningReview.timeoutMs).toBe(0)
+    expect(getSwarmConfig({ planningReview: { timeoutMs: 180000 } }).planningReview.timeoutMs).toBe(180000)
     expect(config.ledgerDir).toBe('')
   })
 

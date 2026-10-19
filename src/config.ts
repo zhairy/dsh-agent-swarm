@@ -111,7 +111,7 @@ export const Config = Schema.object({
     enabled: Schema.boolean().default(true),
     requireJev: Schema.boolean().default(false),
     maxFixRounds: Schema.natural().default(2).description('自动规划修正轮数；达到上限仅暂停自动审核，任务卡仍可编辑并显式复审'),
-    timeoutMs: Schema.natural().default(180000).description('单轮规划审核等待上限（毫秒）；超时返回可诊断阻塞，不产生批准'),
+    timeoutMs: Schema.natural().max(2147483647).default(0).description('单轮规划审核总等待上限（毫秒）；0 为不限，适合长期复杂审核。仍可取消，正数超时不产生批准'),
     reviewAbove: Schema.number().default(0.8)
   }).default({}).description('生成后独立审核目标、流程设计与 Mermaid 代码').volatile(),
   execution: Schema.object({
@@ -249,7 +249,7 @@ export interface SwarmConfigInfo {
 }
 
 export const DEFAULT_WORKFLOW_CONFIG: SwarmConfigInfo['workflow'] = { mode: 'advisory', maxNodes: 32, maxEdges: 64 }
-export const DEFAULT_PLANNING_REVIEW: SwarmConfigInfo['planningReview'] = { enabled: true, requireJev: false, maxFixRounds: 2, reviewAbove: 0.8, timeoutMs: 180000 }
+export const DEFAULT_PLANNING_REVIEW: SwarmConfigInfo['planningReview'] = { enabled: true, requireJev: false, maxFixRounds: 2, reviewAbove: 0.8, timeoutMs: 0 }
 export const DEFAULT_EXECUTION_CONFIG: SwarmConfigInfo['execution'] = { profile: 'legacy', maxCalls: 0, maxTokens: 0, maxCostUsd: 0 }
 export const DEFAULT_RECOVERY_CONFIG: SwarmConfigInfo['recovery'] = { maxTransientRetries: 1, maxLogicalAttempts: 8, maxShortRetryDelayMs: 2000, maxTransientWaitMs: 5000 }
 

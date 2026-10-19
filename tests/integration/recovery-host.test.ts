@@ -13,12 +13,16 @@ interface RecoveryRun extends ScenarioRunInfo {
   recoveryEvents: Array<{ type: string; data?: unknown }>
   recoveryTerminal?: string
   agentErrors?: Array<{ message?: string; code?: string }>
-  planningReviewers?: Array<{ sessionId: string; model: string; tools: string[]; outputSchemaProperties: string[]; snapshotDigest: string; requestText: string; mermaid: string; workflow: unknown; planningScope?: { kind: string; deferred: string[] }; seesAgentResult: boolean; seesJevResult: boolean; readResult?: string; mutationResult?: string; mutationIsError?: boolean }>
+  planningReviewers?: Array<{ sessionId: string; model: string; tools: string[]; outputSchemaProperties: string[]; snapshotDigest: string; requestText: string; requestRevision: number; requestRefs?: Array<{ source: string; text?: string; textRef?: string }>; mermaid: string; workflow: unknown; planningScope?: { kind: string; deferred: string[] }; seesAgentResult: boolean; seesJevResult: boolean; readResult?: string; mutationResult?: string; mutationIsError?: boolean }>
   planningStatus?: { tasks: Array<{ planningReview?: unknown; acceptance?: { status: string } }> }
   hostApis?: { start: boolean; startActivation: boolean }
   analysisReadResult?: string
   analysisContext?: { taskId: string; crossTaskId: string; tools: string[]; indexResult: string; indexIsError: boolean;
     readResult: string; readIsError: boolean; crossTaskResult: string; crossTaskIsError: boolean }
+  questionRequests?: number
+  questionTranscript?: { questionCall: { id: string; name: string; arguments: string }; questionResult: {
+    id: string; role: string; source: { kind: string; callId: string }; toolCallId: string; isError: boolean; content: Array<{ type: string; text?: string }>
+  } }
 }
 const RECOVERY_BASE = {
   jev: { enabled: false }, planningReview: { enabled: false }, workflow: { mode: 'advisory' },
@@ -34,7 +38,10 @@ const runRecovery = async (scenario: string, routes: Record<string, unknown>, mo
   const overlay = `${workspace}.overlay.yml`
   writeFileSync(overlay, YAML.stringify([
     { id: 'swarm-core', config: { ...RECOVERY_BASE, routes, ...options.config } },
-    { insert: [{ id: 'swarm-recovery-test-driver', name: join(DRIVER_DIR, 'recovery-scenarios.js') }] }
+    { insert: [
+      ...(scenario === 'planning-question-reply' ? [{ id: 'swarm-question-fixture-tool', name: '@deepseek-ai/dsh-tool-ask-user' }] : []),
+      { id: 'swarm-recovery-test-driver', name: join(DRIVER_DIR, 'recovery-scenarios.js') }
+    ] }
   ]))
   const out = `${workspace}.out.json`
   const result = await runDshAsync({ args: ['--profile', PROFILE, '--patch', overlay], cwd: workspace, timeout: 35000,
@@ -103,6 +110,29 @@ describe('真实 AgentLoop：pool exhausted 9060669ms 与终态恢复', () => {
 })
 
 describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () => {
+  it('真实 ask_user_question 成功结果经 deriveMessages 进入需求来源，新审核绑定确认且重试不增长', async () => {
+    const run = await runRecovery('planning-question-reply', getRoutesOverlay(), 'normal', undefined, {
+      config: { planningReview: { enabled: true, requireJev: false }, workflow: { mode: 'enforced' }, jev: { enabled: false } }
+    })
+    expect(run.status, run.error ?? run.stderr).toBe('done')
+    expect(run.questionRequests).toBe(1)
+    const transcript = run.questionTranscript!
+    expect(transcript.questionCall.name).toBe('ask_user_question')
+    expect(transcript.questionResult).toMatchObject({ role: 'tool', isError: false, toolCallId: transcript.questionCall.id,
+      source: { kind: 'tool', callId: transcript.questionCall.id } })
+    expect(run.planningReviewers).toHaveLength(2)
+    const first = run.planningReviewers![0]!, second = run.planningReviewers![1]!
+    expect(second.requestRevision).toBe(first.requestRevision + 1)
+    expect(second.requestRefs).toHaveLength(2)
+    expect(second.requestRefs?.map(ref => ref.source)).toContain(transcript.questionResult.id)
+    const confirmation = second.requestRefs?.find(ref => ref.source === transcript.questionResult.id)?.text
+    expect(confirmation).toContain('是否允许在隔离候选中实施最小修复')
+    expect(confirmation).toContain('允许隔离修复')
+    expect(confirmation).toContain('未选选项不是授权')
+    expect(second.snapshotDigest).not.toBe(first.snapshotDigest)
+    expect(JSON.parse(run.results[3]!.text)).toMatchObject({ cached: true, requestRevision: second.requestRevision })
+  })
+
   it.each(['planning-enforced', 'planning-phase-pass', 'planning-phase-low'])('%s：真实宿主自动规划、阶段验收与低分收敛（Jev 为本机固定响应）', async (scenario) => {
     const requests: Array<{ model: string; state: Record<string, unknown>; questions: Record<string, { type: string; criteria?: unknown[] | Record<string, unknown> }> }> = []
     const server = createServer(async (request, response) => {

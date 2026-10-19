@@ -1,0 +1,265 @@
+{
+  "checkedAt": "2026-10-18T14:33:09.333Z",
+  "pid": 1990786,
+  "origin": "http://127.0.0.1:3080",
+  "businessActions": 0,
+  "redaction": "截图仅插件详情面板，隔离浏览器 DOM 中本机路径隐藏；未更改配置。",
+  "plugins": [
+    {
+      "name": "Agent Swarm 中文多智能体",
+      "alerts": [],
+      "componentCount": "共 18 个 · 2 运行中",
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用 Agent Swarm 中文多智能体"
+        },
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用组件 Agent Swarm 中文多智能体"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 @deepseek-ai/dsh-subagent-codex"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 @deepseek-ai/dsh-subagent-codex"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 @deepseek-ai/dsh-subagent-claude-code"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 @deepseek-ai/dsh-subagent-claude-code"
+        },
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        },
+        {
+          "checked": "false",
+          "disabled": false,
+          "name": "启用组件 Agent 预设定义"
+        }
+      ],
+      "title": "Agent Swarm 中文多智能体",
+      "versions": [
+        "v2.9.2",
+        "2.9.2"
+      ],
+      "screenshot": "swarm-detail.png"
+    },
+    {
+      "name": "dsh-plugin-subscriptions",
+      "alerts": [],
+      "componentCount": "共 1 个 · 1 运行中",
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用 dsh-plugin-subscriptions"
+        },
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用组件 dsh-plugin-subscriptions"
+        }
+      ],
+      "title": "dsh-plugin-subscriptions",
+      "versions": [
+        "v0.9.9+local.rc2.1",
+        "0.9.9+local.rc2.1"
+      ],
+      "screenshot": "subscriptions-detail.png"
+    },
+    {
+      "name": "OpenViking 记忆",
+      "alerts": [],
+      "componentCount": "共 1 个 · 1 运行中",
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用 OpenViking 记忆"
+        },
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用组件 OpenViking 记忆"
+        }
+      ],
+      "title": "OpenViking 记忆",
+      "versions": [
+        "v0.5.26",
+        "0.5.26"
+      ],
+      "screenshot": "openviking-detail.png"
+    },
+    {
+      "name": "@deepseek-ai/dsh-tool-calculator",
+      "alerts": [],
+      "componentCount": "共 1 个 · 1 运行中",
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用 @deepseek-ai/dsh-tool-calculator"
+        },
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用组件 @deepseek-ai/dsh-tool-calculator"
+        }
+      ],
+      "title": "@deepseek-ai/dsh-tool-calculator",
+      "versions": [
+        "v0.0.1+local.rc2.1",
+        "0.0.1+local.rc2.1"
+      ],
+      "screenshot": "calculator-detail.png"
+    },
+    {
+      "name": "dsh-plugin-finance-data",
+      "alerts": [],
+      "componentCount": "共 1 个 · 1 运行中",
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用 dsh-plugin-finance-data"
+        },
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用组件 dsh-plugin-finance-data"
+        }
+      ],
+      "title": "dsh-plugin-finance-data",
+      "versions": [
+        "v0.3.2+local.rc2.1",
+        "0.3.2+local.rc2.1"
+      ],
+      "screenshot": "finance-detail.png"
+    },
+    {
+      "name": "dsh-quant",
+      "alerts": [],
+      "componentCount": "共 1 个 · 1 运行中",
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用 dsh-quant"
+        },
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用组件 dsh-quant"
+        }
+      ],
+      "title": "dsh-quant",
+      "versions": [
+        "v0.90.0+rc2.local.1",
+        "0.90.0+rc2.local.1"
+      ],
+      "screenshot": "quant-detail.png"
+    },
+    {
+      "name": "dsh-browser-playwright",
+      "alerts": [],
+      "componentCount": "共 3 个 · 3 运行中",
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用 dsh-browser-playwright"
+        },
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用组件 dsh-browser-playwright/service"
+        },
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用组件 dsh-browser-playwright/playwright"
+        },
+        {
+          "checked": "true",
+          "disabled": false,
+          "name": "启用组件 dsh-browser-playwright/tool"
+        }
+      ],
+      "title": "dsh-browser-playwright",
+      "versions": [
+        "v0.1.1+rc2.local.1",
+        "0.1.1+rc2.local.1"
+      ],
+      "screenshot": "browser-detail.png"
+    }
+  ]
+}

@@ -8,6 +8,19 @@ const phaseCard = { title: '阶段规划活性集成', goal: '本阶段只读分
   planningScope: { kind: 'phase', deliverables: ['只读分析 README.md 并报告依据'], deferred: ['后续实施完整系统'], rationale: '先确认源码证据，再实施完整系统；始终禁止自动启用实盘' } }
 
 export const RECOVERY_SCENARIOS = {
+  'planning-question-reply': {
+    planning: true, preset: 'tian-shu', userText: '只读分析 README.md；下一阶段修复需要另行确认。',
+    root: [
+      { tool: 'swarm_task_card', args: { title: '真实宿主确认来源', goal: '只读分析 README.md', acceptance: ['引用真实文件'], scope: ['README.md'], flags: {} } },
+      { tool: 'ask_user_question', args: { questions: [{ id: 'local_repair_scope', question: '是否允许在隔离候选中实施最小修复？', options: [
+        { label: '允许隔离修复', description: '不修改生产，不启用业务执行' }, { label: '保持只读', description: '不实施修改' }
+      ] }] } },
+      { tool: 'swarm_review_plan', args: { task_id: '$TASK' } },
+      { tool: 'swarm_review_plan', args: { task_id: '$TASK' } },
+      { tool: 'swarm_status', args: { task_id: '$TASK', verbose: true } },
+      { text: 'QUESTION PROVENANCE DONE' }
+    ]
+  },
   'planning-phase-pass': {
     planning: true, preset: 'tian-shu', userText: '实现完整系统；本阶段先只读分析 README.md，完整实施留待后续，禁止自动启用实盘。',
     root: [
@@ -109,6 +122,11 @@ export const apply = (ctx) => {
     setTimeout(() => process.exit(status === 'done' ? 0 : 1), 100)
   }
   if (!scenario) { finish('unknown-scenario'); return }
+  if (scenarioName === 'planning-question-reply') ctx.on('user-questions/request', async request => {
+    // 只模拟人类答复提供方；真实 ask_user_question、Session 和 deriveMessages 生成调用/结果身份。
+    state.questionRequests = (state.questionRequests ?? 0) + 1
+    return { answers: request.questions.map(question => ({ id: question.id, selected: ['允许隔离修复'] })) }
+  })
   let rootStep = 0
   const childSteps = new Map()
   const adapter = {
@@ -138,7 +156,8 @@ export const apply = (ctx) => {
         if (reviewer === undefined) {
           reviewer = { sessionId: options.sessionId, model: options.model, tools,
             outputSchemaProperties: Object.keys(outputSchema?.properties?.value?.properties ?? outputSchema?.properties ?? {}), snapshotDigest: snapshot.snapshotDigest,
-            requestText: snapshot.requestText, mermaid: snapshot.mermaid, workflow: snapshot.workflow, planningScope: snapshot.card.planningScope,
+            requestText: snapshot.requestText, requestRefs: snapshot.requestRefs, requestRevision: snapshot.requestRevision,
+            mermaid: snapshot.mermaid, workflow: snapshot.workflow, planningScope: snapshot.card.planningScope,
             seesAgentResult: Object.hasOwn(snapshot, 'agent'), seesJevResult: Object.hasOwn(snapshot, 'jev') }
           state.planningReviewers.push(reviewer)
         }
@@ -240,6 +259,12 @@ export const apply = (ctx) => {
       state.subagentProviders = ctx.subagents.list()
       handle.agent.followup(Object.freeze({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: scenario.userText ?? 'recovery integration test' }], source: { kind: 'user' } }))
       await handle.agent.whenIdle()
+      if (scenarioName === 'planning-question-reply') {
+        const messages = handle.agent.session.deriveMessages()
+        const questionCall = messages.flatMap(message => message.role === 'assistant' ? message.content : []).find(block => block.type === 'tool-call' && block.name === 'ask_user_question')
+        const questionResult = messages.find(message => message.role === 'tool' && message.toolCallId === questionCall?.id)
+        state.questionTranscript = { questionCall, questionResult }
+      }
       state.recoveryTerminal = ctx.get('agentSwarm')?.routeState.getTerminal(handle.agent.id)
       if (scenario.planning && state.taskId) state.planningStatus = ctx.get('agentSwarm')?.getStatus({ task_id: state.taskId, verbose: true }, { agent: handle.agent, signal: new AbortController().signal })
       finish('done')
