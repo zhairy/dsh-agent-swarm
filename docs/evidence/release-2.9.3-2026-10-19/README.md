@@ -28,4 +28,11 @@
 - 本地已加载插件目录指向本仓库符号链接；服务当前未运行，下一次启动 `dsh-web.service` 时加载 2.9.3 构建产物。
 - 本发布不改变审核阈值、角色权限、执行门禁、证据要求或模型路由策略。
 - 2.9.2 的本机恢复证据保留其历史范围；原业务任务 T-2 不因发布而视为通过。
-- 发布资产与远端校验结果在发布完成后记录。
+
+## GitHub 发布
+
+- Release：<https://github.com/zhairy/dsh-agent-swarm/releases/tag/v2.9.3>
+- 标签 `v2.9.3` 指向发布提交 `70bc41d`；源码基线为 `a53c8f9`，两边树哈希均为 `f52e210`。
+- 四个资产：`dsh-agent-swarm.tgz`（4,035,846 字节）、`release-manifest.json`、`RELEASE-NOTES.zh-CN.md`、`SHA256SUMS`。
+- 发布包 SHA256：`4efce63282da4ec0e8276777485809d9706371722ea22bc3a00c306bbaf74f6b`。
+- 已通过 `releases/latest/download` 匿名下载四个资产，`sha256sum -c SHA256SUMS` 全部通过。
