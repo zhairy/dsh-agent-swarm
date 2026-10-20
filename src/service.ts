@@ -1191,7 +1191,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       session.ledger.AddLedgerEvent({ type: 'task/card', taskId: record.taskId, data: { card, gates: gates.map((gate) => gate.gate), triage: triage.source, cardRevision: record.cardRevision, workflowRevision: record.workflowRevision } })
       return session.store.getTask(record.taskId)!
     })
-    if (deps.getConfig().planningReview.enabled && deps.getConfig().workflow.mode !== 'off') await runReviewPlan({ task_id: task.taskId }, exec, true)
+    // 只有强制模式需要审核结论才能执行；观察模式自动审核的耗时与执行相当、几乎从不通过，改为按需调用 swarm_review_plan
+    if (deps.getConfig().planningReview.enabled && deps.getConfig().workflow.mode === 'enforced') await runReviewPlan({ task_id: task.taskId }, exec, true)
     const explicit = (raw as { upgrade?: unknown }).upgrade
     const latest = session.store.getTask(task.taskId)!
     const rootUpgrade = await UpdateRootUpgrade(exec.agent, session, latest, typeof explicit === 'boolean' ? explicit : undefined)
