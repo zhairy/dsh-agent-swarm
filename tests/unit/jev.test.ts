@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DEFAULT_JEV_CONFIG, JEV_PATH, JEV_QUESTIONS, ParseJevAnswers, getJevState, getRedactedText, intJevClient, intRequestLimiter, getJevFailureKind, isJevAvailabilityFailure } from '../../src/jev.js'
+import { DEFAULT_JEV_CONFIG, JEV_PATH, JEV_QUESTIONS, ParseJevAnswers, getJevState, getRedactedText, intJevClient, getJevFailureKind, isJevAvailabilityFailure } from '../../src/jev.js'
 import { ValidateTaskCard, type TaskCard } from '../../src/policy.js'
 
 const card = ValidateTaskCard({
@@ -87,9 +87,8 @@ describe('intJevClient', () => {
     }
   })
 
-  it('旧非零RPS配置不限制并行请求；0 limiter 真正旁路', async () => {
+  it('旧非零RPS配置不限制并行请求', async () => {
     const wait = vi.fn(async () => undefined)
-    await Promise.all(Array.from({ length: 100 }, () => intRequestLimiter(0, wait)()))
     const fetch = vi.fn(async () => jsonResponse(200, okBody))
     const client = intJevClient({ ...DEFAULT_JEV_CONFIG, maxRequestsPerSecond: 1 }, { fetch: fetch as typeof globalThis.fetch, getApiKey: async () => 'k', sleep: wait })
     await Promise.all(Array.from({ length: 32 }, () => client.ask({}, { q: { type: 'noul' } })))

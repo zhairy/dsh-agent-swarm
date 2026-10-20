@@ -19,7 +19,7 @@ import {
 import { getPromptStyle, getStyledTaskPrompt, type PromptStyle } from './model-family.js'
 import { isNetworkSuspect, type NetworkMonitorInfo } from './network.js'
 import { GATE_IDS, GATE_ROLE, ValidateDelegationBudget, type GateId } from './policy.js'
-import type { FallbackEventInfo, RouteStateRegistry } from './route-state.js'
+import { getValidatedQuotaOrder, type FallbackEventInfo, type RouteStateRegistry } from './route-state.js'
 import { startChild, supportsContinuableSessions } from './subagent-compat.js'
 import {
   getChildPersona,
@@ -921,14 +921,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       try { quotaChain = await deps.orderQuotaRoutes(chain, exec.signal) }
       catch (error) { if (exec.signal.aborted) throw error }
       if (exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '额度路由准备已取消；未启动子智能体')
-      const remaining = [...chain]
-      const ordered: RouteInfo[] = []
-      if (Array.isArray(quotaChain) && quotaChain.length === chain.length) for (const route of quotaChain) {
-        const index = route === null || typeof route !== 'object' ? -1 : remaining.findIndex((candidate) => candidate.provider === route.provider && candidate.model === route.model && candidate.reasoningEffort === route.reasoningEffort)
-        if (index < 0) break
-        ordered.push(remaining.splice(index, 1)[0]!)
-      }
-      quotaChain = ordered.length === chain.length ? ordered : chain
+      quotaChain = getValidatedQuotaOrder(chain, quotaChain)
     }
     const requireVision = role.needsVision || (input.image_paths?.length ?? 0) > 0
     const getSelection = () => FindUsableRoutes(quotaChain, {

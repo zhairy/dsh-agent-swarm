@@ -189,25 +189,35 @@ export interface RouteStateRegistry {
   ) => RequestErrorActionLike | Promise<RequestErrorActionLike>
 }
 
-/**
- * 发往 Codex 的推理强度：DSH 目录把 GPT-6 的最高档列为 ultra，而 Codex 线上协议只接受 max，
- * 订阅插件的本机补丁会做同样的映射；这里再兜底一次，补丁随插件升级丢失时也不会被 400 拒绝
- * @param {RouteInfo} route - 路由
- * @returns {string | undefined} 推理强度
- */
-export const getWireEffort = (route: RouteInfo): string | undefined =>
-  getWireReasoningEffort(route)
-
 /** 换路由时丢弃继承的推理强度，避免把上一模型的强度套到新模型上 */
 const getRoutedConfig = (resolved: CallConfigLike, route: RouteInfo): CallConfigLike => {
   const { reasoningEffort: _inherited, policy: _resourcePolicy, ...rest } = resolved
-  const effort = getWireEffort(route)
+  const effort = getWireReasoningEffort(route)
   return {
     ...rest,
     provider: route.provider,
     model: route.model,
     ...(effort === undefined ? {} : { reasoningEffort: effort })
   }
+}
+
+/**
+ * 额度源给出的顺序只能重排已声明的路由：增删模型、改写 policy 或形状不符时保留原链
+ * @param {readonly RouteInfo[]} declared - 声明的路由链
+ * @param {unknown} proposed - 额度源建议的顺序
+ * @returns {RouteInfo[]} 重排后的链（元素取自 declared）
+ */
+export const getValidatedQuotaOrder = (declared: readonly RouteInfo[], proposed: unknown): RouteInfo[] => {
+  if (!Array.isArray(proposed) || proposed.length !== declared.length) return [...declared]
+  const remaining = [...declared]
+  const ordered: RouteInfo[] = []
+  for (const route of proposed as unknown[]) {
+    const index = route === null || typeof route !== 'object' ? -1
+      : remaining.findIndex((candidate) => isSameRoute(candidate, route as RouteInfo) && candidate.reasoningEffort === (route as RouteInfo).reasoningEffort)
+    if (index < 0) return [...declared]
+    ordered.push(remaining.splice(index, 1)[0]!)
+  }
+  return ordered
 }
 
 /** 能否承担生成请求：判断类 API 或声明不支持生成/工具的路由不参与回退 */
@@ -407,19 +417,6 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     if (signal?.aborted === true) throw new SwarmError('RECOVERY_REQUIRED', '额度路由准备已取消；未启动新的模型请求')
   }
   const canUse = (route: RouteInfo): boolean => health.isAvailable(route) && canServe(route)
-  // Never let an adapter add/drop models or replace declared policy metadata.
-  const validatedQuotaOrder = (declared: RouteInfo[], proposed: readonly RouteInfo[]): RouteInfo[] => {
-    if (!Array.isArray(proposed) || proposed.length !== declared.length) return declared
-    const remaining = [...declared]
-    const ordered: RouteInfo[] = []
-    for (const route of proposed) {
-      if (route === null || typeof route !== 'object') return declared
-      const index = remaining.findIndex((candidate) => sameSelection(candidate, route))
-      if (index < 0) return declared
-      ordered.push(remaining.splice(index, 1)[0]!)
-    }
-    return ordered
-  }
 
   /** 本逻辑请求还能等待的时长：断网等待与链尾保持共用 agents.networkWaitMs */
   const holdLeft = (recovery: RequestRecoveryState, config: SwarmConfigInfo): number =>
@@ -666,7 +663,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       const initial = state.initialRoute === undefined ? 0 : prepared.findIndex((route) => sameSelection(route, state.initialRoute!))
       children.set(agentId, {
         chain: prepared, baseChain: [...state.chain], index: Math.max(0, initial), role: state.role, tried: new Set(),
-        ...(state.initialQuotaOrder === undefined ? {} : { initialQuotaOrder: validatedQuotaOrder(prepared, state.initialQuotaOrder) }),
+        ...(state.initialQuotaOrder === undefined ? {} : { initialQuotaOrder: getValidatedQuotaOrder(prepared, state.initialQuotaOrder) }),
         ...(state.onFallback === undefined ? {} : { onFallback: state.onFallback }),
         ...(state.persistent === true ? { persistent: true } : {}),
         ...(state.logicalRequestId === undefined ? {} : { logicalRequestId: state.logicalRequestId }),
@@ -691,7 +688,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     getChildOverride: (agentId) => { const value = childOverrides.get(agentId); return value === undefined ? undefined : { ...value } },
     SetManualPause: (agentId, paused) => { if (paused) manualPauses.add(agentId); else manualPauses.delete(agentId) },
     isManualPaused: (agentId) => manualPauses.has(agentId),
-    getLastRoute: (agentId) => { const value = lastRoutes.get(agentId); return value === undefined ? undefined : { ...value, ...(getWireEffort(value) === undefined ? {} : { reasoningEffort: getWireEffort(value) }) } },
+    getLastRoute: (agentId) => { const value = lastRoutes.get(agentId); return value === undefined ? undefined : { ...value, ...(getWireReasoningEffort(value) === undefined ? {} : { reasoningEffort: getWireReasoningEffort(value) }) } },
     RestoreRootPreference: (agentId, route) => { if (!rootPreferences.has(agentId)) rootPreferences.set(agentId, { ...route }) },
     getRootPreference: (agentId) => { const value = rootPreferences.get(agentId); return value === undefined ? undefined : { ...value } },
     RecordUserSelection: (agentId, route, seq) => {
@@ -758,7 +755,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
         quotaCancelled(signal)
         const stillCurrent = () => quotaPreparations.get(agent.id) === token && recoveries.get(agent.id) === recovery && children.get(agent.id) === child && roots.get(agent.id) === root && upgrades.get(agent.id) === upgrade && !manualPauses.has(agent.id) && !childOverrides.has(agent.id) && !quotaManualSelections.has(agent.id)
         if (!stillCurrent()) return
-        const chain = validatedQuotaOrder(declared, proposed)
+        const chain = getValidatedQuotaOrder(declared, proposed)
         quotaOrders.set(agent.id, { logicalRequestId: recovery.logicalRequestId, chain })
         // Once an attempt was admitted, quota must not replay a route or reset its
         // bounded recovery state. Fallback uses this order and the existing tried set.

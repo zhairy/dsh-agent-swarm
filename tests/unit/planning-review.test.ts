@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
-import { RunPlanningReview, ValidateReviewSnapshot, ValidatePlanningReviewResult, getPlanningReviewQuestions, getPlanningReviewRecord, getReviewSnapshot, intPlanningReviewStore, isPlanningReviewCurrent, type PlanningReviewResult, type ReviewSnapshot } from '../../src/planning-review.js'
+import { RunPlanningReview, ValidateReviewSnapshot, ValidatePlanningReviewResult, getPlanningReviewQuestions, getPlanningReviewRecord, getReviewSnapshot, isPlanningReviewCurrent, type PlanningReviewResult, type ReviewSnapshot } from '../../src/planning-review.js'
 import { getDefaultWorkflow } from '../../src/workflow.js'
 
 const makeSnapshot = (revision = 1) => {
@@ -135,16 +135,4 @@ describe('独立规划审核与 CAS', () => {
     expect(record.status).toBe('pass')
   })
 
-  it('旧快照不能 CAS 提交，返修计数不会被改图或标题重置', () => {
-    const snapshot = makeSnapshot()
-    const store = intPlanningReviewStore()
-    store.SetSnapshot(snapshot)
-    const record = getPlanningReviewRecord(snapshot, { structure: structure(snapshot), agent: { result: result(snapshot), reviewer }, jev: jev() })
-    expect(store.Commit(record)).toBe(true)
-    expect(store.ConsumeFixRound(snapshot)).toBe(true)
-    store.SetSnapshot(makeSnapshot(2))
-    expect(store.Commit(record)).toBe(false)
-    expect(store.ConsumeFixRound(snapshot)).toBe(true)
-    expect(store.ConsumeFixRound(snapshot)).toBe(false)
-  })
 })

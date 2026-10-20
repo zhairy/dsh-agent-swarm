@@ -77,7 +77,6 @@ export const ValidateAgentControlRecords = (raw: unknown): raw is AgentControlRe
   }
   return true
 }
-export const validateAgentControlRecords = ValidateAgentControlRecords
 
 export const createAgentControl = (deps: AgentControlDeps) => {
   const now = deps.now ?? Date.now

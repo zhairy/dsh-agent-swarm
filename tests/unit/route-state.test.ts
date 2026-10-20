@@ -6,7 +6,6 @@ import { getSwarmConfig } from '../../src/config.js'
 import { intRouteStateRegistry, type FallbackEventInfo } from '../../src/route-state.js'
 import type { PreferredRecoveryEventInfo } from '../../src/route-state.js'
 import { DEFAULT_ROUTE_CHAINS } from '../../src/routes.js'
-import { nativeRecoveryCoverage, getNativeRecoverySupport } from '../../src/provider-policy.js'
 import { intRouteHealth } from '../../src/route-health.js'
 import type { RouteInfo } from '../../src/routes.js'
 import { apply as applyRuntime } from '../../src/runtime.js'
@@ -1207,10 +1206,6 @@ describe('共享故障域与有界恢复', () => {
     registry.BeginRequestStep('restart', 1, 0)
     expect(() => registry.getRequestOverride({ id: 'restart' }, { ...independent }, undefined)).toThrow('recovery_attempts_exhausted')
     expect(registry.getTerminal('restart')).toBe('recovery_attempts_exhausted')
-    expect(nativeRecoveryCoverage(false)).toEqual({ verified: false, reason: 'native-internal-retries-unobservable' })
-    expect(nativeRecoveryCoverage(true).verified).toBe(false)
-    expect(getNativeRecoverySupport(undefined)).toMatchObject({ contractVersion: 1, structuredFailure: false, verified: false })
-    expect(getNativeRecoverySupport({ routeFailureMetadataV1: true, requestRecoveryControlV1: true, requestAttemptEventsV1: true }).verified).toBe(false)
   })
 
   it('真实reset到期仅允许一个half-open，解析模型和10分钟不清隔离，成功才清除', async () => {

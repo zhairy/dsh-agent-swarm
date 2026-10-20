@@ -69,5 +69,3 @@ export const getCheckpoint = (input: CheckpointInputInfo, previous?: CheckpointI
   return { id: getValueDigest({ taskId: input.taskId, cardRevision: input.cardRevision, workflowRevision: input.workflowRevision, roundId: input.roundId }), taskId: input.taskId, cardRevision: input.cardRevision, workflowRevision: input.workflowRevision, roundId: input.roundId, evidenceRefs, knownEvidenceRefs,
     review: { newEvidence, resolvedFindings }, convergence: { unresolvedDelta, repeatedWithoutProgress, blocked }, scope: { outsidePaths }, collaboration: { pendingMessages: input.pendingMessages ?? 0, conflicts }, resource: { ...input.resource, tokens: input.resource?.tokens ?? null, cost: input.resource?.cost ?? null }, unresolved, nextAction, ...(input.progress === undefined ? {} : { progress: input.progress.slice(0, 400) }) }
 }
-
-export const getCheckpointText = (checkpoint: CheckpointInfo): string => `检查点 ${checkpoint.roundId}：新增证据 ${checkpoint.review.newEvidence.length}；未解决项变化 ${checkpoint.convergence.unresolvedDelta}；范围越界 ${checkpoint.scope.outsidePaths.length}；待处理消息 ${checkpoint.collaboration.pendingMessages}；下一步 ${checkpoint.nextAction}`

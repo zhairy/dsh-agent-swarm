@@ -13,7 +13,7 @@ import { resolve, relative, isAbsolute, sep, dirname } from 'node:path'
 import { getRoleRoute, type SwarmConfigInfo } from './config.js'
 import { DispatchAdmissionError, intDelegator, getToolFilter, type ChildScopeRequest, type DelegateExecInfo, type DelegateSessionInfo, type PlanSessionInput } from './delegate.js'
 import type { ChildPromptInfo } from './runtime.js'
-import { startChild, supportsContinuableSessions } from './subagent-compat.js'
+import { startChild } from './subagent-compat.js'
 import { intLedger, intTaskStore, type AcceptanceRecord, type AssessmentInfo, type DelegationRecord, type TaskRecord, type TriageRecord } from './evidence.js'
 import {
   SPAWN_PROVIDER,
@@ -204,6 +204,14 @@ interface SessionStateInfo extends DelegateSessionInfo {
 }
 
 /** 只有任务创建之后的天枢编辑才会让该任务已有的验证失效 */
+/** 会产生工作区副作用的角色：执行需要写租约，流程改版时已执行的节点不自动重放 */
+const MUTATING_ROLES: readonly string[] = ['ji_feng', 'zhu_jian', 'xing_zhou']
+
+/** spawn 后端委派所需能力：0.2.1 起 composition 由角色预设承担（agentPreset），旧宿主要求 persona/toolFilter */
+const getRequiredSpawnCapabilities = (subagents: SubagentsLike | undefined): string[] => subagents !== undefined && typeof subagents.startActivation === 'function'
+  ? ['agentOptions', 'outputSchema', 'depthLimit', 'agentPreset']
+  : ['agentOptions', 'outputSchema', 'toolFilter', 'persona', 'depthLimit']
+
 /** 独立规划审核子会话的固定 persona（不是一次委派，不套用御史的委派 persona） */
 const PLANNING_REVIEWER_PERSONA = '你是独立只读的规划审查者。审核原始用户需求、目标、流程和源码，严禁写入、shell 或自行委派。[[swarm:role=yu_shi]]'
 
@@ -626,7 +634,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       // New workflow versions never relabel historical evidence. Read-only
       // nodes and gates can run afresh. Completed mutations are explicitly
       // skipped, not replayed or represented as fresh successful evidence.
-      if (node.operation === 'delegate' && node.role !== undefined && ['ji_feng', 'zhu_jian', 'xing_zhou'].includes(node.role) && prior !== undefined) {
+      if (node.operation === 'delegate' && node.role !== undefined && MUTATING_ROLES.includes(node.role) && prior !== undefined) {
         if (prior.status === 'succeeded' || prior.status === 'skipped') state.nodes[node.id] = {
           status: 'skipped', reason: `旧流程 ${task.workflowRevision ?? 1} 已执行；本轮不自动重放，原结果仍是历史证据` }
         else if (['running', 'failed', 'blocked'].includes(prior.status)) state.nodes[node.id] = {
@@ -1255,10 +1263,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           const subagents = deps.getSubagents()
           const visible = deps.getTools()?.schemas(exec.agent).map((tool) => tool.name) ?? []
           const capabilities = subagents?.getProvider(SPAWN_PROVIDER)?.capabilities
-          const needsPreset = subagents !== undefined && typeof subagents.startActivation === 'function'
-          const required = needsPreset
-            ? ['agentOptions', 'outputSchema', 'depthLimit', 'agentPreset']
-            : ['agentOptions', 'outputSchema', 'toolFilter', 'persona', 'depthLimit']
+          const required = getRequiredSpawnCapabilities(subagents)
           if (!subagents || !capabilities || !required.every((key) => capabilities[key as keyof typeof capabilities] === true) || visible.length === 0) return { reason: '独立只读审核后端或工具过滤能力不可用' }
           const budget = features.planningBudgetFor(task)
           const reservationId = `plan-${randomUUID()}`
@@ -1505,10 +1510,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (deps.getTools() === undefined) out.push('ctx.tools 不可用：无法计算子智能体工具白名单')
     const spawn = deps.getSubagents()?.getProvider(SPAWN_PROVIDER)
     const capabilities = spawn?.capabilities ?? {}
-    // 0.2.1-alpha 起 composition 由角色预设承担：要求 agentPreset；旧宿主继续要求 persona/toolFilter。
-    const required = deps.getSubagents() !== undefined && typeof deps.getSubagents()!.startActivation === 'function'
-      ? ['agentOptions', 'outputSchema', 'depthLimit', 'agentPreset']
-      : ['agentOptions', 'outputSchema', 'toolFilter', 'persona', 'depthLimit']
+    const required = getRequiredSpawnCapabilities(deps.getSubagents())
     if (spawn === undefined) out.push('spawn 子智能体后端不可用：无法委派')
     else if (required.some((cap) => capabilities[cap] !== true)) out.push(`spawn 后端缺少能力：${required.filter((cap) => capabilities[cap] !== true).join(', ')}`)
     if (deps.getAttachments() === undefined) out.push('附件服务不可用：观象无法接收工作区图片')
@@ -1776,7 +1778,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
             }
           }
           if (args.expected_workflow_revision !== undefined && args.expected_workflow_revision !== (prepared.workflowRevision ?? 1)) throw new SwarmError('INVALID_ARGS', '流程版本已改变')
-          if (prepared.recovered && ['ji_feng', 'zhu_jian', 'xing_zhou'].includes(args.role)
+          if (prepared.recovered && MUTATING_ROLES.includes(args.role)
             && Object.values(prepared.workflowState?.nodes ?? {}).some((node) => node.status === 'blocked')) throw new SwarmError('RECOVERY_REQUIRED', '恢复时存在未确认副作用，不能直接重复写任务')
           if (deps.getConfig().workflow.mode === 'enforced' && !isPlanningReviewCurrent(prepared.planningReview, reviewSnapshot(prepared))) throw new SwarmError('PLANNING_REVIEW_REQUIRED', '执行前需要当前版本的目标、流程设计和 Mermaid 审核')
           if (responsePhase) {
@@ -1833,7 +1835,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       if (args.request_id !== undefined) admissions.get(args.request_id)?.resolve()
       const captured = prepared!
       const cwd = getAgentHeader(exec.agent).cwd ?? process.cwd()
-      const kind = ['ji_feng', 'zhu_jian', 'xing_zhou'].includes(args.role) ? 'write' : args.role === 'fu_he' ? 'verify' : undefined
+      const kind = MUTATING_ROLES.includes(args.role) ? 'write' : args.role === 'fu_he' ? 'verify' : undefined
       let lease: WorkspaceLease | undefined
       let started = false
       try {

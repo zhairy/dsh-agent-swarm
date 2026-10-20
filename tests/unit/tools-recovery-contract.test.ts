@@ -58,7 +58,8 @@ describe('tool recovery contracts', () => {
       const task = status.tasks[0]!
       const text = getStatusText(status)
       expect(text).toContain(`需求版本：${task.requestRevision}；合同版本：${task.cardRevision}；流程版本：${task.workflowRevision}`)
-      expect(text).toContain(`规划审核：${task.planningReview?.status ?? 'pending'}`)
+      expect(task.planningReview).toBeNull()
+      expect(text).toContain('规划审核：未运行（观察模式按需调用 swarm_review_plan）')
     } finally { await service.dispose(); rmSync(home, { recursive: true, force: true }) }
   })
 })

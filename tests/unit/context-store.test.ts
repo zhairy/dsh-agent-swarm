@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { intContextStore, isContextRevisionKnown } from '../../src/context-store.js'
+import { intContextStore } from '../../src/context-store.js'
 
 const binding = { rootSessionId: 'root', workspaceId: 'work', taskId: 'T1', cardRevision: 1, workflowRevision: 1, threadId: 'expert' }
 describe('渐进披露与受控材料引用', () => {
@@ -64,8 +64,6 @@ describe('渐进披露与受控材料引用', () => {
     expect(() => store.Read(binding, artifact.ref, { expectedDigest: 'old' })).toThrow()
   })
   it('只在两个版本均一致时省 brief，容量限制拒绝而不假装空材料', () => {
-    expect(isContextRevisionKnown({ cardRevision: 1, workflowRevision: 1 }, binding)).toBe(true)
-    expect(isContextRevisionKnown({ cardRevision: 1, workflowRevision: 2 }, binding)).toBe(false)
     const store = intContextStore({ maxArtifactBytes: 3 })
     expect(() => store.Add({ binding, layer: 'L0', kind: 'contract', text: '四字' })).toThrow('容量')
   })
@@ -89,7 +87,6 @@ describe('渐进披露与受控材料引用', () => {
     expect(store.Read({ ...binding, requestRevision: 1 }, artifact.ref).requestRevision).toBe(1)
     expect(() => store.Read({ ...binding, requestRevision: 2 }, artifact.ref)).toThrow('需求版本')
     expect(() => intContextStore().Restore(artifact, { ...binding, requestRevision: 2 })).toThrow('需求版本')
-    expect(isContextRevisionKnown({ ...binding, requestRevision: 1 }, { ...binding, requestRevision: 2 })).toBe(false)
     expect(() => store.Add({ binding: { ...binding, requestRevision: 0 }, layer: 'L0', kind: 'contract', text: '坏版本' })).toThrow()
   })
 

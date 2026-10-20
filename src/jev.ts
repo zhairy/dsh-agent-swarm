@@ -222,37 +222,6 @@ const getUsage = (record: Record<string, unknown>): JevUsageInfo => {
 const isAborted = (signal?: AbortSignal): boolean => signal?.aborted === true
 
 /**
- * 进程内滑动窗口限流：每个窗口最多 max 个请求，超出的请求排队等待
- * @deprecated 仅保留旧公开接口兼容；当前 Jev 客户端不调用它，也不建立本地限流队列。
- * @param {number} max - 每秒请求上限
- * @param {(ms: number) => Promise<void>} sleep - 等待函数
- * @param {() => number} now - 时钟
- * @returns {() => Promise<void>} 申请一个请求名额
- */
-export const intRequestLimiter = (max: number, sleep: (ms: number) => Promise<void>, now: () => number = Date.now) => {
-  if (max <= 0) return async (): Promise<void> => undefined
-  const stamps: number[] = []
-  let chain = Promise.resolve()
-  const acquire = async (): Promise<void> => {
-    for (;;) {
-      const at = now()
-      while (stamps.length > 0 && at - (stamps[0] as number) >= 1000) stamps.shift()
-      if (stamps.length < Math.max(1, max)) {
-        stamps.push(at)
-        return
-      }
-      await sleep(Math.max(1, 1000 - (at - (stamps[0] as number))))
-    }
-  }
-  // 串行化名额申请，避免并发请求同时读到同一个窗口
-  return (): Promise<void> => {
-    const next = chain.then(acquire)
-    chain = next.catch(() => undefined)
-    return next
-  }
-}
-
-/**
  * 创建 Jev 客户端（TypeSafe System One HTTP API）
  * @param {JevConfigInfo} config - 调用配置
  * @param {JevDepsInfo} deps - fetch、密钥读取与等待函数

@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile, writeFile, mkdir, symlink, cp } from 'node:fs/pr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { canonicalStateJson, createDurableStateStore, markInterruptedOnRecovery, type DurableStateStore } from '../../src/state-store.js'
+import { canonicalStateJson, createDurableStateStore, type DurableStateStore } from '../../src/state-store.js'
 import { ChunkedState } from '../../src/state-chunks.js'
 
 const directories: string[] = []
@@ -34,7 +34,11 @@ describe('durable snapshot and committed journal', () => {
     await store.commit('checkpoint', () => undefined)
     expect(await readFile(join(path, 'journal.jsonl'), 'utf8')).toBe('')
     await store.dispose()
-    const reopened = track(await createDurableStateStore({ directory: path, initialState: initial, recover: markInterruptedOnRecovery }))
+    const recover = (state: typeof initial) => ({
+      attempts: state.attempts.map((attempt) => attempt.status === 'running' ? { ...attempt, status: 'interrupted', mutationUnknown: true } : attempt),
+      bindings: state.bindings.map((binding) => ({ ...binding, state: binding.state === 'active' ? 'suspended' : binding.state, busy: false }))
+    })
+    const reopened = track(await createDurableStateStore({ directory: path, initialState: initial, recover }))
     expect(reopened.read().attempts[0]).toMatchObject({ status: 'interrupted', mutationUnknown: true })
     expect(reopened.read().bindings[0]).toMatchObject({ state: 'suspended', busy: false })
   })

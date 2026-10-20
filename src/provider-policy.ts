@@ -37,11 +37,6 @@ export const getRouteResourcePolicy = (route: RouteInfo): RouteResourcePolicy =>
   return policy
 }
 
-export const getRouteResourceInfo = (route: RouteInfo) => ({
-  ...getRouteResourcePolicy(route),
-  inferredResourceType: getRouteResourcePolicy(route).accessMode ?? 'unknown',
-  metadataSource: route.policy !== undefined ? 'configured' : route.provider === 'qwen-token-plan-cn' ? 'verified-provider-instance' : getRouteResourcePolicy(route).accessMode === 'unknown' ? 'unknown' : 'provider-kind'
-})
 export interface RouteFailureMetadata extends LlmFailureLike {
   kind?: string
   quotaDomainId?: string
@@ -159,25 +154,3 @@ export const normalizeRouteFailure = (failure: RouteFailureMetadata, route: Rout
 }
 export const isTerminalRouteFailure = (failure: NormalizedRouteFailure): boolean =>
   ['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable'].includes(failure.kind)
-
-export const nativeRecoveryCoverage = (structuredFailureAvailable: boolean, retryControlVerified = false): { verified: boolean; reason: string } => ({
-  verified: structuredFailureAvailable && retryControlVerified,
-  reason: !structuredFailureAvailable ? 'native-internal-retries-unobservable' : retryControlVerified ? 'structured-failure-and-retry-control-verified' : 'native-retry-control-unverified'
-})
-
-/** 拟议 native 适配合同，能力声明与已验证覆盖分开；现有无此合同的后端明确 unknown。 */
-export interface NativeRecoverySupport {
-  contractVersion: 1
-  structuredFailure: boolean
-  preDelayControl: boolean
-  attemptEvents: boolean
-  verified: boolean
-  reason: string
-}
-export const getNativeRecoverySupport = (capabilities: Record<string, boolean> | undefined, adapterControlVerified = false): NativeRecoverySupport => {
-  const structuredFailure = capabilities?.routeFailureMetadataV1 === true
-  const preDelayControl = capabilities?.requestRecoveryControlV1 === true
-  const attemptEvents = capabilities?.requestAttemptEventsV1 === true
-  const coverage = nativeRecoveryCoverage(structuredFailure, preDelayControl && attemptEvents && adapterControlVerified)
-  return { contractVersion: 1, structuredFailure, preDelayControl, attemptEvents, ...coverage }
-}

@@ -3,9 +3,6 @@
  * 升级 DSH 时优先核对本文件与集成测试（tests/integration）
  */
 
-/** 已验证兼容的最低 DSH 版本 */
-export const DSH_MIN_VERSION = '0.1.7-alpha.2'
-
 /** 宿主行提供给预设行的服务名 */
 export const SWARM_SERVICE = 'agentSwarm'
 

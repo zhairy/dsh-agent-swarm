@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createAgentControl, validateAgentControlRecords, type AgentControlDeps } from '../../src/agent-control.js'
+import { createAgentControl, ValidateAgentControlRecords, type AgentControlDeps } from '../../src/agent-control.js'
 import { intRouteStateRegistry } from '../../src/route-state.js'
 
 const original = { provider: 'qwen-token-plan-cn', model: 'old', reasoningEffort: 'high' }
@@ -92,7 +92,7 @@ describe('persistent subagent control uses actual routing and host settlement', 
     expect(snapshot[0]!.requestedRoute).toEqual(original)
     expect(snapshot[0]!.actual?.route).toEqual(original)
     expect(JSON.stringify(snapshot)).not.toMatch(/must-not-persist|private-domain/)
-    expect(validateAgentControlRecords([{ ...snapshot[0], selectedNext: { ...chosen, policy: { quotaDomainId: 'forged' } } }])).toBe(false)
+    expect(ValidateAgentControlRecords([{ ...snapshot[0], selectedNext: { ...chosen, policy: { quotaDomainId: 'forged' } } }])).toBe(false)
   })
 
   it('side-effect confirmation is conditional and cannot bypass the actual workspace/lease recovery callback', async () => {
@@ -165,7 +165,7 @@ describe('persistent subagent control uses actual routing and host settlement', 
     expect(f.routes.isManualPaused('child')).toBe(false)
     expect(f.interrupt).not.toHaveBeenCalled()
     const raw = f.control.Export('root')
-    expect(validateAgentControlRecords(raw)).toBe(true)
+    expect(ValidateAgentControlRecords(raw)).toBe(true)
     const restored = fixture()
     const next = createAgentControl({ validateRoute: async (route) => route, interrupt: restored.interrupt, resume: restored.resume, applyOverride: restored.routes.SetChildOverride, setPaused: restored.routes.SetManualPause })
     next.Restore(raw, 'root')
@@ -173,7 +173,7 @@ describe('persistent subagent control uses actual routing and host settlement', 
     await expect(next.Continue({ parentSessionId: 'root', childId: 'child', expectedRevision: next.get('child')!.revision })).rejects.toThrow('宿主已确认沉寂')
     expect(restored.resume).not.toHaveBeenCalled()
     expect(() => createAgentControl({ validateRoute: async (route) => route, interrupt: restored.interrupt, resume: restored.resume, applyOverride: restored.routes.SetChildOverride, setPaused: restored.routes.SetManualPause }).Restore(raw, 'other')).toThrow('根会话边界')
-    expect(validateAgentControlRecords([{ ...raw[0], revision: -1 }])).toBe(false)
+    expect(ValidateAgentControlRecords([{ ...raw[0], revision: -1 }])).toBe(false)
   })
   it('unknown recovery permits saving a new selection or requesting stop without claiming quiescence', async () => {
     const original = fixture()

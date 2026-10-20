@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { ValidateArtifactSnapshot, getArtifactSnapshot } from '../../src/artifacts.js'
+import { getArtifactSnapshot } from '../../src/artifacts.js'
 
 describe('真实产物摘要', () => {
   it('未跟踪文件、目录与缺失文件进入摘要，内容改动使证据失效', async () => {
@@ -13,9 +13,9 @@ describe('真实产物摘要', () => {
       const before = await getArtifactSnapshot(dir, ['src', 'missing.ts'])
       expect(before.complete).toBe(true)
       expect(before.entries.find((entry) => entry.path === 'missing.ts')?.state).toBe('missing')
-      expect(ValidateArtifactSnapshot(before, await getArtifactSnapshot(dir, ['missing.ts', 'src']))).toEqual([])
+      expect((await getArtifactSnapshot(dir, ['missing.ts', 'src'])).digest).toBe(before.digest)
       await writeFile(join(dir, 'src/a.ts'), '修改后代码')
-      expect(ValidateArtifactSnapshot(before, await getArtifactSnapshot(dir, ['src', 'missing.ts'])).join()).toContain('失效')
+      expect((await getArtifactSnapshot(dir, ['src', 'missing.ts'])).digest).not.toBe(before.digest)
     } finally { await rm(dir, { recursive: true, force: true }) }
   })
 
@@ -31,7 +31,7 @@ describe('真实产物摘要', () => {
       await writeFile(join(dir, 'large'), '12345')
       const limit = await getArtifactSnapshot(dir, ['large'], { maxFileBytes: 4 })
       expect(limit.complete).toBe(false)
-      expect(ValidateArtifactSnapshot(limit, limit).join()).toContain('未知')
+      expect(limit.entries.some((entry) => entry.state === 'unknown')).toBe(true)
     } finally { await rm(dir, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }) }
   })
 

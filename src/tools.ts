@@ -27,6 +27,10 @@ const getPlanningRecoveryText = (recovery: PlanningRecoveryInfo): string[] => re
   recovery.guidance
 ]
 
+/** 观察模式不自动审核：没有记录时如实说明，而不是显示 pending 诱导反复复审 */
+const getPlanningStatusText = (status: string | undefined, mode: string): string =>
+  status ?? (mode === 'enforced' ? 'pending（强制模式需审核通过才能执行）' : '未运行（观察模式按需调用 swarm_review_plan）')
+
 /** 预设行：只挂在天枢预设上，注册 4 个百工工具、7 个 Jev 判断工具与 2 个内嵌技能，并按模型家族补充天枢的调度说明 */
 
 /**
@@ -237,7 +241,7 @@ export const getTaskCardText = (result: TaskCardResult): string => {
     ...(result.suggestedRoles.length === 0 ? ['- 无'] : result.suggestedRoles.map((s) => `- ${s.role} ${s.roleName}：${s.reason}`)),
     `衡鉴：${triage.source}${triage.fallbackReason === undefined ? '' : `（回退原因：${triage.fallbackReason}）`}${answers}`,
     `预算：每任务 ${result.budgets.maxDelegationsPerTask || '不限'} 次委派；每角色 ${result.budgets.maxCallsPerRole || '不限'} 次（铸剑 ${result.budgets.maxCallsZhuJian || '不限'} 次）；自动修复最多 ${result.budgets.maxAutoFixRounds} 轮`,
-    `需求版本：${result.requestRevision}；合同版本：${result.cardRevision}；流程版本：${result.workflowRevision}；规划审核：${result.planningReview?.status ?? 'pending'}`,
+    `需求版本：${result.requestRevision}；合同版本：${result.cardRevision}；流程版本：${result.workflowRevision}；规划审核：${getPlanningStatusText(result.planningReview?.status, result.workflowMode)}`,
     `流程控制模式：${result.workflowMode}；用户明确要求的审核、角色权限与验收门禁仍须遵守。`,
     ...getPlanningRecoveryText(result.planningRecovery),
     ...(result.planningScope === null ? [] : [`阶段任务：${result.planningScope.rationale}；延期：${result.planningScope.deferred.join('；')}。本任务验收不代表整体目标完成。`]),
@@ -294,7 +298,7 @@ export const getDelegationText = (record: DelegationRecord): string => {
 export const getStatusText = (result: StatusResult): string => {
   const tasks = result.tasks.flatMap((task) => [
     `任务 ${task.task_id}：${task.title}（修复轮次 ${task.rounds}；委派 ${task.budget.used}${task.budget.max > 0 ? `/${task.budget.max}` : ' 次（不限）'}）`,
-    `需求版本：${task.requestRevision}；合同版本：${task.cardRevision}；流程版本：${task.workflowRevision}；规划审核：${task.planningReview?.status ?? 'pending'}`,
+    `需求版本：${task.requestRevision}；合同版本：${task.cardRevision}；流程版本：${task.workflowRevision}；规划审核：${getPlanningStatusText(task.planningReview?.status, task.workflowMode)}`,
     `流程控制模式：${task.workflowMode}；进行中的审核或服务故障不代表宿主长期 goal 已被修改。`,
     ...getPlanningRecoveryText(task.planningRecovery),
     ...(task.intentHistoryNote === null ? [] : [`需求历史提示：${task.intentHistoryNote}`]),

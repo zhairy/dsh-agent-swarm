@@ -141,20 +141,6 @@ const journalShape = (value: unknown): value is JournalEntry => {
     && (record.schemaVersion === undefined || record.schemaVersion === 1 || record.schemaVersion === 2)
 }
 
-/** Running work is interrupted on recovery; live host sessions are never assumed resumable. */
-export const markInterruptedOnRecovery = <T>(state: T): T => {
-  const visit = (item: unknown): unknown => {
-    if (Array.isArray(item)) return item.map(visit)
-    if (item === null || typeof item !== 'object') return item
-    const record = Object.fromEntries(Object.entries(item).map(([key, value]) => [key, visit(value)]))
-    if (record.status === 'running' || record.status === 'cancelling') { record.status = 'interrupted'; record.mutationUnknown = true }
-    if (record.state === 'active' && typeof record.agentId === 'string') record.state = 'suspended'
-    if (typeof record.busy === 'boolean') record.busy = false
-    return record
-  }
-  return visit(state) as T
-}
-
 /** Complete committed states form the journal. Auditing/redacted ledgers are never recovery inputs. */
 export const createDurableStateStore = async <T>(options: DurableStateOptions<T>): Promise<DurableStateStore<T>> => {
   const maxStateBytes = options.maxStateBytes ?? 4 * 1024 * 1024

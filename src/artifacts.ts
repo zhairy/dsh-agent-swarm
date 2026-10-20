@@ -99,10 +99,3 @@ export const getArtifactSnapshot = async (workspace: string, paths: readonly str
   const workspaceId = getValueDigest({ workspace: root, profile: '' })
   return { workspaceId, digest: getValueDigest({ workspaceId, entries }), entries, complete: entries.every((entry) => entry.state !== 'unknown') }
 }
-
-/** 起止或验收摘要必须完整且一致。 */
-export const ValidateArtifactSnapshot = (before: ArtifactSnapshotInfo, after: ArtifactSnapshotInfo): string[] => {
-  if (!before.complete || !after.complete) return ['产物摘要包含未知项，不能确认验证有效']
-  if (before.workspaceId !== after.workspaceId || before.digest !== after.digest) return ['验证产物发生变化，证据已经失效']
-  return []
-}

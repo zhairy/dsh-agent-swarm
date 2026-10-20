@@ -19,7 +19,7 @@ import { isDelegableRoleId } from './role-registry.js'
 import { createWorkspaceLeaseManager } from './util/workspace-lease.js'
 import { validateRouteHealthSnapshot, type RouteHealthEntry, type RouteHealthSnapshot } from './route-health.js'
 import { partitionLegacyPlanningBudget } from './planning-recovery.js'
-import { validateAgentControlRecords, type AgentControlRecord } from './agent-control.js'
+import { ValidateAgentControlRecords, type AgentControlRecord } from './agent-control.js'
 import { validateEvidenceAssessment } from './evidence-assessment.js'
 import { ValidateDelegateInput } from './delegate.js'
 import { loadMemoryHandoff } from './memory-handoff.js'
@@ -114,7 +114,7 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
         || !strings(runtime.rootUpgradeExplicit) || runtime.rootUpgradeExplicit.some((id) => !identifier(id)) || new Set(runtime.rootUpgradeExplicit).size !== runtime.rootUpgradeExplicit.length) return invalid()
     }
     at('$.agentControls', 'CONTROL_FORMAT')
-    if (state.agentControls !== undefined && !validateAgentControlRecords(state.agentControls)) return invalid()
+    if (state.agentControls !== undefined && !ValidateAgentControlRecords(state.agentControls)) return invalid()
     at('$.routeHealth', 'ROUTE_HEALTH_FORMAT')
     if (state.routeHealth !== undefined && !validatePersistedRouteHealth(state.routeHealth)) return invalid()
     const tasks = new Map<string, TaskRecord>()

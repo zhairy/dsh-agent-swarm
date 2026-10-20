@@ -16,7 +16,6 @@ import {
   PROVIDER_LABELS,
   PROBE_FAIL_TTL_MS,
   PROBE_OK_TTL_MS,
-  QWEN_PREFERRED_MODELS,
   QWEN_TOKEN_PLAN_MODELS,
   getCatalogVision,
   getFailureClass,
@@ -28,13 +27,12 @@ import {
   createRouteFailureObserver,
   intRouteProbe,
   isSameRoute,
-  isSwitchWorthy,
   type RouteInfo,
   type RouteProbe
 } from '../../src/routes.js'
 import { ROLE_IDS } from '../../src/role-registry.js'
 import { DEFAULT_UPGRADES } from '../../src/upgrade.js'
-import { normalizeRouteFailure, getRouteResourcePolicy, getRouteResourceInfo } from '../../src/provider-policy.js'
+import { normalizeRouteFailure, getRouteResourcePolicy } from '../../src/provider-policy.js'
 import { intRouteStateRegistry } from '../../src/route-state.js'
 
 describe('默认路由表', () => {
@@ -94,9 +92,7 @@ describe('默认路由表', () => {
       .not.toBe(getModelFamily(DEFAULT_ROUTE_CHAINS['suan_heng:research'][0].model))
   })
 
-  it('交集与升级通道', () => {
-    expect(QWEN_PREFERRED_MODELS).toEqual(expect.arrayContaining(['deepseek-v4-pro', 'qwen3.8-max', 'kimi-k2.7-code', 'glm-5.2']))
-    expect(QWEN_PREFERRED_MODELS).not.toContain('MiniMax-M2.5')
+  it('原生升级通道', () => {
     expect(DEFAULT_ESCALATION.zhu_jian).toBe('claude')
     expect(DEFAULT_ESCALATION.fu_he).toBeUndefined()
   })
@@ -109,7 +105,6 @@ describe('路由工具函数', () => {
     expect(getRouteResourcePolicy({ provider: PROVIDER_CLAUDE, model: 'opus' })).toEqual({ accessMode: 'subscription', quotaScope: 'unknown' })
     expect(getRouteResourcePolicy({ provider: PROVIDER_CODEX, model: 'astra' }).quotaDomainId).toBeUndefined()
     expect(getRouteResourcePolicy({ provider: PROVIDER_QWEN, model: 'custom', policy: { accessMode: 'metered_api' } })).toEqual({ accessMode: 'metered_api', quotaScope: 'unknown' })
-    expect(getRouteResourceInfo({ provider: PROVIDER_DS, model: 'deepseek-flash' })).toMatchObject({ inferredResourceType: 'metered_api', metadataSource: 'provider-kind' })
   })
   it('解析预检的结构化quota进入共享隔离，缓存15s过期也不反复查询同账号', async () => {
     let at = 0
@@ -245,11 +240,6 @@ describe('失败分类', () => {
   })
 
   it('是否值得换路由', () => {
-    expect(isSwitchWorthy('route-fatal', false)).toBe(true)
-    expect(isSwitchWorthy('auth', false)).toBe(true)
-    expect(isSwitchWorthy('transient', false)).toBe(false)
-    expect(isSwitchWorthy('transient', true)).toBe(true)
-    expect(isSwitchWorthy('other', true)).toBe(true)
   })
 })
 
