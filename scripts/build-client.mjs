@@ -47,7 +47,7 @@ const agents = ROLE_INFO_LIST.flatMap((role) => {
 const triggers = UPGRADE_TRIGGERS.map((id) => ({ id, label: UPGRADE_TRIGGER_LABELS[id] }))
 const resourceTypes = Object.fromEntries(Object.keys(PROVIDER_LABELS).map((provider) => [provider, getRouteResourcePolicy({ provider, model: '' }).accessMode ?? 'unknown']))
 const data = { namespace: NAMESPACE, agents, triggers, resourceTypes, policy: { defaults: DEFAULT_AGENTS_CONFIG },
-  planning: { defaults: { workflowMode: DEFAULT_WORKFLOW_CONFIG.mode, ...DEFAULT_PLANNING_REVIEW } },
+  planning: { defaults: { workflowMode: DEFAULT_WORKFLOW_CONFIG.mode, ...DEFAULT_PLANNING_REVIEW }, workflow: { maxNodes: DEFAULT_WORKFLOW_CONFIG.maxNodes, maxEdges: DEFAULT_WORKFLOW_CONFIG.maxEdges } },
   math: { defaults: DEFAULT_MATH_CONFIG, groups: MATH_GROUP_OPERATORS, limitMaxima: MATH_LIMIT_MAXIMA, maxWorkPerTask: MAX_MATH_WORK_PER_TASK, maxCallsPerTask: MAX_MATH_CALLS_PER_TASK } }
 const display = { presets: ROLE_INFO_LIST.map((role) => role.presetId), providers: PROVIDER_LABELS }
 

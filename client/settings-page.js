@@ -40,6 +40,8 @@ const WORKFLOW_MODES = ['off', 'advisory', 'enforced']
 /** 流程与规划审核默认值：构建时由 DATA.planning 注入（与宿主 DEFAULT_WORKFLOW_CONFIG / DEFAULT_PLANNING_REVIEW 一致） */
 const PLANNING_DEFAULTS = Object.freeze({ workflowMode: 'advisory', enabled: true, requireJev: false, maxFixRounds: 2, reviewAbove: 0.8, timeoutMs: 0, ...(DATA.planning?.defaults ?? {}) })
 const PLANNING_TIMEOUT_MAX = 2147483647
+/** workflow 其余字段的 schema 默认值：宿主不提供配置分层时，保存不把这些默认值固化进用户配置 */
+const WORKFLOW_DEFAULTS = Object.freeze({ maxNodes: 32, maxEdges: 64, ...(DATA.planning?.workflow ?? {}) })
 const APPROVAL_MODES = ['inherit', 'ask', 'deny']
 const APPROVAL_SCOPES = ['write', 'shell', 'external_mcp', 'jev']
 const APPROVAL_DEFAULTS = Object.freeze({ mode: 'inherit', scope: Object.freeze([...APPROVAL_SCOPES]) })
@@ -336,7 +338,7 @@ const getPlanningErrors = (draft) => {
 const buildPlanning = (draft, layers) => {
   if (Object.keys(getPlanningErrors(draft)).length > 0) return undefined
   const review = { enabled: draft.enabled === true, requireJev: draft.requireJev === true, maxFixRounds: toNumber(draft.maxFixRounds), reviewAbove: toNumber(draft.reviewAbove), timeoutMs: toNumber(draft.timeoutMs) }
-  const kept = (raw, managed) => Object.fromEntries(Object.entries(asRecord(raw)).filter(([key]) => !managed.includes(key)))
+  const kept = (raw, managed) => Object.fromEntries(Object.entries(asRecord(raw)).filter(([key, item]) => !managed.includes(key) && item !== WORKFLOW_DEFAULTS[key]))
   return {
     workflow: { ...kept(layers.workflow, ['mode']), ...(draft.workflowMode === PLANNING_DEFAULTS.workflowMode ? {} : { mode: draft.workflowMode }) },
     planningReview: { ...kept(layers.planningReview, Object.keys(review)), ...Object.fromEntries(Object.entries(review).filter(([key, item]) => item !== PLANNING_DEFAULTS[key])) }

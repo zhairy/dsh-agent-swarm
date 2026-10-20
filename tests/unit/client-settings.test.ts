@@ -457,7 +457,7 @@ describe('任务流程与规划审核设置', () => {
   })
 
   it('只写与默认不同的字段并保留页面不管理的已保存字段；workflow 与 planningReview 同一 revision 原子保存', async () => {
-    const form = createForm({ routes: {}, workflow: { mode: 'advisory', maxNodes: 24 }, planningReview: { timeoutMs: 0, futureSetting: 'keep' } })
+    const form = createForm({ routes: {}, workflow: { mode: 'advisory', maxNodes: 24, maxEdges: 64 }, planningReview: { timeoutMs: 0, futureSetting: 'keep' } })
     const controller = new SwarmAgentsController(createCtx(form))
     expect(controller.getSnapshot().planning).toMatchObject({ dirty: false, custom: false, value: { timeoutMs: 0 } })
     controller.setPlanning({ workflowMode: 'enforced', timeoutMs: '600000' })
