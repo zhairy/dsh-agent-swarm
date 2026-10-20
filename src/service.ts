@@ -204,6 +204,9 @@ interface SessionStateInfo extends DelegateSessionInfo {
 }
 
 /** 只有任务创建之后的天枢编辑才会让该任务已有的验证失效 */
+/** 取消的写入委派等待宿主确认子会话停下的上限 */
+const CANCELLED_WRITER_WAIT_MS = 30_000
+
 /** 会产生工作区副作用的角色：执行需要写租约，流程改版时已执行的节点不自动重放 */
 const MUTATING_ROLES: readonly string[] = ['ji_feng', 'zhu_jian', 'xing_zhou']
 
@@ -471,6 +474,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     join(deps.dshHome, '.credentials.yaml'), join(deps.dshHome, 'plugins', 'subscriptions'),
     join(homedir(), '.config', 'dsh', 'secrets.env'), join(homedir(), '.ssh')]
   const leases = createWorkspaceLeaseManager()
+  /** 取消后未能确认停下的写入者：子会话结束时据此解除工作区租约 */
+  const stuckLeases = new Map<string, { cwd: string; owner: string }>()
   const ensureFeatures = async (session: SessionStateInfo, agent?: AgentLike, coldHeader?: SessionHeaderLike): Promise<FeatureSession> => {
     if (agent !== undefined) session.rootAgent = agent
     if (session.features !== undefined) return session.features
@@ -852,6 +857,18 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       return { accepted: true }
     }
   })
+  /**
+   * 写入委派被取消后：宿主确认子会话已停下（已释放或回到空闲，最多等 30 秒）才能正常释放工作区租约；
+   * 否则保留「未确认副作用」，避免新的写入者与仍在运行的旧写入者并发。
+   */
+  const waitChildStopped = async (childId: string | undefined): Promise<boolean> => {
+    if (childId === undefined) return true
+    if (deps.getAgent === undefined) return false
+    const child = deps.getAgent(childId)
+    if (child === undefined || child.status !== 'running') return true
+    if (child.whenIdle === undefined) return false
+    return Promise.race([child.whenIdle().then(() => true, () => false), new Promise<boolean>((resolve) => setTimeout(resolve, CANCELLED_WRITER_WAIT_MS, false).unref?.())])
+  }
   const getAgentViewForRpc: SwarmService['getAgentViewForRpc'] = async (parentSessionId, childId) => {
     const session = getSession(parentSessionId)
     const parent = deps.getAgent?.(parentSessionId) ?? session.rootAgent
@@ -1949,7 +1966,13 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         })
         throw error
       } finally {
-        if (lease !== undefined) await lease.release({ confirmedStopped: !exec.signal.aborted })
+        if (lease !== undefined) {
+          const childId = session.store.getTaskDelegations(captured.taskId).find((record) => record.attemptId === attemptId)?.childId
+          const stopped = !exec.signal.aborted || await waitChildStopped(childId)
+          await lease.release({ confirmedStopped: stopped })
+          // 超时仍在运行：等宿主报告该子会话结束时再解除，不必等重启
+          if (!stopped && childId !== undefined) stuckLeases.set(childId, { cwd, owner: lease.owner })
+        }
       }
       }, { group: args.role, priority: (raw as { priority?: number }).priority, signal: exec.signal })
     },
@@ -1963,7 +1986,14 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     },
     getRoleForAgent,
     isManagedAgent,
-    OnSubagentEnd: (info) => { agentControl.MarkRunSettled(info.id, info.stopReason); routeState.ReleaseAgent(info.id); hub.Emit(info) },
+    OnSubagentEnd: (info) => {
+      agentControl.MarkRunSettled(info.id, info.stopReason); routeState.ReleaseAgent(info.id); hub.Emit(info)
+      const stuck = stuckLeases.get(info.id)
+      if (stuck !== undefined) {
+        stuckLeases.delete(info.id)
+        void leases.reconcile(stuck.cwd, stuck.owner, true).catch((error: unknown) => deps.logger?.warn(`工作区租约解除失败：${getErrorText(error)}`))
+      }
+    },
     FilterPreStep: (decision) => {
       if (decision.kind !== 'enter' || decision.messages.length === 0) return decision
       const isConsumedNotice = (message: InboxMessageLike): boolean =>

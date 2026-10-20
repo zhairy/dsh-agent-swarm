@@ -47,6 +47,7 @@ const makeRuntime = async (options: {
   config?: Record<string, unknown>
   pending?: boolean
   output?: (role: DelegableRoleId, request: SubagentStartRequestLike) => unknown
+  getAgent?: (id: string) => AgentLike | undefined
 } = {}) => {
   const home = options.home ?? await mkdtemp(join(tmpdir(), 'swarm-task-runtime-'))
   if (options.home === undefined) directories.push(home)
@@ -82,7 +83,8 @@ const makeRuntime = async (options: {
     getCredentials: () => undefined, getAttachments: () => undefined,
     dshHome: home, fetch: fetch as unknown as typeof globalThis.fetch,
     gitStatus: async () => undefined, sleep: async () => undefined,
-    probe: async () => ({ ok: true, vision: true }), now: () => ++time
+    probe: async () => ({ ok: true, vision: true }), now: () => ++time,
+    ...(options.getAgent === undefined ? {} : { getAgent: options.getAgent })
   })
   services.push(service)
   return { service, root, exec, home, subagents, runs, fetch, config }
@@ -264,6 +266,19 @@ describe('task execution through the public service', () => {
     } finally {
       if (status.mutationUnknown && status.owner) await leases.reconcile(runtime.home, status.owner, true)
     }
+  })
+
+  it('cancelled writer releases the workspace once the host confirms the child is gone; no restart needed', async () => {
+    const runtime = await makeRuntime({ pending: true, config: { workflow: { mode: 'advisory' } }, getAgent: () => undefined })
+    const created = await runtime.service.AddTaskCard(card({ flags: { changesCode: true } }), runtime.exec())
+    const cancellation = new AbortController()
+    const running = runtime.service.delegate({ task_id: created.task_id, role: 'ji_feng', node_id: 'implementation', prompt: '写入后被取消', backend: 'api', session: 'oneshot' }, { agent: runtime.root, signal: cancellation.signal })
+    const handled = running.catch(() => undefined)
+    await vi.waitFor(() => expect(runtime.runs).toHaveLength(1))
+    cancellation.abort()
+    runtime.runs[0]!.release(); await handled
+    expect((await createWorkspaceLeaseManager().getStatus(runtime.home))).toMatchObject({ mutationUnknown: false, busy: false })
+    expect(runtime.service.getGuardReason({ name: 'write', agent: runtime.root })).toBeUndefined()
   })
 
   it('replays the same request when JSON object keys are reordered and rejects changed input', async () => {
