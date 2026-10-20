@@ -3,7 +3,9 @@ import { getChildPromptText, getNativePromptText, getNativeStyle, getThreadFollo
 import type { TaskRecord } from '../../src/evidence.js'
 import { getOrchestratorStyleSection, getPromptStyle, getStyledTaskPrompt } from '../../src/model-family.js'
 import { ValidateTaskCard, type TaskCard } from '../../src/policy.js'
-import { ROLE_TAG_PATTERN, getChildPersona } from '../../src/role-registry.js'
+import { ROLE_IDS, ROLE_TAG_PATTERN, getChildPersona, getPresetPersona } from '../../src/role-registry.js'
+import { LANGUAGE_PLACEHOLDER, getLanguageInstruction } from '../../src/language.js'
+import { OUTPUT_LANGUAGE_SECTION, PERSONA_PREFIX_SECTION, getRuntimeAssembly } from '../../src/runtime.js'
 import { ORCHESTRATION_STYLE_SECTION, getStyledAssembly } from '../../src/tools.js'
 
 const card = ValidateTaskCard({ title: '修复', goal: '修好登录', acceptance: ['测试通过'], scope: ['src/a.ts'], flags: { changesCode: true } }).card as TaskCard
@@ -57,7 +59,7 @@ describe('委派任务说明', () => {
     const gpt = getChildPromptText(task, input, 'D-1', 'gpt')
     expect(gpt).toMatch(/^GOAL:\n实现登录[\s\S]*CONTEXT:[\s\S]*STOP WHEN: [\s\S]*EVIDENCE: [\s\S]*DELIVERABLE（交付）:/)
     const generic = getChildPromptText(task, input, 'D-1')
-    expect(generic).toMatch(/任务 T-1 \/ 委派 D-1[\s\S]*—— 本次任务 ——\n\n实现登录[\s\S]*OUTPUT LANGUAGE:[\s\S]*—— 交付 ——/)
+    expect(generic).toMatch(/任务 T-1 \/ 委派 D-1[\s\S]*—— 本次任务 ——\n\n实现登录[\s\S]*输出语言：[\s\S]*—— 交付 ——/)
   })
 
   it('连续会话：首轮带完整背景；追加到已知任务时只带编号；原生后端带 persona 与 JSON Schema', () => {
@@ -109,5 +111,41 @@ describe('天枢的调度风格说明', () => {
     expect(getStyledAssembly(child, 'auto')).toBe(child)
     const once = getStyledAssembly(assembly('gpt-6-sol', 'codex'), 'auto')
     expect(getStyledAssembly(once, 'auto')).toBe(once)
+  })
+})
+
+describe('runtime 行：语言与委派子会话 persona', () => {
+  const assembly = (persona: string, model = 'gpt-6-sol', provider = 'codex') => ({
+    sections: [{ name: PERSONA_PREFIX_SECTION, text: persona }, { name: 'tool:bash', text: 'Execute a bash command.' }],
+    contexts: [], tools: [], variables: { model, provider }
+  })
+
+  it('每个预设 persona 都带 {$language}，按设置页语言替换并在末尾追加用目标语言书写的要求', () => {
+    for (const role of ROLE_IDS) expect(getPresetPersona(role)).toContain(`- **Language**: 强制使用${LANGUAGE_PLACEHOLDER}回答与思考`)
+    const zh = getRuntimeAssembly(assembly(getPresetPersona('tian_shu')), { language: 'zh-CN', promptStyle: 'auto' })
+    expect(zh.sections[0]!.text).toContain('强制使用简体中文回答与思考')
+    expect(zh.sections[0]!.text).not.toContain(LANGUAGE_PLACEHOLDER)
+    expect(zh.sections.at(-1)).toEqual({ name: OUTPUT_LANGUAGE_SECTION, text: getLanguageInstruction('zh-CN'), interpolate: false })
+    expect(zh.sections.at(-1)!.text).toContain('思考与推理过程')
+    const en = getRuntimeAssembly(zh, { language: 'en', promptStyle: 'auto' })
+    expect(en.sections.filter((section) => section.name === OUTPUT_LANGUAGE_SECTION)).toHaveLength(1)
+    expect(getRuntimeAssembly(assembly(getPresetPersona('tian_shu')), { language: 'ja', promptStyle: 'auto' }).sections.at(-1)!.text).toMatch(/^出力言語：日本語（ja）/)
+  })
+
+  it('委派子会话的静态角色预设 persona 换成按当前模型家族生成的委派 persona，含工程规范与本次语言', () => {
+    const child = getRuntimeAssembly(assembly(getPresetPersona('zhu_jian'), 'claude-opus-5-5', 'claude'), { language: 'zh-CN', promptStyle: 'auto', child: { role: 'zhu_jian' } })
+    const persona = child.sections[0]!
+    expect(persona).toMatchObject({ name: PERSONA_PREFIX_SECTION, interpolate: false })
+    expect(ROLE_TAG_PATTERN.exec(persona.text)?.[1]).toBe('zhu_jian')
+    expect(persona.text).toContain('<engineering_rules>')
+    expect(persona.text).toContain('**No Over-Engineering**')
+    expect(persona.text).toContain('强制使用简体中文回答与思考')
+    expect(persona.text).not.toContain('用户直接与你协作')
+    const verify = getRuntimeAssembly(assembly(getPresetPersona('suan_heng'), 'deepseek-flash', 'deepseek-official'), { language: 'zh-CN', promptStyle: 'auto', child: { role: 'suan_heng', mode: 'verify', language: 'en', explicitLanguage: true } })
+    expect(verify.sections[0]!.text).toContain('当前模式：验算')
+    expect(verify.sections[0]!.text).toContain('强制使用English回答与思考')
+    expect(verify.sections.at(-1)!.text).toContain('set explicitly for this delegation')
+    const fixed = getRuntimeAssembly(assembly(getPresetPersona('yu_shi')), { language: 'zh-CN', promptStyle: 'auto', child: { role: 'yu_shi', persona: '规划审查者 [[swarm:role=yu_shi]]' } })
+    expect(fixed.sections[0]!.text).toBe('规划审查者 [[swarm:role=yu_shi]]')
   })
 })

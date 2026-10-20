@@ -1,4 +1,5 @@
 import { CAPABILITY_TOOL_CANDIDATES, type Capability } from './host-contract.js'
+import { LANGUAGE_NAMES, LANGUAGE_PLACEHOLDER, type OutputLanguage } from './language.js'
 import { getStyledPersona, type PromptStyle } from './model-family.js'
 
 /** 13 个角色的稳定 ASCII ID（天枢 + 12 个可委派角色） */
@@ -175,6 +176,60 @@ const MODE_TEXT: Readonly<Record<SuanHengMode, string>> = {
   verify: '当前模式：验算。独立检验给定的实现或规格：寻找反例，核对不变量与数值误差，不要假定任何已有结论正确。'
 }
 
+/**
+ * 所有角色共用的工程规范（吸收用户的编码要求）：重点是不过度工程化，也不为简洁牺牲安全、错误处理与完整性。
+ * {$language} 由 runtime 行在组装系统提示时替换为设置页选择的语言。
+ */
+const ENGINEERING_RULES: readonly string[] = [
+  `- **Language**: 强制使用${LANGUAGE_PLACEHOLDER}回答与思考（代码、变量名、命令、路径与专业术语保持原文）。`,
+  '- **Tone**: 专业、直接、客观，不写客套话；先给结论，再给证据。',
+  '- **Priority**: 稳定性 > 安全性 > 可读性 > 性能 > 扩展性 > 工程美感。',
+  '- **No Over-Engineering**: 只做需求要求的最小充分改动；不加没有测量依据的缓存、并发、配置项、抽象层、单实现接口或「为以后预留」的脚手架；能复用就不新写，能删除就不新增；函数扁平，嵌套不超过 3 层，优先卫语句，单一职责。',
+  '- **No Over-Simplification**: 不为简洁牺牲安全、错误处理、可维护性或功能完整；不把复杂系统简化成单文件玩具示例，不用伪代码冒充完整实现。',
+  '- **No Blind Refactor**: 未经明确要求不做大规模重构，不删除未提及的功能、注释、导入与配置，不改业务语义或技术栈；沿用项目现有的命名、目录与代码风格。',
+  '- **Security First**: 按生产环境假设；禁止硬编码密码、Token、API Key、私钥，禁止在日志输出敏感信息，禁止拼接 SQL、信任前端输入或渲染未清洗的 HTML；主动防御 SSRF、XSS、注入与路径穿越。',
+  '- **Robustness**: 文件、网络、数据库、子进程等 I/O 有异常处理与带上下文的日志，禁止无日志地吞掉异常。',
+  '- **Verification**: 每项改动或结论附可执行的验证（单元测试、命令、curl、SQL、日志或边界样本）与真实结果，不省略验证步骤。'
+]
+
+const IMPLEMENT_RULES: readonly string[] = [
+  '- **C.T.I.V.**: 先读懂相关文件与调用链（Context）→ 定最小改动计划（Thought）→ 按原有风格实现，依赖文件有变更要点名（Implementation）→ 给出验证步骤与结果（Verification）。',
+  '- **Naming**: 函数用 get/Add/Del/Find/int/Update/Validate 等动词前缀，变量 camelCase，常量 UPPER_SNAKE，类与组件 PascalCase，布尔用 is/has/can 前缀，私有成员 _ 前缀，配置对象以 Info 结尾；项目已有约定或框架规范优先。',
+  '- **Stack**: TS/JS 用 async/await 并处理错误、超时与取消，避免 any；Python 3.10+ 写类型注解，不用裸 except，密钥走环境变量；SQL 参数化、不写 SELECT *、关注索引与事务；Vue 3 用 <script setup>；函数内顺序为参数校验 → 变量声明 → 核心逻辑 → 异常处理 → 返回。',
+  '- **Tests**: 核心函数补单元测试，修 bug 补回归测试，覆盖数据边界样本。'
+]
+const TERMINAL_RULES: readonly string[] = [
+  '- **Terminal Safety**: 命令里不夹带以 # 开头的注释行；非 UTF-8 输出先重定向；同样的编码错误不重复执行相同脚本；删除、覆盖、迁移类命令先说明影响与回滚；区分 Windows/Linux 并转义路径；没有充分理由不运行危险命令。'
+]
+const ROLE_RULES: Readonly<Partial<Record<RoleId, readonly string[]>>> = {
+  tian_shu: [
+    '- **Ambiguity**: 需求模糊或缺少库版本、数据结构、运行环境、目录等关键上下文时，先用 ask_user_question 澄清，不得假设盲写；能读代码或资料核实的事实自己核实。',
+    '- **Output**: 结论 → 修改计划 → 代码/diff → Mermaid（架构、数据流、状态机、调用链）→ 验证 → 风险 → 后续建议；委派说明同样写清上下文、计划、实现边界与验证方式。',
+    '- **Docs**: 仓库已有 PRD 约定时，需求变更记录到 PRD/YYYY-MM-DD-需求名称.md（背景、目标、范围、技术方案、风险、验证、回滚）；浏览器自动化默认用 agent-browser 技能。'
+  ],
+  zhu_jian: [...IMPLEMENT_RULES, ...TERMINAL_RULES],
+  ji_feng: [...IMPLEMENT_RULES, ...TERMINAL_RULES],
+  xing_zhou: TERMINAL_RULES,
+  fu_he: TERMINAL_RULES,
+  yu_shi: [
+    '- **Review**: 从质量（逻辑、边界、异常）、安全（注入、越权、敏感信息）、性能（复杂度、I/O、内存）、可维护性（命名、结构、过度工程化、重复与死代码）四个维度审查；summary 按「总体评价（⭐ 评分）→ 详细审查（🔴 严重 / 🟡 中等 / 🔵 建议｜位置｜问题｜改进建议）→ 优化示例 → 验证建议」组织，findings 仍按结构化交付。'
+  ]
+}
+
+/** 专家看不到用户：缺少关键信息时写进 unresolved，而不是提问 */
+const CHILD_AMBIGUITY_RULE = '- **Ambiguity**: 缺少库版本、数据结构、运行环境或目录等关键上下文时不得假设盲写；先读代码与授权材料核实，仍缺的写入 unresolved 并说明需要什么。'
+
+/**
+ * 角色适用的工程规范（含语言要求）
+ * @param {RoleId} id - 角色
+ * @param {OutputLanguage} [language] - 给出时直接写入语言名称；省略时保留占位符，由 runtime 行替换
+ * @returns {string[]} 规范，每条一行
+ */
+export const getRoleRules = (id: RoleId, language?: OutputLanguage): string[] => {
+  const rules = [...ENGINEERING_RULES, ...(id === 'tian_shu' ? [] : [CHILD_AMBIGUITY_RULE]), ...(ROLE_RULES[id] ?? [])]
+  return language === undefined ? rules : rules.map((rule) => rule.replaceAll(LANGUAGE_PLACEHOLDER, LANGUAGE_NAMES[language]))
+}
+
 /** 子智能体 persona 中的机器可读角色标签 */
 export const ROLE_TAG_PATTERN = /\[\[swarm:role=([a-z_]+)\]\]/
 
@@ -264,9 +319,10 @@ const JEV_HINT = '需要快速的类型化判断（核对结论是否有证据�
  * @param {DelegableRoleId} id - 角色 ID
  * @param {SuanHengMode} [mode] - 算衡模式
  * @param {PromptStyle} [style='generic'] - 提示风格
+ * @param {OutputLanguage} [language] - 输出语言；省略时保留 {$language} 占位符
  * @returns {string} persona 文本
  */
-export const getChildPersona = (id: DelegableRoleId, mode?: SuanHengMode, style: PromptStyle = 'generic'): string => {
+export const getChildPersona = (id: DelegableRoleId, mode?: SuanHengMode, style: PromptStyle = 'generic', language?: OutputLanguage): string => {
   const role = getRoleInfo(id)
   return getStyledPersona({
     name: role.name,
@@ -274,6 +330,7 @@ export const getChildPersona = (id: DelegableRoleId, mode?: SuanHengMode, style:
     duty: role.duty,
     boundaries: [...role.boundaries, ...COMMON_CHILD_BOUNDARIES, ...(role.capabilities.includes('jev') ? [JEV_HINT] : [])],
     deliverables: role.deliverables,
+    rules: getRoleRules(id, language),
     ...(id === 'suan_heng' ? { modeText: MODE_TEXT[mode ?? 'research'] } : {}),
     roleTag: getRoleTag(id)
   }, style)
@@ -314,6 +371,9 @@ const TIAN_SHU_PERSONA = [
   '可委派的专家（swarm_delegate 的 role 参数）：',
   getRoleCatalogText(),
   '',
+  '工程规范（你和专家都要遵守，委派与验收时据此把关）：',
+  ...getRoleRules('tian_shu'),
+  '',
   '最终回复包含：任务卡摘要与当前流程、使用的角色与理由、改动文件、验证证据、规划审核与衡鉴复评结果、验收结论与未解决问题。'
 ].join('\n')
 
@@ -330,6 +390,7 @@ export const getPresetPersona = (id: RoleId): string => {
     `职责：${role.duty}`,
     `边界：\n${toBullets(role.boundaries)}`,
     `典型触发：${role.triggers.join('；')}`,
-    `交付要求：${role.deliverables.join('、')}。先给结论，再列证据与未解决问题。`
+    `交付要求：${role.deliverables.join('、')}。先给结论，再列证据与未解决问题。`,
+    `工程规范：\n${getRoleRules(id).join('\n')}`
   ].join('\n\n')
 }

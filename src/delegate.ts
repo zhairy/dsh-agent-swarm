@@ -354,8 +354,20 @@ export interface DelegateDepsInfo {
   onChildStart?: (info: { agentId: string; task: TaskRecord; record: DelegationRecord; role: DelegableRoleId; signal: AbortSignal; persistent?: boolean; input?: DelegateInput; parent?: AgentLike }) => void | Promise<void>
   onChildEnd?: (agentId: string, stopReason?: string) => void | Promise<void>
   /** 0.2.1-alpha：在启动子智能体前登记角色与 allow_web，供宿主 agent/created 首次装配前限制工具面 */
-  noteChildScope?: (request: { role: DelegableRoleId; allowWeb: boolean }) => void
+  noteChildScope?: (request: ChildScopeRequest) => void
 }
+
+/** 启动子智能体前登记的组合意图：宿主 agent/created 早于启动返回，用它决定首次装配的工具面与 persona */
+export interface ChildScopeRequest {
+  role: DelegableRoleId
+  allowWeb: boolean
+  mode?: SuanHengMode
+  language?: OutputLanguage
+  explicitLanguage?: boolean
+}
+
+const getChildScope = (input: DelegateInput): ChildScopeRequest => ({ role: input.role, allowWeb: input.allow_web === true,
+  ...(input.mode === undefined ? {} : { mode: input.mode }), ...(input.language === undefined ? {} : { language: input.language }), explicitLanguage: input.languageExplicit === true })
 
 /** 一次运行（一次性或连续会话的一轮，含自动重试）的结果 */
 interface RunOutcomeInfo {
@@ -564,6 +576,14 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
 
   const getBackoffMs = (config: SwarmConfigInfo, attempt: number): number => config.agents.retryBackoffMs * 2 ** Math.max(0, attempt - 1)
 
+  /** 路由层终态（如链耗尽）比宿主的通用 error 更具体：失败时用它及各路由状态作为错误说明 */
+  const withRouteTerminal = (evaluation: EvaluationInfo, agentId: string): EvaluationInfo => {
+    const terminal = deps.routeState.getTerminal(agentId)
+    if (terminal === undefined || evaluation.status === 'completed') return evaluation
+    const detail = deps.routeState.getTerminalDetail(agentId)
+    return { ...evaluation, error: getExplainedError(detail === undefined ? terminal : `${terminal}：${detail}`) }
+  }
+
   /**
    * 出错重试前的等待：可能由断网引起的失败，在确认断网后等网络恢复（最长 networkWaitMs），否则按退避时间等待
    * @param {SwarmConfigInfo} config - 配置
@@ -646,7 +666,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
           // 任务说明与 persona 按这一层路由的模型家族组织
           const style = getStyle(route, config)
           try {
-            deps.noteChildScope?.({ role: input.role, allowWeb: input.allow_web === true })
+            deps.noteChildScope?.(getChildScope(input))
             const run = await dispatch(exec, () => startChild(subagents, {
               provider: SPAWN_PROVIDER,
               label: `${role.name}·${task.taskId}`,
@@ -689,7 +709,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
         startError = getErrorText(error)
       }
       const result: SubagentResultLike = outcome?.result ?? { output: [], stopReason: 'error', diagnostic: `未能启动：${startError ?? 'unknown'}` }
-      const evaluation = getEvaluation(input.role, input.mode, result, result.structured)
+      const evaluation = withRouteTerminal(getEvaluation(input.role, input.mode, result, result.structured), outcome?.run.id ?? '')
       last = {
         evaluation, childId: outcome?.run.id ?? '', ...(finalRoute ?? usable[usedIndex] ? { finalRoute: finalRoute ?? usable[usedIndex] } : {}), retries, session: session_,
         ...(usedStyle === undefined ? {} : { promptStyle: usedStyle })
@@ -751,7 +771,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       try {
         if (started) await dispatch(exec, () => subagents.sendMessage!(exec.agent, threadId, content, { signal: exec.signal }))
         else {
-          deps.noteChildScope?.({ role: input.role, allowWeb: input.allow_web === true })
+          deps.noteChildScope?.(getChildScope(input))
           await dispatch(exec, async () => {
             // 旧宿主返回 {childId,messageId}；新宿主返回激活句柄，其结果由 hub 的回合结算通知消费。
             const run = subagents.startContinuable !== undefined
@@ -839,7 +859,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       deps.hub.MarkConsumed(threadId)
       const result: SubagentResultLike = { output: [...(info.lastAssistantMessage ?? [])], stopReason: info.stopReason }
       const structured = ParseNativeOutput(getOutputText(result))
-      evaluation = getEvaluation(input.role, input.mode, result, structured)
+      evaluation = withRouteTerminal(getEvaluation(input.role, input.mode, result, structured), threadId)
       if (deps.routeState.isManualPaused(threadId)) {
         if (evaluation.status !== 'completed') evaluation = ['aborted', 'cancelled', 'interrupted'].includes(result.stopReason)
           ? { ...evaluation, status: 'failed', summary: '子会话已人工暂停，等待确认副作用后安全继续', error: 'manual-intervention', unresolved: [...evaluation.unresolved, '人工取消后的副作用与任务进度需要核对；本轮未自动重放'] }
@@ -925,6 +945,15 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       // 订阅类 provider 解析模型要联网：断网时整条链都会预检失败
       await WaitBeforeRetry(config, attempt, true, exec.signal)
       selection = await getSelection()
+    }
+    // 整条链都在隔离期：最早到期的路由在断网等待预算内时等它到期再预检，不直接判定无路由
+    if (selection.usable.length === 0 && selection.skipped.length > 0 && selection.skipped.every((item) => item.reason === 'route-isolated')) {
+      const wait = Math.min(...quotaChain.map((route) => deps.routeState.getRouteDueAt(route))) - deps.now()
+      if (wait > 0 && wait <= config.agents.networkWaitMs && !exec.signal.aborted) {
+        AddRetry(session, record, retries, { attempt: retries.length + 1, reason: `路由链全部在隔离期，等待 ${Math.ceil(wait / 1000)} 秒后重试最早恢复的路由`, action: 'restart' })
+        await deps.sleep(wait, exec.signal)
+        selection = await getSelection()
+      }
     }
     for (const skipped of selection.skipped) {
       attempts.push({ route: getRouteLabel(skipped.route), backend: 'spawn', outcome: 'skipped', reason: skipped.reason })

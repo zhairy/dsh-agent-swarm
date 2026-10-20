@@ -472,3 +472,21 @@ it('验收复评绑定具体验收记录，同版本的新决定使旧异步复�
     expect(service.getStatus({ task_id: task.task_id }, exec()).tasks[0]!.acceptance?.decision).toBe('reject')
   } finally { release(); await previous.catch(() => undefined) }
 })
+
+describe('任务卡流程草稿', () => {
+  it('缺少规则要求的 G_MATH_VERIFY 时自动补入算衡·验算节点，而不是报 workflow 缺少必需门禁', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false } } })
+    const workflow = { schemaVersion: 1, mode: 'standard', nodes: [
+      { id: 'implement', label: '铸剑：B3-e 条件单', operation: 'delegate', role: 'zhu_jian', dependsOn: [], gates: [], outputContractVersion: '1' },
+      { id: 'verify', label: '复核', operation: 'delegate', role: 'fu_he', dependsOn: ['implement'], gates: ['G_VERIFY'], outputContractVersion: '1' },
+      { id: 'adversarial', label: '御史', operation: 'delegate', role: 'yu_shi', dependsOn: ['implement'], gates: ['G_REVIEW'], outputContractVersion: '1' },
+      { id: 'checkpoint', label: '检查点', operation: 'checkpoint', dependsOn: ['verify', 'adversarial'], gates: [], outputContractVersion: '1' },
+      { id: 'accept', label: '验收', operation: 'accept', dependsOn: ['checkpoint'], gates: [], outputContractVersion: '1' }
+    ] }
+    const card = await service.AddTaskCard(cardInput({ changesCode: true, touchesFinancialLogic: true, securitySensitive: true, crossModuleArchitecture: true }, { workflow }), exec())
+    expect(card.requiredGates.map((gate) => gate.gate)).toContain('G_MATH_VERIFY')
+    const math = card.flow?.definition.nodes.find((node) => node.gates.includes('G_MATH_VERIFY'))
+    expect(math).toMatchObject({ role: 'suan_heng', mathMode: 'verify', dependsOn: ['implement'] })
+    expect(card.flow?.mermaid).toContain(`n_${math!.id}`)
+  })
+})

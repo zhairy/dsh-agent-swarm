@@ -95,7 +95,7 @@ describe('2.5.0 independent adversarial association regressions', () => {
     const input = { task_id: h.task.task_id, role: 'tan_wei' as const, prompt: 'Check the source', language: 'ja' as const }
     for (const style of ['generic', 'gpt', 'claude'] as const) {
       for (const text of [getChildPromptText(record, input, 'D-1', style), getThreadFollowupText(record, input, 'D-2', true, style), getNativePromptText(record, input, 'D-3', undefined, style)]) {
-        expect(text).toContain('OUTPUT LANGUAGE: 日本語 (ja)')
+        expect(text).toContain('出力言語：日本語（ja）')
         expect(text).not.toContain('summary 用中文')
       }
       expect(getChildPersona('tan_wei', undefined, style)).not.toContain('summary 用中文')

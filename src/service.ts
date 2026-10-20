@@ -11,7 +11,8 @@ import { join } from 'node:path'
 import { realpathSync } from 'node:fs'
 import { resolve, relative, isAbsolute, sep, dirname } from 'node:path'
 import { getRoleRoute, type SwarmConfigInfo } from './config.js'
-import { DispatchAdmissionError, intDelegator, getToolFilter, type DelegateExecInfo, type DelegateSessionInfo, type PlanSessionInput } from './delegate.js'
+import { DispatchAdmissionError, intDelegator, getToolFilter, type ChildScopeRequest, type DelegateExecInfo, type DelegateSessionInfo, type PlanSessionInput } from './delegate.js'
+import type { ChildPromptInfo } from './runtime.js'
 import { startChild, supportsContinuableSessions } from './subagent-compat.js'
 import { intLedger, intTaskStore, type AcceptanceRecord, type AssessmentInfo, type DelegationRecord, type TaskRecord, type TriageRecord } from './evidence.js'
 import {
@@ -58,7 +59,7 @@ import { getErrorText, SwarmError } from './util/errors.js'
 import { getGitStatus, type GitStatusInfo } from './util/git.js'
 import { intMutex } from './util/mutex.js'
 import { getTaskIntent, getTaskIntentRefs, mergeTaskIntentRefs, getTaskIntentText, getSemanticCardDigest, getCurrentDelegations, digest, getTaskBinding, getTaskContextBinding, isTaskVersionCurrent } from './task-model.js'
-import { getDefaultWorkflow, ValidateWorkflow, getWorkflowDigest, getWorkflowMermaid, getTaskCardMarkdown, intWorkflowState, ReconcileWorkflow, getReadyNodes, getMatchingNode, UpdateWorkflowNode, getValueDigest } from './workflow.js'
+import { getDefaultWorkflow, getLenientWorkflow, getWorkflowDigest, getWorkflowMermaid, getTaskCardMarkdown, intWorkflowState, ReconcileWorkflow, getReadyNodes, getMatchingNode, UpdateWorkflowNode, getValueDigest } from './workflow.js'
 import { RunPlanningReview, getReviewSnapshot, getPlanningReviewState, getPlanningReviewQuestions, isPlanningReviewCurrent, isPlanningReviewReusable, getPlanningReviewDiagnostics, type PlanningAgentAssessmentInfo, type ReviewSnapshot } from './planning-review.js'
 import { waitForPlanning } from './planning-wait.js'
 import { getArtifactSnapshot } from './artifacts.js'
@@ -203,6 +204,9 @@ interface SessionStateInfo extends DelegateSessionInfo {
 }
 
 /** 只有任务创建之后的天枢编辑才会让该任务已有的验证失效 */
+/** 独立规划审核子会话的固定 persona（不是一次委派，不套用御史的委派 persona） */
+const PLANNING_REVIEWER_PERSONA = '你是独立只读的规划审查者。审核原始用户需求、目标、流程和源码，严禁写入、shell 或自行委派。[[swarm:role=yu_shi]]'
+
 const getExternalEditAt = (task: TaskRecord, session: SessionStateInfo): number =>
   session.rootEditAt >= task.createdAt ? session.rootEditAt : 0
 
@@ -244,7 +248,9 @@ export interface SwarmService {
   ApplyChildToolScope: (agent: AgentLike, role: DelegableRoleId, allowWeb?: boolean) => void
   ChildAllowWebFor: (agentId: string) => boolean | undefined
   /** 委派侧在启动子智能体前登记角色与 allow_web，供 agent/created 在首次装配前限制工具面。 */
-  NoteChildScope: (request: { role: DelegableRoleId; allowWeb: boolean }) => void
+  NoteChildScope: (request: ChildScopeRequest) => void
+  /** 子会话在系统提示里的身份（角色、模式、语言、固定 persona）；不是百工委派的子会话返回 undefined */
+  getChildPrompt: (agentId: string) => ChildPromptInfo | undefined
   /** 宿主 agent/created：子智能体入队工作释放前限制其作用域工具面。 */
   OnAgentCreated: (agent: AgentLike) => void
 }
@@ -712,8 +718,11 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const childAllowWeb = new Map<string, boolean>()
   const childToolScopes = new Map<string, { dispose: () => void; allowWeb: boolean }>()
   /** 子智能体创建前登记的 composition 意图：agent/created 早于 onChildStart，用它给首次装配正确的 allow_web。 */
-  const pendingChildScopes: Array<{ role: DelegableRoleId; allowWeb: boolean }> = []
-  const NoteChildScope = (request: { role: DelegableRoleId; allowWeb: boolean }): void => {
+  const pendingChildScopes: ChildScopeRequest[] = []
+  const childPrompts = new Map<string, ChildPromptInfo>()
+  const getChildPromptInfo = (request: ChildScopeRequest): ChildPromptInfo => ({ role: request.role, ...(request.mode === undefined ? {} : { mode: request.mode }),
+    ...(request.language === undefined ? {} : { language: request.language }), ...(request.explicitLanguage === true ? { explicitLanguage: true } : {}) })
+  const NoteChildScope = (request: ChildScopeRequest): void => {
     pendingChildScopes.push(request)
     if (pendingChildScopes.length > 64) pendingChildScopes.shift()
   }
@@ -751,6 +760,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const pending = index < 0 ? undefined : pendingChildScopes.splice(index, 1)[0]
     const allowWeb = pending?.allowWeb ?? getRoleInfo(role).web === 'always'
     childAllowWeb.set(agent.id, allowWeb)
+    if (pending !== undefined && !childPrompts.has(agent.id)) childPrompts.set(agent.id, getChildPromptInfo(pending))
     ApplyChildToolScope(agent, role, allowWeb)
   }
   const requireLiveParent = (parentSessionId: string): AgentLike => {
@@ -938,6 +948,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const session = getSession(task.sessionId)
       childOwners.set(agentId, task.sessionId)
       childSignals.set(agentId, signal)
+      childPrompts.set(agentId, getChildPromptInfo({ role, allowWeb: input?.allow_web === true, ...(record.mode === undefined ? {} : { mode: record.mode }),
+        ...(input?.language === undefined ? {} : { language: input.language }), explicitLanguage: input?.languageExplicit === true }))
       // 新宿主没有启动期 toolFilter：登记 allow_web，并尽力在子智能体作用域上限制继承的工具面；
       // 子智能体首次模型请求仍会经 runtime 的 agent/request 复核一次（那里一定能拿到 agent 作用域）。
       childAllowWeb.set(agentId, input?.allow_web === true)
@@ -962,6 +974,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     },
     onChildEnd: async (agentId, stopReason) => {
       agentControl.MarkRunSettled(agentId, stopReason)
+      if (agentControl.get(agentId)?.persistent !== true) childPrompts.delete(agentId)
       const owner = childOwners.get(agentId)
       if (owner === undefined) return
       const session = getSession(owner)
@@ -1128,8 +1141,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const ruleGates = getRuleGates(card)
       const merged = existing === undefined ? ruleGates : [...existing.gates, ...ruleGates.filter((gate) => !existing.gates.some((old) => old.gate === gate.gate))]
       const { gates, triage } = await getTriage(card, merged, session, exec.signal)
-      const check = ValidateWorkflow(card.workflow ?? getDefaultWorkflow(card, gates), card, gates)
-      if (check.definition === undefined) throw new SwarmError('INVALID_ARGS', check.errors.join('；'))
+      // 天枢给出的流程只作草稿：缺失的必需门禁节点、检查点与验收由宿主补齐，不因写法问题打回任务卡
+      const check = ReconcileWorkflow(card.workflow === undefined ? getDefaultWorkflow(card, gates) : getLenientWorkflow(card.workflow, card, gates), card, gates)
+      if (check.errors.length > 0) throw new SwarmError('INVALID_ARGS', check.errors.join('；'))
       if (check.definition.nodes.length > deps.getConfig().workflow.maxNodes
         || check.definition.nodes.reduce((total, node) => total + node.dependsOn.length, 0) > deps.getConfig().workflow.maxEdges) throw new SwarmError('INVALID_ARGS', '流程超过配置的节点或依赖边上限')
       const workflowDigest = getWorkflowDigest(check.definition)
@@ -1266,7 +1280,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
               prompt: [{ type: 'text', text: prompt }], outputSchema: schema, maxDepth: 1,
               agentPreset: getRoleInfo('yu_shi').presetId,
               toolFilter: { allow: allowed }, agentOptions: { provider: route.provider, model: route.model, ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}) },
-              persona: '你是独立只读的规划审查者。审核原始用户需求、目标、流程和源码，严禁写入、shell或自行委派。[[swarm:role=yu_shi]]\n' + getLanguageInstruction(deps.getConfig().agents.language)
+              persona: `${PLANNING_REVIEWER_PERSONA}\n${getLanguageInstruction(deps.getConfig().agents.language)}`
             })
             // 启动 API 也可能忽略取消；迟到的 child 不绑定任何任务权限，并主动关闭。
             void started.then((late) => {
@@ -1278,6 +1292,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
               }
             }, () => undefined)
             run = await waitForPlanning(started, reviewSignal)
+            childPrompts.set(run.id, { role: 'yu_shi', persona: PLANNING_REVIEWER_PERSONA })
             progress.reviewerId = run.id
             progress.route = getRouteLabel(route)
             progress.agentStage = 'reviewing'
@@ -1305,6 +1320,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
               // 先撤销能力，再有界清理；清理卡死不能阻塞本轮结果与后续审核。
               await features.bindings.revoke(run.id, reviewSignal.aborted ? 'cancelled' : 'completed')
               routeState.DelAgent(run.id)
+              childPrompts.delete(run.id)
               childReady.delete(run.id)
               try { await waitForPlanning(run.dispose(), AbortSignal.timeout(1000)) }
               catch (error) { deps.logger?.warn(`规划审核清理未确认 ${task.taskId}/${run.id}: ${getErrorText(error)}`) }
@@ -2005,6 +2021,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     ,ApplyChildToolScope
     ,ChildAllowWebFor
     ,NoteChildScope
+    ,getChildPrompt: (agentId) => childPrompts.get(agentId)
     ,OnAgentCreated
   }
 }
