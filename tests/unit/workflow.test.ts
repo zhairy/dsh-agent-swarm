@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
-import { ParseWorkflowMermaid, ReconcileWorkflow, UpdateWorkflowNode, ValidateMermaidProjection, ValidateWorkflow, WORKFLOW_LIMITS, getDefaultWorkflow, getMatchingNode, getReadyNodes, getTaskCardMarkdown, getWorkflowDigest, getWorkflowMermaid, intOfficialMermaidParser, intWorkflowState } from '../../src/workflow.js'
+import { ParseWorkflowMermaid, ReconcileWorkflow, getLenientWorkflow, UpdateWorkflowNode, ValidateMermaidProjection, ValidateWorkflow, WORKFLOW_LIMITS, getDefaultWorkflow, getMatchingNode, getReadyNodes, getTaskCardMarkdown, getWorkflowDigest, getWorkflowMermaid, intOfficialMermaidParser, intWorkflowState } from '../../src/workflow.js'
 
 const card = (flags = {}, scope = ['src/a.ts']) => ValidateTaskCard({ title: '改任务', goal: '满足真实合同', acceptance: ['边界行为一致'], scope, flags }).card!
 
@@ -81,6 +81,40 @@ describe('有界任务 DAG', () => {
     expect(mutate((graph) => { graph.nodes[1]!.role = 'ji_feng' }).join()).toContain('不能由')
     expect(mutate((graph) => { graph.nodes[1]!.gates = [] }).join()).toContain('缺少必需门禁')
     expect(mutate((graph) => { graph.nodes[2]!.dependsOn = [] }).join()).toContain('没有通向验收')
+  })
+
+  it('天枢的流程草稿缺必需门禁或写错字段时由宿主补齐，不打回任务卡（B3-e 真实输入）', () => {
+    const task = card({ changesCode: true, touchesFinancialLogic: true, securitySensitive: true, crossModuleArchitecture: true })
+    const gates = getRuleGates(task)
+    expect(gates.map((gate) => gate.gate)).toEqual(expect.arrayContaining(['G_VERIFY', 'G_REVIEW', 'G_MATH_VERIFY']))
+    const draft = { schemaVersion: 1, mode: 'standard', nodes: [
+      { id: 'implement', label: '铸剑：实现条件单创建', operation: 'delegate', role: 'zhu_jian', dependsOn: [], gates: [], outputContractVersion: '1' },
+      { id: 'verify', label: '复核', operation: 'delegate', role: 'fu_he', dependsOn: ['implement'], gates: ['G_VERIFY', 'G_MATH_VERIFY'], outputContractVersion: '1', description: '模型多写的字段' },
+      { id: 'positive', label: '谋定正方', operation: 'delegate', role: 'mou_ding', dependsOn: ['implement'], gates: [], outputContractVersion: '1' },
+      { id: 'adversarial', label: '御史反方', operation: 'delegate', role: 'yu_shi', dependsOn: ['implement'], gates: ['G_REVIEW'], outputContractVersion: '1' },
+      { id: 'checkpoint', label: '检查点', operation: 'checkpoint', dependsOn: ['verify', 'positive', 'adversarial'], gates: [], outputContractVersion: '1' },
+      { id: 'accept', label: '验收', operation: 'accept', dependsOn: ['checkpoint'], gates: [], outputContractVersion: '1' }
+    ] }
+    expect(ValidateWorkflow(draft, task, gates).errors.join()).toContain('不能由 fu_he 产生门禁 G_MATH_VERIFY')
+    const next = ReconcileWorkflow(getLenientWorkflow(draft, task, gates), task, gates)
+    expect(next.errors).toEqual([])
+    const math = next.definition.nodes.find((node) => node.gates.includes('G_MATH_VERIFY'))!
+    expect(math).toMatchObject({ role: 'suan_heng', mathMode: 'verify' })
+    expect(math.dependsOn).toContain('implement')
+    expect(next.definition.nodes.find((node) => node.id === 'verify')!.gates).toEqual(['G_VERIFY'])
+    expect(next.definition.nodes.find((node) => node.operation === 'checkpoint')!.dependsOn).toContain(math.id)
+  })
+
+  it('宽松读取：算衡节点按门禁推断模式、省略字段补齐、没有业务节点时退回默认流程', () => {
+    const task = card({ changesCode: true, numericPrecision: true })
+    const gates = getRuleGates(task)
+    const lenient = getLenientWorkflow({ nodes: [{ id: 'build', role: 'ji_feng' }, { id: 'math', role: 'suan_heng', gates: ['G_MATH_VERIFY'], dependsOn: ['build'] }] }, task, gates)
+    expect(lenient.nodes.find((node) => node.id === 'math')).toMatchObject({ mathMode: 'verify', gates: ['G_MATH_VERIFY'], outputContractVersion: '1' })
+    const next = ReconcileWorkflow(lenient, task, gates)
+    expect(next.errors).toEqual([])
+    expect(next.definition.nodes.filter((node) => node.operation === 'accept')).toHaveLength(1)
+    expect(getLenientWorkflow({ nodes: [] }, task, gates)).toEqual(getDefaultWorkflow(task, gates))
+    expect(ReconcileWorkflow(getLenientWorkflow({ nodes: [{ id: 'x', role: '铸剑' }] }, task, gates), task, gates).errors.join()).toContain('zhu_jian')
   })
 
   it('新增门禁补入图并改变摘要，保留原实现 ID', () => {

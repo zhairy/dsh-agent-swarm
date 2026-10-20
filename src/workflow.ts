@@ -4,7 +4,7 @@ import { Worker } from 'node:worker_threads'
 import { pathToFileURL } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { GATE_IDS, GATE_ROLE, getSuggestedRoles, type GateId, type GateRequirement, type TaskCard } from './policy.js'
-import { getRoleInfo, isDelegableRoleId, type DelegableRoleId, type SuanHengMode } from './role-registry.js'
+import { getDelegableRoleIds, getRoleInfo, isDelegableRoleId, type DelegableRoleId, type SuanHengMode } from './role-registry.js'
 import { SwarmError } from './util/errors.js'
 
 export const WORKFLOW_GENERATOR_VERSION = '1'
@@ -50,6 +50,7 @@ export type MermaidParserLike = (source: string) => Promise<{ version: string; o
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const ID_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
+const DELEGABLE_ROLE_IDS = getDelegableRoleIds()
 const EDIT_ROLES: readonly DelegableRoleId[] = ['zhu_jian', 'ji_feng']
 const POST_EDIT_GATES: readonly GateId[] = ['G_VERIFY', 'G_REVIEW', 'G_MATH_VERIFY', 'G_DIFF_TEST', 'G_BENCH']
 const RISK_KEYS = ['changesAlgorithm', 'numericPrecision', 'securitySensitive', 'touchesFinancialLogic', 'timeSeriesOrBacktest', 'stateMachine', 'sharedStateConcurrency', 'crossModuleArchitecture', 'ambiguousRequirements'] as const
@@ -142,7 +143,7 @@ export const ValidateWorkflow = (raw: unknown, card: TaskCard, gates: readonly G
     const nodeGates = item.gates
     if (!Array.isArray(deps) || deps.some((id) => typeof id !== 'string') || new Set(deps).size !== deps.length) errors.push(`nodes[${i}].dependsOn 必须是无重复的 ID 数组`)
     if (!Array.isArray(nodeGates) || nodeGates.some((gate) => !GATE_IDS.includes(gate as GateId)) || new Set(nodeGates).size !== nodeGates.length) errors.push(`nodes[${i}].gates 不合法`)
-    if (item.operation === 'delegate' && !isDelegableRoleId(item.role)) errors.push(`nodes[${i}].role 必须是可委派角色`)
+    if (item.operation === 'delegate' && !isDelegableRoleId(item.role)) errors.push(`nodes[${i}].role 必须是可委派角色 ID（${DELEGABLE_ROLE_IDS.join('、')}）`)
     if (item.operation !== 'delegate' && (item.role !== undefined || item.mathMode !== undefined || (Array.isArray(nodeGates) && nodeGates.length > 0))) errors.push(`nodes[${i}] 控制节点不能指定角色、模式或门禁`)
     if (item.mathMode !== undefined && (item.role !== 'suan_heng' || !['research', 'verify'].includes(String(item.mathMode)))) errors.push(`nodes[${i}].mathMode 仅算衡可指定 research/verify`)
     if (item.outputContractVersion !== '1') errors.push(`nodes[${i}].outputContractVersion 必须为 1`)
@@ -187,6 +188,35 @@ export const ValidateWorkflow = (raw: unknown, card: TaskCard, gates: readonly G
   }
   if (raw.mode === 'quick' && getWorkflowMode(card) !== 'quick') errors.push('当前风险或范围不能使用 quick 流程')
   return errors.length > 0 ? { errors } : { definition: { schemaVersion: 1, mode: raw.mode as WorkflowMode, nodes }, errors: [] }
+}
+
+/**
+ * 宽松读取天枢给出的流程：补齐可推导字段（mode、schemaVersion、label、outputContractVersion），丢弃未知字段，
+ * 把放错节点的门禁移走（算衡节点按门禁推断模式）。缺失的必需门禁、检查点与验收随后由 ReconcileWorkflow 补齐。
+ * 只放宽写法，不放宽语义：DAG、角色与门禁仍由 ValidateWorkflow 严格校验，必需门禁只会补入、不会删除。
+ */
+export const getLenientWorkflow = (raw: unknown, card: TaskCard, gates: readonly GateRequirement[]): WorkflowDefinition => {
+  const items = isObject(raw) && Array.isArray(raw.nodes) ? raw.nodes : Array.isArray(raw) ? raw : []
+  const nodes = items.filter(isObject).map((item): WorkflowNodeInfo => {
+    const id = typeof item.id === 'string' ? item.id.trim() : ''
+    const operation: WorkflowNodeOperation = ['delegate', 'checkpoint', 'accept'].includes(String(item.operation)) ? item.operation as WorkflowNodeOperation
+      : id === 'accept' ? 'accept' : id === 'checkpoint' && item.role === undefined ? 'checkpoint' : 'delegate'
+    const role = operation === 'delegate' ? item.role : undefined
+    const declared = item.mathMode ?? item.mode
+    let mathMode: SuanHengMode | undefined = role === 'suan_heng' && (declared === 'research' || declared === 'verify') ? declared : undefined
+    const nodeGates: GateId[] = []
+    for (const gate of Array.isArray(item.gates) ? item.gates : []) {
+      const expected = GATE_ROLE[gate as GateId]
+      if (expected === undefined || expected.role !== role || nodeGates.includes(gate as GateId)) continue
+      mathMode ??= expected.mode
+      if (expected.mode === mathMode) nodeGates.push(gate as GateId)
+    }
+    if (role === 'suan_heng') mathMode ??= 'research'
+    const label = typeof item.label === 'string' && item.label.trim() !== '' ? item.label : isDelegableRoleId(role) ? `${getRoleInfo(role).name}：${getRoleInfo(role).title}` : id
+    return { id, label: getContractNodeLabel(label), operation, ...(role === undefined ? {} : { role: role as DelegableRoleId }), ...(mathMode === undefined ? {} : { mathMode }),
+      dependsOn: Array.isArray(item.dependsOn) ? [...new Set(item.dependsOn.filter((dep): dep is string => typeof dep === 'string'))] : [], gates: nodeGates, outputContractVersion: '1' }
+  })
+  return nodes.some((node) => node.operation === 'delegate') ? { schemaVersion: 1, mode: getWorkflowMode(card), nodes } : getDefaultWorkflow(card, gates)
 }
 
 /** 新门禁只能补入结构，保持已有业务节点 ID；返回变更摘要供调用方递增版本。 */
