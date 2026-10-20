@@ -167,10 +167,10 @@ export const apply = (ctx) => {
         await serveAgentControlPreview({ service, parentSessionId: handle.agent.id, childId, state })
         return
       }
-      if (isolated) { state.firstDelegation = await delegated; view = await until(async () => { const item = await read(); return item.phase === 'paused' ? item : undefined }, 'a real failed child did not expose direct paused recovery') }
+      if (isolated) { state.firstDelegation = await delegated; view = await until(async () => { const item = await read(); return item.phase === 'idle' && item.reason?.startsWith('host-run-failed:') ? item : undefined }, 'a real failed child did not expose direct recovery') }
       await service.ControlAgentForRpc({ parentSessionId: handle.agent.id, childId, expectedRevision: view.revision, action: 'select', route: { provider: 'swarm-control-mock', model: nextModel, reasoningEffort: 'max' }, interruptRunning: !isolated, ...(retryIsolated ? { retryRoute: true, forceRetry: true } : {}) })
       state.firstDelegation = await delegated
-      view = await until(async () => { const item = await read(); return item.phase === 'paused' ? item : undefined }, 'interrupt receipt incorrectly failed to reach real host settlement')
+      view = await until(async () => { const item = await read(); return item.phase === (isolated ? 'idle' : 'paused') ? item : undefined }, 'interrupt receipt incorrectly failed to reach real host settlement')
       state.controls.push(view)
       state.requestsBeforeContinue = [...state.requests]
       if (writer) {

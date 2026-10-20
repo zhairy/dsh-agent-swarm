@@ -219,6 +219,9 @@ const inject = ['slots', 'locale', 'uiConversation', 'connection', 'remote.sessi
 const NO_SUBSCRIBE = () => () => undefined
 
 /** The browser only requests changes; actual/settled state always comes back from the host. */
+/** 与宿主 isResumable 一致：沉寂后暂停，或上一轮因模型错误结束的空闲持久会话可以继续 */
+const canContinue = (view) => view?.phase === 'paused' || (view?.phase === 'idle' && String(view?.reason ?? '').startsWith('host-run-failed:'))
+
 class AgentModelController {
   constructor (address, transport) {
     this.address = address
@@ -282,7 +285,7 @@ class AgentModelController {
       if (this.state.retryRoute) input.retryRoute = true
       if (this.state.retryRoute && this.state.forceRetry) input.forceRetry = true
     } else if (action === 'continue') {
-      if (view.phase !== 'paused' || (view.needsSideEffectReview === true && !this.state.confirmSafeToContinue)) return
+      if (!canContinue(view) || (view.needsSideEffectReview === true && !this.state.confirmSafeToContinue)) return
       if (this.state.confirmSafeToContinue) input.confirmSafeToContinue = true
       if (this.state.steering.trim() !== '') input.steering = this.state.steering.trim()
     }
@@ -338,14 +341,14 @@ function AgentControlPanel ({ controller, t }) {
       h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.retryRoute, disabled, onChange: (event) => controller.setOptions({ retryRoute: event.target.checked, forceRetry: false }) }), t('retryRoute')),
       state.retryRoute ? h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.forceRetry, disabled, onChange: (event) => controller.setOptions({ forceRetry: event.target.checked }) }), t('forceRetry')) : null,
       h('p', { style: controlStyle.line }, t('routeHint'))),
-    view?.phase !== 'paused' ? null : h(React.Fragment, null,
+    !canContinue(view) ? null : h(React.Fragment, null,
       view.needsSideEffectReview === true ? h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.confirmSafeToContinue, disabled, onChange: (event) => controller.setOptions({ confirmSafeToContinue: event.target.checked }) }), t('reconcile'), h('p', { style: controlStyle.line }, t('reconcileHint'))) : null,
       field('steering', h('textarea', { style: controlStyle.input, value: state.steering, maxLength: 8000, disabled, 'aria-label': t('steering'), onChange: (event) => controller.setOptions({ steering: event.target.value }) }))),
     h('div', { style: controlStyle.actions },
       h('button', { type: 'button', style: controlStyle.button, disabled: state.busy, onClick: () => controller.load() }, t('refresh')),
       readonly ? null : h('button', { type: 'button', style: controlStyle.button, disabled: disabled || state.draft.provider === '' || state.draft.model === '', onClick: () => controller.command('select') }, state.busy ? t('busy') : t('select')),
       ['running', 'waiting', 'recovery-required'].includes(view?.phase) ? h('button', { type: 'button', style: controlStyle.button, disabled, onClick: () => controller.command('stop') }, t('stop')) : null,
-      view?.phase === 'paused' && !readonly ? h('button', { type: 'button', style: controlStyle.button, disabled: disabled || (view.needsSideEffectReview === true && !state.confirmSafeToContinue), onClick: () => controller.command('continue') }, t('continue')) : null))
+      canContinue(view) && !readonly ? h('button', { type: 'button', style: controlStyle.button, disabled: disabled || (view.needsSideEffectReview === true && !state.confirmSafeToContinue), onClick: () => controller.command('continue') }, t('continue')) : null))
 }
 
 function AgentModelControls (props) {
