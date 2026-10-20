@@ -13,7 +13,7 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const { ROLE_INFO_LIST } = await import(pathToFileURL(join(root, 'lib/role-registry.js')).href)
 const { DEFAULT_ROUTE_CHAINS, PROVIDER_LABELS } = await import(pathToFileURL(join(root, 'lib/routes.js')).href)
 const { DEFAULT_UPGRADES, UPGRADEABLE_KEYS, UPGRADE_TRIGGERS, UPGRADE_TRIGGER_LABELS } = await import(pathToFileURL(join(root, 'lib/upgrade.js')).href)
-const { DEFAULT_AGENTS_CONFIG } = await import(pathToFileURL(join(root, 'lib/config.js')).href)
+const { DEFAULT_AGENTS_CONFIG, DEFAULT_WORKFLOW_CONFIG, DEFAULT_PLANNING_REVIEW } = await import(pathToFileURL(join(root, 'lib/config.js')).href)
 const { getRouteResourcePolicy } = await import(pathToFileURL(join(root, 'lib/provider-policy.js')).href)
 const { DEFAULT_MATH_CONFIG, MATH_GROUP_OPERATORS, MATH_LIMIT_MAXIMA, MAX_MATH_WORK_PER_TASK, MAX_MATH_CALLS_PER_TASK } = await import(pathToFileURL(join(root, 'lib/math/config.js')).href)
 
@@ -47,6 +47,7 @@ const agents = ROLE_INFO_LIST.flatMap((role) => {
 const triggers = UPGRADE_TRIGGERS.map((id) => ({ id, label: UPGRADE_TRIGGER_LABELS[id] }))
 const resourceTypes = Object.fromEntries(Object.keys(PROVIDER_LABELS).map((provider) => [provider, getRouteResourcePolicy({ provider, model: '' }).accessMode ?? 'unknown']))
 const data = { namespace: NAMESPACE, agents, triggers, resourceTypes, policy: { defaults: DEFAULT_AGENTS_CONFIG },
+  planning: { defaults: { workflowMode: DEFAULT_WORKFLOW_CONFIG.mode, ...DEFAULT_PLANNING_REVIEW } },
   math: { defaults: DEFAULT_MATH_CONFIG, groups: MATH_GROUP_OPERATORS, limitMaxima: MATH_LIMIT_MAXIMA, maxWorkPerTask: MAX_MATH_WORK_PER_TASK, maxCallsPerTask: MAX_MATH_CALLS_PER_TASK } }
 const display = { presets: ROLE_INFO_LIST.map((role) => role.presetId), providers: PROVIDER_LABELS }
 

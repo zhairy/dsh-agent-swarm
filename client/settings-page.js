@@ -36,6 +36,10 @@ const LANGUAGE_NAMES = { 'zh-CN': '简体中文', en: 'English', 'zh-TW': '繁�
 const POLICY_KEYS = ['language', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffMs', 'promptStyle', 'networkWaitMs', 'rootRecoverMs', 'modelCallDisplay']
 /** Jev 密钥的默认凭据引用名（swarm-core 的 jev.apiKeyEnv） */
 const DEFAULT_JEV_REF = 'TYPESAFE_API_KEY'
+const WORKFLOW_MODES = ['off', 'advisory', 'enforced']
+/** 流程与规划审核默认值：构建时由 DATA.planning 注入（与宿主 DEFAULT_WORKFLOW_CONFIG / DEFAULT_PLANNING_REVIEW 一致） */
+const PLANNING_DEFAULTS = Object.freeze({ workflowMode: 'advisory', enabled: true, requireJev: false, maxFixRounds: 2, reviewAbove: 0.8, timeoutMs: 0, ...(DATA.planning?.defaults ?? {}) })
+const PLANNING_TIMEOUT_MAX = 2147483647
 const APPROVAL_MODES = ['inherit', 'ask', 'deny']
 const APPROVAL_SCOPES = ['write', 'shell', 'external_mcp', 'jev']
 const APPROVAL_DEFAULTS = Object.freeze({ mode: 'inherit', scope: Object.freeze([...APPROVAL_SCOPES]) })
@@ -267,6 +271,26 @@ Object.assign(en, {
   mathLimit_maxInputBytes: 'Input bytes', mathLimit_maxArrayElements: 'Elements per array', mathLimit_maxTotalElements: 'Total scalars', mathLimit_maxIntegerInputBits: 'Integer input bits', mathLimit_maxIntegerOutputBits: 'Integer output bits', mathLimit_maxIntermediateBits: 'Intermediate integer bits', mathLimit_maxBinomialN: 'Maximum binomial n', mathLimit_maxMatrixDimension: 'Matrix dimension', mathLimit_maxMultiplyAdds: 'Multiply-add count', mathLimit_maxPolynomialDegree: 'Polynomial degree', mathLimit_maxWorkUnits: 'Work per call'
 })
 Object.assign(zh, {
+  planningTitle: '任务流程与规划审核',
+  planningDescription: '任务卡生成执行流程（Mermaid）。观察模式只记录与提示，不拦截委派；强制模式要求当前版本的规划审核通过且节点依赖满足才派发专家。规划审核由独立只读 Agent 与 Jev 并行完成，观察模式下只在天枢调用 swarm_review_plan 时运行。',
+  planningMode: '流程控制模式', planningModeOff: '关闭：不生成流程、不审核', planningModeAdvisory: '观察（推荐）：生成流程，按需审核，不拦截', planningModeEnforced: '强制：审核通过且依赖满足才执行',
+  planningEnabled: '强制模式下建卡后自动审核', planningRequireJev: '审核必须取得 Jev 结论（Jev 不可用时不放行）',
+  planningRounds: '自动规划修正轮数', planningRoundsHint: '达到上限只暂停自动审核，任务卡仍可修改并显式复审（0–10）',
+  planningThreshold: '审核通过阈值', planningThresholdHint: 'Jev 各维度概率都不低于此值才算通过（0–1）',
+  planningTimeout: '单轮审核总等待上限（毫秒）', planningTimeoutHint: '0 表示不设插件总时长上限（默认，适合长期复杂审核，仍可随时取消）；填正整数毫秒保留显式上限，例如 600000 = 10 分钟',
+  errPlanning: '请选择有效的流程模式', errPlanningRounds: '请输入 0 到 10 之间的整数', errPlanningTimeout: '请输入 0 到 2147483647 之间的整数毫秒'
+})
+Object.assign(en, {
+  planningTitle: 'Task workflow & planning review',
+  planningDescription: 'Task cards generate an execution workflow (Mermaid). Advisory mode records and advises without blocking delegations; enforced mode dispatches experts only when the current planning review passed and node dependencies are met. Planning reviews run an independent read-only agent and Jev in parallel; in advisory mode they run only when Tian Shu calls swarm_review_plan.',
+  planningMode: 'Workflow mode', planningModeOff: 'Off: no workflow, no review', planningModeAdvisory: 'Advisory (recommended): workflow plus on-demand review, never blocks', planningModeEnforced: 'Enforced: run only after review passes and dependencies are met',
+  planningEnabled: 'Review automatically after task cards in enforced mode', planningRequireJev: 'Require a Jev verdict (do not pass while Jev is unavailable)',
+  planningRounds: 'Automatic planning fix rounds', planningRoundsHint: 'Reaching the limit only pauses automatic review; the task card stays editable and can be reviewed explicitly (0–10)',
+  planningThreshold: 'Review pass threshold', planningThresholdHint: 'Every Jev dimension must reach this probability to pass (0–1)',
+  planningTimeout: 'Total wait per review (ms)', planningTimeoutHint: '0 sets no plugin deadline (default; suits long complex reviews and stays cancellable); a positive integer keeps an explicit limit, e.g. 600000 = 10 minutes',
+  errPlanning: 'Select a valid workflow mode', errPlanningRounds: 'Enter a whole number between 0 and 10', errPlanningTimeout: 'Enter whole milliseconds between 0 and 2147483647'
+})
+Object.assign(zh, {
   approvalsTitle: '百工工具审批', approvalsDescription: '为百工会话中所选类别的工具调用增加审批要求。继承沿用宿主策略；请求审批需要宿主提供审批能力；拒绝会阻止这些调用。插件不能覆盖宿主的 never 策略，也不能开启被宿主禁用的 MCP。',
   approvalsBoundary: '作用域只覆盖工具调用。shell 包含 run_code；jev 指显式 jev_* 工具。衡鉴分流、会话判断、交付复评与规划审核的内部 Jev HTTP 调用不受此开关控制。',
   approvalsMode: '审批策略', approvalsInherit: '继承宿主', approvalsAsk: '请求审批', approvalsDeny: '拒绝调用', approvalsScope: '作用域', approvalsWrite: '文件写入', approvalsShell: 'Shell / run_code', approvalsMcp: '外部 MCP', approvalsJev: '显式 Jev 工具', approvalsEmpty: '未选择作用域：此设置不会增加工具审批限制。', errApprovals: '请选择有效的审批策略和作用域',
@@ -290,6 +314,35 @@ const getApprovals = (raw) => {
 const getApprovalErrors = (draft) => !APPROVAL_MODES.includes(draft.mode) || !Array.isArray(draft.scope) || draft.scope.some((scope) => !APPROVAL_SCOPES.includes(scope)) ? 'errApprovals' : undefined
 const sameApprovals = (a, b) => a.mode === b.mode && a.scope.length === b.scope.length && a.scope.every((scope) => b.scope.includes(scope))
 const buildApprovals = (draft, saved) => getApprovalErrors(draft) === undefined ? { ...asRecord(saved), mode: draft.mode, scope: APPROVAL_SCOPES.filter((scope) => draft.scope.includes(scope)) } : undefined
+
+/** 已保存的流程模式与规划审核配置（workflow.mode + planningReview.*），按默认值的类型逐字段取值 */
+const getPlanning = (workflow, review) => {
+  const value = asRecord(review)
+  const pick = (key) => (typeof value[key] === typeof PLANNING_DEFAULTS[key] ? value[key] : PLANNING_DEFAULTS[key])
+  const mode = asRecord(workflow).mode
+  return { workflowMode: WORKFLOW_MODES.includes(mode) ? mode : PLANNING_DEFAULTS.workflowMode, enabled: pick('enabled'), requireJev: pick('requireJev'), maxFixRounds: pick('maxFixRounds'), reviewAbove: pick('reviewAbove'), timeoutMs: pick('timeoutMs') }
+}
+const getPlanningErrors = (draft) => {
+  const integer = (value, maximum) => { const n = toNumber(value); return Number.isSafeInteger(n) && n >= 0 && n <= maximum }
+  const ratio = toNumber(draft.reviewAbove)
+  return {
+    ...(WORKFLOW_MODES.includes(draft.workflowMode) ? {} : { workflowMode: 'errPlanning' }),
+    ...(integer(draft.maxFixRounds, 10) ? {} : { maxFixRounds: 'errPlanningRounds' }),
+    ...(Number.isFinite(ratio) && ratio >= 0 && ratio <= 1 ? {} : { reviewAbove: 'errRatio' }),
+    ...(integer(draft.timeoutMs, PLANNING_TIMEOUT_MAX) ? {} : { timeoutMs: 'errPlanningTimeout' })
+  }
+}
+/** 草稿 → workflow 与 planningReview 两个值：只写与默认不同的字段，保留页面不管理的已保存字段（例如 maxNodes）；有错时返回 undefined */
+const buildPlanning = (draft, layers) => {
+  if (Object.keys(getPlanningErrors(draft)).length > 0) return undefined
+  const review = { enabled: draft.enabled === true, requireJev: draft.requireJev === true, maxFixRounds: toNumber(draft.maxFixRounds), reviewAbove: toNumber(draft.reviewAbove), timeoutMs: toNumber(draft.timeoutMs) }
+  const kept = (raw, managed) => Object.fromEntries(Object.entries(asRecord(raw)).filter(([key]) => !managed.includes(key)))
+  return {
+    workflow: { ...kept(layers.workflow, ['mode']), ...(draft.workflowMode === PLANNING_DEFAULTS.workflowMode ? {} : { mode: draft.workflowMode }) },
+    planningReview: { ...kept(layers.planningReview, Object.keys(review)), ...Object.fromEntries(Object.entries(review).filter(([key, item]) => item !== PLANNING_DEFAULTS[key])) }
+  }
+}
+const samePlanning = (a, b) => Object.keys(PLANNING_DEFAULTS).every((key) => String(a[key]) === String(b[key]))
 
 const getMath = (raw) => {
   const source = asRecord(raw)
@@ -581,6 +634,7 @@ class SwarmAgentsController {
     this.policyDraft = undefined
     this.approvalsDraft = undefined
     this.mathDraft = undefined
+    this.planningDraft = undefined
     this.draftRevision = undefined
     this.catalog = { status: 'idle', groups: [], failures: [] }
     this.saving = false
@@ -619,11 +673,30 @@ class SwarmAgentsController {
    * 页面不管理、但用户或 profile 显式写过的 agents 字段：取组合层与用户层，不取 schema 默认值，
    * 避免一次保存把默认值（例如探测地址列表）固化成用户配置；宿主不提供分层时退回解析后的值
    */
-  savedAgentsLayers () {
+  savedLayers (key) {
     const snapshot = this.form.getSnapshot()
-    if (snapshot.base === undefined && snapshot.user === undefined) return asRecord(snapshot.value).agents
-    return { ...asRecord(asRecord(snapshot.base).agents), ...asRecord(asRecord(snapshot.user).agents) }
+    if (snapshot.base === undefined && snapshot.user === undefined) return asRecord(snapshot.value)[key]
+    return { ...asRecord(asRecord(snapshot.base)[key]), ...asRecord(asRecord(snapshot.user)[key]) }
   }
+
+  savedAgentsLayers () { return this.savedLayers('agents') }
+
+  savedPlanning () {
+    const value = asRecord(this.form.getSnapshot().value)
+    return getPlanning(value.workflow, value.planningReview)
+  }
+
+  setPlanning (patch) {
+    if (!this.canEdit()) return
+    if (!this.hasDrafts()) this.draftRevision = this.form.getSnapshot().revision
+    this.planningDraft = { ...(this.planningDraft ?? this.savedPlanning()), ...patch }
+    if (samePlanning(this.planningDraft, this.savedPlanning())) this.planningDraft = undefined
+    if (!this.hasDrafts()) this.draftRevision = undefined
+    this.notice = undefined
+    this.publish()
+  }
+
+  resetPlanning () { this.setPlanning({ ...PLANNING_DEFAULTS }) }
 
   savedPolicy () { return getPolicy(asRecord(this.form.getSnapshot().value).agents) }
 
@@ -631,7 +704,7 @@ class SwarmAgentsController {
 
   savedMath () { return getMath(asRecord(this.form.getSnapshot().value).math) }
 
-  hasDrafts () { return this.drafts.size > 0 || this.policyDraft !== undefined || this.approvalsDraft !== undefined || this.mathDraft !== undefined }
+  hasDrafts () { return this.drafts.size > 0 || this.policyDraft !== undefined || this.approvalsDraft !== undefined || this.mathDraft !== undefined || this.planningDraft !== undefined }
 
   setMath (patch) {
     if (!this.canEdit()) return
@@ -809,6 +882,7 @@ class SwarmAgentsController {
     this.policyDraft = undefined
     this.approvalsDraft = undefined
     this.mathDraft = undefined
+    this.planningDraft = undefined
     this.draftRevision = undefined
     this.conflicted = false
     this.notice = undefined
@@ -850,6 +924,11 @@ class SwarmAgentsController {
       if (math === undefined) { this.publish(); return }
       ops.push({ op: 'set', path: ['math'], value: math })
     }
+    if (this.planningDraft !== undefined) {
+      const planning = buildPlanning(this.planningDraft, { workflow: this.savedLayers('workflow'), planningReview: this.savedLayers('planningReview') })
+      if (planning === undefined) { this.publish(); return }
+      ops.push({ op: 'set', path: ['workflow'], value: planning.workflow }, { op: 'set', path: ['planningReview'], value: planning.planningReview })
+    }
     this.saving = true
     this.notice = undefined
     this.publish()
@@ -866,6 +945,7 @@ class SwarmAgentsController {
       this.policyDraft = undefined
       this.approvalsDraft = undefined
       this.mathDraft = undefined
+      this.planningDraft = undefined
       this.draftRevision = undefined
       this.conflicted = false
       this.notice = 'saved'
@@ -912,6 +992,7 @@ class SwarmAgentsController {
     this.policyDraft = undefined
     this.approvalsDraft = undefined
     this.mathDraft = undefined
+    this.planningDraft = undefined
     this.draftRevision = undefined
     this.conflicted = false
     this.refreshCatalog()
@@ -952,6 +1033,9 @@ class SwarmAgentsController {
     const approvals = { value: this.approvalsDraft ?? this.savedApprovals(), dirty: this.approvalsDraft !== undefined, error: this.approvalsDraft === undefined ? undefined : getApprovalErrors(this.approvalsDraft) }
     const mathValue = this.mathDraft ?? this.savedMath()
     const math = { value: mathValue, dirty: this.mathDraft !== undefined, errors: getMathErrors(mathValue) }
+    const savedPlanning = this.savedPlanning()
+    const planning = { value: this.planningDraft ?? savedPlanning, dirty: this.planningDraft !== undefined, custom: !samePlanning(savedPlanning, PLANNING_DEFAULTS),
+      errors: this.planningDraft === undefined ? {} : getPlanningErrors(this.planningDraft) }
     return {
       status: snapshot.status,
       writable: snapshot.writable,
@@ -959,10 +1043,11 @@ class SwarmAgentsController {
       policy,
       approvals,
       math,
+      planning,
       catalog: this.catalog,
       saving: this.saving,
       dirty: this.hasDrafts(),
-      invalid: rows.some((row) => row.dirty && hasErrors(row.errors)) || Object.values(policyErrors).some((error) => error !== undefined) || approvals.error !== undefined || (math.dirty && Object.keys(math.errors).length > 0),
+      invalid: rows.some((row) => row.dirty && hasErrors(row.errors)) || Object.values(policyErrors).some((error) => error !== undefined) || approvals.error !== undefined || (math.dirty && Object.keys(math.errors).length > 0) || Object.keys(planning.errors).length > 0,
       conflicted: this.conflicted,
       notice: this.notice
     }
@@ -1382,6 +1467,35 @@ function MathCard ({ t, math, editable, controller }) {
   )
 }
 
+/** 任务流程与规划审核（workflow.mode 与 planningReview.*） */
+function PlanningCard ({ t, planning, editable, controller }) {
+  const value = planning.value
+  const number = (name, label, hint, step) => h('label', { style: style.field },
+    h('span', { style: style.fieldLabel }, t(label)),
+    h('input', { style: style.input, type: 'number', step, min: 0, value: String(value[name]), disabled: !editable, 'aria-label': t(label), onChange: (event) => controller.setPlanning({ [name]: event.target.value }) }),
+    planning.errors[name] === undefined ? h('span', { style: style.hint }, t(hint)) : h('span', { style: style.fieldError, role: 'alert' }, t(planning.errors[name])))
+  const check = (name, label) => h('label', { style: style.switchLabel },
+    h('input', { type: 'checkbox', checked: value[name] === true, disabled: !editable, onChange: (event) => controller.setPlanning({ [name]: event.target.checked }) }), t(label))
+  return h('div', { style: style.card, 'data-swarm-planning': 'review' },
+    h('div', { style: style.cardHead },
+      h('span', { style: style.name }, t('planningTitle')),
+      h('span', { style: style.tag }, planning.custom ? t('custom') : t('builtin')),
+      planning.dirty ? h('span', { style: { ...style.tag, color: color.primary } }, t('pending')) : null,
+      h('span', { style: style.spacer }),
+      planning.custom || planning.dirty ? h('button', { type: 'button', style: style.btnSmall, disabled: !editable, onClick: () => controller.resetPlanning() }, t('reset')) : null),
+    h('p', { style: style.note }, t('planningDescription')),
+    h('div', { style: style.policyGrid },
+      h('label', { style: style.field }, h('span', { style: style.fieldLabel }, t('planningMode')),
+        h('select', { style: style.select, value: value.workflowMode, disabled: !editable, 'aria-label': t('planningMode'), onChange: (event) => controller.setPlanning({ workflowMode: event.target.value }) },
+          h('option', { value: 'off' }, t('planningModeOff')), h('option', { value: 'advisory' }, t('planningModeAdvisory')), h('option', { value: 'enforced' }, t('planningModeEnforced'))),
+        planning.errors.workflowMode === undefined ? null : h('span', { style: style.fieldError, role: 'alert' }, t(planning.errors.workflowMode))),
+      number('timeoutMs', 'planningTimeout', 'planningTimeoutHint', 1000),
+      number('maxFixRounds', 'planningRounds', 'planningRoundsHint', 1),
+      number('reviewAbove', 'planningThreshold', 'planningThresholdHint', 0.05)),
+    check('enabled', 'planningEnabled'),
+    check('requireJev', 'planningRequireJev'))
+}
+
 /** 专家会话与重试策略 */
 function PolicyCard ({ t, policy, editable, controller }) {
   const value = policy.value
@@ -1502,6 +1616,7 @@ function SwarmAgentsSection ({ controller, jev }) {
     catalogLine,
     h(ApprovalsCard, { key: 'approvals', t, approvals: state.approvals, editable, controller }),
     h(PolicyCard, { key: 'policy', t, policy: state.policy, editable, controller }),
+    h(PlanningCard, { key: 'planning', t, planning: state.planning, editable, controller }),
     h(MathCard, { key: 'math', t, math: state.math, editable, controller }),
     ...state.rows.map((row) => h(AgentCard, { key: row.key, t, row, groups, editable, controller })),
     h('div', { style: style.footer },
@@ -1554,4 +1669,4 @@ function apply (ctx) {
 exports.inject = inject
 exports.apply = apply
 exports.NS = NS
-exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, getMath, getMathErrors, buildMath, MathCard, ApprovalsCard, JevTestLine, LayerGrid, SwarmAgentsController, JevKeyController, DATA }
+exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, getMath, getMathErrors, buildMath, getPlanning, getPlanningErrors, buildPlanning, PlanningCard, MathCard, ApprovalsCard, JevTestLine, LayerGrid, SwarmAgentsController, JevKeyController, DATA }

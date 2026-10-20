@@ -443,6 +443,44 @@ describe('mathematical operator settings', () => {
   })
 })
 
+describe('任务流程与规划审核设置', () => {
+  const { getPlanning, getPlanningErrors, buildPlanning } = page.__test__
+
+  it('页面显示 planningReview.timeoutMs：默认 0（不限）；正整数毫秒有效，负数、小数、超过 2147483647 拒绝', () => {
+    expect(getPlanning(undefined, undefined)).toEqual({ workflowMode: 'advisory', enabled: true, requireJev: false, maxFixRounds: 2, reviewAbove: 0.8, timeoutMs: 0 })
+    expect(getPlanning({ mode: 'enforced' }, { timeoutMs: 600000, maxFixRounds: 'x' })).toMatchObject({ workflowMode: 'enforced', timeoutMs: 600000, maxFixRounds: 2 })
+    const valid = { ...getPlanning(undefined, undefined), timeoutMs: '600000' }
+    expect(getPlanningErrors(valid)).toEqual({})
+    for (const timeoutMs of ['-1', '1.5', '2147483648', '']) expect(getPlanningErrors({ ...valid, timeoutMs })).toEqual({ timeoutMs: 'errPlanningTimeout' })
+    expect(getPlanningErrors({ ...valid, maxFixRounds: '11', reviewAbove: '1.2', workflowMode: 'strict' })).toEqual({ maxFixRounds: 'errPlanningRounds', reviewAbove: 'errRatio', workflowMode: 'errPlanning' })
+    expect(buildPlanning({ ...valid, timeoutMs: '1.5' }, {})).toBeUndefined()
+  })
+
+  it('只写与默认不同的字段并保留页面不管理的已保存字段；workflow 与 planningReview 同一 revision 原子保存', async () => {
+    const form = createForm({ routes: {}, workflow: { mode: 'advisory', maxNodes: 24 }, planningReview: { timeoutMs: 0, futureSetting: 'keep' } })
+    const controller = new SwarmAgentsController(createCtx(form))
+    expect(controller.getSnapshot().planning).toMatchObject({ dirty: false, custom: false, value: { timeoutMs: 0 } })
+    controller.setPlanning({ workflowMode: 'enforced', timeoutMs: '600000' })
+    expect(controller.getSnapshot()).toMatchObject({ dirty: true, invalid: false, planning: { dirty: true } })
+    await controller.save()
+    const ops = form.mutate.mock.calls.at(-1)![0]
+    expect(ops).toEqual([
+      { op: 'set', path: ['workflow'], value: { maxNodes: 24, mode: 'enforced' } },
+      { op: 'set', path: ['planningReview'], value: { futureSetting: 'keep', timeoutMs: 600000 } }
+    ])
+    expect(form.mutate.mock.calls.at(-1)![1]).toBe(1)
+    expect(controller.getSnapshot().planning).toMatchObject({ dirty: false, custom: true, value: { workflowMode: 'enforced', timeoutMs: 600000 } })
+    controller.setPlanning({ timeoutMs: '-5' })
+    expect(controller.getSnapshot().invalid).toBe(true)
+    controller.resetPlanning()
+    await controller.save()
+    expect(form.mutate.mock.calls.at(-1)![0]).toEqual([
+      { op: 'set', path: ['workflow'], value: { maxNodes: 24 } },
+      { op: 'set', path: ['planningReview'], value: { futureSetting: 'keep' } }
+    ])
+  })
+})
+
 describe('Jev API key 卡片', () => {
   const makeJevCtx = (options: { rpc?: (method: string) => unknown; describe?: unknown; set?: unknown } = {}) => {
     const calls: string[] = []
