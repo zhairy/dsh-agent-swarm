@@ -1455,3 +1455,45 @@ describe('链尾保持：长期目标中铸剑链耗尽（D-74）的回归', () 
     expect(registry.getTerminal(child.id)).toBeUndefined()
   })
 })
+
+describe('链尾保持的有界性（随机化性质检验）', () => {
+  // 线性同余伪随机：固定种子，可复现
+  const random = (seed: number) => () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+  const failures = [
+    { code: 'TRANSPORT', message: 'transport failed' }, { code: 'SERVER_ERROR', status: 503 }, { code: 'RATE_LIMIT', status: 429 },
+    { code: 'QUOTA' }, { status: 401 }, { code: 'RATE_LIMIT', message: 'pool "x" exhausted: every member is cooling down', providerRetryAfterMs: 90_000 }, { status: 400 }
+  ]
+
+  it('任意链与任意失败序列：每个逻辑请求必然终止，总等待不超过 networkWaitMs，保持次数不超过 32，切换次数不超过链长', async () => {
+    const next = random(20261020)
+    for (let trial = 0; trial < 300; trial++) {
+      let at = 0
+      let waited = 0
+      const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, sleep: async (ms) => { waited += ms; at += ms } })
+      const length = 1 + Math.floor(next() * 5)
+      const chain = Array.from({ length }, (_, index) => ({ provider: `p${index % 3}`, model: `m${index}` }))
+      const id = `prop-${trial}`
+      registry.AddChild(id, { chain, role: 'zhu_jian', logicalRequestId: `D-${trial}` })
+      registry.BeginRequestStep(id, 1, 1)
+      let requests = 0
+      let switches = 0
+      let last = ''
+      for (;;) {
+        let route: { provider: string; model: string }
+        try { route = registry.getRequestOverride({ id }, chain[0]!, undefined, config) } catch { break }
+        requests += 1
+        if (last !== '' && last !== route.model) switches += 1
+        last = route.model
+        expect(requests).toBeLessThanOrEqual(length + 32 + 2)
+        const failure = failures[Math.floor(next() * failures.length)]!
+        const action = await registry.getErrorAction({ agent: { id }, provider: route.provider, failure }, undefined, undefined, config)
+        if (action === undefined) break
+      }
+      // 保持等待严格计入预算；另加至多一次 ≤ maxTransientWaitMs 的宿主短重试
+      expect(waited).toBeLessThanOrEqual(config.agents.networkWaitMs + config.recovery.maxTransientWaitMs)
+      expect(registry.getRecovery(id)?.holdRetries ?? 0).toBeLessThanOrEqual(32)
+      expect(switches).toBeLessThanOrEqual(length + 32)
+      expect(['route_chain_exhausted', 'recovery_attempts_exhausted', undefined]).toContain(registry.getTerminal(id))
+    }
+  })
+})

@@ -208,3 +208,47 @@ describe('Mermaid 唯一派生视图', () => {
     expect(bad.ok).toBe(false)
   }, 20000)
 })
+
+describe('流程草稿修补的不变量（随机化性质检验）', () => {
+  const random = (seed: number) => () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+  const roles = ['mou_ding', 'shu_ji', 'suan_heng', 'tan_wei', 'zhu_jian', 'ji_feng', 'xing_zhou', 'yu_shi', 'fu_he', 'miao_bi'] as const
+  const gateIds = ['G_VERIFY', 'G_REVIEW', 'G_MATH_RESEARCH', 'G_MATH_VERIFY', 'G_DIFF_TEST', 'G_BENCH', 'G_VISION'] as const
+  const flagKeys = ['changesCode', 'changesAlgorithm', 'touchesFinancialLogic', 'timeSeriesOrBacktest', 'stateMachine', 'numericPrecision', 'sharedStateConcurrency', 'crossModuleArchitecture', 'securitySensitive'] as const
+  const ancestors = (nodes: Array<{ id: string; dependsOn: string[] }>, id: string): Set<string> => {
+    const index = new Map(nodes.map((node) => [node.id, node])); const seen = new Set<string>()
+    const visit = (key: string) => { for (const dep of index.get(key)?.dependsOn ?? []) if (!seen.has(dep)) { seen.add(dep); visit(dep) } }
+    visit(id); return seen
+  }
+
+  it('任意草稿：修补后要么因结构错误拒绝，要么包含全部必需门禁、无环、唯一验收、验证门禁晚于全部实现', () => {
+    const next = random(42)
+    let accepted = 0
+    for (let trial = 0; trial < 400; trial++) {
+      const flags = Object.fromEntries(flagKeys.map((key) => [key, next() < 0.35]))
+      const task = card(flags, next() < 0.5 ? ['src/a.ts'] : [])
+      const gates = getRuleGates(task)
+      const count = Math.floor(next() * 6)
+      const nodes = Array.from({ length: count }, (_, index) => ({
+        id: `n${index}`, role: roles[Math.floor(next() * roles.length)],
+        ...(next() < 0.3 ? { mode: next() < 0.5 ? 'verify' : 'research' } : {}),
+        dependsOn: index === 0 || next() < 0.4 ? [] : [`n${Math.floor(next() * index)}`],
+        gates: gateIds.filter(() => next() < 0.15),
+        ...(next() < 0.2 ? { description: '多余字段' } : {})
+      }))
+      const result = ReconcileWorkflow(getLenientWorkflow({ nodes }, task, gates), task, gates)
+      if (result.errors.length > 0) continue
+      accepted += 1
+      const graph = result.definition
+      for (const gate of gates) expect(graph.nodes.some((node) => node.gates.includes(gate.gate))).toBe(true)
+      expect(graph.nodes.filter((node) => node.operation === 'accept')).toHaveLength(1)
+      for (const node of graph.nodes) expect(ancestors(graph.nodes, node.id).has(node.id)).toBe(false)
+      const edits = graph.nodes.filter((node) => node.role === 'zhu_jian' || node.role === 'ji_feng').map((node) => node.id)
+      for (const node of graph.nodes.filter((item) => item.gates.some((gate) => ['G_VERIFY', 'G_REVIEW', 'G_MATH_VERIFY', 'G_DIFF_TEST', 'G_BENCH'].includes(gate)))) {
+        for (const edit of edits) expect(ancestors(graph.nodes, node.id).has(edit)).toBe(true)
+      }
+      expect(ValidateWorkflow(graph, task, gates).errors).toEqual([])
+    }
+    // 草稿只依赖前序节点：与门禁顺序冲突的依赖由修补消解，全部应被接受
+    expect(accepted).toBe(400)
+  })
+})

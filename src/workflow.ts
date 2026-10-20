@@ -168,7 +168,7 @@ export const ValidateWorkflow = (raw: unknown, card: TaskCard, gates: readonly G
     visited += 1
     for (const child of children.get(queue[i]!) ?? []) { const count = pending.get(child)! - 1; pending.set(child, count); if (count === 0) queue.push(child) }
   }
-  if (visited !== nodes.length) return { errors: ['workflow 依赖必须无环'] }
+  if (visited !== nodes.length) return { errors: [`workflow 依赖必须无环（环上或环后的节点：${nodes.filter((node) => (pending.get(node.id) ?? 0) > 0).map((node) => node.id).join('、')}）`] }
   const accepts = nodes.filter((node) => node.operation === 'accept')
   if (accepts.length !== 1) errors.push('workflow 必须有唯一验收节点')
   else {
@@ -236,6 +236,14 @@ export const ReconcileWorkflow = (definition: WorkflowDefinition, card: TaskCard
   }
   const research = next.nodes.filter((node) => node.gates.includes('G_MATH_RESEARCH')).map((node) => node.id)
   const edits = next.nodes.filter((node) => node.role !== undefined && EDIT_ROLES.includes(node.role)).map((node) => node.id)
+  const postEdit = next.nodes.filter((node) => node.gates.some((gate) => POST_EDIT_GATES.includes(gate))).map((node) => node.id)
+  // 门禁规定的先后（研算 → 实现 → 验证/审查）优先于草稿：实现不能直接或间接依赖实现后的门禁节点，
+  // 研算不能依赖实现或其后的门禁；先剪掉这些草稿依赖，再补门禁依赖，原本无环的草稿修补后仍然无环
+  const reaches = (dep: string, targets: readonly string[]): boolean => targets.includes(dep) || [...getAncestors(next.nodes, dep)].some((id) => targets.includes(id))
+  for (const node of next.nodes) {
+    if (edits.includes(node.id)) node.dependsOn = node.dependsOn.filter((dep) => !reaches(dep, postEdit))
+    if (card.flags.changesAlgorithm && research.includes(node.id)) node.dependsOn = node.dependsOn.filter((dep) => !reaches(dep, [...edits, ...postEdit]))
+  }
   for (const node of next.nodes) {
     if (card.flags.changesAlgorithm && edits.includes(node.id)) node.dependsOn = [...new Set([...node.dependsOn, ...research])]
     if (node.gates.some((gate) => POST_EDIT_GATES.includes(gate))) node.dependsOn = [...new Set([...node.dependsOn, ...edits])]
