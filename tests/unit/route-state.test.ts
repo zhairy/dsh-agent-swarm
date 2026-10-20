@@ -1084,14 +1084,17 @@ describe('故障恢复', () => {
     expect(quota.calls.isOnline).toBe(0)
   })
 
-  it('同一会话 30 分钟内最多等待 3 次网络，取消时交回宿主', async () => {
-    const registry = intRouteStateRegistry(undefined, undefined, { network: makeNetwork([false, false, false, false]).network })
+  it('断网等待与链尾保持共用本请求的 networkWaitMs 预算，用尽后按角色链回退；取消时交回宿主', async () => {
+    let at = 0
+    const network = { isOnline: async () => false, waitOnline: async (_signal: AbortSignal | undefined, maxMs: number) => { at += Math.min(maxMs, 240_000); return true } }
+    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, network })
     registry.getRequestOverride(root, { provider: 'p', model: 'm' }, 'tian_shu', config)
     const failure = { code: 'NETWORK' }
     for (let index = 0; index < 3; index++) {
       await expect(registry.getErrorAction({ agent: root, provider: 'p', failure }, undefined, 'tian_shu', config)).resolves.toEqual({ kind: 'retry' })
     }
-    // 第 4 次不再等待，直接回退到角色链
+    expect(at).toBe(config.agents.networkWaitMs)
+    // 预算用尽：不再等待，直接回退到角色链
     await registry.getErrorAction({ agent: root, provider: 'p', failure }, undefined, 'tian_shu', config)
     expect(registry.getRequestOverride(root, { provider: 'p', model: 'm' }, 'tian_shu', config).model).toBe(DEFAULT_ROUTE_CHAINS.tian_shu[0].model)
     const controller = new AbortController()
@@ -1381,3 +1384,79 @@ describe.skipIf(!existsSync(resolve(hostRoot, 'dsh-llm-retry/lib/index.js')))(`�
 })
 
 }
+
+describe('链尾保持：长期目标中铸剑链耗尽（D-74）的回归', () => {
+  const opus = { provider: 'claude', model: 'claude-opus-5-5' }
+  const astra = { provider: 'codex', model: 'gpt-6-astra' }
+  const sonnet = { provider: 'claude', model: 'claude-sonnet-5' }
+  const kimi = { provider: 'opencode-go', model: 'kimi-k2.7-code' }
+  const flash = { provider: 'deepseek-official', model: 'deepseek-flash' }
+  const zhuJian = [opus, astra, sonnet, kimi, flash]
+  const authPool = (model: string) => ({ message: `pool "${model}" exhausted: every member is cooling down; claude/token-x/* (AUTH) recovers in 23h55m`, code: 'AUTH', providerRetryAfterMs: 86_100_000 })
+  const transport = { message: 'DeepSeek Messages transport failed', code: 'TRANSPORT' }
+
+  it('宿主以 AUTH 报告的模型池冷却按认证失效隔离（至多 30 分钟重探），同 provider 的其他模型不再白试', () => {
+    let at = 0
+    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at })
+    registry.AddChild(child.id, { chain: [opus, sonnet, flash], role: 'zhu_jian', logicalRequestId: 'D-auth' })
+    registry.BeginRequestStep(child.id, 1, 1)
+    registry.getRequestOverride(child, opus, undefined, config)
+    expect(registry.getErrorAction({ agent: child, provider: 'claude', failure: authPool('claude-opus-5-5') }, undefined, undefined, config)).toEqual({ kind: 'retry' })
+    expect(registry.getChild(child.id)?.route).toEqual(flash)
+    at = 29 * 60_000
+    expect(registry.isRouteAvailable(opus)).toBe(false)
+    at = 31 * 60_000
+    expect(registry.isRouteAvailable(opus)).toBe(true)
+  })
+
+  it('其余路由都被隔离时，链尾的临时传输故障在 networkWaitMs 预算内退避重试，用尽才判定链耗尽并说明各路由状态', async () => {
+    let at = 0
+    const sleeps: number[] = []
+    const health = intRouteHealth(() => at)
+    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, health, sleep: async (ms) => { sleeps.push(ms); at += ms } })
+    registry.AddChild(child.id, { chain: zhuJian, role: 'zhu_jian', logicalRequestId: 'D-74' })
+    registry.BeginRequestStep(child.id, 3, 19)
+    for (const [route, failure] of [[opus, authPool('claude-opus-5-5')], [astra, { code: 'RATE_LIMIT', message: 'pool "gpt-6-astra" exhausted: every member is cooling down', providerRetryAfterMs: 7_200_000 }], [sonnet, authPool('claude-sonnet-5')], [kimi, { status: 401, code: 'AUTH', message: 'api_key_expired', providerRetryAfterMs: 3_600_000 }]] as const) {
+      registry.getRequestOverride(child, route, undefined, config)
+      await registry.getErrorAction({ agent: child, provider: route.provider, failure }, undefined, undefined, config)
+    }
+    expect(registry.getChild(child.id)?.route).toEqual(flash)
+    let retries = 0
+    for (;;) {
+      registry.getRequestOverride(child, flash, undefined, config)
+      const action = await registry.getErrorAction({ agent: child, provider: flash.provider, failure: transport }, undefined, undefined, config)
+      if (action === undefined) break
+      expect(action).toEqual({ kind: 'retry' })
+      expect(registry.getChild(child.id)?.route).toEqual(flash)
+      retries += 1
+    }
+    // 1 次宿主短重试 + 指数退避 5/10/20/40 秒、之后每次 60 秒，总等待不超过 networkWaitMs（10 分钟）
+    expect(sleeps).toEqual([500, 5000, 10000, 20000, 40000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000])
+    expect(sleeps.slice(1).reduce((sum, ms) => sum + ms, 0)).toBeLessThanOrEqual(config.agents.networkWaitMs)
+    expect(retries).toBe(sleeps.length)
+    expect(registry.getTerminal(child.id)).toBe('route_chain_exhausted')
+    const detail = registry.getTerminalDetail(child.id)!
+    expect(detail).toContain('claude/claude-opus-5-5 auth_invalid')
+    expect(detail).toContain('codex/gpt-6-astra pool_exhausted')
+    expect(detail).toContain('deepseek-official/deepseek-flash 本次请求已失败')
+  })
+
+  it('链尾在等待中恢复时继续执行；全部隔离但有路由即将到期时等到期再试，不提前判定耗尽', async () => {
+    let at = 0
+    const sleeps: number[] = []
+    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, sleep: async (ms) => { sleeps.push(ms); at += ms } })
+    registry.AddChild(child.id, { chain: [astra, flash], role: 'zhu_jian', logicalRequestId: 'D-recover' })
+    registry.BeginRequestStep(child.id, 1, 1)
+    registry.getRequestOverride(child, astra, undefined, config)
+    // 模型池冷却 90 秒：低于等待预算
+    expect(registry.getErrorAction({ agent: child, provider: 'codex', failure: { code: 'RATE_LIMIT', message: 'pool "gpt-6-astra" exhausted: every member is cooling down', providerRetryAfterMs: 90_000 } }, undefined, undefined, config)).toEqual({ kind: 'retry' })
+    registry.getRequestOverride(child, flash, undefined, config)
+    // 链尾额度耗尽（30 分钟隔离）：唯一可等的是 90 秒后到期的 astra
+    await expect(registry.getErrorAction({ agent: child, provider: flash.provider, failure: { code: 'QUOTA' } }, undefined, undefined, config)).resolves.toEqual({ kind: 'retry' })
+    expect(sleeps).toEqual([90_000])
+    expect(registry.getChild(child.id)?.route).toEqual(astra)
+    expect(registry.getRequestOverride(child, astra, undefined, config)).toMatchObject(astra)
+    registry.MarkRequestSucceeded(child.id)
+    expect(registry.getTerminal(child.id)).toBeUndefined()
+  })
+})

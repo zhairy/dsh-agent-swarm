@@ -120,7 +120,6 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     available: () => quotaConnection?.createSharedFetchHandler !== undefined,
     getPoolConfiguration: () => getSubscriptionPoolConfiguration(ctx.get('configEditor') as { entries: () => readonly unknown[] } | undefined),
     getRegisteredProviders: () => (ctx.get('llm') as LlmLike | undefined)?.listProviders().map(provider => provider.id) ?? [] })
-  ctx.on('llm/adapters-updated', () => quotaSource.invalidate())
   const service = intSwarmService({
     orderQuotaRoutes: quotaSource.orderQuotaRoutes, onQuotaRouteSuccess: quotaSource.succeeded, quotaDiagnostics: quotaSource.diagnostics,
     getConfig,
@@ -149,6 +148,11 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     fetch: fetchImpl,
     logger: getLogger(ctx),
     network: intNetworkMonitor({ fetch: fetchImpl, getUrls: () => getConfig().agents.networkProbeUrls })
+  })
+  ctx.on('llm/adapters-updated', () => {
+    quotaSource.invalidate()
+    // 重新登录或修改 provider 配置会替换适配器：认证与模型池隔离可能已解除，交给下一次请求重新探测
+    for (const entry of service.routeState.getHealth()) if (entry.kind === 'auth_invalid' || entry.kind === 'pool_exhausted') service.routeState.clearHealth(entry.key)
   })
   ctx.effect(() => ctx.provide(SWARM_SERVICE, service))
   ctx.effect(() => () => { quotaSource.dispose(); return service.dispose() })

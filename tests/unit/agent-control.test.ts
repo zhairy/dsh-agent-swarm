@@ -23,13 +23,17 @@ const fixture = (options: { persist?: () => Promise<void>; resume?: () => Promis
 }
 
 describe('persistent subagent control uses actual routing and host settlement', () => {
-  it('real failed run ends pause persistent tasks for direct recovery; duplicate end signals are idempotent', async () => {
+  it('model errors leave persistent tasks runnable for in-session retry; cancelled runs pause for direct recovery; duplicate end signals are idempotent', async () => {
+    const errored = fixture()
+    errored.start()
+    errored.control.MarkRunSettled('child', 'error')
+    expect(errored.control.get('child')).toMatchObject({ phase: 'idle', paused: false, actual: { state: 'settled' } })
     const f = fixture()
     f.start()
-    f.control.MarkRunSettled('child', 'error')
-    expect(f.control.get('child')).toMatchObject({ phase: 'paused', paused: true, actual: { state: 'settled' }, reason: 'host-run-failed:error' })
+    f.control.MarkRunSettled('child', 'aborted')
+    expect(f.control.get('child')).toMatchObject({ phase: 'paused', paused: true, actual: { state: 'settled' }, reason: 'host-run-failed:aborted' })
     const revision = f.control.get('child')!.revision
-    f.control.MarkRunSettled('child', 'error')
+    f.control.MarkRunSettled('child', 'aborted')
     expect(f.control.get('child')!.revision).toBe(revision)
     await f.control.Continue(f.address())
     expect(f.resume).toHaveBeenCalledTimes(1)

@@ -33,10 +33,14 @@ describe('供应商失败语义与恢复时间', () => {
     expect(normalizeRouteFailure(failure, route).kind).toBe(kind)
   })
 
-  it('池巨额retry hint不等于订阅重置，后续探针有上限而当前请求立即回退', () => {
+  it('池巨额retry hint不等于订阅重置：按提示隔离但至多 30 分钟重探；当前请求立即回退', () => {
     const failure = normalizeRouteFailure({ code: 'RATE_LIMIT', message: 'pool "gpt-6.1-sol" exhausted: every member is unavailable or failed', providerRetryAfterMs: 9060669 }, route)
     expect(failure.resetAt).toBeUndefined()
-    expect(getRouteRecoveryPolicy(failure).retryDelayMs).toBe(300_000)
+    expect(getRouteRecoveryPolicy(failure).retryDelayMs).toBe(1_800_000)
+    expect(getRouteRecoveryPolicy({ ...failure, providerRetryAfterMs: 600_000 }).retryDelayMs).toBe(600_000)
+    const auth = normalizeRouteFailure({ code: 'AUTH', message: 'pool "claude-opus-5-5" exhausted: every member is cooling down; claude/token-x/* (AUTH) recovers in 23h55m', providerRetryAfterMs: 86_100_000 }, route)
+    expect(auth.kind).toBe('auth_invalid')
+    expect(getRouteRecoveryPolicy(auth).retryDelayMs).toBe(1_800_000)
     expect(getRouteRecoveryPolicy({ kind: 'rate_limited', providerRetryAfterMs: 9060669 }).retryDelayMs).toBe(9060669)
   })
 

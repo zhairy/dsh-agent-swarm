@@ -216,8 +216,9 @@ describe('RouteHealth受控恢复，不把暂时故障永久封锁', () => {
     health.record(codex, normalizeRouteFailure(raw, codex))
     expect(health.isAvailable(other)).toBe(true)
     expect(health.list()[0]?.resetAt).toBeUndefined()
-    expect(health.list()[0]?.retryAt).toBe(300_000)
-    at = 300_000
+    expect(health.list()[0]?.retryAt).toBe(1_800_000)
+    expect(health.getDueAt(codex)).toBe(1_800_000)
+    at = 1_800_000
     expect(health.claim(codex, 'new-logical-request')).toBe(true)
   })
 

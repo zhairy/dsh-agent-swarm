@@ -156,6 +156,8 @@ export const intRouteHealth = (now: () => number = Date.now) => {
     }
   return {
     record,
+    /** 最早可以重新尝试的时刻（没有隔离记录为 0）；只用于等待调度，准入仍以 claim 为准。 */
+    getDueAt: (route: RouteInfo): number => Math.max(0, ...blockedEntries(route).map(dueAt)),
     /** Admission eligibility only: an elapsed cooldown permits a probe, not a claim of restored quota. */
     isAvailable: (route: RouteInfo): boolean => {
       const at = now()

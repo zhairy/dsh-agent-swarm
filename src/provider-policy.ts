@@ -89,13 +89,15 @@ const MAX_PROBE_DELAY_MS: Readonly<Record<FailureKind, number>> = Object.freeze(
   rate_limited: 5 * 60_000, network_transient: 60_000, service_transient: 120_000,
   context_exceeded: 0, capability_mismatch: 0, unknown: 5 * 60_000
 })
+const POOL_AUTH_HINT_MAX_MS = 30 * 60_000
 export const getRouteRecoveryPolicy = (failure: Pick<NormalizedRouteFailure, 'kind' | 'providerRetryAfterMs'>, retryCount = 1): { isolate: boolean; retryDelayMs: number } => {
   if (failure.kind === 'context_exceeded' || failure.kind === 'capability_mismatch') return { isolate: false, retryDelayMs: 0 }
   const count = Number.isFinite(retryCount) ? Math.min(32, Math.max(1, Math.floor(retryCount))) : 1
   const cooldown = Math.min(MAX_PROBE_DELAY_MS[failure.kind], ROUTE_RECOVERY_COOLDOWNS_MS[failure.kind] * 2 ** Math.min(8, count - 1))
   const hint = typeof failure.providerRetryAfterMs === 'number' && Number.isFinite(failure.providerRetryAfterMs) && failure.providerRetryAfterMs > 0 ? failure.providerRetryAfterMs : 0
-  // A pool aggregates unavailable members; its large hint is not proof of a billing reset.
-  const retryAfter = failure.kind === 'pool_exhausted' ? Math.min(hint, MAX_PROBE_DELAY_MS.pool_exhausted) : hint
+  // 模型池与认证冷却按宿主提示隔离，但至多 30 分钟重探一次：宿主可能提前恢复（如额度窗口刷新）；
+  // 重新登录或修改 provider 配置触发的 llm/adapters-updated 会立即清除这两类隔离。
+  const retryAfter = failure.kind === 'pool_exhausted' || failure.kind === 'auth_invalid' ? Math.min(hint, POOL_AUTH_HINT_MAX_MS) : hint
   return { isolate: true, retryDelayMs: Math.max(cooldown, retryAfter) }
 }
 
@@ -128,6 +130,8 @@ export const normalizeRouteFailure = (failure: RouteFailureMetadata, route: Rout
   if (kind === 'unknown') {
     if (code === 'CONTEXT_WINDOW_EXCEEDED' || CONTEXT.test(message)) kind = 'context_exceeded'
     else if (['IMAGE_UNSUPPORTED', 'UNSUPPORTED_OPTION', 'UNSUPPORTED_REASONING_EFFORT'].includes(code)) kind = 'capability_mismatch'
+    // 宿主模型池以 AUTH 报告「所有成员冷却」时，根因是凭据或账号被拒，按认证失效处理（同 provider 其余模型一并跳过）
+    else if (code === 'AUTH') kind = 'auth_invalid'
     else if (pool !== undefined || code === 'POOL_EXHAUSTED') kind = 'pool_exhausted'
     else if (BALANCE.test(message) || ['INSUFFICIENT_BALANCE', 'INSUFFICIENT_FUNDS'].includes(code)
       || (failure.status === 402 && (route.provider === 'deepseek-official' || policy.accessMode === 'metered_api'))) kind = 'insufficient_balance'

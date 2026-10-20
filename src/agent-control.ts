@@ -56,6 +56,7 @@ const route = (raw: unknown): raw is RouteInfo => object(raw) && Object.keys(raw
 const publicRoute = (value: RouteInfo): RouteInfo => ({ provider: value.provider, model: value.model, ...(value.reasoningEffort === undefined ? {} : { reasoningEffort: value.reasoningEffort }) })
 const clone = <T>(value: T): T => structuredClone(value)
 const phase = new Set<AgentControlPhase>(['idle', 'running', 'waiting', 'stopping', 'paused', 'recovery-required'])
+const PAUSING_STOP_REASONS = new Set(['aborted', 'cancelled', 'interrupted', 'blocked'])
 
 /** Durable state validation never imports an arbitrary browser-selected policy object. */
 export const ValidateAgentControlRecords = (raw: unknown): raw is AgentControlRecord[] => {
@@ -233,7 +234,8 @@ export const createAgentControl = (deps: AgentControlDeps) => {
     MarkRunSettled: (childId: string, stopReason?: string) => {
       let current = records.get(childId)
       if (current !== undefined && stopReason === 'completed' && current.needsSideEffectReview === true) current = patch(current, { needsSideEffectReview: false })
-      if (current?.persistent === true && stopReason !== undefined && stopReason !== 'completed' && !current.paused) {
+      // 只有取消、打断或被宿主拦下才需要人工核对后继续；模型错误由委派在同一会话内续跑，不暂停
+      if (current?.persistent === true && stopReason !== undefined && PAUSING_STOP_REASONS.has(stopReason) && !current.paused) {
         deps.setPaused(childId, true)
         current = patch(current, { paused: true, reason: `host-run-failed:${stopReason}`.slice(0, 256) })
       }
