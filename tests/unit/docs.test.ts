@@ -19,7 +19,7 @@ describe('文档与代码一致', () => {
 
   it('安装.md 覆盖升级、模型、凭据、可选后端与 doctor', () => {
     const doc = read('docs/安装.md')
-    for (const keyword of ['0.1.7-alpha.2', 'QWEN_TOKEN_PLAN_CN_API_KEY', 'OPENCODE_GO_API_KEY', 'TYPESAFE_API_KEY', '@deepseek-ai/dsh-subagent-codex', '@deepseek-ai/dsh-subagent-claude-code', 'dsh-web-search-free', 'doctor', '天枢']) {
+    for (const keyword of ['0.2.0-rc.2', 'QWEN_TOKEN_PLAN_CN_API_KEY', 'OPENCODE_GO_API_KEY', 'TYPESAFE_API_KEY', '@deepseek-ai/dsh-subagent-codex', '@deepseek-ai/dsh-subagent-claude-code', 'dsh-web-search-free', 'doctor', '天枢']) {
       expect(doc).toContain(keyword)
     }
   })
