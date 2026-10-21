@@ -277,20 +277,20 @@ Object.assign(zh, {
   planningDescription: '任务卡生成执行流程（Mermaid）。观察模式只记录与提示，不拦截委派；强制模式要求当前版本的规划审核通过且节点依赖满足才派发专家。规划审核由独立只读 Agent 与 Jev 并行完成，观察模式下只在天枢调用 swarm_review_plan 时运行。',
   planningMode: '流程控制模式', planningModeOff: '关闭：不生成流程、不审核', planningModeAdvisory: '观察（推荐）：生成流程，按需审核，不拦截', planningModeEnforced: '强制：审核通过且依赖满足才执行',
   planningEnabled: '强制模式下建卡后自动审核', planningRequireJev: '审核必须取得 Jev 结论（Jev 不可用时不放行）',
-  planningRounds: '自动规划修正轮数', planningRoundsHint: '达到上限只暂停自动审核，任务卡仍可修改并显式复审（0–10）',
+  planningRounds: '自动规划修正轮数', planningRoundsHint: '达到上限只暂停自动审核，任务卡仍可修改并显式复审（非负安全整数）',
   planningThreshold: '审核通过阈值', planningThresholdHint: 'Jev 各维度概率都不低于此值才算通过（0–1）',
   planningTimeout: '单轮审核总等待上限（毫秒）', planningTimeoutHint: '0 表示不设插件总时长上限（默认，适合长期复杂审核，仍可随时取消）；填正整数毫秒保留显式上限，例如 600000 = 10 分钟',
-  errPlanning: '请选择有效的流程模式', errPlanningRounds: '请输入 0 到 10 之间的整数', errPlanningTimeout: '请输入 0 到 2147483647 之间的整数毫秒'
+  errPlanning: '请选择有效的流程模式', errPlanningRounds: '请输入非负整数', errPlanningTimeout: '请输入 0 到 2147483647 之间的整数毫秒'
 })
 Object.assign(en, {
   planningTitle: 'Task workflow & planning review',
   planningDescription: 'Task cards generate an execution workflow (Mermaid). Advisory mode records and advises without blocking delegations; enforced mode dispatches experts only when the current planning review passed and node dependencies are met. Planning reviews run an independent read-only agent and Jev in parallel; in advisory mode they run only when Tian Shu calls swarm_review_plan.',
   planningMode: 'Workflow mode', planningModeOff: 'Off: no workflow, no review', planningModeAdvisory: 'Advisory (recommended): workflow plus on-demand review, never blocks', planningModeEnforced: 'Enforced: run only after review passes and dependencies are met',
   planningEnabled: 'Review automatically after task cards in enforced mode', planningRequireJev: 'Require a Jev verdict (do not pass while Jev is unavailable)',
-  planningRounds: 'Automatic planning fix rounds', planningRoundsHint: 'Reaching the limit only pauses automatic review; the task card stays editable and can be reviewed explicitly (0–10)',
+  planningRounds: 'Automatic planning fix rounds', planningRoundsHint: 'Reaching the limit only pauses automatic review; the task card stays editable and can be reviewed explicitly (non-negative safe integer)',
   planningThreshold: 'Review pass threshold', planningThresholdHint: 'Every Jev dimension must reach this probability to pass (0–1)',
   planningTimeout: 'Total wait per review (ms)', planningTimeoutHint: '0 sets no plugin deadline (default; suits long complex reviews and stays cancellable); a positive integer keeps an explicit limit, e.g. 600000 = 10 minutes',
-  errPlanning: 'Select a valid workflow mode', errPlanningRounds: 'Enter a whole number between 0 and 10', errPlanningTimeout: 'Enter whole milliseconds between 0 and 2147483647'
+  errPlanning: 'Select a valid workflow mode', errPlanningRounds: 'Enter a non-negative whole number', errPlanningTimeout: 'Enter whole milliseconds between 0 and 2147483647'
 })
 Object.assign(zh, {
   approvalsTitle: '百工工具审批', approvalsDescription: '为百工会话中所选类别的工具调用增加审批要求。继承沿用宿主策略；请求审批需要宿主提供审批能力；拒绝会阻止这些调用。插件不能覆盖宿主的 never 策略，也不能开启被宿主禁用的 MCP。',
@@ -329,7 +329,8 @@ const getPlanningErrors = (draft) => {
   const ratio = toNumber(draft.reviewAbove)
   return {
     ...(WORKFLOW_MODES.includes(draft.workflowMode) ? {} : { workflowMode: 'errPlanning' }),
-    ...(integer(draft.maxFixRounds, 10) ? {} : { maxFixRounds: 'errPlanningRounds' }),
+    // 与配置 schema 一致：非负整数，不另设上限
+    ...(integer(draft.maxFixRounds, Number.MAX_SAFE_INTEGER) ? {} : { maxFixRounds: 'errPlanningRounds' }),
     ...(Number.isFinite(ratio) && ratio >= 0 && ratio <= 1 ? {} : { reviewAbove: 'errRatio' }),
     ...(integer(draft.timeoutMs, PLANNING_TIMEOUT_MAX) ? {} : { timeoutMs: 'errPlanningTimeout' })
   }

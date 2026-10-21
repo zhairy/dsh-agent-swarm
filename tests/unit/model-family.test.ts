@@ -72,6 +72,10 @@ describe('委派任务说明', () => {
     const native = getNativePromptText(task, input, 'D-3', undefined, 'gpt')
     expect(native).toMatch(/^Role: [\s\S]*\[\[swarm:role=zhu_jian\]\][\s\S]*GOAL:/)
     expect(native).toContain('"required"')
+    // 原生客户端不经过系统提示组装：persona 里的语言占位符要在这里解析
+    const english = getNativePromptText(task, { ...input, language: 'en' }, 'D-4', undefined, 'claude')
+    expect(english).not.toContain('{$')
+    expect(english).toContain('English')
   })
 
   it('getStyledTaskPrompt 可省略背景', () => {

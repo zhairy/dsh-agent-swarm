@@ -105,6 +105,95 @@ describe('有界任务 DAG', () => {
     expect(next.definition.nodes.find((node) => node.operation === 'checkpoint')!.dependsOn).toContain(math.id)
   })
 
+  it('修补与门禁顺序冲突的草稿依赖时保留经由它的业务先后：实现 → 复核 → 修复，修复仍在分析与第一次实现之后', () => {
+    const task = card({ changesCode: true })
+    const gates = getRuleGates(task)
+    const draft = { nodes: [
+      { id: 'analysis', role: 'tan_wei', dependsOn: [] },
+      { id: 'impl1', role: 'zhu_jian', dependsOn: ['analysis'] },
+      { id: 'verify1', role: 'fu_he', dependsOn: ['impl1'], gates: ['G_VERIFY'] },
+      { id: 'impl2', role: 'ji_feng', dependsOn: ['verify1'] }
+    ] }
+    const result = ReconcileWorkflow(getLenientWorkflow(draft, task, gates), task, gates)
+    expect(result.errors).toEqual([])
+    const node = (id: string) => result.definition.nodes.find((item) => item.id === id)!
+    expect(node('impl2').dependsOn).toEqual(['impl1'])
+    expect(node('verify1').dependsOn).toEqual(expect.arrayContaining(['impl1', 'impl2']))
+    expect(getReadyNodes(result.definition, intWorkflowState(result.definition)).map((item) => item.id)).toEqual(['analysis'])
+  })
+
+  it('缺少门禁时不复用实现前的同角色节点（例如先复现问题的复核），而是补一个实现后的门禁节点；依赖验收节点的草稿也能修补', () => {
+    const task = card({ changesCode: true })
+    const gates = getRuleGates(task)
+    const draft = { nodes: [
+      { id: 'reproduce', role: 'fu_he', dependsOn: [] },
+      { id: 'impl', role: 'ji_feng', dependsOn: ['reproduce'] },
+      { id: 'accept', operation: 'accept', dependsOn: ['impl'] },
+      { id: 'late', role: 'miao_bi', dependsOn: ['accept'] }
+    ] }
+    const result = ReconcileWorkflow(getLenientWorkflow(draft, task, gates), task, gates)
+    expect(result.errors).toEqual([])
+    const node = (id: string) => result.definition.nodes.find((item) => item.id === id)!
+    expect(node('reproduce').gates).toEqual([])
+    expect(node('impl').dependsOn).toEqual(['reproduce'])
+    const verify = result.definition.nodes.find((item) => item.gates.includes('G_VERIFY'))!
+    expect(verify.id).not.toBe('reproduce')
+    expect(verify.dependsOn).toContain('impl')
+    expect(node('late').dependsOn).toEqual(['impl'])
+  })
+
+  it.each([false, true])('最终汇合检查点保留合法控制顺序，不因节点展示反序而反转依赖（反序=%s）', (reverse) => {
+    const task = card()
+    const gates = getRuleGates(task)
+    const draft = getLenientWorkflow({ nodes: [
+      { id: 'analysis', role: 'tan_wei', dependsOn: [] },
+      { id: 'checkpoint_a', operation: 'checkpoint', dependsOn: ['analysis'] },
+      { id: 'checkpoint_b', operation: 'checkpoint', dependsOn: ['checkpoint_a'] },
+      { id: 'accept', operation: 'accept', dependsOn: ['checkpoint_b'] }
+    ] }, task, gates)
+    if (reverse) draft.nodes.reverse()
+    const original = structuredClone(draft)
+    expect(ValidateWorkflow(draft, task, gates).errors).toEqual([])
+    const result = ReconcileWorkflow(draft, task, gates)
+    expect(result.errors).toEqual([])
+    expect(result.definition.nodes.find((node) => node.id === 'checkpoint_a')?.dependsOn).toEqual(['analysis'])
+    expect(result.definition.nodes.find((node) => node.id === 'checkpoint_b')?.dependsOn).toContain('checkpoint_a')
+    expect(result.definition.nodes.find((node) => node.id === 'accept')?.dependsOn).toEqual(['checkpoint_b'])
+    expect(getReadyNodes(result.definition, intWorkflowState(result.definition)).map((node) => node.id)).toEqual(['analysis'])
+    expect(draft).toEqual(original)
+    expect(ReconcileWorkflow(result.definition, task, gates)).toEqual({ definition: result.definition, changed: false, errors: [] })
+  })
+
+  it('验收移到末尾时绕过验收并保留实现祖先，文档必须等实现完成', () => {
+    const task = card({ changesCode: true })
+    const gates = getRuleGates(task)
+    const draft = getLenientWorkflow({ nodes: [
+      { id: 'impl', role: 'ji_feng', dependsOn: [] },
+      { id: 'accept', operation: 'accept', dependsOn: ['impl'] },
+      { id: 'document', role: 'miao_bi', dependsOn: ['accept'] }
+    ] }, task, gates)
+    const result = ReconcileWorkflow(draft, task, gates)
+    expect(result.errors).toEqual([])
+    expect(result.definition.nodes.find((node) => node.id === 'document')?.dependsOn).toEqual(['impl'])
+    const state = intWorkflowState(result.definition)
+    expect(getReadyNodes(result.definition, state).map((node) => node.id)).toEqual(['impl'])
+    expect(getReadyNodes(result.definition, UpdateWorkflowNode(state, 'impl', 'succeeded')).map((node) => node.id)).toContain('document')
+    expect(ReconcileWorkflow(result.definition, task, gates)).toEqual({ definition: result.definition, changed: false, errors: [] })
+  })
+
+  it.each([1, 2])('补验收节点的 ID 避开已有业务节点，重复修补仍幂等（占用数=%s）', (count) => {
+    const task = card({ changesCode: true })
+    const gates = getRuleGates(task)
+    const nodes = Array.from({ length: count }, (_, index) => ({ id: `accept${'_final'.repeat(index)}`, operation: 'delegate', role: 'ji_feng', dependsOn: [] }))
+    const draft = getLenientWorkflow({ nodes }, task, gates)
+    const result = ReconcileWorkflow(draft, task, gates)
+    expect(result.errors).toEqual([])
+    expect(new Set(result.definition.nodes.map((node) => node.id)).size).toBe(result.definition.nodes.length)
+    for (const node of nodes) expect(result.definition.nodes.find((item) => item.id === node.id)?.operation).toBe('delegate')
+    expect(result.definition.nodes.filter((node) => node.operation === 'accept')).toHaveLength(1)
+    expect(ReconcileWorkflow(result.definition, task, gates)).toEqual({ definition: result.definition, changed: false, errors: [] })
+  })
+
   it('宽松读取：算衡节点按门禁推断模式、省略字段补齐、没有业务节点时退回默认流程', () => {
     const task = card({ changesCode: true, numericPrecision: true })
     const gates = getRuleGates(task)
@@ -235,7 +324,8 @@ describe('流程草稿修补的不变量（随机化性质检验）', () => {
         gates: gateIds.filter(() => next() < 0.15),
         ...(next() < 0.2 ? { description: '多余字段' } : {})
       }))
-      const result = ReconcileWorkflow(getLenientWorkflow({ nodes }, task, gates), task, gates)
+      const draft = getLenientWorkflow({ nodes }, task, gates)
+      const result = ReconcileWorkflow(draft, task, gates)
       if (result.errors.length > 0) continue
       accepted += 1
       const graph = result.definition
@@ -247,8 +337,61 @@ describe('流程草稿修补的不变量（随机化性质检验）', () => {
         for (const edit of edits) expect(ancestors(graph.nodes, node.id).has(edit)).toBe(true)
       }
       expect(ValidateWorkflow(graph, task, gates).errors).toEqual([])
+      expect(ReconcileWorkflow(graph, task, gates)).toEqual({ definition: graph, changed: false, errors: [] })
+      // 修补只去掉与门禁顺序冲突的先后：实现在草稿里的其余祖先仍是祖先；改算法时研算的非实现、非门禁祖先也保留
+      const postEdit = new Set(graph.nodes.filter((item) => item.gates.some((gate) => ['G_VERIFY', 'G_REVIEW', 'G_MATH_VERIFY', 'G_DIFF_TEST', 'G_BENCH'].includes(gate))).map((item) => item.id))
+      for (const edit of edits) for (const id of ancestors(draft.nodes, edit)) if (!postEdit.has(id)) expect(ancestors(graph.nodes, edit).has(id)).toBe(true)
+      if (task.flags.changesAlgorithm) for (const node of graph.nodes.filter((item) => item.gates.includes('G_MATH_RESEARCH'))) {
+        for (const id of ancestors(draft.nodes, node.id)) if (!postEdit.has(id) && !edits.includes(id)) expect(ancestors(graph.nodes, node.id).has(id)).toBe(true)
+      }
     }
     // 草稿只依赖前序节点：与门禁顺序冲突的依赖由修补消解，全部应被接受
     expect(accepted).toBe(400)
+  })
+
+  it('无门禁冲突的含验收与检查点 DAG 保留所有非验收祖先，重复修补不再改图', () => {
+    const next = random(20261021)
+    const task = card()
+    const gates = getRuleGates(task)
+    for (let trial = 0; trial < 100; trial++) {
+      const count = 3 + Math.floor(next() * 6)
+      const acceptAt = 1 + Math.floor(next() * (count - 1))
+      const nodes = Array.from({ length: count }, (_, index) => ({
+        id: `n${index}`, operation: index === acceptAt ? 'accept' : index > 0 && next() < 0.5 ? 'checkpoint' : 'delegate',
+        role: 'tan_wei', dependsOn: Array.from({ length: index }, (_, parent) => `n${parent}`).filter(() => next() < 0.4)
+      }))
+      const draft = getLenientWorkflow({ nodes }, task, gates)
+      const original = structuredClone(draft)
+      const result = ReconcileWorkflow(draft, task, gates)
+      expect(result.errors).toEqual([])
+      for (const node of draft.nodes.filter((item) => item.operation !== 'accept')) {
+        const remaining = ancestors(result.definition.nodes, node.id)
+        for (const ancestor of ancestors(draft.nodes, node.id)) if (ancestor !== `n${acceptAt}`) expect(remaining.has(ancestor)).toBe(true)
+      }
+      expect(draft).toEqual(original)
+      expect(ReconcileWorkflow(result.definition, task, gates)).toEqual({ definition: result.definition, changed: false, errors: [] })
+    }
+  })
+
+  it('任意含检查点与验收节点、依赖任意前序节点（含验收）的草稿：除多个验收节点外全部被接受', () => {
+    const next = random(77)
+    let accepted = 0
+    for (let trial = 0; trial < 400; trial++) {
+      const flags = Object.fromEntries(flagKeys.map((key) => [key, next() < 0.35]))
+      const task = card(flags)
+      const gates = getRuleGates(task)
+      const count = 1 + Math.floor(next() * 6)
+      const nodes = Array.from({ length: count }, (_, index) => {
+        const operation = index > 0 && next() < 0.2 ? (next() < 0.5 ? 'accept' : 'checkpoint') : 'delegate'
+        return { id: `n${index}`, operation, ...(operation === 'delegate' ? { role: roles[Math.floor(next() * roles.length)] } : {}),
+          dependsOn: index === 0 ? [] : [...new Set(Array.from({ length: Math.floor(next() * 3) }, () => `n${Math.floor(next() * index)}`))] }
+      })
+      const result = ReconcileWorkflow(getLenientWorkflow({ nodes }, task, gates), task, gates)
+      const accepts = nodes.filter((node) => node.operation === 'accept').length
+      if (accepts > 1) { expect(result.errors.join()).toContain('唯一验收节点'); continue }
+      expect(result.errors).toEqual([])
+      accepted += 1
+    }
+    expect(accepted).toBeGreaterThan(300)
   })
 })

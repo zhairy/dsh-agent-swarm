@@ -238,9 +238,6 @@ describe('失败分类', () => {
     expect(getFailureClass({ code: 'WEIRD' })).toBe('other')
     expect(getFailureClass(undefined)).toBe('other')
   })
-
-  it('是否值得换路由', () => {
-  })
 })
 
 describe('intRouteProbe', () => {

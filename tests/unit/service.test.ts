@@ -489,4 +489,10 @@ describe('任务卡流程草稿', () => {
     expect(math).toMatchObject({ role: 'suan_heng', mathMode: 'verify', dependsOn: ['implement'] })
     expect(card.flow?.mermaid).toContain(`n_${math!.id}`)
   })
+
+  it('异常大的流程草稿在修补前按配置上限拒绝', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false } } })
+    const nodes = Array.from({ length: 40 }, (_, index) => ({ id: `n${index}`, role: 'tan_wei', dependsOn: index === 0 ? [] : [`n${index - 1}`] }))
+    await expect(service.AddTaskCard(cardInput({ changesCode: true }, { workflow: { nodes } }), exec())).rejects.toThrow('流程草稿超过配置的上限（32 个节点、64 条依赖边）')
+  })
 })

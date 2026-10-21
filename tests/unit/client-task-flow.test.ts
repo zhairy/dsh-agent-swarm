@@ -3,13 +3,14 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 interface ElementInfo { type: unknown; props: Record<string, unknown>; children: unknown[] }
-const loadModule = () => {
+const loadModule = (view: unknown = null) => {
   const source = readFileSync(join(__dirname, '../../client/task-flow.js'), 'utf8')
   const module = { exports: {} as any }
   const effects: Array<() => unknown> = []
+  let stateIndex = 0
   const React = {
     createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): ElementInfo => ({ type, props: props ?? {}, children }),
-    useState: (initial: unknown) => [initial, vi.fn()],
+    useState: (initial: unknown) => [stateIndex++ === 0 ? view : initial, vi.fn()],
     useRef: (initial: unknown) => ({ current: initial }),
     useEffect: (effect: () => unknown) => effects.push(effect)
   }
@@ -108,6 +109,29 @@ describe('真实任务流程客户端投影', () => {
     review.mermaidReview.parserVersion = 'not-run'
     expect(getPlanningReviewView(review).mermaid.syntax).toBe('unknown')
   })
+  it.each([
+    ['zh', 'advisory', '流程已生成（观察模式，按需审核）', '未审核'],
+    ['en', 'advisory', 'Generated (advisory mode; review on demand)', 'Not reviewed'],
+    ['zh', 'enforced', '流程已生成，等待审核', '未审核'],
+    ['en', 'enforced', 'Generated, awaiting review', 'Not reviewed']
+  ])('%s 的 %s 未审核任务使用最终注册词典显示正确状态', (language, workflowMode, status, unknownReview) => {
+    const module = loadModule({ task_id: 'T-1', workflowMode })
+    let dictionaries: Record<string, Record<string, string>> = {}
+    module.apply({
+      effect: (run: () => unknown) => run(),
+      locale: { register: (_namespace: string, value: typeof dictionaries) => { dictionaries = value } },
+      uiConversation: { events: { register: vi.fn() } },
+      slots: { inject: vi.fn() }
+    })
+    const t = (key: string) => dictionaries[language]![key] ?? key
+    const { TaskFlowRow, PlanningReviewPanel } = module.__test__
+    const node = TaskFlowRow({ node: { data: { taskId: 'T-1', seq: 1, text: '真实工具内容' } }, sessionId: 'session', loadTask: vi.fn(), t })
+    expect(textOf(node.children[0].children[1])).toBe(status)
+    const panel = textOf(PlanningReviewPanel({ review: undefined, t }))
+    expect(panel).toContain(unknownReview)
+    expect(panel).not.toContain(status)
+  })
+
   it('只从持久工具结果识别任务；同 taskId 更新而非追加重复图', () => {
     const { readTaskResult, taskFlowDefinition } = loadModule().__test__
     expect(readTaskResult({ ...event(), type: 'assistant/message' })).toBeUndefined()

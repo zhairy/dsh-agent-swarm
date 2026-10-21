@@ -274,12 +274,19 @@ export const ValidateTaskCard = (input: unknown): { card?: TaskCard; errors: str
 }
 
 /**
- * 是否声明了真实的性能预算（「待测」不算）
+ * 是否声明了真实的性能预算（规模描述、空 targets 与「待测」不算）
  * @param {PerfInfo | undefined} perf - 性能预算
  * @returns {boolean} 是否需要基准门禁
  */
 export const hasPerfBudget = (perf: PerfInfo | undefined): boolean =>
-  perf !== undefined && Object.values(perf).some((value) => value !== undefined && value !== '' && value !== '待测')
+  perf !== undefined && (
+    PERF_NUMBER_KEYS.some((key) => {
+      const value = perf[key]
+      return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    })
+    || (typeof perf.throughput === 'string' && !['', '待测'].includes(perf.throughput.trim()))
+    || (perf.targets?.length ?? 0) > 0
+  )
 
 const AddGate = (gates: GateRequirement[], gate: GateId, reason: string, source: GateSource): void => {
   if (gates.some((item) => item.gate === gate)) return

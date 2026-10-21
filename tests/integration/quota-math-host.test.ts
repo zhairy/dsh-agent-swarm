@@ -33,7 +33,8 @@ const fixture = async (options: { partial?: boolean; holdStatus?: Promise<void>;
   const root = new Context()
   const calls: SourceCall[] = []
   let scoped: any
-  const config: Record<string, any> = { rootFallback: options.routing === true, jev: { enabled: false }, review: { enabled: false }, planningReview: { enabled: false },
+  // 账本写进临时目录：进程内装配时 profileContext 不一定可见，回退的 ~/.dsh 是本机真实账本
+  const config: Record<string, any> = { ledgerDir: join(directory, 'ledger'), rootFallback: options.routing === true, jev: { enabled: false }, review: { enabled: false }, planningReview: { enabled: false },
     workflow: { mode: 'advisory' }, persistence: { enabled: false }, math: { groups: { statistics: false, matrix: false } },
     routes: { tian_shu: { chain: [{ provider: 'codex', model: 'fixture-model' }, ...(options.routing ? [{ provider: 'claude', model: 'fixture-secondary' }, { provider: 'deepseek-official', model: 'fixture-api' }] : [])], upgrade: { enabled: false } } } }
   const fiber = await root.plugin({ name: 'quota-math-sdk-fixture', apply(ctx: any) {

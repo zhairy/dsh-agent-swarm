@@ -16,7 +16,7 @@ const obj = (properties: Record<string, JsonSchemaObject>, required: string[]): 
 
 /** 所有角色共享 summary 与 unresolved 字段 */
 const withCommon = (properties: Record<string, JsonSchemaObject>, required: string[]): JsonSchemaObject =>
-  obj({ summary: str('中文结论摘要'), unresolved: strList('未解决或未核实的事项'), ...properties }, ['summary', 'unresolved', ...required])
+  obj({ summary: str('结论摘要（按本轮输出语言书写）'), unresolved: strList('未解决或未核实的事项'), ...properties }, ['summary', 'unresolved', ...required])
 
 const SCHEMAS: Readonly<Record<DelegableRoleId, JsonSchemaObject>> = {
   mou_ding: withCommon({

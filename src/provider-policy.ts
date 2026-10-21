@@ -68,6 +68,7 @@ const POOL = /\bpool\s+["']([^"']+)["']\s+exhausted\b/i
 const QUOTA = /\busage limit(?:\s+(?:reached|exceeded))?\b|\b(?:you(?:'|’)ve|you have) hit your (?:usage )?limit\b|\bexceeded (?:your )?(?:current )?quota\b|\b(?:quota|credits?)(?:\s+(?:has|have)\s+been)?\s+(?:exhausted|exceeded|depleted)\b|额度(?:已)?(?:耗尽|用尽)|计划(?:额度)?(?:耗尽|用尽)/i
 const BALANCE = /insufficient (?:balance|funds)|balance (?:exhausted|depleted)|余额不足/i
 const MODEL = /Unpurchased|Access to model denied|not eligible for (?:using )?(?:this|the) model|model[^\n]*not (?:found|exist)/i
+const AUTH = /\binvalid (?:api key|credentials?)\b|\bauthentication failed\b|\btoken (?:(?:has|is) )?expired\b|\b(?:not logged in|login required|please (?:log in|login|sign in))\b/i
 const RATE_WINDOW = /\b(?:rpm|tpm)\b|per (?:second|minute)|每(?:秒|分钟)|concurrent (?:requests|limit)|并发(?:请求|限制)/i
 const CONTEXT = /context[_ -]window[_ -]exceeded|maximum context (?:length|window)|context (?:length|window)[^\n]*(?:exceeded|too (?:large|long))|exceeded (?:the )?model token limit|prompt (?:is )?too long/i
 
@@ -91,7 +92,7 @@ export const getRouteRecoveryPolicy = (failure: Pick<NormalizedRouteFailure, 'ki
   const cooldown = Math.min(MAX_PROBE_DELAY_MS[failure.kind], ROUTE_RECOVERY_COOLDOWNS_MS[failure.kind] * 2 ** Math.min(8, count - 1))
   const hint = typeof failure.providerRetryAfterMs === 'number' && Number.isFinite(failure.providerRetryAfterMs) && failure.providerRetryAfterMs > 0 ? failure.providerRetryAfterMs : 0
   // 模型池与认证冷却按宿主提示隔离，但至多 30 分钟重探一次：宿主可能提前恢复（如额度窗口刷新）；
-  // 重新登录或修改 provider 配置触发的 llm/adapters-updated 会立即清除这两类隔离。
+  // 通用 adapter 更新只失效元数据；隔离到期或显式受控重试后才允许半开探测。
   const retryAfter = failure.kind === 'pool_exhausted' || failure.kind === 'auth_invalid' ? Math.min(hint, POOL_AUTH_HINT_MAX_MS) : hint
   return { isolate: true, retryDelayMs: Math.max(cooldown, retryAfter) }
 }
@@ -125,15 +126,18 @@ export const normalizeRouteFailure = (failure: RouteFailureMetadata, route: Rout
   if (kind === 'unknown') {
     if (code === 'CONTEXT_WINDOW_EXCEEDED' || CONTEXT.test(message)) kind = 'context_exceeded'
     else if (['IMAGE_UNSUPPORTED', 'UNSUPPORTED_OPTION', 'UNSUPPORTED_REASONING_EFFORT'].includes(code)) kind = 'capability_mismatch'
-    // 宿主模型池以 AUTH 报告「所有成员冷却」时，根因是凭据或账号被拒，按认证失效处理（同 provider 其余模型一并跳过）
-    else if (code === 'AUTH') kind = 'auth_invalid'
+    // 订阅模型池以 AUTH 报告耗尽时，根因是池内账号凭据被拒，按认证失效处理（同 provider 其余模型一并跳过）；
+    // 其他 AUTH 不够具体（任何带 401/403 的消息、可能因断网失败的令牌刷新），按状态码与消息细分
+    else if (code === 'AUTH' && pool !== undefined && !MODEL.test(message)) kind = 'auth_invalid'
     else if (pool !== undefined || code === 'POOL_EXHAUSTED') kind = 'pool_exhausted'
     else if (BALANCE.test(message) || ['INSUFFICIENT_BALANCE', 'INSUFFICIENT_FUNDS'].includes(code)
       || (failure.status === 402 && (route.provider === 'deepseek-official' || policy.accessMode === 'metered_api'))) kind = 'insufficient_balance'
     else if (['QUOTA', 'INSUFFICIENT_QUOTA', 'USAGE_LIMIT', 'BILLING_HARD_LIMIT_REACHED'].includes(code)) kind = 'quota_exhausted'
     else if (RATE_WINDOW.test(message) && (failure.status === 429 || code === 'RATE_LIMIT')) kind = 'rate_limited'
     else if (QUOTA.test(message)) kind = 'quota_exhausted'
-    else if (['MISSING_CREDENTIAL', 'INVALID_CREDENTIAL', 'UNAUTHORIZED'].includes(code) || failure.status === 401 || (failure.status === 403 && !MODEL.test(message))) kind = 'auth_invalid'
+    // pi-ai 的 AUTH failure 可能仅有 code/message；只补明确认证文本，不把模型拒绝或刷新失败扩大为认证失效。
+    else if (['MISSING_CREDENTIAL', 'INVALID_CREDENTIAL', 'UNAUTHORIZED'].includes(code) || failure.status === 401 || (failure.status === 403 && !MODEL.test(message))
+      || (code === 'AUTH' && !MODEL.test(message) && AUTH.test(message))) kind = 'auth_invalid'
     else if (code === 'NO_ADAPTER' && /transport failed|fetch failed/i.test(message)) kind = 'network_transient'
     else if (code === 'NO_ADAPTER' && /No eligible account/i.test(message)) kind = 'pool_exhausted'
     else if (MODEL.test(message) || ['NO_ADAPTER', 'UNKNOWN_MODEL', 'UNKNOWN_PROVIDER'].includes(code)) kind = 'model_unavailable'

@@ -69,6 +69,39 @@ describe('宿主插件', () => {
     expect(disposers).toHaveLength(4)
   })
 
+  it('重复 llm/adapters-updated 不修改健康隔离、退避或半开探测所有者', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const { provided, listeners } = makeHost()
+      const service = provided.get('agentSwarm') as SwarmService
+      const opus = { provider: 'claude', model: 'claude-opus-5-5' }
+      const flash = { provider: 'deepseek-official', model: 'deepseek-flash' }
+      await service.routeState.ObserveRouteFailure(opus, { code: 'AUTH', message: 'pool "claude-opus-5-5" exhausted: every member is cooling down; claude/x (AUTH) recovers in 2h', providerRetryAfterMs: 7_200_000 })
+      await service.routeState.ObserveRouteFailure(flash, { code: 'QUOTA' })
+      const updateAdapters = listeners.get('llm/adapters-updated') as unknown as () => void
+      const before = service.routeState.getHealth()
+      for (let i = 0; i < 3; i++) updateAdapters()
+      expect(service.routeState.getHealth()).toEqual(before)
+      expect(service.routeState.isRouteAvailable(opus)).toBe(false)
+      expect(service.routeState.isRouteAvailable(flash)).toBe(false)
+
+      // Only expiry (or explicit user retry), not a generic adapter refresh,
+      // admits a single probe. Refreshes cannot steal its live ownership either.
+      vi.setSystemTime(Math.max(...before.map(entry => Math.max(entry.retryAt ?? 0, entry.resetAt ?? 0))))
+      service.routeState.AddChild('probe-a', { chain: [opus], role: 'zhu_jian' })
+      service.routeState.AddChild('probe-b', { chain: [opus], role: 'zhu_jian' })
+      const child = (id: string) => ({ id, session: { header: { parentSession: 'root' } } })
+      expect(service.routeState.getRequestOverride(child('probe-a'), opus, undefined, service.getConfig())).toMatchObject(opus)
+      const probing = service.routeState.getHealth()
+      expect(probing.some(entry => entry.halfOpenAgent === 'probe-a')).toBe(true)
+      for (let i = 0; i < 3; i++) updateAdapters()
+      expect(service.routeState.getHealth()).toEqual(probing)
+      expect(() => service.routeState.getRequestOverride(child('probe-b'), opus, undefined, service.getConfig())).toThrow('route_chain_exhausted')
+      service.routeState.MarkRequestSucceeded('probe-a')
+      expect(service.routeState.getHealth().map((entry) => entry.kind)).toEqual(['quota_exhausted'])
+    } finally { vi.useRealTimers() }
+  })
+
   it('在 globalThis 登记百工管理的会话，供 llm-fallbacks 跳过全局回退；卸载时撤销', () => {
     const store = globalThis as Record<symbol, unknown>
     const { disposers } = makeHost()

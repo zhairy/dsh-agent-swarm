@@ -18,6 +18,7 @@ import type { AcceptResultInfo, SwarmService } from './service.js'
 import { getToolDefinition, type ToolDefinitionLike, type ToolExecLike } from './tool-shape.js'
 import { SwarmError } from './util/errors.js'
 import type { JsonSchemaObject } from './util/json-schema.js'
+import { getPlanningStatusText } from './workflow.js'
 import type { PlanningRecoveryInfo } from './planning-recovery.js'
 
 const getPlanningRecoveryText = (recovery: PlanningRecoveryInfo): string[] => recovery.blockers.length === 0 && recovery.errors.length === 0 && !recovery.findings?.length ? [] : [
@@ -28,8 +29,6 @@ const getPlanningRecoveryText = (recovery: PlanningRecoveryInfo): string[] => re
 ]
 
 /** 观察模式不自动审核：没有记录时如实说明，而不是显示 pending 诱导反复复审 */
-const getPlanningStatusText = (status: string | undefined, mode: string): string =>
-  status ?? (mode === 'enforced' ? 'pending（强制模式需审核通过才能执行）' : '未运行（观察模式按需调用 swarm_review_plan）')
 
 /** 预设行：只挂在天枢预设上，注册 4 个百工工具、7 个 Jev 判断工具与 2 个内嵌技能，并按模型家族补充天枢的调度说明 */
 

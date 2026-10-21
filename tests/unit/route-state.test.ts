@@ -23,7 +23,7 @@ describe('automatic source quota routing', () => {
   const api = { provider: 'deepseek-official', model: 'deepseek-flash' }
   const declared = [primary, qwen, claude, api]
   const effective = [qwen, claude, primary, api]
-  const cfg = getSwarmConfig({ agents: { rootRecoverMs: 1 }, routes: { tian_shu: { chain: declared } } })
+  const cfg = getSwarmConfig({ agents: { rootRecoverMs: 60_000 }, routes: { tian_shu: { chain: declared } } })
   const order = (routes: readonly RouteInfo[]) => effective.map((item) => routes.find((route) => route.provider === item.provider)!)
   const fail = (registry: ReturnType<typeof intRouteStateRegistry>, selected: RouteInfo, agent = root, role: 'tian_shu' | undefined = 'tian_shu') => registry.recover({ agent, provider: selected.provider, failure: { status: 400 } }, async () => undefined, role, cfg)
 
@@ -1453,6 +1453,323 @@ describe('链尾保持：长期目标中铸剑链耗尽（D-74）的回归', () 
     expect(registry.getRequestOverride(child, astra, undefined, config)).toMatchObject(astra)
     registry.MarkRequestSucceeded(child.id)
     expect(registry.getTerminal(child.id)).toBeUndefined()
+  })
+})
+
+describe('准入等待与等待期间的用户选择', () => {
+  const astra = { provider: 'codex', model: 'gpt-6-astra' }
+  const kimi = { provider: 'opencode-go', model: 'kimi-k2.7-code' }
+  const flash = { provider: 'deepseek-official', model: 'deepseek-flash' }
+  const poolCooling = (ms: number) => ({ code: 'RATE_LIMIT', message: 'pool "gpt-6-astra" exhausted: every member is cooling down', providerRetryAfterMs: ms })
+  const expert = (id: string) => ({ id, session: { header: { parentSession: 'root' } } })
+  const setup = (onSleep?: (ms: number) => void, agents: Partial<typeof config.agents> = {}) => {
+    let at = 0
+    const sleeps: number[] = []
+    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, sleep: async (ms) => { sleeps.push(ms); at += ms; onSleep?.(ms) } })
+    return { registry, sleeps, cfg: getSwarmConfig({ agents: { ...config.agents, ...agents } }), setNow: (value: number) => { at = value } }
+  }
+
+  it('另一位专家的失败隔离了共享路由：准入时在预算内等到期再用，不计入逻辑次数；超出预算才判定耗尽并说明原因', async () => {
+    const { registry, sleeps, cfg } = setup()
+    const b = expert('expert-b')
+    registry.AddChild(b.id, { chain: [astra], role: 'zhu_jian', logicalRequestId: 'D-b' })
+    registry.BeginRequestStep(b.id, 1, 1)
+    await registry.ObserveRouteFailure(astra, poolCooling(90_000), cfg)
+    await expect(registry.AdmitRequest(b, astra, undefined, cfg)).resolves.toMatchObject(astra)
+    expect(sleeps).toEqual([90_000])
+    expect(registry.getRecovery(b.id)).toMatchObject({ attempts: 1, holdRetries: 1, admissionHolds: 1, holdWaitedMs: 90_000 })
+    const c = expert('expert-c')
+    registry.AddChild(c.id, { chain: [flash], role: 'zhu_jian', logicalRequestId: 'D-c' })
+    registry.BeginRequestStep(c.id, 1, 1)
+    await registry.ObserveRouteFailure(flash, { code: 'QUOTA' }, cfg)
+    await expect(registry.AdmitRequest(c, flash, undefined, cfg)).rejects.toThrow('route_chain_exhausted')
+    expect(registry.getTerminalDetail(c.id)).toContain('deepseek-official/deepseek-flash quota_exhausted')
+    expect(sleeps).toEqual([90_000])
+  })
+
+  it('链尾准入等待后环查已恢复的前序路由，只等待一次且不重置逻辑尝试预算', async () => {
+    const { registry, sleeps, cfg } = setup()
+    const limited = { ...cfg, recovery: { ...cfg.recovery, maxLogicalAttempts: 1 } }
+    registry.AddChild(child.id, { chain: [astra, flash], initialRoute: flash, role: 'zhu_jian', logicalRequestId: 'D-admission-wrap' })
+    registry.BeginRequestStep(child.id, 1, 1)
+    await registry.ObserveRouteFailure(astra, poolCooling(90_000), limited)
+    await registry.ObserveRouteFailure(flash, { code: 'QUOTA' }, limited)
+    await expect(registry.AdmitRequest(child, flash, undefined, limited)).resolves.toMatchObject(astra)
+    expect(sleeps).toEqual([90_000])
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 1, attemptedRoutes: ['codex/gpt-6-astra'], holdRetries: 1, admissionHolds: 1, holdWaitedMs: 90_000 })
+    expect(registry.getTerminal(child.id)).toBeUndefined()
+    await expect(registry.AdmitRequest(child, flash, undefined, limited)).rejects.toThrow('recovery_attempts_exhausted')
+    expect(registry.getRecovery(child.id)?.attempts).toBe(1)
+    expect(sleeps).toEqual([90_000])
+  })
+
+  it.each([
+    { initial: astra, blocked: [astra], expected: kimi },
+    { initial: kimi, blocked: [kimi], expected: flash },
+    { initial: flash, blocked: [flash], expected: astra },
+    { initial: flash, blocked: [astra, flash], expected: kimi },
+    { initial: kimi, blocked: [kimi, flash], expected: astra }
+  ])('准入环查先向后再从链首选可用路由：$initial.model → $expected.model', async ({ initial, blocked, expected }) => {
+    const { registry, sleeps, cfg } = setup(undefined, { networkWaitMs: 0 })
+    registry.AddChild(child.id, { chain: [astra, kimi, flash], initialRoute: initial, role: 'zhu_jian' })
+    for (const route of blocked) await registry.ObserveRouteFailure(route, { code: 'QUOTA' }, cfg)
+    await expect(registry.AdmitRequest(child, initial, undefined, cfg)).resolves.toMatchObject(expected)
+    expect(registry.getRecovery(child.id)?.attempts).toBe(1)
+    expect(sleeps).toEqual([])
+  })
+
+  it('准入环查不重试本步已失败路由，也不引入独立链之外的可用路由', async () => {
+    const { registry, sleeps, cfg } = setup(undefined, { networkWaitMs: 0 })
+    registry.AddChild(child.id, { chain: [astra, flash], role: 'zhu_jian' })
+    registry.getRequestOverride(child, astra, undefined, cfg)
+    expect(await registry.getErrorAction({ agent: child, provider: astra.provider, failure: { status: 400 } }, undefined, undefined, cfg)).toEqual({ kind: 'retry' })
+    await registry.ObserveRouteFailure(flash, { code: 'QUOTA' }, cfg)
+    expect(registry.isRouteAvailable(astra)).toBe(true)
+    expect(registry.isRouteAvailable(kimi)).toBe(true)
+    await expect(registry.AdmitRequest(child, flash, undefined, cfg)).rejects.toThrow('route_chain_exhausted')
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 1, attemptedRoutes: ['codex/gpt-6-astra'] })
+    expect(sleeps).toEqual([])
+  })
+
+  it('链尾准入等待中手选模型时保留新选择，不被已恢复的前序路由覆盖', async () => {
+    const { registry, sleeps, cfg } = setup(() => registry.RecordUserSelection(child.id, kimi))
+    registry.AddChild(child.id, { chain: [astra, flash], initialRoute: flash, role: 'zhu_jian' })
+    await registry.ObserveRouteFailure(astra, poolCooling(90_000), cfg)
+    await registry.ObserveRouteFailure(flash, { code: 'QUOTA' }, cfg)
+    await expect(registry.AdmitRequest(child, flash, undefined, cfg, true)).resolves.toMatchObject(kimi)
+    expect(registry.getChildOverride(child.id)).toEqual(kimi)
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 1, attemptedRoutes: ['opencode-go/kimi-k2.7-code'], holdWaitedMs: 90_000 })
+    expect(sleeps).toEqual([90_000])
+  })
+
+  it.each(['root', 'child'] as const)('准入预取消信号不探测、不取得半开许可、不消耗尝试（%s）', async (scope) => {
+    let at = 0
+    const probe = vi.fn(async () => ({ ok: true as const, vision: true }))
+    const registry = intRouteStateRegistry(undefined, probe, { now: () => at })
+    const agent = scope === 'root' ? root : child
+    const role = scope === 'root' ? 'tian_shu' as const : undefined
+    if (scope === 'child') registry.AddChild(child.id, { chain: [astra], role: 'zhu_jian' })
+    registry.BeginRequestStep(agent.id, 1, 1)
+    await registry.ObserveRouteFailure(astra, poolCooling(60_000), config)
+    at = 60_000
+    const controller = new AbortController()
+    controller.abort()
+    await expect(registry.AdmitRequest(agent, astra, role, config, true, controller.signal)).rejects.toThrow('取消')
+    expect(registry.getRecovery(agent.id)?.attempts).toBe(0)
+    expect(registry.getHealth().every((entry) => entry.halfOpenAgent === undefined)).toBe(true)
+    expect(probe).not.toHaveBeenCalled()
+  })
+
+  it.each(['root', 'child'] as const)('准入已试路由的隔离即将到期时等待重探，不重置累计尝试（%s）', async (scope) => {
+    const { registry, sleeps, cfg } = setup()
+    const routed = getSwarmConfig({ agents: cfg.agents, routes: { tian_shu: { chain: [astra, flash] } } })
+    const agent = scope === 'root' ? root : child
+    const role = scope === 'root' ? 'tian_shu' as const : undefined
+    if (scope === 'child') registry.AddChild(child.id, { chain: [astra, flash], role: 'zhu_jian' })
+    registry.BeginRequestStep(agent.id, 1, 1)
+    registry.getRequestOverride(agent, astra, role, routed, true)
+    expect(await registry.getErrorAction({ agent, provider: astra.provider, failure: { code: 'POOL_EXHAUSTED', providerRetryAfterMs: 60_000 } }, undefined, role, routed)).toEqual({ kind: 'retry' })
+    await registry.ObserveRouteFailure(flash, { code: 'QUOTA' }, routed)
+    await expect(registry.AdmitRequest(agent, astra, role, routed, true)).resolves.toMatchObject(astra)
+    expect(sleeps).toEqual([60_000])
+    expect(registry.getRecovery(agent.id)).toMatchObject({ attempts: 2, attemptedRoutes: ['codex/gpt-6-astra', 'codex/gpt-6-astra'], admissionHolds: 1, holdWaitedMs: 60_000 })
+  })
+
+  it('准入醒来后等待共享半开成功的持久提交，而不是直接失败或提前调用模型', async () => {
+    let at = 0
+    let commit!: () => void
+    let slept!: () => void
+    const committed = new Promise<void>((resolve) => { commit = resolve })
+    const sleeping = new Promise<void>((resolve) => { slept = resolve })
+    const first = expert('half-open-owner')
+    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at,
+      onHealthChange: (_snapshot, event) => event.reason === 'success' ? committed : undefined,
+      sleep: async (ms) => { at += ms; registry.MarkRequestSucceeded(first.id); slept() } })
+    for (const agent of [first, child]) registry.AddChild(agent.id, { chain: [astra], role: 'zhu_jian' })
+    await registry.ObserveRouteFailure(astra, poolCooling(60_000), config)
+    at = 60_000
+    registry.getRequestOverride(first, astra, undefined, config)
+    let settled = false
+    const admission = registry.AdmitRequest(child, astra, undefined, config).then((route) => { settled = true; return { route } }, (error: unknown) => { settled = true; return { error } })
+    try {
+      await sleeping
+      await Promise.resolve()
+      expect(registry.getRecovery(child.id)?.attempts).toBe(0)
+      expect(settled).toBe(false)
+      commit()
+      await expect(admission).resolves.toMatchObject({ route: astra })
+      expect(registry.getRecovery(child.id)?.attempts).toBe(1)
+    } finally { commit(); await admission }
+  })
+
+  it.each([
+    { failure: 'vision', single: false }, { failure: 'unavailable', single: false }, { failure: 'vision', single: true }
+  ])('准入候选隔离到期后必须通过 probe 与视觉适用性，不启动不兼容模型（$failure，单路由=$single）', async ({ failure, single }) => {
+    let at = 0
+    const probe = vi.fn(async () => failure === 'vision' ? { ok: true as const, vision: false } : { ok: false as const, reason: 'provider-not-configured' })
+    const registry = intRouteStateRegistry(undefined, probe, { now: () => at, sleep: async (ms) => { at += ms } })
+    registry.AddChild(child.id, { chain: single ? [flash] : [astra, flash], role: 'guan_xiang', requireVision: true })
+    await registry.ObserveRouteFailure(astra, { code: 'QUOTA' }, config)
+    await registry.ObserveRouteFailure(flash, { code: 'POOL_EXHAUSTED', providerRetryAfterMs: 60_000 }, config)
+    await expect(registry.AdmitRequest(child, astra, undefined, config)).rejects.toThrow('route_chain_exhausted')
+    expect(registry.getRecovery(child.id)?.attempts).toBe(0)
+    expect(registry.getLastRoute(child.id)).toBeUndefined()
+    expect(registry.getHealth().every((entry) => entry.halfOpenAgent === undefined)).toBe(true)
+  })
+
+  it('准入候选预检不合格时按原链顺序继续，只有合格模型消耗一次尝试', async () => {
+    const registry = intRouteStateRegistry(undefined, async (route) => ({ ok: true, vision: route.model === flash.model }))
+    registry.AddChild(child.id, { chain: [astra, kimi, flash], role: 'guan_xiang', requireVision: true })
+    await registry.ObserveRouteFailure(astra, { code: 'QUOTA' }, config)
+    await expect(registry.AdmitRequest(child, astra, undefined, config)).resolves.toMatchObject(flash)
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 1, attemptedRoutes: ['deepseek-official/deepseek-flash'] })
+  })
+
+  it.each(['cancel', 'dispose', 'new-step', 'manual'] as const)('准入候选预检期间状态改变不提交过期选择或重建旧请求（%s）', async (change) => {
+    let entered!: () => void
+    let release!: () => void
+    const probing = new Promise<void>((resolve) => { entered = resolve })
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const registry = intRouteStateRegistry(undefined, async (route) => {
+      if (route.model === flash.model) { entered(); await pending }
+      return { ok: true, vision: true }
+    })
+    registry.AddChild(child.id, { chain: [astra, flash], role: 'zhu_jian' })
+    registry.BeginRequestStep(child.id, 1, 1)
+    await registry.ObserveRouteFailure(astra, { code: 'QUOTA' }, config)
+    const controller = new AbortController()
+    const admission = registry.AdmitRequest(child, astra, undefined, config, true, controller.signal).then((route) => ({ route }), (error: unknown) => ({ error }))
+    await probing
+    expect(registry.getRecovery(child.id)?.attempts).toBe(0)
+    if (change === 'cancel') controller.abort()
+    else if (change === 'dispose') registry.DelAgent(child.id)
+    else if (change === 'new-step') registry.BeginRequestStep(child.id, 1, 2)
+    else registry.RecordUserSelection(child.id, kimi)
+    release()
+    if (change === 'manual') {
+      await expect(admission).resolves.toMatchObject({ route: kimi })
+      expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 1, attemptedRoutes: ['opencode-go/kimi-k2.7-code'] })
+    } else {
+      await expect(admission).resolves.toMatchObject({ error: expect.any(Error) })
+      expect(registry.getRecovery(child.id)?.attempts ?? 0).toBe(0)
+      if (change === 'dispose') expect(registry.getRecovery(child.id)).toBeUndefined()
+    }
+  })
+
+  it('准入保留人工重试已取得的单半开许可，不让全局 probe 拒绝自身许可', async () => {
+    const registry = intRouteStateRegistry(undefined, async (route) => registry.isRouteAvailable(route) ? { ok: true, vision: true } : { ok: false, reason: 'route-isolated' }, { now: () => 0 })
+    registry.AddChild(child.id, { chain: [astra], role: 'zhu_jian' })
+    await registry.ObserveRouteFailure(astra, poolCooling(60_000), config)
+    expect(registry.RequestRouteRetry(astra, child.id, { force: true }).ok).toBe(true)
+    await expect(registry.AdmitRequest(child, astra, undefined, config)).resolves.toMatchObject(astra)
+    expect(registry.getRecovery(child.id)?.attempts).toBe(1)
+    expect(registry.getHealth()[0]?.halfOpenAgent).toBe(child.id)
+    expect(registry.RequestRouteRetry(astra, 'other', { force: true })).toMatchObject({ ok: false, reason: 'retry-in-flight' })
+  })
+
+  it('隔离到期后另一请求持有半开探测：按退避间隔复查，探测成功后准入；等待中隔离被延长时继续等到新的到期时刻', async () => {
+    let succeedOnSleep = false
+    const a = expert('expert-a'); const b = expert('expert-b')
+    const { registry, sleeps, cfg, setNow } = setup(() => { if (succeedOnSleep) { registry.MarkRequestSucceeded(a.id); succeedOnSleep = false } })
+    for (const agent of [a, b]) { registry.AddChild(agent.id, { chain: [astra], role: 'zhu_jian', logicalRequestId: `D-${agent.id}` }); registry.BeginRequestStep(agent.id, 1, 1) }
+    await registry.ObserveRouteFailure(astra, poolCooling(90_000), cfg)
+    setNow(90_000)
+    expect(registry.getRequestOverride(a, astra, undefined, cfg)).toMatchObject(astra)
+    succeedOnSleep = true
+    await expect(registry.AdmitRequest(b, astra, undefined, cfg)).resolves.toMatchObject(astra)
+    expect(sleeps).toEqual([5000])
+
+    const extended = setup((ms) => { if (ms === 90_000) void registry2.ObserveRouteFailure(astra, poolCooling(60_000), cfg2) })
+    const registry2 = extended.registry, cfg2 = extended.cfg
+    registry2.AddChild(b.id, { chain: [astra], role: 'zhu_jian', logicalRequestId: 'D-extended' })
+    registry2.BeginRequestStep(b.id, 1, 1)
+    await registry2.ObserveRouteFailure(astra, poolCooling(90_000), cfg2)
+    await expect(registry2.AdmitRequest(b, astra, undefined, cfg2)).resolves.toMatchObject(astra)
+    expect(extended.sleeps).toHaveLength(2)
+    expect(extended.sleeps[1]).toBeGreaterThan(0)
+    expect(extended.sleeps.reduce((sum, ms) => sum + ms, 0)).toBeLessThanOrEqual(cfg2.agents.networkWaitMs)
+  })
+
+  it('错误恢复时唯一可用的路由正由其他专家半开探测：按退避间隔等待探测结果，不直接判定链耗尽', async () => {
+    let succeedOnSleep = false
+    const a = expert('expert-a')
+    const { registry, sleeps, cfg, setNow } = setup(() => { if (succeedOnSleep) { registry.MarkRequestSucceeded(a.id); succeedOnSleep = false } })
+    registry.AddChild(a.id, { chain: [astra], role: 'zhu_jian', logicalRequestId: 'D-a' })
+    registry.AddChild(child.id, { chain: [flash, astra], role: 'zhu_jian', logicalRequestId: 'D-probe' })
+    registry.BeginRequestStep(a.id, 1, 1); registry.BeginRequestStep(child.id, 1, 1)
+    await registry.ObserveRouteFailure(astra, poolCooling(90_000), cfg)
+    setNow(90_000)
+    expect(registry.getRequestOverride(a, astra, undefined, cfg)).toMatchObject(astra)
+    registry.getRequestOverride(child, flash, undefined, cfg)
+    succeedOnSleep = true
+    expect(await registry.getErrorAction({ agent: child, provider: flash.provider, failure: { code: 'QUOTA' } }, undefined, undefined, cfg)).toEqual({ kind: 'retry' })
+    expect(sleeps).toEqual([5000])
+    expect(registry.getRequestOverride(child, flash, undefined, cfg)).toMatchObject(astra)
+  })
+
+  it('等待期间用户换了模型：醒来后按用户的选择重试，不改回等待前的目标（子会话与主会话）', async () => {
+    let onHold: (() => void) | undefined
+    const { registry, cfg } = setup((ms) => { if (ms >= 5000) onHold?.() })
+    registry.AddChild(child.id, { chain: [astra, flash], role: 'zhu_jian', logicalRequestId: 'D-switch' })
+    registry.BeginRequestStep(child.id, 1, 1)
+    await registry.ObserveRouteFailure(flash, { code: 'QUOTA' }, cfg)
+    const transport = { code: 'TRANSPORT', message: 'transport failed' }
+    registry.getRequestOverride(child, astra, undefined, cfg)
+    expect(await registry.getErrorAction({ agent: child, provider: astra.provider, failure: transport }, undefined, undefined, cfg)).toEqual({ kind: 'retry' })
+    registry.getRequestOverride(child, astra, undefined, cfg)
+    onHold = () => registry.SetChildOverride(child.id, kimi)
+    expect(await registry.getErrorAction({ agent: child, provider: astra.provider, failure: transport }, undefined, undefined, cfg)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(child, astra, undefined, cfg)).toMatchObject(kimi)
+
+    const rootCfg = getSwarmConfig({ agents: config.agents, routes: { tian_shu: { chain: [astra, flash] } } })
+    registry.BeginRequestStep(root.id, 1, 1)
+    registry.getRequestOverride(root, astra, 'tian_shu', rootCfg, true)
+    expect(await registry.getErrorAction({ agent: root, provider: astra.provider, failure: transport }, undefined, 'tian_shu', rootCfg)).toEqual({ kind: 'retry' })
+    registry.getRequestOverride(root, astra, 'tian_shu', rootCfg, true)
+    onHold = () => registry.RecordUserSelection(root.id, kimi)
+    expect(await registry.getErrorAction({ agent: root, provider: astra.provider, failure: transport }, undefined, 'tian_shu', rootCfg)).toEqual({ kind: 'retry' })
+    expect(registry.getRequestOverride(root, kimi, 'tian_shu', rootCfg, true)).toMatchObject(kimi)
+  })
+
+  it('等待中被取消或人工暂停不再重试；判断类路由不参与等待；保持次数不超过 32', async () => {
+    const transport = { code: 'TRANSPORT', message: 'transport failed' }
+    const controller = new AbortController()
+    let onHold: (() => void) | undefined
+    const { registry, cfg } = setup((ms) => { if (ms >= 5000) onHold?.() })
+    registry.AddChild(child.id, { chain: [astra], role: 'zhu_jian', logicalRequestId: 'D-abort' })
+    registry.BeginRequestStep(child.id, 1, 1)
+    registry.getRequestOverride(child, astra, undefined, cfg)
+    await registry.getErrorAction({ agent: child, provider: astra.provider, failure: transport }, undefined, undefined, cfg)
+    registry.getRequestOverride(child, astra, undefined, cfg)
+    onHold = () => controller.abort()
+    expect(await registry.getErrorAction({ agent: child, provider: astra.provider, failure: transport, signal: controller.signal }, undefined, undefined, cfg)).toBeUndefined()
+    registry.BeginRequestStep(child.id, 1, 2)
+    registry.getRequestOverride(child, astra, undefined, cfg)
+    await registry.getErrorAction({ agent: child, provider: astra.provider, failure: transport }, undefined, undefined, cfg)
+    registry.getRequestOverride(child, astra, undefined, cfg)
+    onHold = () => registry.SetManualPause(child.id, true)
+    expect(await registry.getErrorAction({ agent: child, provider: astra.provider, failure: transport }, undefined, undefined, cfg)).toBeUndefined()
+
+    const judge = { provider: 'typesafe', model: 'jev', policy: { accessMode: 'judgment_api' as const } }
+    const judged = setup()
+    judged.registry.AddChild(child.id, { chain: [astra, judge], role: 'zhu_jian', logicalRequestId: 'D-judge' })
+    judged.registry.BeginRequestStep(child.id, 1, 1)
+    await judged.registry.ObserveRouteFailure(judge, poolCooling(60_000), judged.cfg)
+    judged.registry.getRequestOverride(child, astra, undefined, judged.cfg)
+    expect(await judged.registry.getErrorAction({ agent: child, provider: astra.provider, failure: { code: 'QUOTA' } }, undefined, undefined, judged.cfg)).toBeUndefined()
+    expect(judged.sleeps).toEqual([])
+    expect(judged.registry.getTerminal(child.id)).toBe('route_chain_exhausted')
+
+    const capped = setup(undefined, { networkWaitMs: 100 * 3_600_000 })
+    capped.registry.AddChild(child.id, { chain: [astra], role: 'zhu_jian', logicalRequestId: 'D-cap' })
+    capped.registry.BeginRequestStep(child.id, 1, 1)
+    for (let action: unknown = { kind: 'retry' }; action !== undefined;) {
+      capped.registry.getRequestOverride(child, astra, undefined, capped.cfg)
+      action = await capped.registry.getErrorAction({ agent: child, provider: astra.provider, failure: transport }, undefined, undefined, capped.cfg)
+    }
+    expect(capped.registry.getRecovery(child.id)?.holdRetries).toBe(32)
+    expect(capped.sleeps).toHaveLength(33)
+    expect(capped.registry.getTerminal(child.id)).toBe('route_chain_exhausted')
   })
 })
 

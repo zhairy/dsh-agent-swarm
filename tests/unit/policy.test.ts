@@ -61,11 +61,25 @@ describe('ValidateTaskCard', () => {
     ]))
   })
 
-  it('性能预算：数字才算，「待测」不算', () => {
-    expect(hasPerfBudget(undefined)).toBe(false)
-    expect(hasPerfBudget({ p95Ms: '待测' })).toBe(false)
-    expect(hasPerfBudget({ p99Ms: 20 })).toBe(true)
-    expect(hasPerfBudget({ throughput: '1k/s' })).toBe(true)
+  it.each([
+    [undefined, false],
+    [{}, false],
+    [{ dataScale: '单次标量计算' }, false],
+    [{ p95Ms: '待测', p99Ms: '待测', throughput: '待测' }, false],
+    [{ targets: [] }, false],
+    [{ p95Ms: 0 }, true],
+    [{ p99Ms: 0 }, true],
+    [{ p99Ms: 20 }, true],
+    [{ p95Ms: -1 }, false],
+    [{ p95Ms: Number.NaN }, false],
+    [{ p99Ms: Number.POSITIVE_INFINITY }, false],
+    [{ throughput: '' }, false],
+    [{ throughput: '   ' }, false],
+    [{ throughput: ' 待测 ' }, false],
+    [{ throughput: '1k/s' }, true],
+    [{ targets: [{ metric: 'peakMemory', operator: '<=', value: 1024, unit: 'bytes' }] }, true]
+  ] satisfies [TaskCard['perf'], boolean][])('性能预算只计明确阈值，不计规模或占位信息：%j => %s', (perf, expected) => {
+    expect(hasPerfBudget(perf)).toBe(expected)
   })
 
   it('阶段合同保留整体原始需求并规范化阶段边界', () => {
@@ -159,6 +173,29 @@ describe('ValidateTaskCard', () => {
 describe('规则门禁', () => {
   it('代码改动 → 复核', () => {
     expect(getRuleGates(makeCard({ changesCode: true })).map((g) => g.gate)).toEqual(['G_VERIFY'])
+  })
+
+  it.each([
+    { dataScale: '单次标量计算', p95Ms: '待测', p99Ms: '待测', throughput: '待测' },
+    { targets: [] }
+  ])('只有规模或空 targets 不误加基准门禁、不阻断验收：%j', (perf) => {
+    const card = makeCard({}, { perf })
+    const gates = getRuleGates(card)
+    expect(gates).toEqual([])
+    expect(isTriageUseful(card, gates)).toBe(false)
+    expect(getAcceptanceCheck(gates, [], [], 0, card.perf)).toMatchObject({ ok: true, missing: [] })
+  })
+
+  it.each([
+    { p95Ms: 0 },
+    { p99Ms: 20 },
+    { throughput: '1k/s' },
+    { targets: [{ metric: 'peakMemory', operator: '<=', value: 1024, unit: 'bytes' }] }
+  ] satisfies TaskCard['perf'][])('真实延迟、吞吐与内存预算仍需基准证据：%j', (perf) => {
+    const card = makeCard({}, { perf })
+    const gates = getRuleGates(card)
+    expect(gates.map((gate) => gate.gate)).toEqual(['G_BENCH'])
+    expect(getAcceptanceCheck(gates, [], [], 0, card.perf).ok).toBe(false)
   })
 
   it('量化核心算法改动触发全套门禁', () => {

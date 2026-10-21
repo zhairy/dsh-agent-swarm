@@ -5,12 +5,13 @@ import { intRouteStateRegistry } from '../../src/route-state.js'
 const original = { provider: 'qwen-token-plan-cn', model: 'old', reasoningEffort: 'high' }
 const chosen = { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
 const binding = { childId: 'child', parentSessionId: 'root', taskId: 'T-1', delegationId: 'D-1', persistent: true, cardRevision: 1, workflowRevision: 1, requestRevision: 1 }
-const fixture = (options: { persist?: () => Promise<void>; resume?: () => Promise<{ accepted: true }> } = {}) => {
+const fixture = (options: { persist?: () => Promise<void>; resume?: () => Promise<{ accepted: true }>; isDelegationActive?: () => boolean } = {}) => {
   const routes = intRouteStateRegistry()
   routes.AddChild('child', { chain: [original], role: 'tan_wei', persistent: true, logicalRequestId: 'D-1' })
   const interrupt = vi.fn(async () => undefined)
   const resume = vi.fn<AgentControlDeps['resume']>(options.resume ?? (async () => ({ accepted: true as const })))
-  const control = createAgentControl({ validateRoute: async (route) => route, interrupt, resume, applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause, persist: options.persist })
+  const control = createAgentControl({ validateRoute: async (route) => route, interrupt, resume, applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause, persist: options.persist,
+    ...(options.isDelegationActive === undefined ? {} : { isDelegationActive: options.isDelegationActive }) })
   control.Register(binding)
   const address = () => ({ parentSessionId: 'root', childId: 'child', expectedRevision: control.get('child')!.revision })
   const agent = { id: 'child', session: { header: { parentSession: 'root' } } }
@@ -37,6 +38,29 @@ describe('persistent subagent control uses actual routing and host settlement', 
     const revision = f.control.get('child')!.revision
     f.control.MarkRunSettled('child', 'aborted')
     expect(f.control.get('child')!.revision).toBe(revision)
+    await f.control.Continue(f.address())
+    expect(f.resume).toHaveBeenCalledTimes(1)
+  })
+  it('宿主真实结束原因：aborted（取消或打断）与 refusal（回合被拦下）暂停，error 与 max-tokens 不暂停', () => {
+    for (const [reason, paused] of [['aborted', true], ['refusal', true], ['error', false], ['max-tokens', false]] as const) {
+      const f = fixture()
+      f.start()
+      f.control.MarkRunSettled('child', reason)
+      expect(f.control.get('child')).toMatchObject({ phase: paused ? 'paused' : 'idle', paused, reason: `host-run-failed:${reason}` })
+      expect(f.routes.isManualPaused('child')).toBe(paused)
+    }
+  })
+  it('原委派仍在退避等待自动重试时拒绝人工继续，且不改变状态、不暂停自动恢复', async () => {
+    let active = true
+    const f = fixture({ isDelegationActive: () => active })
+    f.start()
+    f.control.MarkRunSettled('child', 'error')
+    const before = f.control.get('child')!
+    await expect(f.control.Continue(f.address())).rejects.toThrow('原委派仍在自动重试')
+    expect(f.control.get('child')).toEqual(before)
+    expect(f.routes.isManualPaused('child')).toBe(false)
+    expect(f.resume).not.toHaveBeenCalled()
+    active = false
     await f.control.Continue(f.address())
     expect(f.resume).toHaveBeenCalledTimes(1)
   })

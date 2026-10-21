@@ -28,7 +28,10 @@ const loadPage = (): any => {
   const source = readFileSync(join(__dirname, '../../client/settings-page.js'), 'utf8')
     .replace('const DATA = __SWARM_DATA__', `const DATA = ${JSON.stringify(DATA)}`)
   const module = { exports: {} as any }
-  const react = { createElement: () => null, useSyncExternalStore: () => undefined, useEffect: () => undefined, Fragment: 'fragment' }
+  const react = {
+    createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]) => ({ type, props, children }),
+    useSyncExternalStore: () => undefined, useEffect: () => undefined, Fragment: 'fragment'
+  }
   new Function('require', 'module', 'exports', source)((id: string) => {
     if (id === 'react') return react
     throw new Error(`unexpected require ${id}`)
@@ -452,8 +455,29 @@ describe('任务流程与规划审核设置', () => {
     const valid = { ...getPlanning(undefined, undefined), timeoutMs: '600000' }
     expect(getPlanningErrors(valid)).toEqual({})
     for (const timeoutMs of ['-1', '1.5', '2147483648', '']) expect(getPlanningErrors({ ...valid, timeoutMs })).toEqual({ timeoutMs: 'errPlanningTimeout' })
-    expect(getPlanningErrors({ ...valid, maxFixRounds: '11', reviewAbove: '1.2', workflowMode: 'strict' })).toEqual({ maxFixRounds: 'errPlanningRounds', reviewAbove: 'errRatio', workflowMode: 'errPlanning' })
+    // 修正轮数与配置 schema 一致：非负整数，不另设上限
+    expect(getPlanningErrors({ ...valid, maxFixRounds: '11' })).toEqual({})
+    expect(getPlanningErrors({ ...valid, maxFixRounds: '-1', reviewAbove: '1.2', workflowMode: 'strict' })).toEqual({ maxFixRounds: 'errPlanningRounds', reviewAbove: 'errRatio', workflowMode: 'errPlanning' })
     expect(buildPlanning({ ...valid, timeoutMs: '1.5' }, {})).toBeUndefined()
+  })
+
+  it.each([['zh', '非负安全整数'], ['en', 'non-negative safe integer']])('%s 的修正轮数提示与允许超过 10 的校验一致', (language, hint) => {
+    const form = createForm({ routes: {} })
+    let dictionaries: Record<string, Record<string, string>> = {}
+    const t = (key: string) => dictionaries[language]![key] ?? key
+    page.apply({
+      ...createCtx(form),
+      effect: (run: () => unknown, name: string) => { if (name === 'swarm-settings: dictionaries') run() },
+      locale: { register: (_namespace: string, value: typeof dictionaries) => { dictionaries = value }, bind: () => t }
+    })
+    const value = { ...getPlanning(undefined, undefined), maxFixRounds: '11' }
+    expect(getPlanningErrors(value)).toEqual({})
+    const card = page.__test__.PlanningCard({ t, planning: { value, errors: {} }, editable: true, controller: {} })
+    const textOf = (element: any): string => typeof element === 'string' ? element : (element?.children ?? []).map(textOf).join('')
+    expect(textOf(card)).toContain(hint)
+    expect(textOf(card)).not.toContain('0–10')
+    expect(getPlanningErrors({ ...value, maxFixRounds: String(Number.MAX_SAFE_INTEGER) })).toEqual({})
+    expect(getPlanningErrors({ ...value, maxFixRounds: String(Number.MAX_SAFE_INTEGER + 1) })).toEqual({ maxFixRounds: 'errPlanningRounds' })
   })
 
   it('只写与默认不同的字段并保留页面不管理的已保存字段；workflow 与 planningReview 同一 revision 原子保存', async () => {

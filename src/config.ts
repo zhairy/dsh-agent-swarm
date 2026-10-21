@@ -88,7 +88,7 @@ export const Config = Schema.object({
     retryBackoffMs: Schema.natural().default(5000).description('出错重试前的等待时间（毫秒，逐次加倍）'),
     promptStyle: Schema.union([...PROMPT_STYLES]).default('auto')
       .description('提示风格：auto 按模型自动选择（Claude 用 XML 分节，GPT 用目标/停止条件/证据，其他模型用编号步骤）；也可固定为 claude / gpt / generic'),
-    networkWaitMs: Schema.natural().default(600000).description('模型请求因网络中断失败时，等待网络恢复的最长时间（毫秒）；0 为不等待，直接回退到下一层路由'),
+    networkWaitMs: Schema.natural().default(600000).description('单次模型请求的等待预算（毫秒）：断网时等网络恢复，路由链上暂无可用模型时等最早恢复的路由，两者共用；0 为不等待，直接回退或判定链耗尽'),
     rootRecoverMs: Schema.natural().default(600000).description('天枢回退到备用模型后，经过这段时间（毫秒）重新尝试对话框所选的模型；0 为一直使用备用模型'),
     networkProbeUrls: Schema.array(Schema.string()).default(['https://api.deepseek.com', 'https://dashscope.aliyuncs.com', 'https://www.baidu.com'])
       .description('判断网络是否可达的探测地址：任一地址有 HTTP 响应即视为联网'),
@@ -113,7 +113,7 @@ export const Config = Schema.object({
     maxFixRounds: Schema.natural().default(2).description('自动规划修正轮数；达到上限仅暂停自动审核，任务卡仍可编辑并显式复审'),
     timeoutMs: Schema.natural().max(2147483647).default(0).description('单轮规划审核总等待上限（毫秒）；0 为不限，适合长期复杂审核。仍可取消，正数超时不产生批准'),
     reviewAbove: Schema.number().default(0.8)
-  }).default({}).description('生成后独立审核目标、流程设计与 Mermaid 代码').volatile(),
+  }).default({}).description('规划审核：独立审核目标、流程设计与 Mermaid 代码；强制模式下建卡后自动进行，观察模式由天枢按需调用').volatile(),
   execution: Schema.object({
     profile: Schema.union(['legacy', 'bounded']).default('legacy'),
     maxCalls: Schema.natural().default(0),

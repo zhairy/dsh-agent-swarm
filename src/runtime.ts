@@ -101,7 +101,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     await service.routeState.PreparePreferredRecovery(payload.agent, resolved, presetRole, service.getConfig())
     await service.routeState.PrepareQuotaRouting(payload.agent, resolved, presetRole, service.getConfig(), payload.signal)
     if (isTracked(payload.agent)) await service.routeState.WaitHealthReady(payload.agent.id, payload.signal)
-    const result = service.routeState.getRequestOverride(payload.agent, resolved, presetRole, service.getConfig(), explicitSelectionAvailable)
+    const result = await service.routeState.AdmitRequest(payload.agent, resolved, presetRole, service.getConfig(), explicitSelectionAvailable, payload.signal)
     service.agentControl?.ObserveRequest(payload.agent.id, result)
     const selected = service.routeState.getChildOverride(payload.agent.id)
     if (selected !== undefined) service.agentControl?.ObserveSelection(payload.agent.id, selected)

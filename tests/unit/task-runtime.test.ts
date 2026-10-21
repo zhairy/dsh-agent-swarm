@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getSwarmConfig } from '../../src/config.js'
 import { intSwarmService, type SwarmService } from '../../src/service.js'
-import type { AgentLike, SubagentResultLike, SubagentStartRequestLike } from '../../src/host-contract.js'
+import type { AgentLike, JobsLike, SubagentResultLike, SubagentStartRequestLike } from '../../src/host-contract.js'
 import { ROLE_TAG_PATTERN, type DelegableRoleId } from '../../src/role-registry.js'
 import { VALID_OUTPUTS } from '../fixtures/valid-outputs.js'
 import { createWorkspaceLeaseManager } from '../../src/util/workspace-lease.js'
@@ -48,6 +48,7 @@ const makeRuntime = async (options: {
   pending?: boolean
   output?: (role: DelegableRoleId, request: SubagentStartRequestLike) => unknown
   getAgent?: (id: string) => AgentLike | undefined
+  getJobs?: () => JobsLike | undefined
 } = {}) => {
   const home = options.home ?? await mkdtemp(join(tmpdir(), 'swarm-task-runtime-'))
   if (options.home === undefined) directories.push(home)
@@ -84,7 +85,8 @@ const makeRuntime = async (options: {
     dshHome: home, fetch: fetch as unknown as typeof globalThis.fetch,
     gitStatus: async () => undefined, sleep: async () => undefined,
     probe: async () => ({ ok: true, vision: true }), now: () => ++time,
-    ...(options.getAgent === undefined ? {} : { getAgent: options.getAgent })
+    ...(options.getAgent === undefined ? {} : { getAgent: options.getAgent }),
+    ...(options.getJobs === undefined ? {} : { getJobs: options.getJobs })
   })
   services.push(service)
   return { service, root, exec, home, subagents, runs, fetch, config }
@@ -279,6 +281,34 @@ describe('task execution through the public service', () => {
     runtime.runs[0]!.release(); await handled
     expect((await createWorkspaceLeaseManager().getStatus(runtime.home))).toMatchObject({ mutationUnknown: false, busy: false })
     expect(runtime.service.getGuardReason({ name: 'write', agent: runtime.root })).toBeUndefined()
+  })
+
+  it('cancelled writer that left a background job: the job is stopped and awaited before release; a job that keeps running keeps the lease unconfirmed', async () => {
+    for (const stops of [true, false]) {
+      const status = new Map<string, string>()
+      const killed: string[] = []
+      const jobs: JobsLike = {
+        list: (caller) => [...status].map(([id, value]) => ({ id, owner: caller, status: value })),
+        kill: (id) => { killed.push(id); if (stops) status.set(id, 'killed') },
+        wait: async (id) => ({ status: status.get(id)! })
+      }
+      const runtime = await makeRuntime({ pending: true, config: { workflow: { mode: 'advisory' } }, getAgent: (id) => ({ id, session: { header: {} }, status: 'idle' }) as AgentLike, getJobs: () => jobs })
+      const created = await runtime.service.AddTaskCard(card({ flags: { changesCode: true } }), runtime.exec())
+      const cancellation = new AbortController()
+      const handled = runtime.service.delegate({ task_id: created.task_id, role: 'ji_feng', node_id: 'implementation', prompt: '启动长时间构建后被取消', backend: 'api', session: 'oneshot' }, { agent: runtime.root, signal: cancellation.signal }).catch(() => undefined)
+      await vi.waitFor(() => expect(runtime.runs).toHaveLength(1))
+      status.set('job-build', 'running')
+      cancellation.abort()
+      runtime.runs[0]!.release(); await handled
+      expect(killed).toEqual(['job-build'])
+      const leases = createWorkspaceLeaseManager()
+      const lease = await leases.getStatus(runtime.home)
+      try {
+        expect(lease.mutationUnknown).toBe(!stops)
+      } finally {
+        if (lease.mutationUnknown && lease.owner) await leases.reconcile(runtime.home, lease.owner, true)
+      }
+    }
   })
 
   it('replays the same request when JSON object keys are reordered and rejects changed input', async () => {

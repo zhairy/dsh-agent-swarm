@@ -250,7 +250,7 @@ export const getNativeStyle = (kind: BackendKind): PromptStyle => (kind.startsWi
 
 export const getNativePromptText = (task: TaskRecord, input: DelegateInput, delegationId: string, mode?: SuanHengMode, style: PromptStyle = 'generic'): string =>
   [
-    getChildPersona(input.role, mode, style),
+    getChildPersona(input.role, mode, style, input.language),
     getStyledTaskPrompt({
       brief: getTaskBrief(task, input, delegationId),
       request: getVisibleRequest(input),

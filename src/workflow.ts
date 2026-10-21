@@ -223,10 +223,15 @@ export const getLenientWorkflow = (raw: unknown, card: TaskCard, gates: readonly
 export const ReconcileWorkflow = (definition: WorkflowDefinition, card: TaskCard, gates: readonly GateRequirement[]): { definition: WorkflowDefinition; changed: boolean; errors: string[] } => {
   const next = structuredClone(definition)
   const defaultDefinition = getDefaultWorkflow(card, gates)
+  const isEdit = (node: WorkflowNodeInfo): boolean => node.role !== undefined && EDIT_ROLES.includes(node.role)
   for (const gate of gates) {
     if (next.nodes.some((node) => node.gates.includes(gate.gate))) continue
     const template = defaultDefinition.nodes.find((node) => node.gates.includes(gate.gate))!
-    const compatible = next.nodes.find((node) => node.role === template.role && node.mathMode === template.mathMode)
+    // 复用同角色节点承担缺失的门禁时，不能改变它在草稿里与实现的先后（例如实现前复现问题的复核节点）
+    const editIds = next.nodes.filter(isEdit).map((node) => node.id)
+    const fits = (node: WorkflowNodeInfo): boolean => POST_EDIT_GATES.includes(gate.gate) ? !editIds.some((id) => getAncestors(next.nodes, id).has(node.id))
+      : gate.gate !== 'G_MATH_RESEARCH' || !editIds.some((id) => getAncestors(next.nodes, node.id).has(id))
+    const compatible = next.nodes.find((node) => node.role === template.role && node.mathMode === template.mathMode && fits(node))
     if (compatible !== undefined) compatible.gates = [...new Set([...compatible.gates, gate.gate])]
     else {
       let id = template.id
@@ -235,28 +240,45 @@ export const ReconcileWorkflow = (definition: WorkflowDefinition, card: TaskCard
     }
   }
   const research = next.nodes.filter((node) => node.gates.includes('G_MATH_RESEARCH')).map((node) => node.id)
-  const edits = next.nodes.filter((node) => node.role !== undefined && EDIT_ROLES.includes(node.role)).map((node) => node.id)
+  const edits = next.nodes.filter(isEdit).map((node) => node.id)
   const postEdit = next.nodes.filter((node) => node.gates.some((gate) => POST_EDIT_GATES.includes(gate))).map((node) => node.id)
-  // 门禁规定的先后（研算 → 实现 → 验证/审查）优先于草稿：实现不能直接或间接依赖实现后的门禁节点，
-  // 研算不能依赖实现或其后的门禁；先剪掉这些草稿依赖，再补门禁依赖，原本无环的草稿修补后仍然无环
-  const reaches = (dep: string, targets: readonly string[]): boolean => targets.includes(dep) || [...getAncestors(next.nodes, dep)].some((id) => targets.includes(id))
-  for (const node of next.nodes) {
-    if (edits.includes(node.id)) node.dependsOn = node.dependsOn.filter((dep) => !reaches(dep, postEdit))
-    if (card.flags.changesAlgorithm && research.includes(node.id)) node.dependsOn = node.dependsOn.filter((dep) => !reaches(dep, [...edits, ...postEdit]))
+  const byId = new Map(next.nodes.map((node) => [node.id, node]))
+  /** 依赖里的 blocked 节点换成它自己的依赖（递归）：去掉与门禁顺序冲突的边，保留经由它的其余先后关系 */
+  const bypass = (deps: readonly string[], blocked: ReadonlySet<string>, seen: Set<string>): string[] => deps.flatMap((dep) => {
+    if (!blocked.has(dep)) return [dep]
+    if (seen.has(dep)) return []
+    seen.add(dep)
+    return bypass(byId.get(dep)?.dependsOn ?? [], blocked, seen)
+  })
+  // 验收移到末尾时绕过它，保留经由它的业务与控制祖先，避免补检查点后成环。
+  const acceptIds = new Set(next.nodes.filter((node) => node.operation === 'accept').map((node) => node.id))
+  for (const node of next.nodes) node.dependsOn = [...new Set(bypass(node.dependsOn, acceptIds, new Set()))]
+  /** before 及其上游都不能依赖 after：对这些节点绕过 after 节点 */
+  const repair = (before: readonly string[], after: readonly string[]): void => {
+    const blocked = new Set(after)
+    const upstream = new Set(before.flatMap((id) => [id, ...getAncestors(next.nodes, id)]))
+    for (const node of next.nodes) if (upstream.has(node.id) && !blocked.has(node.id)) node.dependsOn = [...new Set(bypass(node.dependsOn, blocked, new Set()))]
   }
+  // 门禁规定的先后（研算 → 实现 → 验证/审查）优先于草稿。绕过只用到原有的祖先关系，原本无环的草稿修补后仍然无环
+  repair(edits, postEdit)
+  if (card.flags.changesAlgorithm) repair(research, [...edits, ...postEdit])
   for (const node of next.nodes) {
     if (card.flags.changesAlgorithm && edits.includes(node.id)) node.dependsOn = [...new Set([...node.dependsOn, ...research])]
     if (node.gates.some((gate) => POST_EDIT_GATES.includes(gate))) node.dependsOn = [...new Set([...node.dependsOn, ...edits])]
   }
-  // 保留自定义中间检查点，不能删掉仍被业务节点依赖的控制节点。
-  let checkpoint = next.nodes.find((node) => node.operation === 'checkpoint' && next.nodes.filter((candidate) => candidate.operation === 'delegate').every((candidate) => !getAncestors(next.nodes, candidate.id).has(node.id)))
+  // 只有没有非验收后继的检查点可作最终汇合点，保留业务节点和中间检查点的已有顺序。
+  let checkpoint = next.nodes.find((node) => node.operation === 'checkpoint' && next.nodes.filter((candidate) => candidate.operation !== 'accept').every((candidate) => !getAncestors(next.nodes, candidate.id).has(node.id)))
   if (checkpoint === undefined) {
     checkpoint = structuredClone(defaultDefinition.nodes.find((node) => node.operation === 'checkpoint')!)
     while (next.nodes.some((node) => node.id === checkpoint!.id)) checkpoint.id += '_final'
     next.nodes.push(checkpoint)
   }
   let accept = next.nodes.find((node) => node.operation === 'accept')
-  if (accept === undefined) { accept = structuredClone(defaultDefinition.nodes.find((node) => node.operation === 'accept')!); next.nodes.push(accept) }
+  if (accept === undefined) {
+    accept = structuredClone(defaultDefinition.nodes.find((node) => node.operation === 'accept')!)
+    while (next.nodes.some((node) => node.id === accept!.id)) accept.id += '_final'
+    next.nodes.push(accept)
+  }
   checkpoint.dependsOn = next.nodes.filter((node) => node.id !== checkpoint.id && node.operation !== 'accept').map((node) => node.id)
   accept.dependsOn = [checkpoint.id]
   next.mode = getWorkflowMode(card)
@@ -271,6 +293,10 @@ export const getWorkflowMermaid = (definition: WorkflowDefinition): string => [
   ...getCanonicalWorkflow(definition).nodes.map((node) => `  n_${node.id}["${getMermaidLabel(node.label)}"]`),
   ...getCanonicalWorkflow(definition).nodes.flatMap((node) => node.dependsOn.map((dep) => `  n_${dep} --> n_${node.id}`))
 ].join('\n')
+
+/** 规划审核状态的说明文字：观察模式不自动审核，没有记录时说明「未运行」而不是「待审核」 */
+export const getPlanningStatusText = (status: string | undefined, mode: string): string =>
+  status ?? (mode === 'enforced' ? 'pending（强制模式需审核通过才能执行）' : '未运行（观察模式按需调用 swarm_review_plan）')
 
 /** 同一合同和图生成可复制任务说明，展示与执行状态共用唯一数据源。 */
 export const getTaskCardMarkdown = (card: TaskCard, definition: WorkflowDefinition, options: { taskId: string; cardRevision?: number; workflowRevision?: number; state?: WorkflowStateInfo; planningStatus?: string; delegationLimit?: number } ): string => [

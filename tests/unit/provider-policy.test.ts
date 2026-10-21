@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getRouteRecoveryPolicy, getWireReasoningEffort, normalizeRouteFailure, type FailureKind } from '../../src/provider-policy.js'
+import { getRouteFailure, getRouteRecoveryPolicy, getWireReasoningEffort, normalizeRouteFailure, type FailureKind } from '../../src/provider-policy.js'
 import { getFailureHint } from '../../src/util/failure-hint.js'
 
 const route = { provider: 'codex', model: 'gpt-6.1-sol' }
@@ -42,6 +42,39 @@ describe('供应商失败语义与恢复时间', () => {
     expect(auth.kind).toBe('auth_invalid')
     expect(getRouteRecoveryPolicy(auth).retryDelayMs).toBe(1_800_000)
     expect(getRouteRecoveryPolicy({ kind: 'rate_limited', providerRetryAfterMs: 9060669 }).retryDelayMs).toBe(9060669)
+  })
+
+  it.each([
+    // AUTH 也可能是模型权限或临时刷新失败，不能仅凭 code 扩大为 provider 认证隔离。
+    [{ code: 'AUTH', message: 'pool "claude-opus-5-5" exhausted: every member is cooling down; claude/token-x/* (AUTH) recovers in 2h' }, 'auth_invalid'],
+    [{ code: 'AUTH', message: '403 Access to model denied.' }, 'model_unavailable'],
+    [{ code: 'AUTH', status: 403, message: 'Access to model denied.' }, 'model_unavailable'],
+    [{ code: 'AUTH', message: '403 Access to model denied. Please log in again.' }, 'model_unavailable'],
+    [{ code: 'AUTH', message: 'Codex token refresh failed' }, 'unknown'],
+    [{ code: 'AUTH', message: 'Codex token refresh failed: fetch failed' }, 'unknown'],
+    [{ code: 'AUTH', message: 'pool "claude-opus-5-5" exhausted: 2 of 2 member(s) failed; last claude/a (AUTH: 403 Access to model denied.)' }, 'pool_exhausted'],
+    [{ code: 'AUTH', status: 401, message: 'invalid api key' }, 'auth_invalid'],
+    [{ code: 'AUTH' }, 'unknown'],
+    [{ code: 'AUTH', message: '403 request rejected' }, 'unknown'],
+    [{ message: 'invalid credentials' }, 'unknown']
+  ] as const)('AUTH 细分：%j => %s', (failure, kind) => {
+    expect(normalizeRouteFailure(failure, route).kind).toBe(kind)
+  })
+
+  it.each([
+    // 已核验 pi-ai mapStopReason 的 AUTH failure 只有 code/message、无 status；以下为该形状的合成反例。
+    '401 invalid api key',
+    '403 authentication failed',
+    '401 invalid credentials',
+    '401 token expired',
+    '401 Token has expired',
+    '401 Please log in again',
+    '401 login required',
+    '401 not logged in'
+  ])('宿主无 status 的明确 AUTH 文本仍按认证失效处理：%s', (message) => {
+    const failure = getRouteFailure({ failure: { code: 'AUTH', message } })
+    expect(failure.status).toBeUndefined()
+    expect(normalizeRouteFailure(failure, route).kind).toBe('auth_invalid')
   })
 
   it('按已观察到的Qwen月额度UTC句式保留确切reset，其他provider不能借此互相污染', () => {
