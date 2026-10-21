@@ -8,6 +8,14 @@ import { getPlanningReviewQuestions, type ReviewSnapshot } from '../../src/plann
 import type { AgentLike, SubagentStartRequestLike } from '../../src/host-contract.js'
 import { VALID_OUTPUTS } from '../fixtures/valid-outputs.js'
 
+// Keep service lifecycle and projection checks real without starting a Mermaid/
+// JSDOM worker for every revision; workflow.test.ts covers the official parser.
+vi.mock('../../src/workflow.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/workflow.js')>()
+  return { ...actual, ParseWorkflowMermaid: (definition: Parameters<typeof actual.ParseWorkflowMermaid>[0], source?: string) =>
+    actual.ParseWorkflowMermaid(definition, source, async () => ({ version: actual.MERMAID_PARSER_VERSION, ok: true })) }
+})
+
 const cleanup: Array<() => Promise<void>> = []
 afterEach(async () => { for (const action of cleanup.splice(0)) await action() })
 const make = (options: { jevAvailable?: boolean; requireJev?: boolean; reviewVerdict?: 'pass' | 'changes_requested'; missingToolFilter?: boolean } = {}) => {
