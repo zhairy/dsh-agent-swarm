@@ -2,8 +2,6 @@
 
 [中文](#中文) · [English](#english)
 
-![Model call lines in the chat and the model badge in the session header](assets/screenshots/model-calls.png)
-
 ---
 
 ## 中文
