@@ -35,6 +35,7 @@
   "files": [
     "README.md",
     "THIRD-PARTY-NOTICES.md",
+    "assets/screenshots",
     "config",
     "cordis.patch.yml",
     "docs",

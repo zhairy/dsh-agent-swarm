@@ -32,7 +32,7 @@
       maxRetries: 3                # 未执行、中断、出错或交付不合格时的自动重试次数
       retryBackoffMs: 5000         # 出错重试前的等待（逐次加倍）
       promptStyle: auto            # auto：按模型家族组织提示（Claude：XML 分节；GPT：目标/停止条件/证据；其他：编号步骤）；也可固定 claude / gpt / generic
-      networkWaitMs: 600000        # 断网引起的失败先等网络恢复（最长 10 分钟），再在原模型重试；0 为直接回退
+      networkWaitMs: 600000        # 单次请求的等待预算（10 分钟）：断网时等网络恢复；链上暂无可用模型时等最早恢复的路由；0 为不等待
       rootRecoverMs: 600000        # 普通故障回退后的恢复；确认耗尽的额度域不会靠此计时器清除
       modelCallDisplay: every      # 聊天窗口「调用模型」行：every 每次调用都显示；turn 只在每轮首次与换模型时显示
       networkProbeUrls:            # 联网探测地址：任一有 HTTP 响应即视为联网
