@@ -277,4 +277,3 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
 }
 
 /** 只有相同语义版本才能在专家续会话里省略完整任务背景。 */
-export const isContextRevisionKnown = (seen: { cardRevision: number; workflowRevision: number; requestRevision?: number } | undefined, current: { cardRevision: number; workflowRevision: number; requestRevision?: number }): boolean => seen?.cardRevision === current.cardRevision && seen.workflowRevision === current.workflowRevision && (seen.requestRevision ?? 1) === (current.requestRevision ?? 1)

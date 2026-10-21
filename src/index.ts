@@ -19,7 +19,9 @@ import {
   type PluginContextLike,
   type SessionProjectionsLike,
   type SubagentsLike,
-  type ToolsLike
+  type ToolsLike,
+  type JobsLike,
+  type JobLifecycleEventLike
 } from './host-contract.js'
 import { intNetworkMonitor } from './network.js'
 import { getSubscriptionPoolConfiguration } from './quota-routing.js'
@@ -120,7 +122,6 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     available: () => quotaConnection?.createSharedFetchHandler !== undefined,
     getPoolConfiguration: () => getSubscriptionPoolConfiguration(ctx.get('configEditor') as { entries: () => readonly unknown[] } | undefined),
     getRegisteredProviders: () => (ctx.get('llm') as LlmLike | undefined)?.listProviders().map(provider => provider.id) ?? [] })
-  ctx.on('llm/adapters-updated', () => quotaSource.invalidate())
   const service = intSwarmService({
     orderQuotaRoutes: quotaSource.orderQuotaRoutes, onQuotaRouteSuccess: quotaSource.succeeded, quotaDiagnostics: quotaSource.diagnostics,
     getConfig,
@@ -132,6 +133,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     getApproval: () => ctx.get('approval') as ApprovalServiceLike | undefined,
     getSessionProjections: () => ctx.get('sessionProjections') as SessionProjectionsLike | undefined,
     getAgent: (sessionId) => (ctx.get('agents') as { get: (id: string) => AgentLike | undefined } | undefined)?.get(sessionId),
+    getJobs: () => ctx.get('jobs') as JobsLike | undefined,
     inspectParent: async (sessionId) => (await inspectRootMetadata(sessionId))?.header,
     inspectRootPreference: async (sessionId) => (await inspectRootMetadata(sessionId))?.preference,
     activateParent: async (sessionId) => {
@@ -150,6 +152,9 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     logger: getLogger(ctx),
     network: intNetworkMonitor({ fetch: fetchImpl, getUrls: () => getConfig().agents.networkProbeUrls })
   })
+  // Adapter refreshes include catalog/reasoning changes, not just auth changes.
+  // They invalidate quota data, never erase cooldowns or half-open ownership.
+  ctx.on('llm/adapters-updated', () => quotaSource.invalidate())
   ctx.effect(() => ctx.provide(SWARM_SERVICE, service))
   ctx.effect(() => () => { quotaSource.dispose(); return service.dispose() })
   ctx.effect(() => PublishManagedAgents((agent) => service.isManagedAgent(agent as AgentLike)))
@@ -157,6 +162,10 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   ensureRolePresetsForActivationHost(ctx, getLogger(ctx))
   // 连续会话（continuable）的每一轮结束都经 subagent/end 通知；swarm_delegate 据此取回结果
   ctx.on('subagent/end', (info: SubagentEndInfoLike) => service.OnSubagentEnd(info))
+  ctx.on('agent/disposed', (payload: { agent?: AgentLike } | undefined) => {
+    if (payload?.agent !== undefined) service.OnAgentDisposed(payload.agent.id)
+  })
+  ctx.on('session/event', (session: { id: string }, event: JobLifecycleEventLike) => service.OnJobEvent(session.id, event))
   // 0.2.1-alpha：子智能体入队工作释放前限制其作用域工具面（旧宿主无该方法，行为不变）。
   ctx.on('agent/created', (payload: { agent?: AgentLike } | undefined) => {
     if (payload?.agent !== undefined) service.OnAgentCreated(payload.agent)

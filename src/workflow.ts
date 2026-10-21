@@ -4,7 +4,7 @@ import { Worker } from 'node:worker_threads'
 import { pathToFileURL } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { GATE_IDS, GATE_ROLE, getSuggestedRoles, type GateId, type GateRequirement, type TaskCard } from './policy.js'
-import { getRoleInfo, isDelegableRoleId, type DelegableRoleId, type SuanHengMode } from './role-registry.js'
+import { getDelegableRoleIds, getRoleInfo, isDelegableRoleId, type DelegableRoleId, type SuanHengMode } from './role-registry.js'
 import { SwarmError } from './util/errors.js'
 
 export const WORKFLOW_GENERATOR_VERSION = '1'
@@ -50,6 +50,7 @@ export type MermaidParserLike = (source: string) => Promise<{ version: string; o
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const ID_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
+const DELEGABLE_ROLE_IDS = getDelegableRoleIds()
 const EDIT_ROLES: readonly DelegableRoleId[] = ['zhu_jian', 'ji_feng']
 const POST_EDIT_GATES: readonly GateId[] = ['G_VERIFY', 'G_REVIEW', 'G_MATH_VERIFY', 'G_DIFF_TEST', 'G_BENCH']
 const RISK_KEYS = ['changesAlgorithm', 'numericPrecision', 'securitySensitive', 'touchesFinancialLogic', 'timeSeriesOrBacktest', 'stateMachine', 'sharedStateConcurrency', 'crossModuleArchitecture', 'ambiguousRequirements'] as const
@@ -142,7 +143,7 @@ export const ValidateWorkflow = (raw: unknown, card: TaskCard, gates: readonly G
     const nodeGates = item.gates
     if (!Array.isArray(deps) || deps.some((id) => typeof id !== 'string') || new Set(deps).size !== deps.length) errors.push(`nodes[${i}].dependsOn 必须是无重复的 ID 数组`)
     if (!Array.isArray(nodeGates) || nodeGates.some((gate) => !GATE_IDS.includes(gate as GateId)) || new Set(nodeGates).size !== nodeGates.length) errors.push(`nodes[${i}].gates 不合法`)
-    if (item.operation === 'delegate' && !isDelegableRoleId(item.role)) errors.push(`nodes[${i}].role 必须是可委派角色`)
+    if (item.operation === 'delegate' && !isDelegableRoleId(item.role)) errors.push(`nodes[${i}].role 必须是可委派角色 ID（${DELEGABLE_ROLE_IDS.join('、')}）`)
     if (item.operation !== 'delegate' && (item.role !== undefined || item.mathMode !== undefined || (Array.isArray(nodeGates) && nodeGates.length > 0))) errors.push(`nodes[${i}] 控制节点不能指定角色、模式或门禁`)
     if (item.mathMode !== undefined && (item.role !== 'suan_heng' || !['research', 'verify'].includes(String(item.mathMode)))) errors.push(`nodes[${i}].mathMode 仅算衡可指定 research/verify`)
     if (item.outputContractVersion !== '1') errors.push(`nodes[${i}].outputContractVersion 必须为 1`)
@@ -167,7 +168,7 @@ export const ValidateWorkflow = (raw: unknown, card: TaskCard, gates: readonly G
     visited += 1
     for (const child of children.get(queue[i]!) ?? []) { const count = pending.get(child)! - 1; pending.set(child, count); if (count === 0) queue.push(child) }
   }
-  if (visited !== nodes.length) return { errors: ['workflow 依赖必须无环'] }
+  if (visited !== nodes.length) return { errors: [`workflow 依赖必须无环（环上或环后的节点：${nodes.filter((node) => (pending.get(node.id) ?? 0) > 0).map((node) => node.id).join('、')}）`] }
   const accepts = nodes.filter((node) => node.operation === 'accept')
   if (accepts.length !== 1) errors.push('workflow 必须有唯一验收节点')
   else {
@@ -189,14 +190,48 @@ export const ValidateWorkflow = (raw: unknown, card: TaskCard, gates: readonly G
   return errors.length > 0 ? { errors } : { definition: { schemaVersion: 1, mode: raw.mode as WorkflowMode, nodes }, errors: [] }
 }
 
+/**
+ * 宽松读取天枢给出的流程：补齐可推导字段（mode、schemaVersion、label、outputContractVersion），丢弃未知字段，
+ * 把放错节点的门禁移走（算衡节点按门禁推断模式）。缺失的必需门禁、检查点与验收随后由 ReconcileWorkflow 补齐。
+ * 只放宽写法，不放宽语义：DAG、角色与门禁仍由 ValidateWorkflow 严格校验，必需门禁只会补入、不会删除。
+ */
+export const getLenientWorkflow = (raw: unknown, card: TaskCard, gates: readonly GateRequirement[]): WorkflowDefinition => {
+  const items = isObject(raw) && Array.isArray(raw.nodes) ? raw.nodes : Array.isArray(raw) ? raw : []
+  const nodes = items.filter(isObject).map((item): WorkflowNodeInfo => {
+    const id = typeof item.id === 'string' ? item.id.trim() : ''
+    const operation: WorkflowNodeOperation = ['delegate', 'checkpoint', 'accept'].includes(String(item.operation)) ? item.operation as WorkflowNodeOperation
+      : id === 'accept' ? 'accept' : id === 'checkpoint' && item.role === undefined ? 'checkpoint' : 'delegate'
+    const role = operation === 'delegate' ? item.role : undefined
+    const declared = item.mathMode ?? item.mode
+    let mathMode: SuanHengMode | undefined = role === 'suan_heng' && (declared === 'research' || declared === 'verify') ? declared : undefined
+    const nodeGates: GateId[] = []
+    for (const gate of Array.isArray(item.gates) ? item.gates : []) {
+      const expected = GATE_ROLE[gate as GateId]
+      if (expected === undefined || expected.role !== role || nodeGates.includes(gate as GateId)) continue
+      mathMode ??= expected.mode
+      if (expected.mode === mathMode) nodeGates.push(gate as GateId)
+    }
+    if (role === 'suan_heng') mathMode ??= 'research'
+    const label = typeof item.label === 'string' && item.label.trim() !== '' ? item.label : isDelegableRoleId(role) ? `${getRoleInfo(role).name}：${getRoleInfo(role).title}` : id
+    return { id, label: getContractNodeLabel(label), operation, ...(role === undefined ? {} : { role: role as DelegableRoleId }), ...(mathMode === undefined ? {} : { mathMode }),
+      dependsOn: Array.isArray(item.dependsOn) ? [...new Set(item.dependsOn.filter((dep): dep is string => typeof dep === 'string'))] : [], gates: nodeGates, outputContractVersion: '1' }
+  })
+  return nodes.some((node) => node.operation === 'delegate') ? { schemaVersion: 1, mode: getWorkflowMode(card), nodes } : getDefaultWorkflow(card, gates)
+}
+
 /** 新门禁只能补入结构，保持已有业务节点 ID；返回变更摘要供调用方递增版本。 */
 export const ReconcileWorkflow = (definition: WorkflowDefinition, card: TaskCard, gates: readonly GateRequirement[]): { definition: WorkflowDefinition; changed: boolean; errors: string[] } => {
   const next = structuredClone(definition)
   const defaultDefinition = getDefaultWorkflow(card, gates)
+  const isEdit = (node: WorkflowNodeInfo): boolean => node.role !== undefined && EDIT_ROLES.includes(node.role)
   for (const gate of gates) {
     if (next.nodes.some((node) => node.gates.includes(gate.gate))) continue
     const template = defaultDefinition.nodes.find((node) => node.gates.includes(gate.gate))!
-    const compatible = next.nodes.find((node) => node.role === template.role && node.mathMode === template.mathMode)
+    // 复用同角色节点承担缺失的门禁时，不能改变它在草稿里与实现的先后（例如实现前复现问题的复核节点）
+    const editIds = next.nodes.filter(isEdit).map((node) => node.id)
+    const fits = (node: WorkflowNodeInfo): boolean => POST_EDIT_GATES.includes(gate.gate) ? !editIds.some((id) => getAncestors(next.nodes, id).has(node.id))
+      : gate.gate !== 'G_MATH_RESEARCH' || !editIds.some((id) => getAncestors(next.nodes, node.id).has(id))
+    const compatible = next.nodes.find((node) => node.role === template.role && node.mathMode === template.mathMode && fits(node))
     if (compatible !== undefined) compatible.gates = [...new Set([...compatible.gates, gate.gate])]
     else {
       let id = template.id
@@ -205,20 +240,45 @@ export const ReconcileWorkflow = (definition: WorkflowDefinition, card: TaskCard
     }
   }
   const research = next.nodes.filter((node) => node.gates.includes('G_MATH_RESEARCH')).map((node) => node.id)
-  const edits = next.nodes.filter((node) => node.role !== undefined && EDIT_ROLES.includes(node.role)).map((node) => node.id)
+  const edits = next.nodes.filter(isEdit).map((node) => node.id)
+  const postEdit = next.nodes.filter((node) => node.gates.some((gate) => POST_EDIT_GATES.includes(gate))).map((node) => node.id)
+  const byId = new Map(next.nodes.map((node) => [node.id, node]))
+  /** 依赖里的 blocked 节点换成它自己的依赖（递归）：去掉与门禁顺序冲突的边，保留经由它的其余先后关系 */
+  const bypass = (deps: readonly string[], blocked: ReadonlySet<string>, seen: Set<string>): string[] => deps.flatMap((dep) => {
+    if (!blocked.has(dep)) return [dep]
+    if (seen.has(dep)) return []
+    seen.add(dep)
+    return bypass(byId.get(dep)?.dependsOn ?? [], blocked, seen)
+  })
+  // 验收移到末尾时绕过它，保留经由它的业务与控制祖先，避免补检查点后成环。
+  const acceptIds = new Set(next.nodes.filter((node) => node.operation === 'accept').map((node) => node.id))
+  for (const node of next.nodes) node.dependsOn = [...new Set(bypass(node.dependsOn, acceptIds, new Set()))]
+  /** before 及其上游都不能依赖 after：对这些节点绕过 after 节点 */
+  const repair = (before: readonly string[], after: readonly string[]): void => {
+    const blocked = new Set(after)
+    const upstream = new Set(before.flatMap((id) => [id, ...getAncestors(next.nodes, id)]))
+    for (const node of next.nodes) if (upstream.has(node.id) && !blocked.has(node.id)) node.dependsOn = [...new Set(bypass(node.dependsOn, blocked, new Set()))]
+  }
+  // 门禁规定的先后（研算 → 实现 → 验证/审查）优先于草稿。绕过只用到原有的祖先关系，原本无环的草稿修补后仍然无环
+  repair(edits, postEdit)
+  if (card.flags.changesAlgorithm) repair(research, [...edits, ...postEdit])
   for (const node of next.nodes) {
     if (card.flags.changesAlgorithm && edits.includes(node.id)) node.dependsOn = [...new Set([...node.dependsOn, ...research])]
     if (node.gates.some((gate) => POST_EDIT_GATES.includes(gate))) node.dependsOn = [...new Set([...node.dependsOn, ...edits])]
   }
-  // 保留自定义中间检查点，不能删掉仍被业务节点依赖的控制节点。
-  let checkpoint = next.nodes.find((node) => node.operation === 'checkpoint' && next.nodes.filter((candidate) => candidate.operation === 'delegate').every((candidate) => !getAncestors(next.nodes, candidate.id).has(node.id)))
+  // 只有没有非验收后继的检查点可作最终汇合点，保留业务节点和中间检查点的已有顺序。
+  let checkpoint = next.nodes.find((node) => node.operation === 'checkpoint' && next.nodes.filter((candidate) => candidate.operation !== 'accept').every((candidate) => !getAncestors(next.nodes, candidate.id).has(node.id)))
   if (checkpoint === undefined) {
     checkpoint = structuredClone(defaultDefinition.nodes.find((node) => node.operation === 'checkpoint')!)
     while (next.nodes.some((node) => node.id === checkpoint!.id)) checkpoint.id += '_final'
     next.nodes.push(checkpoint)
   }
   let accept = next.nodes.find((node) => node.operation === 'accept')
-  if (accept === undefined) { accept = structuredClone(defaultDefinition.nodes.find((node) => node.operation === 'accept')!); next.nodes.push(accept) }
+  if (accept === undefined) {
+    accept = structuredClone(defaultDefinition.nodes.find((node) => node.operation === 'accept')!)
+    while (next.nodes.some((node) => node.id === accept!.id)) accept.id += '_final'
+    next.nodes.push(accept)
+  }
   checkpoint.dependsOn = next.nodes.filter((node) => node.id !== checkpoint.id && node.operation !== 'accept').map((node) => node.id)
   accept.dependsOn = [checkpoint.id]
   next.mode = getWorkflowMode(card)
@@ -233,6 +293,10 @@ export const getWorkflowMermaid = (definition: WorkflowDefinition): string => [
   ...getCanonicalWorkflow(definition).nodes.map((node) => `  n_${node.id}["${getMermaidLabel(node.label)}"]`),
   ...getCanonicalWorkflow(definition).nodes.flatMap((node) => node.dependsOn.map((dep) => `  n_${dep} --> n_${node.id}`))
 ].join('\n')
+
+/** 规划审核状态的说明文字：观察模式不自动审核，没有记录时说明「未运行」而不是「待审核」 */
+export const getPlanningStatusText = (status: string | undefined, mode: string): string =>
+  status ?? (mode === 'enforced' ? 'pending（强制模式需审核通过才能执行）' : '未运行（观察模式按需调用 swarm_review_plan）')
 
 /** 同一合同和图生成可复制任务说明，展示与执行状态共用唯一数据源。 */
 export const getTaskCardMarkdown = (card: TaskCard, definition: WorkflowDefinition, options: { taskId: string; cardRevision?: number; workflowRevision?: number; state?: WorkflowStateInfo; planningStatus?: string; delegationLimit?: number } ): string => [

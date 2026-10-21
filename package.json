@@ -1,7 +1,7 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "2.9.3",
-  "description": "DSH 中文多智能体插件：版本化 Mermaid 任务流程、独立规划审核、额度耗尽立即回退、Jev 判断、受限专家协作与纯函数数学验证",
+  "version": "3.0.0",
+  "description": "DSH 多智能体插件：天枢统御 12 位专家，任务卡 + Mermaid 流程 + 证据门禁验收；多层模型链即时回退与链尾等待恢复、按配置语言输出、内嵌 Jev 判断 / DSH multi-agent swarm plugin with evidence-gated delegation, resilient model routing, language control and embedded Jev judgments",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -35,6 +35,7 @@
   "files": [
     "README.md",
     "THIRD-PARTY-NOTICES.md",
+    "assets/screenshots",
     "config",
     "cordis.patch.yml",
     "docs",
@@ -47,21 +48,13 @@
     "skills"
   ],
   "scripts": {
-    "bench:state": "npm run build && node --expose-gc scripts/bench-state-store.mjs",
-    "bench:workflow": "npm run build && node scripts/bench-workflow.mjs",
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
-    "coverage": "vitest run --coverage",
     "doctor": "node scripts/doctor.mjs",
     "gen:presets": "node scripts/gen-presets.mjs",
     "pack:release": "node scripts/pack-release.mjs",
     "prepare": "npm run build",
     "repair:state": "node scripts/repair-state.mjs",
-    "sandbox": "node scripts/sandbox.mjs",
-    "sync-dsh": "node scripts/sync-dsh.mjs",
-    "test": "vitest run",
-    "test:integration": "npm run build && vitest run --config vitest.integration.config.ts",
-    "typecheck": "tsc -p tsconfig.json",
-    "verify:incremental": "npm run build && node scripts/verify-incremental-adversarial.mjs"
+    "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "~3.18.4",
@@ -108,9 +101,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
-    "@vitest/coverage-v8": "^5.0.1",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1",
     "yaml": "^2.9.1"
   }
 }

@@ -3,7 +3,6 @@ import { APPROVAL_SCOPES, type ApprovalsConfigInfo } from './config.js'
 
 export { APPROVAL_SCOPES, type ApprovalsConfigInfo } from './config.js'
 export type ApprovalScope = typeof APPROVAL_SCOPES[number]
-export type ApprovalMode = ApprovalsConfigInfo['mode']
 export type HostApprovalPolicy = 'ask' | 'never' | 'unavailable' | 'unknown'
 
 const SCOPE_LABELS: Record<ApprovalScope, string> = {

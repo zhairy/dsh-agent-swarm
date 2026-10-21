@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getLanguageInstruction, type OutputLanguage } from './language.js'
 import { DELEGATE_BACKENDS } from './delegate.js'
 import type { DelegationRecord } from './evidence.js'
 import { SWARM_SERVICE, type PluginContextLike, type PromptAssemblyLike, type SkillsLike, type ToolsLike } from './host-contract.js'
@@ -19,6 +18,7 @@ import type { AcceptResultInfo, SwarmService } from './service.js'
 import { getToolDefinition, type ToolDefinitionLike, type ToolExecLike } from './tool-shape.js'
 import { SwarmError } from './util/errors.js'
 import type { JsonSchemaObject } from './util/json-schema.js'
+import { getPlanningStatusText } from './workflow.js'
 import type { PlanningRecoveryInfo } from './planning-recovery.js'
 
 const getPlanningRecoveryText = (recovery: PlanningRecoveryInfo): string[] => recovery.blockers.length === 0 && recovery.errors.length === 0 && !recovery.findings?.length ? [] : [
@@ -27,6 +27,8 @@ const getPlanningRecoveryText = (recovery: PlanningRecoveryInfo): string[] => re
   ...(recovery.findings ?? []).map(finding => `审核发现（诊断材料，不是批准）${finding.location}：${finding.issue}\n依据：${finding.evidence}\n建议：${finding.suggestion}`),
   recovery.guidance
 ]
+
+/** 观察模式不自动审核：没有记录时如实说明，而不是显示 pending 诱导反复复审 */
 
 /** 预设行：只挂在天枢预设上，注册 4 个百工工具、7 个 Jev 判断工具与 2 个内嵌技能，并按模型家族补充天枢的调度说明 */
 
@@ -84,7 +86,7 @@ export const TASK_CARD_PARAMETERS: JsonSchemaObject = {
   properties: {
     task_id: { type: 'string', description: '更新已有任务时传入；新任务不传' },
     expected_card_revision: { type: 'number', description: '更新任务时的合同版本，用于并发比较' },
-    workflow: { type: 'object', additionalProperties: true, description: '可选结构化流程；依赖、角色和门禁由宿主校验，Mermaid 自动生成' },
+    workflow: { type: 'object', additionalProperties: true, description: '可选流程草稿 {nodes:[{id, role, mathMode?, dependsOn, gates?}]}；缺少的必需门禁节点、最终检查点与验收由宿主自动补齐，Mermaid 自动生成；省略时按风险标志生成默认流程' },
     intent: { type: 'object', properties: { text: { type: 'string' }, sourceRef: { type: 'string' } }, required: ['text'], additionalProperties: false, description: '旧宿主不能读取用户消息时的显式原始需求，不能冒称已获宿主验证' },
     title: { type: 'string', description: '任务标题' },
     goal: { type: 'string', description: '目标与期望结果' },
@@ -238,7 +240,7 @@ export const getTaskCardText = (result: TaskCardResult): string => {
     ...(result.suggestedRoles.length === 0 ? ['- 无'] : result.suggestedRoles.map((s) => `- ${s.role} ${s.roleName}：${s.reason}`)),
     `衡鉴：${triage.source}${triage.fallbackReason === undefined ? '' : `（回退原因：${triage.fallbackReason}）`}${answers}`,
     `预算：每任务 ${result.budgets.maxDelegationsPerTask || '不限'} 次委派；每角色 ${result.budgets.maxCallsPerRole || '不限'} 次（铸剑 ${result.budgets.maxCallsZhuJian || '不限'} 次）；自动修复最多 ${result.budgets.maxAutoFixRounds} 轮`,
-    `需求版本：${result.requestRevision}；合同版本：${result.cardRevision}；流程版本：${result.workflowRevision}；规划审核：${result.planningReview?.status ?? 'pending'}`,
+    `需求版本：${result.requestRevision}；合同版本：${result.cardRevision}；流程版本：${result.workflowRevision}；规划审核：${getPlanningStatusText(result.planningReview?.status, result.workflowMode)}`,
     `流程控制模式：${result.workflowMode}；用户明确要求的审核、角色权限与验收门禁仍须遵守。`,
     ...getPlanningRecoveryText(result.planningRecovery),
     ...(result.planningScope === null ? [] : [`阶段任务：${result.planningScope.rationale}；延期：${result.planningScope.deferred.join('；')}。本任务验收不代表整体目标完成。`]),
@@ -295,7 +297,7 @@ export const getDelegationText = (record: DelegationRecord): string => {
 export const getStatusText = (result: StatusResult): string => {
   const tasks = result.tasks.flatMap((task) => [
     `任务 ${task.task_id}：${task.title}（修复轮次 ${task.rounds}；委派 ${task.budget.used}${task.budget.max > 0 ? `/${task.budget.max}` : ' 次（不限）'}）`,
-    `需求版本：${task.requestRevision}；合同版本：${task.cardRevision}；流程版本：${task.workflowRevision}；规划审核：${task.planningReview?.status ?? 'pending'}`,
+    `需求版本：${task.requestRevision}；合同版本：${task.cardRevision}；流程版本：${task.workflowRevision}；规划审核：${getPlanningStatusText(task.planningReview?.status, task.workflowMode)}`,
     `流程控制模式：${task.workflowMode}；进行中的审核或服务故障不代表宿主长期 goal 已被修改。`,
     ...getPlanningRecoveryText(task.planningRecovery),
     ...(task.intentHistoryNote === null ? [] : [`需求历史提示：${task.intentHistoryNote}`]),
@@ -386,21 +388,18 @@ const TOOL_RECOVERY_TEXT = [
 
 /**
  * 按所选模型的家族给天枢的系统提示追加调度风格说明（Claude / GPT / 其他）。
- * 专家子会话的 persona 带角色标签，它们沿用委派时按路由生成的 persona，不追加。
+ * 专家子会话的 persona 带角色标签，它们沿用委派时按路由生成的 persona，不追加；输出语言由 runtime 行统一追加。
  * @param {PromptAssemblyLike} assembled - 组装结果
  * @param {PromptStylePolicy} policy - 配置的提示风格
  * @returns {PromptAssemblyLike} 追加后的组装结果
  */
-export const getStyledAssembly = (assembled: PromptAssemblyLike, policy: PromptStylePolicy, language?: OutputLanguage): PromptAssemblyLike => {
+export const getStyledAssembly = (assembled: PromptAssemblyLike, policy: PromptStylePolicy): PromptAssemblyLike => {
   const sections = Array.isArray(assembled.sections) ? assembled.sections : []
-  if (sections.some(section => ROLE_TAG_PATTERN.test(section.text))) return assembled
-  const languageSection = { name: 'dsh-agent-swarm:output-language', text: getLanguageInstruction(language) }
-  if (sections.some(section => section.name === ORCHESTRATION_STYLE_SECTION)) return language === undefined ? assembled : { ...assembled, sections: [...sections.filter(section => section.name !== languageSection.name), languageSection] }
+  if (sections.some((section) => ROLE_TAG_PATTERN.test(section.text) || section.name === ORCHESTRATION_STYLE_SECTION)) return assembled
   const variables = assembled.variables ?? {}
   const style = getPromptStyle({ ...(variables.provider === undefined ? {} : { provider: variables.provider }), ...(variables.model === undefined ? {} : { model: variables.model }) }, policy)
   return { ...assembled, sections: [...sections,
-    ...(language === undefined ? [] : [{ name: 'dsh-agent-swarm:output-language', text: getLanguageInstruction(language) }]),
-    ...(sections.some((section) => section.name === TOOL_RECOVERY_SECTION) ? [] : [{ name: TOOL_RECOVERY_SECTION, text: TOOL_RECOVERY_TEXT, interpolate: false }]),
+    { name: TOOL_RECOVERY_SECTION, text: TOOL_RECOVERY_TEXT, interpolate: false },
     { name: ORCHESTRATION_STYLE_SECTION, text: getOrchestratorStyleSection(style), interpolate: false }
   ] }
 }
@@ -429,5 +428,5 @@ export const apply = (ctx: PluginContextLike): void => {
   const skills = ctx.get('skills') as SkillsLike | undefined
   if (skills !== undefined) for (const skill of getEmbeddedSkills()) ctx.effect(() => skills.register(skill))
   ctx.on('system-prompt/assemble', async (_assembly: unknown, _context: unknown, next: () => Promise<PromptAssemblyLike>) =>
-    getStyledAssembly(await next(), service.getConfig().agents.promptStyle, service.getConfig().agents.language))
+    getStyledAssembly(await next(), service.getConfig().agents.promptStyle))
 }

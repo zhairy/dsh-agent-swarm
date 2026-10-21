@@ -90,9 +90,6 @@ export const DEEPSEEK_OFFICIAL_MODELS: CatalogInfo = {
   'deepseek-v4-pro': { vision: false }
 }
 
-/** 两个订阅都有的模型：一律 qwen-token-plan-cn 优先、opencode-go 备用 */
-export const QWEN_PREFERRED_MODELS: readonly string[] = Object.keys(QWEN_TOKEN_PLAN_MODELS).filter((model) => model in OPENCODE_GO_MODELS)
-
 const q = (model: string, reasoningEffort?: string): RouteInfo => ({ provider: PROVIDER_QWEN, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) })
 const g = (model: string, reasoningEffort?: string): RouteInfo => ({ provider: PROVIDER_GO, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) })
 const d = (model: string, reasoningEffort?: string): RouteInfo => ({ provider: PROVIDER_DS, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) })
@@ -329,15 +326,6 @@ export const getFailureClass = (failure: LlmFailureLike | undefined): FailureCla
   if (status === 400 || status === 404 || status === 422) return 'route-fatal'
   return 'other'
 }
-
-/**
- * 是否值得切换到下一条路由：致命与认证失败立即切换；瞬时/其他失败在宿主重试用尽后切换
- * @param {FailureClass} failureClass - 失败分类
- * @param {boolean} exhausted - 宿主是否已放弃（request-error 的 next() 返回 undefined）
- * @returns {boolean} 是否切换
- */
-export const isSwitchWorthy = (failureClass: FailureClass, exhausted: boolean): boolean =>
-  failureClass === 'route-fatal' || failureClass === 'auth' || exhausted
 
 /** 预检结果缓存：可用结果缓存较久，失败结果很快过期，故障恢复后能及时重新启用 */
 export const PROBE_OK_TTL_MS = 120_000

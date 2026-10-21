@@ -3,9 +3,6 @@
  * 升级 DSH 时优先核对本文件与集成测试（tests/integration）
  */
 
-/** 已验证兼容的最低 DSH 版本 */
-export const DSH_MIN_VERSION = '0.1.7-alpha.2'
-
 /** 宿主行提供给预设行的服务名 */
 export const SWARM_SERVICE = 'agentSwarm'
 
@@ -175,6 +172,20 @@ export interface SubagentsLike {
   sendMessage?: (sender: AgentLike, targetId: string, content: ContentBlockLike[], options: { signal: AbortSignal }) => Promise<string>
   interrupt?: (targetSessionId: string, authority: { kind: 'ancestor'; agent: AgentLike }) => void
   listChildren?: (parentSessionId: string, signal?: AbortSignal) => Promise<Array<{ id: string; createdAt: number; mode: 'continuable' | 'one-shot' | 'unknown'; label?: string }>>
+}
+
+/** ctx.jobs 的最小形状：会话启动的后台作业（长时间构建、代码生成等），owner 为启动它的会话 ID */
+export interface JobsLike {
+  list: (caller: string) => Array<{ id: string; owner?: string; status: string }>
+  kill: (id: string, caller: string, reason?: string) => unknown
+  /** 等到终态或超时，返回当时的作业状态 */
+  wait: (id: string, timeoutMs: number, caller: string) => Promise<{ status: string }>
+}
+
+/** session/event 的后台作业事实；强制失败/拒绝不是 producer done 的清理确认。 */
+export interface JobLifecycleEventLike {
+  type: string
+  data?: { jobId?: string; owner?: string; status?: string; producerReported?: boolean }
 }
 
 /** 进入一步之前的消息（agent/pre-step）；只读取本插件需要的来源字段 */

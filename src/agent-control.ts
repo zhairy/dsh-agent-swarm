@@ -42,6 +42,8 @@ export interface AgentControlDeps {
   setPaused: (childId: string, paused: boolean) => void
   /** The current task contract/lease is revalidated by the existing delegation pipeline. */
   resume: (binding: AgentControlBinding, input?: { steering?: string }) => Promise<{ accepted: true; delegationId?: string }>
+  /** 原委派仍在执行（例如模型出错后正在退避等待自动重试）：此时人工继续会打断自动恢复 */
+  isDelegationActive?: (binding: AgentControlBinding) => boolean
   persist?: (records: AgentControlRecord[]) => void | Promise<void>
   /** A user-authorized, scoped one-time probe; never a provider-wide cache clear. */
   retryRoute?: (route: RouteInfo, childId: string, force: boolean) => void | Promise<void>
@@ -56,6 +58,10 @@ const route = (raw: unknown): raw is RouteInfo => object(raw) && Object.keys(raw
 const publicRoute = (value: RouteInfo): RouteInfo => ({ provider: value.provider, model: value.model, ...(value.reasoningEffort === undefined ? {} : { reasoningEffort: value.reasoningEffort }) })
 const clone = <T>(value: T): T => structuredClone(value)
 const phase = new Set<AgentControlPhase>(['idle', 'running', 'waiting', 'stopping', 'paused', 'recovery-required'])
+/** 宿主 subagent/end 的结束原因只有 completed、aborted（取消或打断）、error、max-tokens、refusal（回合被拦下） */
+const PAUSING_STOP_REASONS = new Set(['aborted', 'refusal'])
+/** 可人工继续：宿主确认沉寂（暂停或空闲）。已完成的委派由恢复管线识别并直接返回，不会重跑 */
+const isResumable = (record: Pick<AgentControlRecord, 'phase'>): boolean => record.phase === 'paused' || record.phase === 'idle'
 
 /** Durable state validation never imports an arbitrary browser-selected policy object. */
 export const ValidateAgentControlRecords = (raw: unknown): raw is AgentControlRecord[] => {
@@ -76,7 +82,6 @@ export const ValidateAgentControlRecords = (raw: unknown): raw is AgentControlRe
   }
   return true
 }
-export const validateAgentControlRecords = ValidateAgentControlRecords
 
 export const createAgentControl = (deps: AgentControlDeps) => {
   const now = deps.now ?? Date.now
@@ -155,7 +160,9 @@ export const createAgentControl = (deps: AgentControlDeps) => {
     const paused = selected === undefined || running ? true : current.paused
     deps.setPaused(current.childId, true)
     const next = patch(current, { ...(selected === undefined ? {} : { selectedNext: clone(selected) }), paused,
-      phase: running ? 'stopping' : paused ? 'paused' : 'idle', reason: running ? 'manual-cancel-requested' : selected === undefined ? 'manual-paused' : 'manual-model-selected' })
+      phase: running ? 'stopping' : paused ? 'paused' : 'idle',
+      // 失败后先选模型再继续：保留失败标记，界面据此继续提供「安全继续」
+      reason: running ? 'manual-cancel-requested' : selected === undefined ? 'manual-paused' : current.reason?.startsWith('host-run-failed:') === true ? current.reason : 'manual-model-selected' })
     try { await commit(current, next) } catch (error) { if (retry) deps.cancelRetryRoute?.(current.childId); throw error }
     if (selected !== undefined) deps.applyOverride(current.childId, clone(selected))
     deps.setPaused(current.childId, paused)
@@ -233,10 +240,11 @@ export const createAgentControl = (deps: AgentControlDeps) => {
     MarkRunSettled: (childId: string, stopReason?: string) => {
       let current = records.get(childId)
       if (current !== undefined && stopReason === 'completed' && current.needsSideEffectReview === true) current = patch(current, { needsSideEffectReview: false })
+      // 只有取消、打断或回合被拦下才暂停等待人工核对；模型错误不暂停：委派在同一会话里续跑，人工也可直接继续
       if (current?.persistent === true && stopReason !== undefined && stopReason !== 'completed' && !current.paused) {
-        deps.setPaused(childId, true)
-        current = patch(current, { paused: true, reason: `host-run-failed:${stopReason}`.slice(0, 256) })
-      }
+        if (PAUSING_STOP_REASONS.has(stopReason)) deps.setPaused(childId, true)
+        current = patch(current, { ...(PAUSING_STOP_REASONS.has(stopReason) ? { paused: true } : {}), reason: `host-run-failed:${stopReason}`.slice(0, 256) })
+      } else if (current !== undefined && stopReason === 'completed' && current.reason?.startsWith('host-run-failed:') === true) current = patch(current, { reason: 'host-run-completed' })
       if (current !== undefined && (current.phase !== (current.paused ? 'paused' : 'idle') || (current.actual !== undefined && current.actual.state !== 'settled'))) patch(current, { phase: current.paused ? 'paused' : 'idle', ...(current.actual === undefined ? {} : { actual: { ...current.actual, state: 'settled' } }) })
     },
     /** Trusted host reconciliation only, never a browser's claim that cancellation finished. */
@@ -251,7 +259,8 @@ export const createAgentControl = (deps: AgentControlDeps) => {
       if (current.needsSideEffectReview === true && input.confirmSafeToContinue !== true) throw new SwarmError('RECOVERY_REQUIRED', '继续前必须先核对取消后的副作用与当前任务进度；确认不替代工作区恢复检查')
       if (input.steering !== undefined && (typeof input.steering !== 'string' || input.steering.length > 8000)) throw new SwarmError('INVALID_ARGS', '继续说明必须是有界文本')
       if (!current.persistent) throw new SwarmError('INVALID_ARGS', '一次性子智能体不能继续同一会话')
-      if (current.phase !== 'paused') throw new SwarmError('RECOVERY_REQUIRED', '只有宿主已确认沉寂的暂停会话才能继续')
+      if (!isResumable(current)) throw new SwarmError('RECOVERY_REQUIRED', '只有宿主已确认沉寂的暂停会话或上一轮失败的空闲会话才能继续')
+      if (deps.isDelegationActive?.(current) === true) throw new SwarmError('RECOVERY_REQUIRED', '原委派仍在自动重试，等它结束后再继续')
       const next = patch(current, { phase: 'idle', paused: false, reason: 'manual-continue-requested' })
       await commit(current, next)
       deps.setPaused(current.childId, false)

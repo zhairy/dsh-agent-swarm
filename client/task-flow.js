@@ -8,12 +8,12 @@ const NS = 'swarmTaskFlow'
 const KIND = 'swarm-task-flow'
 const ASSET_URL = '/api/swarm-assets/mermaid.min.js'
 const EMPTY_LABELS = Object.freeze({ code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' })
-const zh = { title: '任务流程', refresh: '刷新状态', source: 'Mermaid 源码', loading: '读取任务状态…', unavailable: '任务状态暂不可用', renderError: '图形展示不可用，仍可读取源码与步骤', pending: '流程已生成，等待审核', nodePending: '待执行', reviewing: '审核中', pass: '已审核', pass_with_degradation: '降级审核', changes_requested: '需修正', unknown: '审核未确定', 'needs-clarification': '待澄清', review_required: '需独立复核', stale: '审核失效', ready: '可执行', running: '执行中', succeeded: '已完成', failed: '失败', blocked: '阻塞', skipped: '跳过', generated: '流程已生成', workflowMode: '流程模式' }
-const en = { title: 'Task flow', refresh: 'Refresh status', source: 'Mermaid source', loading: 'Loading task state…', unavailable: 'Task state unavailable', renderError: 'Diagram unavailable; source and steps remain readable', pending: 'Generated, awaiting review', nodePending: 'Pending', reviewing: 'Reviewing', pass: 'Reviewed', pass_with_degradation: 'Reviewed with degradation', changes_requested: 'Changes requested', unknown: 'Review undetermined', 'needs-clarification': 'Needs clarification', review_required: 'Independent review required', stale: 'Review stale', ready: 'Ready', running: 'Running', succeeded: 'Completed', failed: 'Failed', blocked: 'Blocked', skipped: 'Skipped', generated: 'Flow generated', workflowMode: 'Flow mode' }
+const zh = { title: '任务流程', refresh: '刷新状态', source: 'Mermaid 源码', loading: '读取任务状态…', unavailable: '任务状态暂不可用', renderError: '图形展示不可用，仍可读取源码与步骤', pending: '流程已生成，等待审核', notReviewed: '流程已生成（观察模式，按需审核）', nodePending: '待执行', reviewing: '审核中', pass: '已审核', pass_with_degradation: '降级审核', changes_requested: '需修正', unknown: '审核未确定', 'needs-clarification': '待澄清', review_required: '需独立复核', stale: '审核失效', ready: '可执行', running: '执行中', succeeded: '已完成', failed: '失败', blocked: '阻塞', skipped: '跳过', generated: '流程已生成', workflowMode: '流程模式' }
+const en = { title: 'Task flow', refresh: 'Refresh status', source: 'Mermaid source', loading: 'Loading task state…', unavailable: 'Task state unavailable', renderError: 'Diagram unavailable; source and steps remain readable', pending: 'Generated, awaiting review', notReviewed: 'Generated (advisory mode; review on demand)', nodePending: 'Pending', reviewing: 'Reviewing', pass: 'Reviewed', pass_with_degradation: 'Reviewed with degradation', changes_requested: 'Changes requested', unknown: 'Review undetermined', 'needs-clarification': 'Needs clarification', review_required: 'Independent review required', stale: 'Review stale', ready: 'Ready', running: 'Running', succeeded: 'Completed', failed: 'Failed', blocked: 'Blocked', skipped: 'Skipped', generated: 'Flow generated', workflowMode: 'Flow mode' }
 Object.assign(zh, { zoomIn: '放大', zoomOut: '缩小', fit: '适应宽度' })
 Object.assign(en, { zoomIn: 'Zoom in', zoomOut: 'Zoom out', fit: 'Fit width' })
-Object.assign(zh, { planningReview: '规划审核', goalDimension: '目标', designDimension: '流程设计', mermaidDimension: 'Mermaid', agentOpinion: '独立 Agent', jevOpinion: 'Jev 判断', syntaxCheck: '语法', projectionCheck: '投影', semanticCheck: '语义', notReviewed: '未审核', checkPass: '通过', checkFail: '未通过', reviewIssues: '审核发现与错误' })
-Object.assign(en, { planningReview: 'Planning review', goalDimension: 'Goal', designDimension: 'Workflow design', mermaidDimension: 'Mermaid', agentOpinion: 'Independent Agent', jevOpinion: 'Jev judgment', syntaxCheck: 'Syntax', projectionCheck: 'Projection', semanticCheck: 'Semantics', notReviewed: 'Not reviewed', checkPass: 'Pass', checkFail: 'Failed', reviewIssues: 'Review findings and errors' })
+Object.assign(zh, { planningReview: '规划审核', goalDimension: '目标', designDimension: '流程设计', mermaidDimension: 'Mermaid', agentOpinion: '独立 Agent', jevOpinion: 'Jev 判断', syntaxCheck: '语法', projectionCheck: '投影', semanticCheck: '语义', reviewNotReviewed: '未审核', checkPass: '通过', checkFail: '未通过', reviewIssues: '审核发现与错误' })
+Object.assign(en, { planningReview: 'Planning review', goalDimension: 'Goal', designDimension: 'Workflow design', mermaidDimension: 'Mermaid', agentOpinion: 'Independent Agent', jevOpinion: 'Jev judgment', syntaxCheck: 'Syntax', projectionCheck: 'Projection', semanticCheck: 'Semantics', reviewNotReviewed: 'Not reviewed', checkPass: 'Pass', checkFail: 'Failed', reviewIssues: 'Review findings and errors' })
 Object.assign(zh, { reviewUnavailable: '未审核（服务不可用）' })
 Object.assign(en, { reviewUnavailable: 'Not reviewed (service unavailable)' })
 Object.assign(zh, { diagramType: '图表视角', workflow: '工作流', orchestration: '执行前编排', architecture: '委派架构', sequence: '委派记录时序', dataflow: '合同与证据流', lifecycle: '生命周期快照', progress: '当前有效完成的委派节点', progressUnknown: '无委派节点，进度不适用', progressBoundary: '节点比例不表示工时、正确率或验收通过；失败、阻塞与跳过单独统计。', exportSnapshot: '导出图表快照 JSON', deviations: '状态偏移诊断', omitted: '更早记录未展示', diagramBindingMismatch: '图表版本不一致，保留原流程；请刷新状态' })
@@ -245,7 +245,7 @@ const getPlanningReviewView = (review) => {
 function PlanningReviewPanel ({ review, t }) {
   const translate = typeof t === 'function' ? t : (key) => zh[key] ?? key
   const value = getPlanningReviewView(review)
-  const label = (status) => status === 'unknown' ? translate('notReviewed') : status === 'pass' ? translate('checkPass') : status === 'unavailable' ? translate('reviewUnavailable') : translate(status)
+  const label = (status) => status === 'unknown' ? translate('reviewNotReviewed') : status === 'pass' ? translate('checkPass') : status === 'unavailable' ? translate('reviewUnavailable') : translate(status)
   const opinions = (dimension) => `${translate('agentOpinion')}：${label(dimension.agent)}；${translate('jevOpinion')}：${label(dimension.jev)}`
   return h('div', { 'data-swarm-plan-review': '', style: { marginTop: 12, fontSize: 13, lineHeight: 1.7 } },
     h('strong', null, translate('planningReview')),
@@ -301,7 +301,8 @@ function TaskFlowRow (props) {
   if (data === undefined) return null
   const definition = view?.flow?.definition ?? view?.workflowDefinition
   const state = view?.flow?.state ?? view?.workflowState
-  const planningStatus = view?.planningReview?.status ?? 'pending'
+  // 观察模式不自动审核：没有审核记录时不显示「等待审核」
+  const planningStatus = view?.planningReview?.status ?? (view?.workflowMode === 'enforced' ? 'pending' : 'notReviewed')
   const markdown = getTaskMarkdown(view, data.text)
   return h('section', { style: styles.card, 'data-swarm-task-flow': data.taskId, 'aria-label': translate('title') },
     h('div', { style: styles.header }, h('strong', null, `${translate('title')} · ${data.taskId}`), h('span', { style: styles.status, 'data-planning-status': view === null ? 'pending' : planningStatus }, translate(view === null ? 'pending' : planningStatus)), h('button', { type: 'button', style: styles.button, onClick: () => setRefresh((value) => value + 1) }, translate('refresh'))),

@@ -68,13 +68,17 @@ interface RootStateInfo {
   tried: ReadonlySet<string>
 }
 
-/** 一次断网等待：开始等待（recovered 未定义）或等待结束 */
+/** 一次等待：开始等待（recovered 未定义）或等待结束。network 为断网等待；route 为等路由恢复（链尾临时故障退避、隔离到期、他人半开探测） */
 export interface NetworkWaitEventInfo {
   agentId: string
   scope: 'child' | 'root'
+  reason: 'network' | 'route'
   route?: RouteInfo
-  failure: LlmFailureLike
-  /** 等待结束时：网络是否已恢复 */
+  /** 触发等待的失败；准入时等待没有失败 */
+  failure?: LlmFailureLike
+  /** route 等待开始时：计划等待时长 */
+  waitMs?: number
+  /** 等待结束时：network 为网络是否已恢复，route 恒为 true */
   recovered?: boolean
   waitedMs?: number
 }
@@ -114,6 +118,13 @@ export interface RequestRecoveryState {
   observedModelAttempts?: number
   observedAttemptIds?: string[]
   observationCoverage?: 'agent-loop-stream-attempts'
+  /** 链上没有可切换路由时的等待（含断网等待、准入等待）：次数与累计时长，上限为 agents.networkWaitMs */
+  holdRetries?: number
+  holdWaitedMs?: number
+  /** 其中准入时的等待：醒来后才发出本次请求，不是额外的模型调用，不从逻辑次数中扣除 */
+  admissionHolds?: number
+  /** 链耗尽时各路由的状态说明，写进委派结果 */
+  terminalDetail?: string
 }
 export interface RecoveryPolicy {
   maxTransientRetries: number
@@ -123,10 +134,18 @@ export interface RecoveryPolicy {
 }
 export const DEFAULT_RECOVERY_POLICY: RecoveryPolicy = { maxTransientRetries: 1, maxShortRetryDelayMs: 2000, maxTransientWaitMs: 5000, maxLogicalAttempts: 8 }
 
-/** 同一会话连续断网等待的上限；超过后按常规回退，避免网络时断时续时无限等待 */
-const MAX_NETWORK_WAITS = 3
-/** 距上次等待超过这段时间，等待次数重新计数 */
-const NETWORK_WAIT_RESET_MS = 30 * 60_000
+/** 单个逻辑请求的保持重试上限：时长预算之外的保险，防止时钟停滞或网络抖动时无限重试 */
+const MAX_HOLD_RETRIES = 32
+
+/** 准入需要先等待：只在 requestOverride 与 AdmitRequest 之间传递 */
+class AdmissionWait {
+  constructor (readonly waitMs: number, readonly route: RouteInfo) {}
+}
+
+/** 同步选路在 claim 与计数之前交给异步准入做适用性预检。 */
+class AdmissionProbe {
+  constructor (readonly route: RouteInfo) {}
+}
 
 /** 路由状态注册表：spawn 子智能体按链回退，swarm 预设的根会话按角色链回退 */
 export interface RouteStateRegistry {
@@ -140,8 +159,12 @@ export interface RouteStateRegistry {
   /** Aggregate lifecycle counts only; no session, request or model identities. */
   getRecoveryDiagnostics: () => { agents: number; logicalRequests: number; logicalStates: number; disposedTerminals: number }
   getTerminal: (agentId: string) => RequestRecoveryState['terminal']
+  /** 链耗尽时各路由的状态说明（隔离原因与预计恢复时间） */
+  getTerminalDetail: (agentId: string) => string | undefined
   isRouteAvailable: (route: RouteInfo) => boolean
   isRouteAvailableFor: (route: RouteInfo, agentId: string) => boolean
+  /** 隔离到期时刻（未隔离为 0），供委派前判断是否值得等待 */
+  getRouteDueAt: (route: RouteInfo) => number
   getHealth: () => ReturnType<RouteHealth['list']>
   getHealthSnapshot: () => RouteHealthSnapshot
   WaitHealthReady: (agentId: string, signal?: AbortSignal) => Promise<void>
@@ -173,7 +196,10 @@ export interface RouteStateRegistry {
   DelAgent: (agentId: string) => void
   /** 宿主释放 Agent 时调用：连续会话子智能体的路由状态保留，其余清理 */
   ReleaseAgent: (agentId: string) => void
+  /** 同步准入：链上没有可立即使用的路由时直接判定链耗尽 */
   getRequestOverride: (agent: AgentLike, resolved: CallConfigLike, presetRole: RoleId | undefined, config?: SwarmConfigInfo, explicitSelectionAvailable?: boolean) => CallConfigLike
+  /** 宿主请求入口的准入：链上暂时没有可用路由时，在等待预算内等最早可能恢复的路由后重新准入 */
+  AdmitRequest: (agent: AgentLike, resolved: CallConfigLike, presetRole: RoleId | undefined, config: SwarmConfigInfo, explicitSelectionAvailable?: boolean, signal?: AbortSignal) => Promise<CallConfigLike>
   getErrorAction: (
     payload: RequestErrorPayloadLike,
     action: RequestErrorActionLike,
@@ -182,19 +208,10 @@ export interface RouteStateRegistry {
   ) => RequestErrorActionLike | Promise<RequestErrorActionLike>
 }
 
-/**
- * 发往 Codex 的推理强度：DSH 目录把 GPT-6 的最高档列为 ultra，而 Codex 线上协议只接受 max，
- * 订阅插件的本机补丁会做同样的映射；这里再兜底一次，补丁随插件升级丢失时也不会被 400 拒绝
- * @param {RouteInfo} route - 路由
- * @returns {string | undefined} 推理强度
- */
-export const getWireEffort = (route: RouteInfo): string | undefined =>
-  getWireReasoningEffort(route)
-
 /** 换路由时丢弃继承的推理强度，避免把上一模型的强度套到新模型上 */
 const getRoutedConfig = (resolved: CallConfigLike, route: RouteInfo): CallConfigLike => {
   const { reasoningEffort: _inherited, policy: _resourcePolicy, ...rest } = resolved
-  const effort = getWireEffort(route)
+  const effort = getWireReasoningEffort(route)
   return {
     ...rest,
     provider: route.provider,
@@ -203,13 +220,38 @@ const getRoutedConfig = (resolved: CallConfigLike, route: RouteInfo): CallConfig
   }
 }
 
+/**
+ * 额度源给出的顺序只能重排已声明的路由：增删模型、改写 policy 或形状不符时保留原链
+ * @param {readonly RouteInfo[]} declared - 声明的路由链
+ * @param {unknown} proposed - 额度源建议的顺序
+ * @returns {RouteInfo[]} 重排后的链（元素取自 declared）
+ */
+export const getValidatedQuotaOrder = (declared: readonly RouteInfo[], proposed: unknown): RouteInfo[] => {
+  if (!Array.isArray(proposed) || proposed.length !== declared.length) return [...declared]
+  const remaining = [...declared]
+  const ordered: RouteInfo[] = []
+  for (const route of proposed as unknown[]) {
+    const index = route === null || typeof route !== 'object' ? -1
+      : remaining.findIndex((candidate) => isSameRoute(candidate, route as RouteInfo) && candidate.reasoningEffort === (route as RouteInfo).reasoningEffort)
+    if (index < 0) return [...declared]
+    ordered.push(remaining.splice(index, 1)[0]!)
+  }
+  return ordered
+}
+
+/** 能否承担生成请求：判断类 API 或声明不支持生成/工具的路由不参与回退 */
+const canServe = (route: RouteInfo): boolean => {
+  const policy = getRouteResourcePolicy(route)
+  return policy.accessMode !== 'judgment_api' && policy.capabilities?.generation !== false && policy.capabilities?.tools !== false
+}
+
 /** 从 start 起找第一条未试过的路由；认证失败时跳过同一 provider */
-const FindNextIndex = (chain: RouteInfo[], start: number, tried: ReadonlySet<string>, failed: RouteInfo, failureClass: FailureClass, health: RouteHealth): number | undefined => {
+const FindNextIndex = (chain: RouteInfo[], start: number, tried: ReadonlySet<string>, failed: RouteInfo, failureClass: FailureClass, health: RouteHealth, accepts?: (route: RouteInfo) => boolean): number | undefined => {
   for (let index = start; index < chain.length; index++) {
     const route = chain[index] as RouteInfo
-    const policy = getRouteResourcePolicy(route)
-    if (tried.has(getRouteLabel(route)) || !health.isAvailable(route) || policy.accessMode === 'judgment_api' || policy.capabilities?.generation === false || policy.capabilities?.tools === false) continue
+    if (tried.has(getRouteLabel(route)) || !health.isAvailable(route) || !canServe(route)) continue
     if (failureClass === 'auth' && route.provider === failed.provider && route.policy?.quotaDomainId === undefined) continue
+    if (accepts?.(route) === false) continue
     return index
   }
   return undefined
@@ -381,8 +423,6 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
   /** 兼容旧宿主的改写前路由；必须排除实际自动回退和适配器默认值漂移。 */
   const lastResolved = new Map<string, RouteInfo>()
   const upgrades = new Map<string, RootUpgradeStateInfo>()
-  /** 断网等待次数（按会话） */
-  const networkWaits = new Map<string, { count: number; last: number }>()
   const delayPreferred = (agentId: string): void => {
     const failures = (preferredRecoveryWaits.get(agentId)?.failures ?? 0) + 1
     preferredRecoveryWaits.set(agentId, { failures, nextAt: now() + Math.min(300000, 5000 * 2 ** Math.min(failures - 1, 6)) })
@@ -396,44 +436,110 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
   const quotaCancelled = (signal?: AbortSignal): void => {
     if (signal?.aborted === true) throw new SwarmError('RECOVERY_REQUIRED', '额度路由准备已取消；未启动新的模型请求')
   }
-  const canUse = (route: RouteInfo): boolean => {
-    const policy = getRouteResourcePolicy(route)
-    return health.isAvailable(route) && policy.accessMode !== 'judgment_api' && policy.capabilities?.generation !== false && policy.capabilities?.tools !== false
-  }
-  // Never let an adapter add/drop models or replace declared policy metadata.
-  const validatedQuotaOrder = (declared: RouteInfo[], proposed: readonly RouteInfo[]): RouteInfo[] => {
-    if (!Array.isArray(proposed) || proposed.length !== declared.length) return declared
-    const remaining = [...declared]
-    const ordered: RouteInfo[] = []
-    for (const route of proposed) {
-      if (route === null || typeof route !== 'object') return declared
-      const index = remaining.findIndex((candidate) => sameSelection(candidate, route))
-      if (index < 0) return declared
-      ordered.push(remaining.splice(index, 1)[0]!)
+  const canUse = (route: RouteInfo): boolean => health.isAvailable(route) && canServe(route)
+  const admissionKey = (route: RouteInfo): string => getCanonicalJson([route.provider, route.model, route.reasoningEffort ?? null, route.policy ?? {}])
+
+  /** 计入 maxLogicalAttempts 的次数：错误恢复中的等待会多出一次重试请求，不算新的逻辑尝试 */
+  const countedAttempts = (recovery: RequestRecoveryState): number => recovery.attempts - ((recovery.holdRetries ?? 0) - (recovery.admissionHolds ?? 0))
+  /** 本逻辑请求还能等待的时长：断网等待与链尾保持共用 agents.networkWaitMs */
+  const holdLeft = (recovery: RequestRecoveryState, config: SwarmConfigInfo): number =>
+    (recovery.holdRetries ?? 0) >= MAX_HOLD_RETRIES ? 0 : Math.max(0, (config.agents?.networkWaitMs ?? 0) - (recovery.holdWaitedMs ?? 0))
+
+  /** 链耗尽时写进委派结果的说明：每条路由是被隔离（原因与预计恢复）还是本次请求已失败 */
+  const getChainDetail = (chain: readonly RouteInfo[], tried: ReadonlySet<string>): string => chain.map((route) => {
+    const due = health.getDueAt(route) - now()
+    const kind = health.getRelatedEntries(route)[0]?.kind
+    if (kind !== undefined && due > 0) return `${getRouteLabel(route)} ${kind}（约 ${Math.ceil(due / 60_000)} 分钟后可再试）`
+    return `${getRouteLabel(route)} ${tried.has(getRouteLabel(route)) ? '本次请求已失败' : '不可用'}`
+  }).join('；')
+
+  /**
+   * 链上已没有可切换的路由：在等待预算内等最早能再试的一条——当前路由只是临时故障、或路由正由其他请求半开探测时
+   * 指数退避（5 秒起，封顶 60 秒），被隔离的路由等到隔离到期；预检失败或能力不符的路由不等。超出预算才判定链耗尽。
+   * 每次等待都从预算中扣除，单个逻辑请求的总等待不超过 networkWaitMs，保持次数不超过 MAX_HOLD_RETRIES，必然终止。
+   */
+  const holdOrExhaust = (agentId: string, chain: readonly RouteInfo[], current: RouteInfo, tried: ReadonlySet<string>, failure: LlmFailureLike,
+    kind: { transient: boolean; auth: boolean }, config: SwarmConfigInfo, signal: AbortSignal | undefined, retarget: (route: RouteInfo) => RequestErrorActionLike): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
+    const recovery = recoveryOf(agentId)
+    const at = now()
+    const backoff = Math.min(60_000, 5_000 * 2 ** Math.min(recovery.holdRetries ?? 0, 4))
+    let best: { route: RouteInfo; wait: number } | undefined
+    for (const route of chain) {
+      // 认证失败时同一 provider 的其他模型同样会失败
+      if (!canServe(route) || (kind.auth && route.provider === current.provider && route.policy?.quotaDomainId === undefined)) continue
+      const due = health.getDueAt(route)
+      // 已到期但正由其他请求半开探测的路由，与当前路由的临时故障一样按退避间隔复查
+      const wait = due > at ? due - at : (isSameRoute(route, current) && kind.transient) || !health.isAvailable(route) ? backoff : Infinity
+      if (wait !== Infinity && (best === undefined || wait < best.wait)) best = { route, wait }
     }
-    return ordered
+    if (best === undefined || best.wait > holdLeft(recovery, config)) {
+      recovery.terminalDetail = getChainDetail(chain, tried)
+      return terminal(agentId, 'route_chain_exhausted', failure)
+    }
+    const target = best
+    const scope = children.has(agentId) ? 'child' : 'root'
+    recovery.holdRetries = (recovery.holdRetries ?? 0) + 1
+    recovery.holdWaitedMs = (recovery.holdWaitedMs ?? 0) + target.wait
+    options.onNetworkWait?.({ agentId, scope, reason: 'route', failure, route: target.route, waitMs: target.wait })
+    return (options.sleep ?? SleepWithSignal)(target.wait, signal).then(() => {
+      options.onNetworkWait?.({ agentId, scope, reason: 'route', failure, route: target.route, recovered: true, waitedMs: target.wait })
+      if (signal?.aborted === true || manualPauses.has(agentId) || recoveries.get(agentId) !== recovery) return undefined
+      return retarget(target.route)
+    })
   }
 
-  const getChildFallback = (agentId: string, state: ChildStateInfo, failure: LlmFailureLike, failureClass: FailureClass, _action: RequestErrorActionLike, signal?: AbortSignal): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
+  /**
+   * 准入时链上暂时没有能立即使用的路由（被其他专家的失败隔离，或正由其他请求半开探测）：返回在本请求等待预算内
+   * 等到最早可能恢复的一条所需的时长；没有可等的路由或超出预算时判定链耗尽
+   */
+  const getAdmissionWait = (agentId: string, chain: readonly RouteInfo[], current: RouteInfo, tried: ReadonlySet<string>, config: SwarmConfigInfo | undefined, checks?: ReadonlyMap<string, boolean>): AdmissionWait => {
+    const recovery = recoveryOf(agentId)
+    const at = now()
+    const poll = Math.min(60_000, 5_000 * 2 ** Math.min(recovery.holdRetries ?? 0, 4))
+    let best: AdmissionWait | undefined
+    for (const route of [current, ...chain]) {
+      if (!canServe(route) || checks?.get(admissionKey(route)) === false || (!isSameRoute(route, current) && tried.has(getRouteLabel(route)) && health.getRelatedEntries(route).length === 0)) continue
+      const due = health.getDueAt(route)
+      // 已试路由只有仍有隔离记录才可等待重探；半开探测由另一请求持有时按退避间隔复查。
+      const waitMs = due > at ? due - at : poll
+      if (best === undefined || waitMs < best.waitMs) best = new AdmissionWait(waitMs, route)
+    }
+    if (config !== undefined && best !== undefined && best.waitMs <= holdLeft(recovery, config)) return best
+    recovery.terminalDetail = getChainDetail(chain, tried)
+    terminal(agentId, 'route_chain_exhausted')
+    throw new SwarmError('SERVICE_UNAVAILABLE', 'route_chain_exhausted')
+  }
+
+  const getChildFallback = (agentId: string, state: ChildStateInfo, failure: LlmFailureLike, failureClass: FailureClass, transient: boolean, config: SwarmConfigInfo, signal?: AbortSignal): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
     const current = state.chain[state.index] as RouteInfo
     const chain = effectiveChain(agentId, state.chain)
     const start = quotaOrders.has(agentId) ? 0 : state.index + 1
     if (state.index === 0 || preferredTrials.has(agentId)) delayPreferred(agentId)
     const tried = new Set([...state.tried, getRouteLabel(current)])
-    const settle = (next: number | undefined): RequestErrorActionLike => {
-      if (signal?.aborted === true || manualPauses.has(agentId) || children.get(agentId) !== state) return undefined
-      if (next === undefined) {
-        children.set(agentId, { ...state, tried })
-        return terminal(agentId, 'route_chain_exhausted', failure)
-      }
-      const to = chain[next] as RouteInfo
-      children.set(agentId, { ...state, index: state.chain.findIndex((route) => sameSelection(route, to)), tried })
-      state.onFallback?.({ agentId, from: current, to, failure, scope: 'child' })
+    const moveTo = (base: ChildStateInfo, to: RouteInfo, nextTried: ReadonlySet<string>): RequestErrorActionLike => {
+      const index = base.chain.findIndex((route) => sameSelection(route, to))
+      if (index < 0) return undefined
+      children.set(agentId, { ...base, index, tried: nextTried })
+      if (!isSameRoute(to, current)) state.onFallback?.({ agentId, from: current, to, failure, scope: 'child' })
       return { kind: 'retry' }
     }
-    if (probe === undefined) return settle(FindNextIndex(chain, start, tried, current, failureClass, health))
+    const settle = (next: number | undefined): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
+      if (signal?.aborted === true || manualPauses.has(agentId) || children.get(agentId) !== state) return undefined
+      if (next !== undefined) return moveTo(state, chain[next] as RouteInfo, tried)
+      const held = { ...state, tried }
+      children.set(agentId, held)
+      return holdOrExhaust(agentId, chain, current, tried, failure, { transient, auth: failureClass === 'auth' }, config, signal, (to) => {
+        const latest = children.get(agentId)
+        // 等待期间用户换了模型或状态已更新：不改回等待前的目标，交给准入按最新状态选路
+        if (latest !== held) return latest === undefined ? undefined : { kind: 'retry' }
+        return moveTo(latest, to, new Set([...latest.tried].filter((label) => label !== getRouteLabel(to))))
+      })
+    }
+    // 先向后找，再从链首环形查找：之前被预检跳过、现已恢复的路由也能接手
+    const findFrom = (from: number): number | undefined => FindNextIndex(chain, from, tried, current, failureClass, health)
+    if (probe === undefined) return settle(findFrom(start) ?? findFrom(0))
     return (async () => {
-      for (let next = FindNextIndex(chain, start, tried, current, failureClass, health); next !== undefined; next = FindNextIndex(chain, next + 1, tried, current, failureClass, health)) {
+      for (const from of [start, 0]) for (let next = findFrom(from); next !== undefined; next = findFrom(next + 1)) {
         if (signal?.aborted === true) return undefined
         const candidate = chain[next] as RouteInfo
         const checked = await (signal === undefined ? probe(candidate) : probe(candidate, signal))
@@ -445,7 +551,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     })()
   }
 
-  const getRootFallback = (payload: RequestErrorPayloadLike, presetRole: RoleId, failureClass: FailureClass, _action: RequestErrorActionLike, config: SwarmConfigInfo): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
+  const getRootFallback = (payload: RequestErrorPayloadLike, presetRole: RoleId, failureClass: FailureClass, transient: boolean, config: SwarmConfigInfo): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
     const agentId = payload.agent.id
     const failed = lastRoutes.get(agentId) ?? { provider: payload.provider, model: '' }
     const previous = roots.get(agentId)
@@ -458,16 +564,19 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     // 升级期间：先在升级链内回退，再回到常规链
     const chain = effectiveChain(agentId, upgrade === undefined ? roleChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, roleChain))
     if (preferredTrials.has(agentId) || isSameRoute(failed, picker)) delayPreferred(agentId)
-    const settle = (next: number | undefined): RequestErrorActionLike => {
-      if (payload.signal?.aborted === true || manualPauses.has(agentId) || recoveries.get(agentId) !== recovery || roots.get(agentId) !== previous || rootPreferences.get(agentId) !== preference || upgrades.get(agentId) !== upgrade) return undefined
-      if (next === undefined) {
-        roots.set(agentId, { ...previous, picker, tried })
-        return terminal(agentId, 'route_chain_exhausted', payload.failure)
-      }
-      const to = chain[next] as RouteInfo
-      roots.set(agentId, { override: to, at: now(), picker, tried })
-      onRootFallback?.({ agentId, from: failed, to, failure: payload.failure, scope: 'root' })
+    const moveTo = (to: RouteInfo, nextTried: ReadonlySet<string>): RequestErrorActionLike => {
+      roots.set(agentId, { override: to, at: now(), picker, tried: nextTried })
+      if (!isSameRoute(to, failed)) onRootFallback?.({ agentId, from: failed, to, failure: payload.failure, scope: 'root' })
       return { kind: 'retry' }
+    }
+    const settle = (next: number | undefined): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
+      if (payload.signal?.aborted === true || manualPauses.has(agentId) || recoveries.get(agentId) !== recovery || roots.get(agentId) !== previous || rootPreferences.get(agentId) !== preference || upgrades.get(agentId) !== upgrade) return undefined
+      if (next !== undefined) return moveTo(chain[next] as RouteInfo, tried)
+      const held = { ...previous, picker, tried }
+      roots.set(agentId, held)
+      return holdOrExhaust(agentId, chain, failed, tried, payload.failure, { transient, auth: failureClass === 'auth' }, config, payload.signal,
+        (to) => roots.get(agentId) !== held || rootPreferences.get(agentId) !== preference || upgrades.get(agentId) !== upgrade
+          ? { kind: 'retry' } : moveTo(to, new Set([...held.tried].filter((label) => label !== getRouteLabel(to)))))
     }
     if (probe === undefined) return settle(FindNextIndex(chain, 0, tried, failed, failureClass, health))
     // 与子智能体一致：只回退到当前可解析的路由，不可用的记为已试并继续向后找
@@ -483,21 +592,9 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     return FindUsableIndex().then(settle)
   }
 
-  /** 能否再等一次网络：同一会话 30 分钟内最多等 MAX_NETWORK_WAITS 次 */
-  const canWaitNetwork = (agentId: string): boolean => {
-    const record = networkWaits.get(agentId)
-    if (record === undefined || now() - record.last > NETWORK_WAIT_RESET_MS) return true
-    return record.count < MAX_NETWORK_WAITS
-  }
-
-  const AddNetworkWait = (agentId: string): void => {
-    const record = networkWaits.get(agentId)
-    const fresh = record === undefined || now() - record.last > NETWORK_WAIT_RESET_MS
-    networkWaits.set(agentId, { count: fresh ? 1 : record.count + 1, last: now() })
-  }
-
   /**
-   * 断网时先等待网络恢复，恢复后在原路由上重试；网络正常（单个供应商故障）或等待超时时按常规回退
+   * 断网时先等待网络恢复（与链尾保持共用本请求的等待预算），恢复后在原路由上重试；
+   * 网络正常（单个供应商故障）或预算用尽时按常规回退
    * @returns 回退动作
    */
   const getNetworkAwareAction = (
@@ -505,20 +602,104 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
   ): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
     const network = options.network
     const agentId = payload.agent.id
-    const waitMs = config.agents?.networkWaitMs ?? 0
+    const recovery = recoveryOf(agentId)
     // 不需要探测时保持同步返回
-    if (network === undefined || waitMs <= 0 || !isNetworkSuspect(payload.failure) || !canWaitNetwork(agentId)) return fallback()
+    if (network === undefined || holdLeft(recovery, config) <= 0 || !isNetworkSuspect(payload.failure)) return fallback()
     return (async () => {
       if (await network.isOnline()) return fallback()
       const route = lastRoutes.get(agentId)
       const started = now()
-      AddNetworkWait(agentId)
-      options.onNetworkWait?.({ agentId, scope, failure: payload.failure, ...(route === undefined ? {} : { route }) })
-      const recovered = await network.waitOnline(payload.signal, waitMs)
-      options.onNetworkWait?.({ agentId, scope, failure: payload.failure, recovered, waitedMs: now() - started, ...(route === undefined ? {} : { route }) })
+      options.onNetworkWait?.({ agentId, scope, reason: 'network', failure: payload.failure, ...(route === undefined ? {} : { route }) })
+      const recovered = await network.waitOnline(payload.signal, holdLeft(recovery, config))
+      recovery.holdRetries = (recovery.holdRetries ?? 0) + 1
+      recovery.holdWaitedMs = (recovery.holdWaitedMs ?? 0) + (now() - started)
+      options.onNetworkWait?.({ agentId, scope, reason: 'network', failure: payload.failure, recovered, waitedMs: now() - started, ...(route === undefined ? {} : { route }) })
       if (payload.signal?.aborted === true || manualPauses.has(agentId)) return undefined
       return recovered ? { kind: 'retry' } : fallback()
     })()
+  }
+
+  /** 准入；canWait 时链上暂无可用路由但等待预算允许，抛出 AdmissionWait，交给 AdmitRequest 等待后重新准入 */
+  const requestOverride = (agent: AgentLike, resolved: CallConfigLike, _presetRole: RoleId | undefined, config: SwarmConfigInfo | undefined, explicitSelectionAvailable: boolean, canWait: boolean, checks?: ReadonlyMap<string, boolean>): CallConfigLike => {
+    if (!managed(agent, _presetRole)) return resolved
+    if (pendingHealthCommit !== undefined) throw new SwarmError('RECOVERY_REQUIRED', '健康状态持久提交仍未完成；请在请求边界等待，未启动模型请求')
+    if (failedHealthCommit) throw new SwarmError('SERVICE_UNAVAILABLE', 'route_health_persist_failed')
+    if (manualPauses.has(agent.id)) throw new SwarmError('RECOVERY_REQUIRED', '子会话已人工暂停；取消沉寂后显式继续')
+    if (recoveries.get(agent.id)?.completed) begin(agent.id, `${agent.id}:request:${++requestSequence}`)
+    const recovery = recoveryOf(agent.id)
+    const freshSynchronousBoundary = probe === undefined && recoveryBoundaries.delete(agent.id)
+    let child = children.get(agent.id)
+    const previousResolved = lastResolved.get(agent.id)
+    // Current Hosts provide explicit selection events. Legacy Hosts can only
+    // infer a changed provider/model that is not the last actual fallback;
+    // adapter default effort changes cannot establish human intent.
+    const lastAutomatic = lastRoutes.get(agent.id)
+    const legacyUserChange = !explicitSelectionAvailable && previousResolved !== undefined && !sameSelection(resolved, previousResolved) && (lastAutomatic === undefined || !isSameRoute(resolved, lastAutomatic))
+    if (child?.persistent === true && legacyUserChange) {
+      api.SetChildOverride(agent.id, { provider: resolved.provider, model: resolved.model, ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort }) })
+      child = children.get(agent.id)
+    }
+    const root = roots.get(agent.id)
+    // 只在旧宿主的排除自动回退后兼容识别人选；新宿主由 RecordUserSelection 更新。
+    if (child === undefined && legacyUserChange) {
+      rootPreferences.set(agent.id, { ...resolved }); roots.delete(agent.id); upgrades.delete(agent.id)
+      quotaManualSelections.add(agent.id); quotaOrders.delete(agent.id); quotaPreparations.delete(agent.id)
+    }
+    if (child === undefined && !rootPreferences.has(agent.id)) rootPreferences.set(agent.id, { ...resolved })
+    const preferredRoot = rootPreferences.get(agent.id) ?? resolved
+    // 回退覆盖到期：故障多半已经恢复（例如断网结束），重新尝试对话框所选模型；再失败会重新回退
+    const recoverMs = config?.agents?.rootRecoverMs ?? 0
+    const current = roots.get(agent.id)
+    if (freshSynchronousBoundary && child === undefined && current?.override !== undefined && current.at !== undefined && recoverMs > 0 && now() - current.at >= recoverMs && (preferredRecoveryWaits.get(agent.id)?.nextAt ?? 0) <= now() && health.isAvailable(preferredRoot)) roots.delete(agent.id)
+    const upgrade = child === undefined ? upgrades.get(agent.id) : undefined
+    // 升级生效后用户在对话框里换了模型：以用户的选择为准，撤销升级
+    if (upgrade !== undefined && upgrade.picker === undefined) upgrade.picker = { ...preferredRoot }
+    lastResolved.set(agent.id, { provider: resolved.provider, model: resolved.model, ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort }) })
+    if (recovery.terminal !== undefined) throw new SwarmError('SERVICE_UNAVAILABLE', recovery.terminal)
+    if (countedAttempts(recovery) >= policyOf(config).maxLogicalAttempts) { terminal(agent.id, 'recovery_attempts_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'recovery_attempts_exhausted') }
+    const declared = config === undefined || _presetRole === undefined ? undefined : getRoleRoute(config, getRouteKey(_presetRole)).chain.find((route) => isSameRoute(route, preferredRoot))
+    let route = child === undefined ? (roots.get(agent.id)?.override ?? (upgrades.get(agent.id) === undefined ? undefined : upgrades.get(agent.id)!.chain[upgrades.get(agent.id)!.index]) ?? { ...preferredRoot, ...(declared?.policy === undefined ? {} : { policy: declared.policy }) }) : child.chain[child.index]
+    const pendingRetry = manualRetries.get(agent.id)
+    if (route !== undefined && pendingRetry !== undefined && isSameRoute(route, pendingRetry.route)) {
+      manualRetries.delete(agent.id)
+      const permitted = health.claimManualRetry(route, agent.id, { force: pendingRetry.force })
+      if (!permitted.ok) throw new SwarmError('RECOVERY_REQUIRED', `受控模型重试暂不可用：${permitted.reason}`)
+    }
+    const accepts = (candidate: RouteInfo): boolean => {
+      if (checks === undefined) return true
+      const checked = checks.get(admissionKey(candidate))
+      if (checked === undefined) throw new AdmissionProbe(candidate)
+      return checked
+    }
+    // 只有从隔离恢复的当前路由才预检；未失败过的健康路由与 2.9.3 一致不依赖元数据。
+    // 已由本请求持有的半开/人工许可不能再走全局 probe（它会把自己的 claim 当作隔离）。
+    const returning = route !== undefined && health.getRelatedEntries(route).length > 0
+    if (route === undefined || !canServe(route) || (returning && health.isAvailable(route) && !accepts(route)) || !health.claim(route, agent.id)) {
+      if (child === undefined && config?.rootFallback === false) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'root-fallback-disabled: route_chain_exhausted') }
+      const baseChain = config === undefined || _presetRole === undefined ? [] : getRoleRoute(config, getRouteKey(_presetRole)).chain
+      const chain = effectiveChain(agent.id, child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain)))
+      const tried = child?.tried ?? roots.get(agent.id)?.tried ?? new Set<string>()
+      // 与错误回退一致：先向后找，再环查此前被跳过、现已恢复的路由。
+      const index = FindNextIndex(chain, child === undefined || quotaOrders.has(agent.id) ? 0 : child.index + 1, tried, route ?? resolved, 'other', health, accepts)
+        ?? FindNextIndex(chain, 0, tried, route ?? resolved, 'other', health, accepts)
+      const candidate = index === undefined ? undefined : chain[index] as RouteInfo
+      if (candidate === undefined || !health.claim(candidate, agent.id)) {
+        if (canWait) throw getAdmissionWait(agent.id, chain, route ?? resolved, tried, config, checks)
+        recovery.terminalDetail = getChainDetail(chain, tried)
+        terminal(agent.id, 'route_chain_exhausted')
+        throw new SwarmError('SERVICE_UNAVAILABLE', 'route_chain_exhausted')
+      }
+      route = candidate
+      if (child !== undefined) children.set(agent.id, { ...child, index: child.chain.findIndex((candidate) => sameSelection(candidate, route!)) })
+      else roots.set(agent.id, { override: route, at: now(), picker: resolved, tried: root?.tried ?? new Set() })
+    }
+    const activeChild = children.get(agent.id)
+    if (activeChild?.initialQuotaOrder !== undefined) children.set(agent.id, { ...activeChild, initialQuotaOrder: undefined })
+    recovery.attempts += 1
+    recovery.attemptedRoutes.push(getRouteLabel(route))
+    const next = route === undefined ? resolved : getRoutedConfig(resolved, route)
+    lastRoutes.set(agent.id, route)
+    return next
   }
 
   const api: RouteStateRegistry = {
@@ -542,7 +723,9 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     getRecovery: (id) => { const state = recoveries.get(id); return state === undefined ? undefined : { ...state, attemptedRoutes: [...state.attemptedRoutes], ...(state.observedAttemptIds === undefined ? {} : { observedAttemptIds: [...state.observedAttemptIds] }) } },
     getRecoveryDiagnostics: () => ({ agents: recoveries.size, logicalRequests: logical.size, logicalStates, disposedTerminals: disposedTerminals.size }),
     getTerminal: (id) => recoveries.get(id)?.terminal ?? disposedTerminals.get(id),
+    getTerminalDetail: (id) => recoveries.get(id)?.terminalDetail,
     isRouteAvailable: (route) => health.isAvailable(route),
+    getRouteDueAt: (route) => health.getDueAt(route),
     isRouteAvailableFor: (route, agentId) => health.isAvailable(route) || (manualRetries.get(agentId) !== undefined && isSameRoute(manualRetries.get(agentId)!.route, route)),
     getHealth: () => health.list(),
     getHealthSnapshot: () => health.getSnapshot(),
@@ -551,7 +734,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     clearHealth: (key) => health.clear(key),
     ObserveRouteFailure: (route, failure, config) => {
       const normalized = normalizeRouteFailure(failure as RouteFailureMetadata, route)
-      if (isTerminalRouteFailure(normalized)) {
+      // 元数据网络故障也走既有隔离与有界准入等待，不能作为模型不可用的永久否定。
+      if (isTerminalRouteFailure(normalized) || normalized.kind === 'network_transient') {
         health.record(route, normalized)
         return options.onHealthChange?.(health.getSnapshot(), { reason: 'probe' })
       } else if (normalized.providerRetryAfterMs !== undefined && normalized.providerRetryAfterMs > policyOf(config).maxShortRetryDelayMs) {
@@ -614,7 +798,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       const initial = state.initialRoute === undefined ? 0 : prepared.findIndex((route) => sameSelection(route, state.initialRoute!))
       children.set(agentId, {
         chain: prepared, baseChain: [...state.chain], index: Math.max(0, initial), role: state.role, tried: new Set(),
-        ...(state.initialQuotaOrder === undefined ? {} : { initialQuotaOrder: validatedQuotaOrder(prepared, state.initialQuotaOrder) }),
+        ...(state.initialQuotaOrder === undefined ? {} : { initialQuotaOrder: getValidatedQuotaOrder(prepared, state.initialQuotaOrder) }),
         ...(state.onFallback === undefined ? {} : { onFallback: state.onFallback }),
         ...(state.persistent === true ? { persistent: true } : {}),
         ...(state.logicalRequestId === undefined ? {} : { logicalRequestId: state.logicalRequestId }),
@@ -639,7 +823,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     getChildOverride: (agentId) => { const value = childOverrides.get(agentId); return value === undefined ? undefined : { ...value } },
     SetManualPause: (agentId, paused) => { if (paused) manualPauses.add(agentId); else manualPauses.delete(agentId) },
     isManualPaused: (agentId) => manualPauses.has(agentId),
-    getLastRoute: (agentId) => { const value = lastRoutes.get(agentId); return value === undefined ? undefined : { ...value, ...(getWireEffort(value) === undefined ? {} : { reasoningEffort: getWireEffort(value) }) } },
+    getLastRoute: (agentId) => { const value = lastRoutes.get(agentId); return value === undefined ? undefined : { ...value, ...(getWireReasoningEffort(value) === undefined ? {} : { reasoningEffort: getWireReasoningEffort(value) }) } },
     RestoreRootPreference: (agentId, route) => { if (!rootPreferences.has(agentId)) rootPreferences.set(agentId, { ...route }) },
     getRootPreference: (agentId) => { const value = rootPreferences.get(agentId); return value === undefined ? undefined : { ...value } },
     RecordUserSelection: (agentId, route, seq) => {
@@ -669,8 +853,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
         candidates = upgrade.chain.slice(0, Math.max(0, at))
       } else if (root?.override !== undefined && (config.agents.rootRecoverMs ?? 0) > 0 && root.at !== undefined && now() - root.at >= config.agents.rootRecoverMs) candidates = [rootPreferences.get(agent.id) ?? root.picker ?? resolved]
       for (const candidate of candidates) {
-        const resource = getRouteResourcePolicy(candidate)
-        if (!health.isAvailable(candidate) || resource.accessMode === 'judgment_api' || resource.capabilities?.generation === false || resource.capabilities?.tools === false) continue
+        if (!canUse(candidate)) continue
         const checked = probe === undefined ? { ok: true as const, vision: true } : await probe(candidate)
         if (manualPauses.has(agent.id) || recoveries.get(agent.id)?.logicalRequestId !== logicalRequestId || children.get(agent.id) !== child || upgrades.get(agent.id) !== upgrade || roots.get(agent.id) !== root) return
         if (!checked.ok || (child?.requireVision === true && !checked.vision)) continue
@@ -707,7 +890,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
         quotaCancelled(signal)
         const stillCurrent = () => quotaPreparations.get(agent.id) === token && recoveries.get(agent.id) === recovery && children.get(agent.id) === child && roots.get(agent.id) === root && upgrades.get(agent.id) === upgrade && !manualPauses.has(agent.id) && !childOverrides.has(agent.id) && !quotaManualSelections.has(agent.id)
         if (!stillCurrent()) return
-        const chain = validatedQuotaOrder(declared, proposed)
+        const chain = getValidatedQuotaOrder(declared, proposed)
         quotaOrders.set(agent.id, { logicalRequestId: recovery.logicalRequestId, chain })
         // Once an attempt was admitted, quota must not replay a route or reset its
         // bounded recovery state. Fallback uses this order and the existing tried set.
@@ -809,7 +992,6 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       roots.delete(agentId)
       lastRoutes.delete(agentId)
       lastResolved.delete(agentId)
-      networkWaits.delete(agentId)
     },
     ReleaseAgent: (agentId) => {
       quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
@@ -826,73 +1008,65 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       roots.delete(agentId)
       lastRoutes.delete(agentId)
       lastResolved.delete(agentId)
-      networkWaits.delete(agentId)
     },
-    getRequestOverride: (agent, resolved, _presetRole, config, explicitSelectionAvailable = false) => {
-      if (!managed(agent, _presetRole)) return resolved
-      if (pendingHealthCommit !== undefined) throw new SwarmError('RECOVERY_REQUIRED', '健康状态持久提交仍未完成；请在请求边界等待，未启动模型请求')
-      if (failedHealthCommit) throw new SwarmError('SERVICE_UNAVAILABLE', 'route_health_persist_failed')
-      if (manualPauses.has(agent.id)) throw new SwarmError('RECOVERY_REQUIRED', '子会话已人工暂停；取消沉寂后显式继续')
-      if (recoveries.get(agent.id)?.completed) begin(agent.id, `${agent.id}:request:${++requestSequence}`)
-      const recovery = recoveryOf(agent.id)
-      const freshSynchronousBoundary = probe === undefined && recoveryBoundaries.delete(agent.id)
-      let child = children.get(agent.id)
-      const previousResolved = lastResolved.get(agent.id)
-      // Current Hosts provide explicit selection events. Legacy Hosts can only
-      // infer a changed provider/model that is not the last actual fallback;
-      // adapter default effort changes cannot establish human intent.
-      const lastAutomatic = lastRoutes.get(agent.id)
-      const legacyUserChange = !explicitSelectionAvailable && previousResolved !== undefined && !sameSelection(resolved, previousResolved) && (lastAutomatic === undefined || !isSameRoute(resolved, lastAutomatic))
-      if (child?.persistent === true && legacyUserChange) {
-        api.SetChildOverride(agent.id, { provider: resolved.provider, model: resolved.model, ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort }) })
-        child = children.get(agent.id)
+    getRequestOverride: (agent, resolved, presetRole, config, explicitSelectionAvailable = false) => requestOverride(agent, resolved, presetRole, config, explicitSelectionAvailable, false),
+    AdmitRequest: async (agent, resolved, presetRole, config, explicitSelectionAvailable = false, signal) => {
+      const checks = probe === undefined ? undefined : new Map<string, boolean>()
+      for (;;) {
+        if (signal?.aborted === true) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+        if (managed(agent, presetRole)) {
+          if (manualPauses.has(agent.id)) throw new SwarmError('RECOVERY_REQUIRED', '子会话已人工暂停；取消沉寂后显式继续')
+          const recovery = recoveries.get(agent.id)
+          const child = children.get(agent.id)
+          await waitHealthReady(agent.id, signal)
+          if (Boolean(signal?.aborted)) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+          if (recoveries.get(agent.id) !== recovery || (child !== undefined && !children.has(agent.id))) throw new SwarmError('RECOVERY_REQUIRED', '路由准入所属请求已结束或变更')
+          if (children.get(agent.id) !== child) checks?.clear()
+          if (pendingHealthCommit !== undefined) continue
+        }
+        let wait: AdmissionWait
+        try { return requestOverride(agent, resolved, presetRole, config, explicitSelectionAvailable, true, checks) } catch (error) {
+          if (error instanceof AdmissionProbe) {
+            const recovery = recoveries.get(agent.id)
+            const child = children.get(agent.id)
+            const root = roots.get(agent.id)
+            const preference = rootPreferences.get(agent.id)
+            const upgrade = upgrades.get(agent.id)
+            const order = quotaOrders.get(agent.id)
+            const checked = await (signal === undefined ? probe!(error.route) : probe!(error.route, signal))
+            if (Boolean(signal?.aborted)) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+            if (recoveries.get(agent.id) !== recovery || (child !== undefined && !children.has(agent.id))) throw new SwarmError('RECOVERY_REQUIRED', '路由准入所属请求已结束或变更')
+            if (children.get(agent.id) !== child || roots.get(agent.id) !== root || rootPreferences.get(agent.id) !== preference || upgrades.get(agent.id) !== upgrade || quotaOrders.get(agent.id) !== order) { checks!.clear(); continue }
+            // probe 期间被其他请求隔离时重新等待健康状态，不把它当作永久能力不符。
+            // 元数据暂时不可知不是否定证据：放行给真实请求判断（失败走常规错误恢复），并记下结果避免立即重探。
+            const unknown = !checked.ok && ['metadata-pending-timeout', 'metadata-capacity-busy', 'llm-service-changed'].includes(checked.reason)
+            if (checked.ok || checked.reason !== 'route-isolated') checks!.set(admissionKey(error.route), unknown || (checked.ok && (child?.requireVision !== true || checked.vision)))
+            continue
+          }
+          if (!(error instanceof AdmissionWait)) throw error
+          wait = error
+        }
+        const recovery = recoveryOf(agent.id)
+        const child = children.get(agent.id)
+        const root = roots.get(agent.id)
+        recovery.holdRetries = (recovery.holdRetries ?? 0) + 1
+        recovery.admissionHolds = (recovery.admissionHolds ?? 0) + 1
+        recovery.holdWaitedMs = (recovery.holdWaitedMs ?? 0) + wait.waitMs
+        const event = { agentId: agent.id, scope: children.has(agent.id) ? 'child' as const : 'root' as const, reason: 'route' as const, route: wait.route }
+        options.onNetworkWait?.({ ...event, waitMs: wait.waitMs })
+        await (options.sleep ?? SleepWithSignal)(wait.waitMs, signal)
+        for (const [key, accepted] of checks ?? []) if (accepted) checks!.delete(key)
+        if (children.get(agent.id) !== child || roots.get(agent.id) !== root) checks?.clear()
+        options.onNetworkWait?.({ ...event, recovered: true, waitedMs: wait.waitMs })
+        if (Boolean(signal?.aborted)) throw new SwarmError('RECOVERY_REQUIRED', '等待路由恢复时已取消；未启动新的模型请求')
+        if (recoveries.get(agent.id) !== recovery || (child !== undefined && !children.has(agent.id))) throw new SwarmError('RECOVERY_REQUIRED', '路由准入所属请求已结束或变更')
+        // 只解除本次等待目标的已试标记；手选、换步或重新登记不能被旧等待覆盖。
+        if (children.get(agent.id) === child && roots.get(agent.id) === root && health.isAvailable(wait.route)) {
+          const label = getRouteLabel(wait.route)
+          if (child?.tried.has(label)) children.set(agent.id, { ...child, tried: new Set([...child.tried].filter((item) => item !== label)) })
+          if (root?.tried.has(label)) roots.set(agent.id, { ...root, tried: new Set([...root.tried].filter((item) => item !== label)) })
+        }
       }
-      const root = roots.get(agent.id)
-      // 只在旧宿主的排除自动回退后兼容识别人选；新宿主由 RecordUserSelection 更新。
-      if (child === undefined && legacyUserChange) {
-        rootPreferences.set(agent.id, { ...resolved }); roots.delete(agent.id); upgrades.delete(agent.id)
-        quotaManualSelections.add(agent.id); quotaOrders.delete(agent.id); quotaPreparations.delete(agent.id)
-      }
-      if (child === undefined && !rootPreferences.has(agent.id)) rootPreferences.set(agent.id, { ...resolved })
-      const preferredRoot = rootPreferences.get(agent.id) ?? resolved
-      // 回退覆盖到期：故障多半已经恢复（例如断网结束），重新尝试对话框所选模型；再失败会重新回退
-      const recoverMs = config?.agents?.rootRecoverMs ?? 0
-      const current = roots.get(agent.id)
-      if (freshSynchronousBoundary && child === undefined && current?.override !== undefined && current.at !== undefined && recoverMs > 0 && now() - current.at >= recoverMs && (preferredRecoveryWaits.get(agent.id)?.nextAt ?? 0) <= now() && health.isAvailable(preferredRoot)) roots.delete(agent.id)
-      const upgrade = child === undefined ? upgrades.get(agent.id) : undefined
-      // 升级生效后用户在对话框里换了模型：以用户的选择为准，撤销升级
-      if (upgrade !== undefined && upgrade.picker === undefined) upgrade.picker = { ...preferredRoot }
-      lastResolved.set(agent.id, { provider: resolved.provider, model: resolved.model, ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort }) })
-      if (recovery.terminal !== undefined) throw new SwarmError('SERVICE_UNAVAILABLE', recovery.terminal)
-      if (recovery.attempts >= policyOf(config).maxLogicalAttempts) { terminal(agent.id, 'recovery_attempts_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'recovery_attempts_exhausted') }
-      const declared = config === undefined || _presetRole === undefined ? undefined : getRoleRoute(config, getRouteKey(_presetRole)).chain.find((route) => isSameRoute(route, preferredRoot))
-      let route = child === undefined ? (roots.get(agent.id)?.override ?? (upgrades.get(agent.id) === undefined ? undefined : upgrades.get(agent.id)!.chain[upgrades.get(agent.id)!.index]) ?? { ...preferredRoot, ...(declared?.policy === undefined ? {} : { policy: declared.policy }) }) : child.chain[child.index]
-      const pendingRetry = manualRetries.get(agent.id)
-      if (route !== undefined && pendingRetry !== undefined && isSameRoute(route, pendingRetry.route)) {
-        manualRetries.delete(agent.id)
-        const permitted = health.claimManualRetry(route, agent.id, { force: pendingRetry.force })
-        if (!permitted.ok) throw new SwarmError('RECOVERY_REQUIRED', `受控模型重试暂不可用：${permitted.reason}`)
-      }
-      const resource = route === undefined ? undefined : getRouteResourcePolicy(route)
-      const incompatible = resource?.accessMode === 'judgment_api' || resource?.capabilities?.generation === false || resource?.capabilities?.tools === false
-      if (route === undefined || incompatible || !health.claim(route, agent.id)) {
-        if (child === undefined && config?.rootFallback === false) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'root-fallback-disabled: route_chain_exhausted') }
-        const baseChain = config === undefined || _presetRole === undefined ? [] : getRoleRoute(config, getRouteKey(_presetRole)).chain
-        const chain = effectiveChain(agent.id, child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain)))
-        const index = FindNextIndex(chain, child === undefined || quotaOrders.has(agent.id) ? 0 : child.index + 1, child?.tried ?? roots.get(agent.id)?.tried ?? new Set(), route ?? resolved, 'other', health)
-        if (index === undefined) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'route_chain_exhausted') }
-        route = chain[index] as RouteInfo
-        if (!health.claim(route, agent.id)) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'route_chain_exhausted') }
-        if (child !== undefined) children.set(agent.id, { ...child, index: child.chain.findIndex((candidate) => sameSelection(candidate, route!)) })
-        else roots.set(agent.id, { override: route, at: now(), picker: resolved, tried: root?.tried ?? new Set() })
-      }
-      const activeChild = children.get(agent.id)
-      if (activeChild?.initialQuotaOrder !== undefined) children.set(agent.id, { ...activeChild, initialQuotaOrder: undefined })
-      recovery.attempts += 1
-      recovery.attemptedRoutes.push(getRouteLabel(route))
-      const next = route === undefined ? resolved : getRoutedConfig(resolved, route)
-      lastRoutes.set(agent.id, route)
-      return next
     },
     getErrorAction: (payload, action, presetRole, config) => {
       if (!managed(payload.agent, presetRole)) return action
@@ -907,6 +1081,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       const failureClass = getFailureClass(payload.failure)
       const fatal = isTerminalRouteFailure(normalized)
       const longWait = normalized.providerRetryAfterMs !== undefined && Number.isFinite(normalized.providerRetryAfterMs) && normalized.providerRetryAfterMs > policy.maxShortRetryDelayMs
+      // 只有网络、服务端与限流类故障值得在原路由上等；4xx、能力不符等等待也不会好转
+      const transient = !longWait && ['network_transient', 'service_transient', 'rate_limited'].includes(normalized.kind)
       if (fatal || longWait) {
         health.record(failed, normalized, fatal ? undefined : normalized.providerRetryAfterMs)
         if (longWait) recovery.suppressedRetryAfterMs = normalized.providerRetryAfterMs
@@ -914,7 +1090,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       const afterHealthCommit = (): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
         if (recoveries.get(payload.agent.id) !== recovery || manualPauses.has(payload.agent.id) || payload.signal?.aborted === true) return undefined
         // 第八次的终态故障仍要记录域隔离，随后停止恢复，不再尝试第九个模型。
-        if (recovery.attempts >= policy.maxLogicalAttempts) return terminal(payload.agent.id, 'recovery_attempts_exhausted')
+        if (countedAttempts(recovery) >= policy.maxLogicalAttempts) return terminal(payload.agent.id, 'recovery_attempts_exhausted')
         if (!fatal && !longWait && !failedProbe && (!isNetworkSuspect(payload.failure) || options.network === undefined || config.agents.networkWaitMs <= 0)) {
           if (['rate_limited', 'service_transient', 'network_transient'].includes(normalized.kind)) {
             const delay = Math.max(0, normalized.providerRetryAfterMs ?? 500)
@@ -936,13 +1112,13 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
           const fallback = withQuota(() => {
             // 等待期间子智能体可能已被释放或重新登记：以最新状态为准
             const latest = children.get(payload.agent.id)
-            return latest === undefined ? action : getChildFallback(payload.agent.id, latest, payload.failure, failureClass, action, payload.signal)
+            return latest === undefined ? action : getChildFallback(payload.agent.id, latest, payload.failure, failureClass, transient, config, payload.signal)
           })
           return fatal || longWait || failedProbe ? fallback() : getNetworkAwareAction(payload, 'child', config, fallback)
         }
         if (!config.rootFallback || presetRole === undefined) return fatal || longWait || failedProbe ? terminal(payload.agent.id, 'route_chain_exhausted', payload.failure) : action
         if (getAgentHeader(payload.agent).parentSession !== undefined) return action
-        const fallback = withQuota(() => getRootFallback(payload, presetRole, failureClass, action, config))
+        const fallback = withQuota(() => getRootFallback(payload, presetRole, failureClass, transient, config))
         return fatal || longWait || failedProbe ? fallback() : getNetworkAwareAction(payload, 'root', config, fallback)
       }
       if ((fatal || longWait || failedProbe) && options.onHealthChange !== undefined) {

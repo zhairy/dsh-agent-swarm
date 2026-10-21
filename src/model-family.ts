@@ -42,6 +42,8 @@ export interface PersonaPartsInfo {
   duty: string
   boundaries: readonly string[]
   deliverables: readonly string[]
+  /** 工程规范（含语言要求），每条一行 */
+  rules: readonly string[]
   modeText?: string
   roleTag: string
 }
@@ -50,12 +52,6 @@ const SESSION_NOTE = '你可能会在同一会话里陆续收到同一大类任�
 
 const bullets = (items: readonly string[]): string => items.map((item) => `- ${item}`).join('\n')
 
-/**
- * 按风格生成子智能体 persona
- * @param {PersonaPartsInfo} parts - 角色信息
- * @param {PromptStyle} style - 风格
- * @returns {string} persona
- */
 /** 各风格的任务说明里「交付」一节的名称，persona 据此引用 */
 const DELIVERY_SECTION: Readonly<Record<PromptStyle, string>> = {
   claude: '<deliverable> 一节',
@@ -63,6 +59,12 @@ const DELIVERY_SECTION: Readonly<Record<PromptStyle, string>> = {
   generic: '末尾「交付」一节'
 }
 
+/**
+ * 按风格生成子智能体 persona
+ * @param {PersonaPartsInfo} parts - 角色信息
+ * @param {PromptStyle} style - 风格
+ * @returns {string} persona
+ */
 export const getStyledPersona = (parts: PersonaPartsInfo, style: PromptStyle): string => {
   const intro = `你是「${parts.name}」（${parts.title}），dsh-agent-swarm 多智能体系统中的专家，由主持者「天枢」委派完成一项任务。你看不到天枢与用户的对话，只依据收到的任务说明工作。`
   const deliverable = `按每次任务说明${DELIVERY_SECTION[style]}的方式提交结构化结果（${parts.deliverables.join('、')}）。summary 按本轮输出语言约定写结论（未指定时使用简体中文），unresolved 列出未解决或未核实的事项。`
@@ -71,6 +73,7 @@ export const getStyledPersona = (parts: PersonaPartsInfo, style: PromptStyle): s
       `<role>\n${intro}\n</role>`,
       `<duty>\n${parts.duty}\n</duty>`,
       `<boundaries>\n${bullets(parts.boundaries)}\n</boundaries>`,
+      `<engineering_rules>\n${parts.rules.join('\n')}\n</engineering_rules>`,
       ...(parts.modeText === undefined ? [] : [`<mode>\n${parts.modeText}\n</mode>`]),
       [
         '<working_style>',
@@ -78,7 +81,6 @@ export const getStyledPersona = (parts: PersonaPartsInfo, style: PromptStyle): s
         '- 一次真实的检查足以支撑结论时就停止，不必反复自我验证；独立复核由「复核」专家负责。',
         '- 报告简洁：结论、证据、未解决事项即可，不写过程叙述。',
         '- 推理过程不需要写进回复；需要解释时给出简短理由。',
-        '- 只有缺少关键信息无法继续，或下一步有风险时才停下，并把原因写进 unresolved。',
         '</working_style>'
       ].join('\n'),
       `<deliverable>\n${deliverable}\n</deliverable>`,
@@ -92,13 +94,13 @@ export const getStyledPersona = (parts: PersonaPartsInfo, style: PromptStyle): s
       `Goal: ${parts.duty}`,
       `Success criteria: 交付覆盖任务的验收要求，每条结论都有可核对的证据（路径、命令与退出码、来源）。`,
       `Constraints:\n${bullets(parts.boundaries)}`,
+      `Engineering rules:\n${parts.rules.join('\n')}`,
       ...(parts.modeText === undefined ? [] : [`Mode: ${parts.modeText}`]),
       `Output: ${deliverable}`,
       [
         'Stop rules:',
         '- 偏向直接行动：把任务做完，而不是只给计划。',
-        '- 满足成功标准、给出证据后即停止；不为可逆的低影响改动额外编写测试。',
-        '- 缺少信息时根据上下文做最合理的决定并在 unresolved 中注明，不要提问。',
+        '- 满足成功标准、给出证据后即停止；测试按工程规范补齐（核心函数单测、bug 回归测试），不做规范之外的额外工作。',
         '- 按本轮输出语言约定排版，保留代码、标识符与数值原文。'
       ].join('\n'),
       `Session: ${SESSION_NOTE}`,
@@ -109,6 +111,7 @@ export const getStyledPersona = (parts: PersonaPartsInfo, style: PromptStyle): s
     intro,
     `职责：${parts.duty}`,
     `必须遵守：\n${parts.boundaries.map((item, index) => `${index + 1}. ${item}`).join('\n')}`,
+    `工程规范：\n${parts.rules.join('\n')}`,
     ...(parts.modeText === undefined ? [] : [parts.modeText]),
     `成功标准：交付覆盖任务的验收要求，每条结论都有可核对的证据。满足后立即停止，不要过度思考或重复检查。`,
     `交付：${deliverable}`,

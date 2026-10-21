@@ -364,24 +364,3 @@ export const getPlanningReviewDiagnostics = (record: PlanningReviewRecord): Arra
   return probability !== null && probability >= record.reviewPolicy.reviewAbove ? [] : [{ dimension, probability, threshold: record.reviewPolicy.reviewAbove, question: record.questions?.[dimension] ?? question }]
 })
 
-/** task 级 CAS 防止旧审查提交覆盖新需求；返修计数不因换图重置。 */
-export const intPlanningReviewStore = () => {
-  const entries = new Map<string, { snapshot: ReviewSnapshot; record?: PlanningReviewRecord; fixRounds: number }>()
-  const key = (binding: Pick<ReviewSnapshot, 'rootSessionId' | 'workspaceId' | 'taskId'>): string => getValueDigest([binding.rootSessionId, binding.workspaceId, binding.taskId])
-  return {
-    SetSnapshot: (snapshot: ReviewSnapshot): void => { const previous = entries.get(key(snapshot)); entries.set(key(snapshot), { snapshot, fixRounds: previous?.fixRounds ?? 0, ...(previous?.record?.snapshotDigest === snapshot.snapshotDigest ? { record: previous.record } : {}) }) },
-    get: (binding: Pick<ReviewSnapshot, 'rootSessionId' | 'workspaceId' | 'taskId'>) => { const value = entries.get(key(binding)); return value === undefined ? undefined : structuredClone(value) },
-    Commit: (record: PlanningReviewRecord, expectedSnapshotDigest = record.snapshotDigest): boolean => {
-      const current = entries.get(key(record))
-      if (current === undefined || current.snapshot.snapshotDigest !== expectedSnapshotDigest || record.snapshotDigest !== expectedSnapshotDigest) return false
-      current.record = structuredClone(record)
-      return true
-    },
-    ConsumeFixRound: (binding: Pick<ReviewSnapshot, 'rootSessionId' | 'workspaceId' | 'taskId'>, maxRounds = 2): boolean => {
-      const current = entries.get(key(binding))
-      if (current === undefined || current.fixRounds >= maxRounds) return false
-      current.fixRounds += 1
-      return true
-    }
-  }
-}
