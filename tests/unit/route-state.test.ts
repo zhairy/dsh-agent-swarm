@@ -1284,6 +1284,24 @@ describe('共享故障域与有界恢复', () => {
     }
   })
 
+  it.each(['commit', 'reject'])('短网络元数据故障立即隔离，但观察器必须等待健康态持久提交（%s）', async (outcome) => {
+    let commit!: () => void, reject!: (error: Error) => void
+    const persisted = new Promise<void>((resolve, fail) => { commit = resolve; reject = fail })
+    const onHealthChange = vi.fn(() => persisted)
+    const registry = intRouteStateRegistry(undefined, undefined, { now: () => 1000, onHealthChange })
+    let settled = false
+    const observation = Promise.resolve(registry.ObserveRouteFailure(accountA, { code: 'TRANSPORT', message: 'fetch failed: ENETUNREACH' }, config))
+      .then(() => { settled = true; return { committed: true } }, (error: unknown) => { settled = true; return { error } })
+    await Promise.resolve()
+    expect(registry.isRouteAvailable(accountA)).toBe(false)
+    expect(registry.getHealth()).toMatchObject([{ kind: 'network_transient', retryCount: 1, retryAt: 11_000 }])
+    expect(settled).toBe(false)
+    expect(onHealthChange).toHaveBeenCalledExactlyOnceWith(registry.getHealthSnapshot(), { reason: 'probe' })
+    if (outcome === 'commit') commit()
+    else reject(new Error('disk-write-failed'))
+    expect(await observation).toEqual(outcome === 'commit' ? { committed: true } : { error: new Error('disk-write-failed') })
+  })
+
   it('健康态持久化失败停止模型与外层重启，而不选择备用或调用宿主next', async () => {
     const registry = intRouteStateRegistry(undefined, undefined, { onHealthChange: async () => { throw new Error('disk-write-failed') } })
     registry.AddChild(child.id, { chain: [accountA, independent], role: 'fu_he' })
@@ -1603,7 +1621,7 @@ describe('准入等待与等待期间的用户选择', () => {
   })
 
   it.each([
-    { failure: 'vision', single: false }, { failure: 'unavailable', single: false }, { failure: 'vision', single: true }
+    { failure: 'vision', single: false }, { failure: 'unavailable', single: false }, { failure: 'vision', single: true }, { failure: 'unavailable', single: true }
   ])('准入候选隔离到期后必须通过 probe 与视觉适用性，不启动不兼容模型（$failure，单路由=$single）', async ({ failure, single }) => {
     let at = 0
     const probe = vi.fn(async () => failure === 'vision' ? { ok: true as const, vision: false } : { ok: false as const, reason: 'provider-not-configured' })
@@ -1665,6 +1683,84 @@ describe('准入等待与等待期间的用户选择', () => {
     expect(registry.getRecovery(child.id)?.attempts).toBe(1)
     expect(registry.getHealth()[0]?.halfOpenAgent).toBe(child.id)
     expect(registry.RequestRouteRetry(astra, 'other', { force: true })).toMatchObject({ ok: false, reason: 'retry-in-flight' })
+  })
+
+  it.each(['metadata-pending-timeout', 'metadata-capacity-busy', 'llm-service-changed', 'model-unavailable: fetch failed: ENETUNREACH'])('未失败过的当前路由准入不依赖元数据预检（%s）', async (reason) => {
+    const probe = vi.fn(async () => ({ ok: false as const, reason }))
+    const registry = intRouteStateRegistry(undefined, probe)
+    registry.AddChild(child.id, { chain: [astra], role: 'zhu_jian', logicalRequestId: 'D-healthy' })
+    registry.BeginRequestStep(child.id, 1, 1)
+    await expect(registry.AdmitRequest(child, astra, undefined, config)).resolves.toMatchObject(astra)
+    expect(probe).not.toHaveBeenCalled()
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 1, attemptedRoutes: ['codex/gpt-6-astra'] })
+    expect(registry.getTerminal(child.id)).toBeUndefined()
+  })
+
+  it('健康首选路由在元数据暂时故障时跨步保持，不被悄悄降到后备路由', async () => {
+    const probe = vi.fn(async (route: RouteInfo) => route.model === astra.model ? { ok: false as const, reason: 'metadata-pending-timeout' } : { ok: true as const, vision: true })
+    const registry = intRouteStateRegistry(undefined, probe)
+    registry.AddChild(child.id, { chain: [astra, flash], role: 'zhu_jian', logicalRequestId: 'D-stay' })
+    for (const step of [1, 2]) {
+      registry.BeginRequestStep(child.id, 1, step)
+      await expect(registry.AdmitRequest(child, astra, undefined, config)).resolves.toMatchObject(astra)
+      expect(registry.getChild(child.id)?.route).toEqual(astra)
+      registry.MarkRequestSucceeded(child.id)
+    }
+    expect(probe).not.toHaveBeenCalled()
+  })
+
+  it.each(['metadata-pending-timeout', 'metadata-capacity-busy', 'llm-service-changed'])('隔离到期重开的路由遇到元数据暂时不可知时放行给真实请求判断，且不立即重探（%s）', async (reason) => {
+    let at = 0
+    let calls = 0
+    const registry = intRouteStateRegistry(undefined, async () => {
+      if (++calls > 2) throw new Error('re-probe loop')
+      return { ok: false, reason }
+    }, { now: () => at })
+    registry.AddChild(child.id, { chain: [astra], role: 'zhu_jian', logicalRequestId: 'D-reopen' })
+    registry.BeginRequestStep(child.id, 1, 1)
+    await registry.ObserveRouteFailure(astra, poolCooling(60_000), config)
+    at = 60_000
+    await expect(registry.AdmitRequest(child, astra, undefined, config)).resolves.toMatchObject(astra)
+    expect(calls).toBe(1)
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 1, attemptedRoutes: ['codex/gpt-6-astra'] })
+    expect(registry.getHealth()[0]?.halfOpenAgent).toBe(child.id)
+  })
+
+  it('预检期间候选被其他请求隔离（route-isolated）不记为永久拒绝，隔离到期后重探并准入', async () => {
+    let at = 0
+    let calls = 0
+    const sleeps: number[] = []
+    const registry = intRouteStateRegistry(undefined, async (route) => {
+      calls += 1
+      if (calls > 1) return { ok: true, vision: true }
+      await registry.ObserveRouteFailure(route, poolCooling(60_000), config)
+      return { ok: false, reason: 'route-isolated' }
+    }, { now: () => at, sleep: async (ms) => { sleeps.push(ms); at += ms } })
+    registry.AddChild(child.id, { chain: [astra, flash], role: 'zhu_jian' })
+    await registry.ObserveRouteFailure(astra, { code: 'QUOTA' }, config)
+    await expect(registry.AdmitRequest(child, astra, undefined, config)).resolves.toMatchObject(flash)
+    expect(calls).toBe(2)
+    expect(sleeps).toEqual([60_000])
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 1, attemptedRoutes: ['deepseek-official/deepseek-flash'], admissionHolds: 1 })
+  })
+
+  it('等待后不复用等待前的预检通过结果：重探转为确定拒绝时不准入', async () => {
+    let at = 0
+    let calls = 0
+    const sleeps: number[] = []
+    const registry = intRouteStateRegistry(undefined, async (route) => {
+      calls += 1
+      if (calls > 1) return { ok: false, reason: 'provider-not-configured' }
+      await registry.ObserveRouteFailure(route, poolCooling(60_000), config)
+      return { ok: true, vision: true }
+    }, { now: () => at, sleep: async (ms) => { sleeps.push(ms); at += ms } })
+    registry.AddChild(child.id, { chain: [astra, flash], role: 'zhu_jian' })
+    await registry.ObserveRouteFailure(astra, { code: 'QUOTA' }, config)
+    await expect(registry.AdmitRequest(child, astra, undefined, config)).rejects.toThrow('route_chain_exhausted')
+    expect(calls).toBe(2)
+    expect(sleeps).toEqual([60_000])
+    expect(registry.getRecovery(child.id)?.attempts).toBe(0)
+    expect(registry.getHealth().every((entry) => entry.halfOpenAgent === undefined)).toBe(true)
   })
 
   it('隔离到期后另一请求持有半开探测：按退避间隔复查，探测成功后准入；等待中隔离被延长时继续等到新的到期时刻', async () => {

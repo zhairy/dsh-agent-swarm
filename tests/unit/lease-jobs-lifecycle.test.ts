@@ -256,6 +256,34 @@ describe('workspace leases follow real DSH JobsLocal lifecycle', () => {
     job.resolve({ status: 'killed' })
   })
 
+  it('keeps the lease fenced when an in-flight wait returns forced-failed without producer confirmation', async () => {
+    const f = await fixture()
+    const run = await f.start()
+    const before = await f.leases.getStatus(f.home)
+    const events = vi.spyOn(f.service, 'OnJobEvent')
+    const job = f.startJob(run.child.id, () => { throw new Error('orphaned fixture writer') })
+    const waiting = vi.spyOn(f.jobs, 'wait')
+    run.finish()
+    await vi.waitFor(() => expect(waiting).toHaveBeenCalledWith(job.id, expect.any(Number), run.child.id))
+    const waited = waiting.mock.results[0]!.value
+    expect(run.returned()).toBe(false)
+    await f.owners[0]!.dispose()
+    await expect(waited).resolves.toMatchObject({ id: job.id, status: 'failed' })
+    expect(events).toHaveBeenCalledWith(run.child.id, {
+      type: 'job/settled',
+      data: expect.objectContaining({ jobId: job.id, status: 'failed', cause: 'teardown', producerReported: false })
+    })
+    await run.handled
+    expect(f.jobs.list(run.child.id)).toEqual([])
+    expect(await f.leases.getStatus(f.home)).toMatchObject({ owner: before.owner, leaseEpoch: before.leaseEpoch, busy: true, mutationUnknown: true })
+    // JobsLocal keeps its first settlement; late done cannot supply new stop proof.
+    events.mockClear()
+    job.resolve({ status: 'killed' })
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(events).not.toHaveBeenCalled()
+    expect(await f.leases.getStatus(f.home)).toMatchObject({ owner: before.owner, leaseEpoch: before.leaseEpoch, busy: true, mutationUnknown: true })
+  })
+
   it('does not overwrite newer producer settlement with an earlier timed-wait snapshot after record removal', async () => {
     const f = await fixture()
     const run = await f.start()

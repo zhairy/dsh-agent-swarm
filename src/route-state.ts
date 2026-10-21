@@ -671,8 +671,10 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       if (checked === undefined) throw new AdmissionProbe(candidate)
       return checked
     }
+    // 只有从隔离恢复的当前路由才预检；未失败过的健康路由与 2.9.3 一致不依赖元数据。
     // 已由本请求持有的半开/人工许可不能再走全局 probe（它会把自己的 claim 当作隔离）。
-    if (route === undefined || !canServe(route) || (health.isAvailable(route) && !accepts(route)) || !health.claim(route, agent.id)) {
+    const returning = route !== undefined && health.getRelatedEntries(route).length > 0
+    if (route === undefined || !canServe(route) || (returning && health.isAvailable(route) && !accepts(route)) || !health.claim(route, agent.id)) {
       if (child === undefined && config?.rootFallback === false) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'root-fallback-disabled: route_chain_exhausted') }
       const baseChain = config === undefined || _presetRole === undefined ? [] : getRoleRoute(config, getRouteKey(_presetRole)).chain
       const chain = effectiveChain(agent.id, child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain)))
@@ -732,7 +734,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     clearHealth: (key) => health.clear(key),
     ObserveRouteFailure: (route, failure, config) => {
       const normalized = normalizeRouteFailure(failure as RouteFailureMetadata, route)
-      if (isTerminalRouteFailure(normalized)) {
+      // 元数据网络故障也走既有隔离与有界准入等待，不能作为模型不可用的永久否定。
+      if (isTerminalRouteFailure(normalized) || normalized.kind === 'network_transient') {
         health.record(route, normalized)
         return options.onHealthChange?.(health.getSnapshot(), { reason: 'probe' })
       } else if (normalized.providerRetryAfterMs !== undefined && normalized.providerRetryAfterMs > policyOf(config).maxShortRetryDelayMs) {
@@ -1035,7 +1038,9 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
             if (recoveries.get(agent.id) !== recovery || (child !== undefined && !children.has(agent.id))) throw new SwarmError('RECOVERY_REQUIRED', '路由准入所属请求已结束或变更')
             if (children.get(agent.id) !== child || roots.get(agent.id) !== root || rootPreferences.get(agent.id) !== preference || upgrades.get(agent.id) !== upgrade || quotaOrders.get(agent.id) !== order) { checks!.clear(); continue }
             // probe 期间被其他请求隔离时重新等待健康状态，不把它当作永久能力不符。
-            if (checked.ok || checked.reason !== 'route-isolated') checks!.set(admissionKey(error.route), checked.ok && (child?.requireVision !== true || checked.vision))
+            // 元数据暂时不可知不是否定证据：放行给真实请求判断（失败走常规错误恢复），并记下结果避免立即重探。
+            const unknown = !checked.ok && ['metadata-pending-timeout', 'metadata-capacity-busy', 'llm-service-changed'].includes(checked.reason)
+            if (checked.ok || checked.reason !== 'route-isolated') checks!.set(admissionKey(error.route), unknown || (checked.ok && (child?.requireVision !== true || checked.vision)))
             continue
           }
           if (!(error instanceof AdmissionWait)) throw error

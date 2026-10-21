@@ -1,10 +1,10 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getRoleRoute, getSwarmConfig, type SwarmConfigInfo } from '../../src/config.js'
 import { getLedgerEvents } from '../../src/evidence.js'
-import type { SubagentStartRequestLike } from '../../src/host-contract.js'
+import type { LlmLike, SubagentStartRequestLike } from '../../src/host-contract.js'
 import { ROLE_TAG_PATTERN, type DelegableRoleId } from '../../src/role-registry.js'
 import { ValidateAcceptInput, intSwarmService, type SwarmServiceDepsInfo } from '../../src/service.js'
 import { getAcceptText, getDelegationText, getStatusText } from '../../src/tools.js'
@@ -50,6 +50,142 @@ const makeService = (options: { config?: Record<string, unknown>; env?: Partial<
   }
   return { service: intSwarmService(deps), fetchMock, subagents, dshHome, config }
 }
+
+describe('默认预检的短网络元数据恢复', () => {
+  const route = { provider: 'codex', model: 'gpt-6-astra' }
+  const child = { id: 'metadata-child', session: { header: { parentSession: root.id } } }
+  const networkFailures = [
+    { code: 'TRANSPORT', message: 'fetch failed: ENETUNREACH' },
+    { code: 'NETWORK', message: 'fetch failed: ENETUNREACH' },
+    { code: 'TIMEOUT', message: 'metadata request timed out' },
+    { code: 'NO_ADAPTER', message: 'transport failed: fetch failed' }
+  ]
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(1_000_000) })
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks() })
+
+  // 不替换 probe、observer、健康态或准入等待，只控制外部元数据与时钟。
+  const returning = async (resolveModelInfo: LlmLike['resolveModelInfo'], options: { providerConfigured?: boolean; requireVision?: boolean } = {}) => {
+    const llm = { listProviders: () => options.providerConfigured === false ? [] : [{ id: route.provider }], resolveModelInfo }
+    const made = makeService({ config: { persistence: { enabled: false }, jev: { enabled: false }, agents: { networkWaitMs: 70_000 } },
+      env: { getLlm: () => llm, now: () => Date.now() } })
+    const registry = made.service.routeState
+    registry.AddChild(child.id, { chain: [route], role: 'zhu_jian', logicalRequestId: 'metadata-request', requireVision: options.requireVision })
+    registry.BeginRequestStep(child.id, 1, 1)
+    await registry.ObserveRouteFailure(route, { code: 'POOL_EXHAUSTED' }, made.config)
+    vi.setSystemTime(registry.getRouteDueAt(route))
+    return { ...made, registry }
+  }
+
+  it.each([
+    ...networkFailures.map((failure) => ({ ...failure, providerRetryAfterMs: undefined, resetAfterMs: undefined, waitMs: 10_000 })),
+    { ...networkFailures[0]!, providerRetryAfterMs: 500, resetAfterMs: undefined, waitMs: 10_000 },
+    { ...networkFailures[0]!, providerRetryAfterMs: 60_000, resetAfterMs: undefined, waitMs: 60_000 },
+    { ...networkFailures[0]!, providerRetryAfterMs: undefined, resetAfterMs: 45_000, waitMs: 45_000 }
+  ])('$code 元数据失败后隔离等待 $waitMs 毫秒，恢复准入不早于冷却或供应商下限', async ({ code, message, providerRetryAfterMs, resetAfterMs, waitMs }) => {
+    const calls: number[] = []
+    const resolveModelInfo = vi.fn(async () => {
+      calls.push(Date.now())
+      if (calls.length === 1) throw Object.assign(new Error(message), { failure: { code, message, providerRetryAfterMs,
+        ...(resetAfterMs === undefined ? {} : { resetAt: new Date(Date.now() + resetAfterMs).toISOString() }) } })
+      return { inputModalities: ['text', 'image'] }
+    })
+    const { registry, config, fetchMock } = await returning(resolveModelInfo)
+    const startedAt = Date.now()
+    const result = registry.AdmitRequest(child, route, undefined, config).then((value) => ({ value }), (error: unknown) => ({ error }))
+    await vi.advanceTimersByTimeAsync(waitMs - 1)
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 0, admissionHolds: 1, holdWaitedMs: waitMs })
+    expect(registry.getHealth()).toMatchObject([{ kind: 'network_transient', retryCount: 1, retryAt: startedAt + waitMs }])
+    expect(registry.isRouteAvailable(route)).toBe(false)
+    expect(calls).toEqual([startedAt])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await result).toEqual({ value: route })
+    expect(calls).toEqual([startedAt, startedAt + waitMs])
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 1, admissionHolds: 1, holdWaitedMs: waitMs, attemptedRoutes: ['codex/gpt-6-astra'] })
+    expect(registry.getHealth()).toMatchObject([{ kind: 'network_transient', halfOpenAgent: child.id }])
+    expect(registry.getTerminal(child.id)).toBeUndefined()
+    registry.MarkRequestSucceeded(child.id)
+    await registry.WaitHealthReady(child.id)
+    expect(registry.getHealth()).toEqual([])
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each(networkFailures)('$code 持续元数据失败按 10/20/40 秒退避，并在准入等待预算耗尽后终止', async (failure) => {
+    const calls: number[] = []
+    const { registry, config, fetchMock } = await returning(async () => {
+      calls.push(Date.now())
+      throw Object.assign(new Error(failure.message), { failure })
+    })
+    const startedAt = Date.now()
+    const result = registry.AdmitRequest(child, route, undefined, config).then((value) => ({ value }), (error: unknown) => ({ error }))
+    await vi.runAllTimersAsync()
+    expect(await result).toMatchObject({ error: { message: 'route_chain_exhausted' } })
+    expect(calls.map((at) => at - startedAt)).toEqual([0, 10_000, 30_000, 70_000])
+    expect(Date.now() - startedAt).toBe(70_000)
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 0, admissionHolds: 3, holdWaitedMs: 70_000, terminal: 'route_chain_exhausted' })
+    expect(registry.getHealth()).toMatchObject([{ kind: 'network_transient', retryCount: 4, retryAt: startedAt + 130_000 }])
+    expect(registry.getHealth().every((entry) => entry.halfOpenAgent === undefined)).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { name: '确定模型不可用', failure: { code: 'UNKNOWN_MODEL', message: 'model not found' }, providerConfigured: true, vision: true },
+    { name: '供应商未配置', failure: undefined, providerConfigured: false, vision: true },
+    { name: '明确能力不符', failure: { code: 'UNSUPPORTED_REASONING_EFFORT', message: 'unsupported reasoning effort' }, providerConfigured: true, vision: true },
+    { name: '缺少视觉能力', failure: undefined, providerConfigured: true, vision: false },
+    { name: '无结构化网络事实的错误文本', failure: { message: 'fetch failed: ENETUNREACH' }, providerConfigured: true, vision: true }
+  ])('$name 仍拒绝准入，不将所有 model-unavailable 当作网络故障', async ({ failure, providerConfigured, vision }) => {
+    const resolveModelInfo = vi.fn(async () => {
+      if (failure !== undefined) throw Object.assign(new Error(failure.message), { failure })
+      return { inputModalities: vision ? ['text', 'image'] : ['text'] }
+    })
+    const { registry, config } = await returning(resolveModelInfo, { providerConfigured, requireVision: true })
+    const startedAt = Date.now()
+    await expect(registry.AdmitRequest(child, route, undefined, config)).rejects.toThrow('route_chain_exhausted')
+    expect(Date.now()).toBe(startedAt)
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 0, terminal: 'route_chain_exhausted' })
+    expect(registry.getRecovery(child.id)?.admissionHolds ?? 0).toBe(0)
+    expect(registry.getHealth().every((entry) => entry.kind !== 'network_transient' && entry.halfOpenAgent === undefined)).toBe(true)
+    expect(resolveModelInfo).toHaveBeenCalledTimes(providerConfigured ? 1 : 0)
+  })
+
+  it('真实 signal 在元数据查询期间 abort 后不再隔离、等待或准入，迟到的网络失败也不继续', async () => {
+    let rejectMetadata!: (error: unknown) => void
+    const resolveModelInfo = vi.fn(() => new Promise<Awaited<ReturnType<LlmLike['resolveModelInfo']>>>((_resolve, reject) => { rejectMetadata = reject }))
+    const { registry, config } = await returning(resolveModelInfo)
+    const before = registry.getHealthSnapshot()
+    const controller = new AbortController()
+    const result = registry.AdmitRequest(child, route, undefined, config, false, controller.signal)
+      .then((value) => ({ value }), (error: unknown) => ({ error }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(resolveModelInfo).toHaveBeenCalledTimes(1)
+    controller.abort()
+    expect(await result).toMatchObject({ error: { code: 'RECOVERY_REQUIRED' } })
+    rejectMetadata(Object.assign(new Error(networkFailures[0]!.message), { failure: networkFailures[0] }))
+    await vi.runAllTimersAsync()
+    expect(registry.getHealthSnapshot()).toEqual(before)
+    expect(registry.getRecovery(child.id)?.attempts).toBe(0)
+    expect(registry.getRecovery(child.id)?.admissionHolds ?? 0).toBe(0)
+    expect(resolveModelInfo).toHaveBeenCalledTimes(1)
+  })
+
+  it('真实 signal 在网络隔离等待期间 abort 后不再次查询元数据或准入', async () => {
+    const resolveModelInfo = vi.fn(async () => ({ inputModalities: ['text', 'image'] }))
+      .mockRejectedValueOnce(Object.assign(new Error(networkFailures[0]!.message), { failure: networkFailures[0] }))
+    const { registry, config } = await returning(resolveModelInfo)
+    const controller = new AbortController()
+    const result = registry.AdmitRequest(child, route, undefined, config, false, controller.signal)
+      .then((value) => ({ value }), (error: unknown) => ({ error }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(registry.getRecovery(child.id)).toMatchObject({ attempts: 0, admissionHolds: 1 })
+    controller.abort()
+    expect(await result).toMatchObject({ error: { code: 'RECOVERY_REQUIRED' } })
+    await vi.runAllTimersAsync()
+    expect(resolveModelInfo).toHaveBeenCalledTimes(1)
+    expect(registry.getRecovery(child.id)?.attempts).toBe(0)
+    expect(registry.getHealth()).toMatchObject([{ kind: 'network_transient' }])
+    expect(registry.getHealth().every((entry) => entry.halfOpenAgent === undefined)).toBe(true)
+  })
+})
 
 const cardInput = (flags: Record<string, boolean>, extra: Record<string, unknown> = {}) => ({ title: '任务', goal: '目标', acceptance: ['通过'], scope: ['src/a.ts'], flags, ...extra })
 
