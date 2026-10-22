@@ -42,11 +42,17 @@
 | 隔离 tarball 安装 | 3.1.0 正常启动并通过 pnpm 11 |
 | link 安装器 | 临时 profile 启动，插件启用，`dsh.profile.bundles` 正确 |
 | agent-browser | 百工预设、插件版本 v3.1.0、原生 Team 实验开关正常，无页面错误 |
+| 本机正式 profile | `dsh-web` 用户服务 active，PID 1358953，仅监听 127.0.0.1:3080；宿主与插件分别为 0.2.1-rc.2 / 3.1.0 |
+| 长会话回归 | 打开真实的“行情工作台布局优化”会话，数百条消息、工具调用和压缩历史连续渲染，页面错误为空 |
 
 浏览器证据：
 
 - [百工预设](browser/baigong-preset.png)
 - [插件版本](browser/plugin-v3.1.0.png)
+- [本机真实长会话](browser/production-long-session.png)
+- [本机插件页](browser/production-plugin-v3.1.0.png)
+
+本机 profile 升级前备份位于 `/home/zhairy/.dsh/backup-v3.1.0-20261023-014921`。`pnpm install` 期间出现旧版本 patch 未命中和 peer warning；升级后 `dshmarket`、RigorQuant、subscriptions、finance、browser、quant 等插件仍可解析，`dsh --dump-config` 仅报告已知的 RigorQuant `agent-team` 缺失提示。
 
 ## Jev 审核
 
