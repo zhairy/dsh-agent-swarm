@@ -21,7 +21,7 @@ export interface RouteHealthClear { key: string; failedAt: number; failureId?: s
 export interface RouteHealthSnapshot { schemaVersion: 1; entries: RouteHealthEntry[]; cleared: RouteHealthClear[] }
 /** All aliases and clear barriers share one bounded identity space; none are evicted by age/LRU. */
 export const MAX_ROUTE_HEALTH_KEYS = 4096
-const FAILURE_KINDS = new Set(['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable', 'rate_limited', 'network_transient', 'service_transient', 'context_exceeded', 'capability_mismatch', 'unknown'])
+const FAILURE_KINDS = new Set(['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable', 'rate_limited', 'network_transient', 'service_transient', 'context_exceeded', 'capability_mismatch', 'protocol_incompatible', 'unknown'])
 export interface RouteManualRetryResult {
   ok: boolean
   keys: string[]

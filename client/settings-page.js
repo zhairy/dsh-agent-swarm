@@ -18,7 +18,7 @@ const h = React.createElement
  *   triggers: Array<{ id: string, label: string }>,
  *   policy?: { defaults: PolicyInfo }
  * }}
- * @typedef {{ session: string, repeatAbove: number, sameCategoryAbove: number, maxRetries: number, retryBackoffMs: number, promptStyle: string, networkWaitMs: number, rootRecoverMs: number, modelCallDisplay: string }} PolicyInfo
+ * @typedef {{ session: string, repeatAbove: number, sameCategoryAbove: number, maxRetries: number, retryBackoffMs: number, promptStyle: string, networkWaitMs: number, rootRecoverMs: number, modelCallDisplay: string, nativeTeamProjection: boolean }} PolicyInfo
  */
 const DATA = __SWARM_DATA__
 const MATH = DATA.math
@@ -27,13 +27,13 @@ const NS = 'settings.swarmAgents'
 const EMPTY_SLOT = Object.freeze({ provider: '', model: '', reasoningEffort: '' })
 const NO_UPGRADE = Object.freeze({ enabled: false, chain: [], triggers: [] })
 /** 与宿主 DEFAULT_AGENTS_CONFIG 一致；构建时由 DATA.policy 注入，缺失时用这份兜底 */
-const POLICY_DEFAULTS = Object.freeze({ language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every', ...(DATA.policy?.defaults ?? {}) })
+const POLICY_DEFAULTS = Object.freeze({ language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every', nativeTeamProjection: false, ...(DATA.policy?.defaults ?? {}) })
 const SESSION_POLICIES = ['auto', 'continuable', 'oneshot']
 const PROMPT_STYLES = ['auto', 'claude', 'gpt', 'generic']
 const MODEL_CALL_DISPLAYS = ['every', 'turn']
 const LANGUAGES = ['zh-CN', 'en', 'zh-TW', 'ja', 'ko']
 const LANGUAGE_NAMES = { 'zh-CN': '简体中文', en: 'English', 'zh-TW': '繁體中文', ja: '日本語', ko: '한국어' }
-const POLICY_KEYS = ['language', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffMs', 'promptStyle', 'networkWaitMs', 'rootRecoverMs', 'modelCallDisplay']
+const POLICY_KEYS = ['language', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffMs', 'promptStyle', 'networkWaitMs', 'rootRecoverMs', 'modelCallDisplay', 'nativeTeamProjection']
 /** Jev 密钥的默认凭据引用名（swarm-core 的 jev.apiKeyEnv） */
 const DEFAULT_JEV_REF = 'TYPESAFE_API_KEY'
 const WORKFLOW_MODES = ['off', 'advisory', 'enforced']
@@ -124,6 +124,10 @@ const zh = {
   policyModelCallHint: '百工会话的聊天窗口用一行显示「模型 · 供应商 · 推理强度」；换模型（回退、升级）时总会显示',
   modelCallEvery: '每次调用都显示',
   modelCallTurn: '每轮首次与换模型时显示',
+  policyNativeTeam: '原生团队只读镜像',
+  policyNativeTeamHint: '实验性，默认关闭。仅投影 DSH 原生团队已有成员、共享任务和实时状态，并可打开成员会话；不会创建成员、修改共享任务或绕过百工门禁。',
+  policyOn: '启用',
+  policyOff: '关闭',
   jevTitle: 'Jev 模型 API Key',
   jevDescription: '百工内嵌 TypeSafe Jev（System One）：衡鉴分流、专家会话判断、交付复评，以及 7 个 jev_* 判断工具（jev_ask / jev_check / jev_classify / jev_score / jev_match / jev_screen / jev_health）都直接在插件内调用，不需要外部 MCP。密钥保存在 DSH 凭据存储中，不会显示，也不会写入配置文件。',
   jevRef: '凭据引用',
@@ -227,6 +231,10 @@ const en = {
   policyModelCallHint: 'Swarm sessions show a "model · provider · effort" line in the chat; a model switch (fallback, upgrade) is always shown',
   modelCallEvery: 'On every call',
   modelCallTurn: 'First call of each turn and on switches',
+  policyNativeTeam: 'Read-only native team mirror',
+  policyNativeTeamHint: 'Experimental and off by default. It projects existing native DSH team members, shared tasks and live status, and can open member sessions. It never creates members, edits shared tasks or bypasses Agent Swarm gates.',
+  policyOn: 'Enabled',
+  policyOff: 'Off',
   jevTitle: 'Jev API key',
   jevDescription: 'The swarm embeds TypeSafe Jev (System One): triage, expert session planning, delivery review and the 7 jev_* judgment tools (jev_ask / jev_check / jev_classify / jev_score / jev_match / jev_screen / jev_health) call it directly from the plugin, with no external MCP. The key is kept in the DSH credential store; it is never displayed or written to configuration.',
   jevRef: 'Credential reference',
@@ -553,7 +561,8 @@ const getPolicy = (value) => {
     language: LANGUAGES.includes(merged.language) ? merged.language : 'zh-CN',
     session: SESSION_POLICIES.includes(merged.session) ? merged.session : 'auto',
     promptStyle: PROMPT_STYLES.includes(merged.promptStyle) ? merged.promptStyle : 'auto',
-    modelCallDisplay: MODEL_CALL_DISPLAYS.includes(merged.modelCallDisplay) ? merged.modelCallDisplay : 'every'
+    modelCallDisplay: MODEL_CALL_DISPLAYS.includes(merged.modelCallDisplay) ? merged.modelCallDisplay : 'every',
+    nativeTeamProjection: merged.nativeTeamProjection === true
   }
 }
 
@@ -581,7 +590,7 @@ const getPolicyErrors = (policy) => {
 }
 
 /** 草稿里的时长字段：重试等待用秒，断网等待与恢复用分钟 */
-const DRAFT_KEYS = ['language', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffSec', 'promptStyle', 'networkWaitMin', 'rootRecoverMin', 'modelCallDisplay']
+const DRAFT_KEYS = ['language', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffSec', 'promptStyle', 'networkWaitMin', 'rootRecoverMin', 'modelCallDisplay', 'nativeTeamProjection']
 
 /** 已保存策略 → 编辑草稿（时长换成秒或分钟） */
 const toPolicyDraft = (policy) => ({
@@ -594,7 +603,8 @@ const toPolicyDraft = (policy) => ({
   promptStyle: policy.promptStyle,
   networkWaitMin: policy.networkWaitMs / 60000,
   rootRecoverMin: policy.rootRecoverMs / 60000,
-  modelCallDisplay: policy.modelCallDisplay
+  modelCallDisplay: policy.modelCallDisplay,
+  nativeTeamProjection: policy.nativeTeamProjection
 })
 
 /**
@@ -615,7 +625,8 @@ const buildPolicy = (draft, saved) => {
     promptStyle: PROMPT_STYLES.includes(draft.promptStyle) ? draft.promptStyle : 'auto',
     networkWaitMs: Math.round(toNumber(draft.networkWaitMin) * 60000),
     rootRecoverMs: Math.round(toNumber(draft.rootRecoverMin) * 60000),
-    modelCallDisplay: MODEL_CALL_DISPLAYS.includes(draft.modelCallDisplay) ? draft.modelCallDisplay : 'every'
+    modelCallDisplay: MODEL_CALL_DISPLAYS.includes(draft.modelCallDisplay) ? draft.modelCallDisplay : 'every',
+    nativeTeamProjection: draft.nativeTeamProjection === true
   }
   const kept = Object.fromEntries(Object.entries(asRecord(saved)).filter(([key]) => !POLICY_KEYS.includes(key)))
   return { ...kept, ...Object.fromEntries(Object.entries(value).filter(([key, item]) => item !== POLICY_DEFAULTS[key])) }
@@ -1560,6 +1571,19 @@ function PolicyCard ({ t, policy, editable, controller }) {
         h('option', { value: 'every' }, t('modelCallEvery')),
         h('option', { value: 'turn' }, t('modelCallTurn'))),
         h('span', { style: style.hint }, t('policyModelCallHint'))
+      ),
+      h('label', { style: style.field },
+        h('span', { style: style.fieldLabel }, t('policyNativeTeam')),
+        h('span', { style: style.switchLabel },
+          h('input', {
+            type: 'checkbox',
+            checked: value.nativeTeamProjection,
+            disabled: !editable,
+            'aria-label': t('policyNativeTeam'),
+            onChange: (event) => controller.setPolicy({ nativeTeamProjection: event.target.checked })
+          }),
+          value.nativeTeamProjection ? t('policyOn') : t('policyOff')),
+        h('span', { style: style.hint }, t('policyNativeTeamHint'))
       ),
       h(PolicyNumber, { t, name: 'networkWaitMin', label: 'policyNetworkWait', hint: 'policyNetworkWaitHint', value: value.networkWaitMin, error: policy.errors.networkWaitMin, step: 1, disabled: !editable, controller }),
       h(PolicyNumber, { t, name: 'rootRecoverMin', label: 'policyRootRecover', hint: 'policyRootRecoverHint', value: value.rootRecoverMin, error: policy.errors.rootRecoverMin, step: 1, disabled: !editable, controller })

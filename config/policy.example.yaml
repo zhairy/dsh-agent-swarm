@@ -35,6 +35,7 @@
       networkWaitMs: 600000        # 单次请求的等待预算（10 分钟）：断网时等网络恢复；链上暂无可用模型时等最早恢复的路由；0 为不等待
       rootRecoverMs: 600000        # 普通故障回退后的恢复；确认耗尽的额度域不会靠此计时器清除
       modelCallDisplay: every      # 聊天窗口「调用模型」行：every 每次调用都显示；turn 只在每轮首次与换模型时显示
+      nativeTeamProjection: false  # 实验性只读：投影 DSH 原生团队已有成员/任务并打开成员会话；不接管百工执行
       networkProbeUrls:            # 联网探测地址：任一有 HTTP 响应即视为联网
         - https://api.deepseek.com
         - https://dashscope.aliyuncs.com

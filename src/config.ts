@@ -93,7 +93,9 @@ export const Config = Schema.object({
     networkProbeUrls: Schema.array(Schema.string()).default(['https://api.deepseek.com', 'https://dashscope.aliyuncs.com', 'https://www.baidu.com'])
       .description('判断网络是否可达的探测地址：任一地址有 HTTP 响应即视为联网'),
     modelCallDisplay: Schema.union(['every', 'turn']).default('every')
-      .description('百工会话聊天窗口里的「调用模型」行：every 每次调用都显示；turn 只在每轮首次调用与换模型时显示')
+      .description('百工会话聊天窗口里的「调用模型」行：every 每次调用都显示；turn 只在每轮首次调用与换模型时显示'),
+    nativeTeamProjection: Schema.boolean().default(false)
+      .description('实验性只读投影：在会话头部查看 DSH 原生团队已有成员、共享任务与实时状态；不改任务、不创建成员、不接管执行')
   }).default({}).description('专家的会话与重试策略；专家执行不设时间限制').volatile(),
   budgets: Schema.object({
     maxDelegationsPerTask: Schema.natural().default(0).description('每个任务的委派次数上限；0 为不限'),
@@ -202,6 +204,8 @@ export interface AgentsConfigInfo {
   networkProbeUrls: string[]
   /** 聊天窗口「调用模型」行的显示方式（由浏览器端读取） */
   modelCallDisplay: ModelCallDisplay
+  /** 实验性 DSH 原生团队只读投影；默认关闭，百工仍是唯一执行控制器 */
+  nativeTeamProjection: boolean
 }
 
 /** every：每次调用都显示；turn：每轮首次调用与换模型时显示 */
@@ -220,7 +224,8 @@ export const DEFAULT_AGENTS_CONFIG: AgentsConfigInfo = {
   networkWaitMs: 600_000,
   rootRecoverMs: 600_000,
   networkProbeUrls: [...DEFAULT_NETWORK_PROBE_URLS],
-  modelCallDisplay: 'every'
+  modelCallDisplay: 'every',
+  nativeTeamProjection: false
 }
 
 /** 合并默认值后的完整配置 */

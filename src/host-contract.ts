@@ -159,6 +159,8 @@ export interface SubagentEndInfoLike {
   id: string
   stopReason: string
   lastAssistantMessage?: readonly ContentBlockLike[]
+  /** Host turn/end error text captured from session/event; absent when the host did not expose one. */
+  diagnostic?: string
 }
 
 /** ctx.subagents 的最小形状；连续会话相关方法在 DSH 0.1.7-rc.2 起提供，缺失时退回一次性委派 */
@@ -185,7 +187,13 @@ export interface JobsLike {
 /** session/event 的后台作业事实；强制失败/拒绝不是 producer done 的清理确认。 */
 export interface JobLifecycleEventLike {
   type: string
-  data?: { jobId?: string; owner?: string; status?: string; producerReported?: boolean }
+  data?: {
+    jobId?: string
+    owner?: string
+    status?: string
+    producerReported?: boolean
+    reason?: { kind?: string; error?: { message?: string; code?: string } | string }
+  }
 }
 
 /** 进入一步之前的消息（agent/pre-step）；只读取本插件需要的来源字段 */

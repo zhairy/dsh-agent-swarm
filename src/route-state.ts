@@ -10,7 +10,7 @@ import {
 } from './host-contract.js'
 import type { RoleId } from './role-registry.js'
 import { isNetworkSuspect, SleepWithSignal, type NetworkMonitorInfo } from './network.js'
-import { normalizeRouteFailure, isTerminalRouteFailure, getRouteResourcePolicy, getWireReasoningEffort, type RouteFailureMetadata } from './provider-policy.js'
+import { normalizeRouteFailure, isTerminalRouteFailure, getRouteResourcePolicy, getWireReasoningEffort, type FailureKind, type RouteFailureMetadata } from './provider-policy.js'
 import { intRouteHealth, type RouteHealth, type RouteHealthSnapshot } from './route-health.js'
 import { SwarmError } from './util/errors.js'
 import { getFailureClass, getRouteKey, getRouteLabel, isSameRoute, type FailureClass, type RouteInfo, type RouteProbe } from './routes.js'
@@ -125,6 +125,16 @@ export interface RequestRecoveryState {
   admissionHolds?: number
   /** 链耗尽时各路由的状态说明，写进委派结果 */
   terminalDetail?: string
+  /** 最近一次真实请求失败；仅供只读诊断，不进入批准或门禁。 */
+  lastFailure?: {
+    kind: FailureKind
+    provider: string
+    model: string
+    message: string
+    at: number
+    code?: string
+    status?: number
+  }
 }
 export interface RecoveryPolicy {
   maxTransientRetries: number
@@ -1076,6 +1086,15 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       const policy = policyOf(config)
       const failed = lastRoutes.get(payload.agent.id) ?? children.get(payload.agent.id)?.chain[children.get(payload.agent.id)!.index] ?? { provider: payload.provider, model: '' }
       const normalized = normalizeRouteFailure(payload.failure as RouteFailureMetadata, failed)
+      recovery.lastFailure = {
+        kind: normalized.kind,
+        provider: normalized.provider,
+        model: normalized.model,
+        message: normalized.message.slice(0, 500),
+        at: now(),
+        ...(normalized.code === undefined ? {} : { code: normalized.code }),
+        ...(normalized.status === undefined ? {} : { status: normalized.status })
+      }
       if (normalized.kind === 'context_exceeded') return terminal(payload.agent.id, 'context_recovery_required')
       const failedProbe = health.failHalfOpen(failed, payload.agent.id)
       const failureClass = getFailureClass(payload.failure)
