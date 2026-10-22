@@ -42,7 +42,7 @@
 | 隔离 tarball 安装 | 3.1.0 正常启动并通过 pnpm 11 |
 | link 安装器 | 临时 profile 启动，插件启用，`dsh.profile.bundles` 正确 |
 | agent-browser | 百工预设、插件版本 v3.1.0、原生 Team 实验开关正常，无页面错误 |
-| 本机正式 profile | `dsh-web` 用户服务 active，PID 1358953，仅监听 127.0.0.1:3080；宿主与插件分别为 0.2.1-rc.2 / 3.1.0 |
+| 本机正式 profile | `dsh-web` 用户服务 active，最终复核 PID 1363632，仅监听 127.0.0.1:3080；宿主与插件分别为 0.2.1-rc.2 / 3.1.0 |
 | 长会话回归 | 打开真实的“行情工作台布局优化”会话，数百条消息、工具调用和压缩历史连续渲染，页面错误为空 |
 
 浏览器证据：
@@ -53,6 +53,8 @@
 - [本机插件页](browser/production-plugin-v3.1.0.png)
 
 本机 profile 升级前备份位于 `/home/zhairy/.dsh/backup-v3.1.0-20261023-014921`。`pnpm install` 期间出现旧版本 patch 未命中和 peer warning；升级后 `dshmarket`、RigorQuant、subscriptions、finance、browser、quant 等插件仍可解析，`dsh --dump-config` 仅报告已知的 RigorQuant `agent-team` 缺失提示。
+
+随后把 `dsh-llm-fallbacks` 的百工排除补丁从 0.6.5 迁移到已安装的 0.6.8，并重启服务。`doctor` 的“llm-fallbacks 跳过百工模式”检查现为通过；剩余未配置项只是账号凭据与不再读取的旧预设目录，不是插件安装故障。
 
 ## Jev 审核
 
