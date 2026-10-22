@@ -75,3 +75,11 @@
 - 未提供真实用户的多小时分页会话全集；用穷举事件组合和宿主集成测试覆盖可枚举契约。
 - 临时 profile 未配置真实模型，因此没有重复发起真实模型业务调用；原生产 profile 的模型链路另行验证。
 - 原生 Team 在临时 profile 中没有实际成员/任务，仅验证默认关闭、组件加载和开关；成员投影的 DOM 上限由单元测试覆盖。
+
+## GitHub 发布
+
+- Release：<https://github.com/zhairy/dsh-agent-swarm/releases/tag/v3.1.0>
+- 标签 `v3.1.0` 指向发布提交 `e75df18`；源码发布提交为 `809f20c63de8b41087559a303ed627820af4cdfe`，后续证据提交不改变发布物。
+- 五个资产：`dsh-agent-swarm.tgz`（1,316,811 字节）、`release-manifest.json`、`RELEASE-NOTES.zh-CN.md`、`RELEASE-NOTES.en.md`、`SHA256SUMS`。
+- 发布包 SHA256：`0bdf0a00b29d18b9787f74a76e0fe62e416ff29079d2b6996540d38fdab7851b`。
+- 已通过 `releases/latest/download` 匿名下载五个资产，`sha256sum -c SHA256SUMS` 全部通过。
