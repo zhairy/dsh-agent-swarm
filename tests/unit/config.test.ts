@@ -41,7 +41,7 @@ describe('Config schema', () => {
       language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000,
       promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000,
       networkProbeUrls: ['https://api.deepseek.com', 'https://dashscope.aliyuncs.com', 'https://www.baidu.com'],
-      modelCallDisplay: 'every'
+      modelCallDisplay: 'every', nativeTeamProjection: false
     })
     expect(config.jev).toMatchObject({ maxRequestsPerSecond: 0, maxRequestChars: 120000 })
     expect(getSwarmConfig({ agents: { modelCallDisplay: 'turn' } }).agents.modelCallDisplay).toBe('turn')

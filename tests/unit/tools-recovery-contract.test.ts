@@ -62,4 +62,21 @@ describe('tool recovery contracts', () => {
       expect(text).toContain('规划审核：未运行（观察模式按需调用 swarm_review_plan）')
     } finally { await service.dispose(); rmSync(home, { recursive: true, force: true }) }
   })
+
+  it('renders a blocked task with a concrete recovery prescription', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'swarm-tool-blocked-'))
+    const service = intSwarmService({ getConfig: () => getSwarmConfig({ jev: { enabled: false }, planningReview: { enabled: false }, workflow: { mode: 'off' } }),
+      getLlm: () => undefined, getSubagents: () => undefined, getTools: () => undefined, getAttachments: () => undefined,
+      getCredentials: () => undefined, fetch: async () => { throw new Error('No network is allowed in this readonly diagnostic test') },
+      dshHome: home, gitStatus: async () => undefined })
+    try {
+      const exec = { agent: { id: 'blocked-root', session: { header: { agentPreset: 'tian-shu', cwd: home } } }, signal: new AbortController().signal }
+      const card = await service.AddTaskCard({ title: '阻塞恢复', goal: '补齐验证证据', acceptance: ['真实运行通过'], flags: { changesCode: true } }, exec)
+      const accepted = await service.AcceptTask({ task_id: card.task_id, decision: 'accept', summary: '尚未提供验证退出码', stopReason: '等待验证' }, exec)
+      expect(accepted.status).toBe('blocked')
+      const task = service.getStatus({ task_id: card.task_id }, exec).tasks[0]!
+      expect(task.blockedRecovery).toMatchObject({ active: true, blocked: true, cause: 'missing-gate', nextAction: 'delegate-gate' })
+      expect(task.blockedRecovery.recommendedRoles.map((item) => item.role)).toContain('fu_he')
+    } finally { await service.dispose(); rmSync(home, { recursive: true, force: true }) }
+  })
 })

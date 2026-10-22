@@ -12,6 +12,7 @@ import {
   getOutputText,
   getToolFilter,
   intDelegator,
+  isThinkingReplayFailure,
   type DelegateDepsInfo,
   type DelegateSessionInfo
 } from '../../src/delegate.js'
@@ -129,6 +130,13 @@ describe('纯函数', () => {
     expect(ParseNativeOutput('结果 {"y":3} 完')).toEqual({ y: 3 })
     expect(ParseNativeOutput('没有 JSON')).toBeUndefined()
     expect(getOutputText({ output: [{ type: 'text', text: 'a' }, { type: 'image' }, { type: 'text', text: 'b' }], stopReason: 'completed' })).toBe('a\nb')
+  })
+
+  it('只把明确的 thinking 回放契约错误归类为可重建会话', () => {
+    expect(isThinkingReplayFailure('The `content[].thinking` in the thinking mode must be passed back to the API.')).toBe(true)
+    expect(isThinkingReplayFailure('thinking mode passed back unexpectedly')).toBe(false)
+    expect(isThinkingReplayFailure('content[] malformed')).toBe(false)
+    expect(isThinkingReplayFailure(undefined)).toBe(false)
   })
 
   it('独立性：御史避开实现者家族，验算避开研算家族', () => {
@@ -424,7 +432,7 @@ describe('intDelegator.delegate', () => {
   })
 })
 
-interface FakeTurn { stopReason?: string; text?: string; startError?: string; sendError?: string; silent?: boolean }
+interface FakeTurn { stopReason?: string; text?: string; diagnostic?: string; startError?: string; sendError?: string; silent?: boolean }
 
 const json = (role: keyof typeof VALID_OUTPUTS): string => '```json\n' + JSON.stringify(VALID_OUTPUTS[role]) + '\n```'
 
@@ -436,7 +444,12 @@ const makeThreadHarness = (turns: FakeTurn[], overrides: Parameters<typeof makeH
   const reply = (childId: string): void => {
     const turn = queue.shift() ?? { text: json('zhu_jian') }
     if (turn.silent === true) return
-    setTimeout(() => h.deps.hub.Emit({ id: childId, stopReason: turn.stopReason ?? 'completed', lastAssistantMessage: [{ type: 'text', text: turn.text ?? '' }] }), 5)
+    setTimeout(() => h.deps.hub.Emit({
+      id: childId,
+      stopReason: turn.stopReason ?? 'completed',
+      lastAssistantMessage: [{ type: 'text', text: turn.text ?? '' }],
+      ...(turn.diagnostic === undefined ? {} : { diagnostic: turn.diagnostic })
+    }), 5)
   }
   const extra = {
     // 与宿主一样依赖 this：解构调用会失败
@@ -533,6 +546,26 @@ describe('连续会话与自动重试', () => {
     expect(h.delivered[3]?.text).toContain('上一次执行中断')
     expect(h.deps.sleep).toHaveBeenCalledTimes(1)
     expect(getLedgerEvents(h.session.ledger.path).filter((e) => e.type === 'delegation/retry')).toHaveLength(3)
+  })
+
+  it('thinking 历史回放失败时关闭损坏会话，在新会话从当前工作区恢复', async () => {
+    const h = track(makeThreadHarness([
+      { stopReason: 'error', text: '', diagnostic: 'The `content[].thinking` in the thinking mode must be passed back to the API.' },
+      { text: json('zhu_jian') }
+    ]))
+    const record = await h.delegator.delegate({ task_id: 'T-1', role: 'zhu_jian', prompt: '继续实现' }, exec(), h.session)
+    expect(record.status).toBe('completed')
+    expect(record.retries).toContainEqual({
+      attempt: 1,
+      action: 'restart',
+      reason: expect.stringContaining('thinking 历史回放')
+    })
+    expect(h.startContinuable).toHaveBeenCalledTimes(2)
+    const firstThread = h.delivered[0]?.childId
+    expect(record.session?.threadId).not.toBe(firstThread)
+    expect(h.session.threads.list().filter((thread) => thread.closed)).toHaveLength(1)
+    expect(h.delivered[1]?.text).toContain('【宿主协议恢复】')
+    expect(h.delivered[1]?.text).toContain('真实工作区核对已有进展')
   })
 
   it('会话无法建立时换新会话重试，多次失败后改为一次性调用', async () => {

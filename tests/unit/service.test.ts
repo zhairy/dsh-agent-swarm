@@ -428,6 +428,38 @@ describe('衡鉴复评', () => {
 })
 
 describe('连续会话', () => {
+  it('从子会话 turn/end 捕获 thinking 协议错误并交给连续会话恢复分类', async () => {
+    let service: ReturnType<typeof makeService>['service'] | undefined
+    let childId: string | undefined
+    const subagents = {
+      list: () => ['spawn'],
+      getProvider: () => ({ capabilities: {} }),
+      start: vi.fn(async () => { throw new Error('should not use one-shot') }),
+      startContinuable: vi.fn(async (spec: { childId: string }) => {
+        childId = spec.childId
+        return { childId: spec.childId, messageId: 'm' }
+      }),
+      sendMessage: vi.fn(async () => 'm')
+    }
+    const made = makeService({
+      config: { jev: { enabled: false }, agents: { session: 'continuable', maxRetries: 0 } },
+      env: { getSubagents: () => subagents as never }
+    })
+    service = made.service
+    const { task_id } = await service.AddTaskCard(cardInput({ uiCopy: true }), exec())
+    const pending = service.delegate({ task_id, role: 'zhu_jian', prompt: '继续实现' }, exec())
+    await vi.waitFor(() => expect(childId).toBeTypeOf('string'))
+    service.OnJobEvent(childId!, {
+      type: 'turn/end',
+      data: { reason: { kind: 'error', error: { message: 'The `content[].thinking` in the thinking mode must be passed back to the API.' } } }
+    })
+    service.OnSubagentEnd({ id: childId!, stopReason: 'error' })
+    const record = await pending
+    expect(record.status).toBe('failed')
+    expect(record.error).toContain('content[].thinking')
+    expect(record.unresolved.join('')).toContain('自动重建会话次数已用尽')
+  })
+
   it('衡鉴判定同类时追加到已有会话；取走结果后滤掉宿主给天枢的重复结束通知；状态列出会话', async () => {
     let service: ReturnType<typeof makeService>['service'] | undefined
     const reply = (childId: string): void => {

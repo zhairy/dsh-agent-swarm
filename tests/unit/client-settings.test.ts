@@ -299,7 +299,7 @@ describe('SwarmAgentsController', () => {
 
 describe('专家会话与重试策略', () => {
   it('读取已保存值时按类型补默认；校验范围；只写与默认不同的字段', () => {
-    const defaults = { language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every' }
+    const defaults = { language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every', nativeTeamProjection: false }
     expect(getPolicy(undefined)).toEqual(defaults)
     expect(getPolicy({ session: 'weird', maxRetries: '5', repeatAbove: 0.7, promptStyle: 'odd' })).toMatchObject({ session: 'auto', maxRetries: 3, repeatAbove: 0.7, promptStyle: 'auto' })
     const draft = toPolicyDraft(getPolicy(undefined))

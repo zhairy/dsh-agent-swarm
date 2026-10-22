@@ -6,17 +6,27 @@ interface ElementInfo { type: unknown; props: Record<string, unknown>; children:
 
 const DISPLAY = { presets: ['tian-shu', 'yu-shi'], providers: { claude: 'Claude 订阅', codex: 'ChatGPT 订阅' } }
 
-/** 以 CommonJS 方式执行模块源码：注入数据与只记录结构的 React 桩 */
+/** 以 CommonJS 方式执行模块源码：注入数据、内部事件模块与只记录结构的 React 桩 */
 const loadModule = (): any => {
-  const source = readFileSync(join(__dirname, '../../client/model-display.js'), 'utf8')
-    .replace('const DISPLAY = __SWARM_DISPLAY__', `const DISPLAY = ${JSON.stringify(DISPLAY)}`)
-  const module = { exports: {} as any }
   const react = {
     createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): ElementInfo => ({ type, props: props ?? {}, children }),
     useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot()
   }
-  new Function('require', 'module', 'exports', source)((id: string) => {
+  const load = (path: string, source: string, externalRequire: (id: string) => unknown) => {
+    const module = { exports: {} as any }
+    new Function('require', 'module', 'exports', source)(externalRequire, module, module.exports)
+    return module
+  }
+  const modelEvents = load(
+    '../../client/model-events.js',
+    readFileSync(join(__dirname, '../../client/model-events.js'), 'utf8')
+      .replace('const DISPLAY = __SWARM_DISPLAY__', `const DISPLAY = ${JSON.stringify(DISPLAY)}`),
+    (id) => { throw new Error(`unexpected event require ${id}`) }
+  )
+  const module = { exports: {} as any }
+  new Function('require', 'module', 'exports', readFileSync(join(__dirname, '../../client/model-display.js'), 'utf8'))((id: string) => {
     if (id === 'react') return react
+    if (id === '@swarm/model-events') return modelEvents.exports
     throw new Error(`unexpected require ${id}`)
   }, module, module.exports)
   return module.exports
@@ -78,7 +88,39 @@ describe('「调用模型」行', () => {
     expect(modelCallDefinition.match(event)).toEqual({ id: '99', role: 'start' })
     const state = modelCallDefinition.start(undefined, { event }, reader({ 'swarm-request-route': { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max' }, 'swarm-session-marker': { swarm: true } }))
     expect(state).toMatchObject({ provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max', source: 'request-header-attempt', failedAttempt: true })
-    expect(modelCallDefinition.start(undefined, { event }, reader({}))).toBeUndefined()
+    const hidden = modelCallDefinition.start(undefined, { event }, reader({}))
+    expect(hidden).toMatchObject({ seq: 99, time: 99, anchorSeq: 99, __hidden: true })
+    expect(modelCallDefinition.buildViewNode({ key: 'k', id: '99', start: { location: { kind: 'step' } }, state: hidden })).toBeNull()
+  })
+
+  it('分页窗口缺少请求头时 start() 仍返回隐藏状态，并继承上一条模型避免伪切换', () => {
+    const event = { type: 'assistant/attempt', seq: 100, time: 100, data: { turn: 2, step: 1, stream: [] } }
+    const previous = { ...opus, turn: 2, reasoningEffort: 'high', anchorSeq: 90 }
+    const hidden = modelCallDefinition.start(undefined, { event }, reader({ 'swarm-model-call': previous }))
+    expect(hidden).toMatchObject({ ...previous, seq: 100, time: 100, anchorSeq: 100, __hidden: true })
+    expect(modelCallDefinition.start(undefined, message(101, 'claude', 'claude-opus-5-5', 2), reader({ 'swarm-model-call': hidden })))
+      .toMatchObject({ repeat: true, switched: false })
+  })
+
+  it('任意事件窗口组合下，被 match 的 assistant 事件都不会让 start 返回 undefined', () => {
+    const events = [
+      message(200, 'claude', 'claude-opus-5-5', 3),
+      { event: { type: 'assistant/attempt', seq: 201, time: 201, data: { turn: 3, step: 1, stream: [] } } }
+    ]
+    const previousStates = [undefined, { ...opus, turn: 2 }, { ...opus, turn: 3, __hidden: true }, { ...opus, turn: 3, reasoningEffort: 'high' }]
+    const headers = [undefined, { ...opus, reasoningEffort: 'high' }, { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max' }]
+    for (const event of events) {
+      expect(modelCallDefinition.match(event.event)).not.toBeNull()
+      for (const previous of previousStates) for (const header of headers) {
+        const state = modelCallDefinition.start(undefined, event, reader({
+          ...(previous === undefined ? {} : { 'swarm-model-call': previous }),
+          ...(header === undefined ? {} : { 'swarm-request-route': header })
+        }))
+        expect(state).toBeDefined()
+        if (state.__hidden === true) expect(modelCallDefinition.buildViewNode({ key: 'k', id: String(event.event.seq), start: event, state })).toBeNull()
+        expect(state.from).not.toEqual({ provider: undefined, model: undefined })
+      }
+    }
   })
 
   it('同一轮同一模型标为 repeat；同一轮换了模型显示「切换模型」；新一轮不算重复', () => {

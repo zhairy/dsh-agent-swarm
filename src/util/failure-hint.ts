@@ -5,6 +5,8 @@
 
 const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/route_chain_exhausted/i, '路由链上的模型在等待预算内都没有恢复：按上面各路由的状态修复账号或额度，或在「设置 → 百工 Agent」调整模型链与断网等待时间后重新委派'],
+  [/content\[\]\.thinking[^\n]*thinking mode[^\n]*must be passed back|thinking (?:content|block)s?[^\n]*must be passed back/i,
+    '当前会话的 thinking 消息格式与该模型不兼容：停止在同一路由重试，切换到兼容的备用模型；百工会隔离该故障路由并保留任务状态'],
   [/CONTEXT_WINDOW_EXCEEDED|maximum context (?:length|window)|exceeded (?:the )?model token limit|prompt (?:is )?too long/i,
     '请求上下文超过模型容量：需要先压缩或缩减材料，再开始新的请求；这不表示订阅额度耗尽或模型下线'],
   [/IMAGE_UNSUPPORTED/i, '当前请求的图像输入不被该模型支持：请选择有视觉能力的模型；这不表示该模型的纯文本请求不可用'],

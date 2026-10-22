@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getRouteFailure, getRouteRecoveryPolicy, getWireReasoningEffort, normalizeRouteFailure, type FailureKind } from '../../src/provider-policy.js'
+import { getRouteFailure, getRouteRecoveryPolicy, getWireReasoningEffort, isTerminalRouteFailure, normalizeRouteFailure, type FailureKind } from '../../src/provider-policy.js'
 import { getFailureHint } from '../../src/util/failure-hint.js'
 
 const route = { provider: 'codex', model: 'gpt-6.1-sol' }
@@ -28,6 +28,7 @@ describe('供应商失败语义与恢复时间', () => {
     [{ code: 'UNSUPPORTED_REASONING_EFFORT' }, 'capability_mismatch'],
     [{ code: 'CONTEXT_WINDOW_EXCEEDED', status: 400, message: 'Invalid request: Your request exceeded model token limit: 262144 (requested: 459079)' }, 'context_exceeded'],
     [{ status: 400, message: 'maximum context length is 262144 tokens' }, 'context_exceeded'],
+    [{ code: 'INVALID_REQUEST', status: 400, message: 'The `content[].thinking` in the thinking mode must be passed back to the API. (request_id: r1)' }, 'protocol_incompatible'],
     [{ status: 429, message: 'quota per minute exceeded' }, 'rate_limited']
   ] as const)('%j => %s，不能把账户/上下文/协议错误都称为额度耗尽', (failure, kind) => {
     expect(normalizeRouteFailure(failure, route).kind).toBe(kind)
@@ -87,7 +88,7 @@ describe('供应商失败语义与恢复时间', () => {
   })
 
   it('所有真实provider故障给有限恢复探针；context为请求问题，不隔离route', () => {
-    const kinds: FailureKind[] = ['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable', 'rate_limited', 'network_transient', 'service_transient', 'unknown']
+    const kinds: FailureKind[] = ['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable', 'rate_limited', 'network_transient', 'service_transient', 'protocol_incompatible', 'unknown']
     for (const kind of kinds) {
       const policy = getRouteRecoveryPolicy({ kind }, 32)
       expect(policy.isolate).toBe(true)
@@ -98,11 +99,19 @@ describe('供应商失败语义与恢复时间', () => {
     expect(getRouteRecoveryPolicy({ kind: 'capability_mismatch' })).toEqual({ isolate: false, retryDelayMs: 0 })
   })
 
+  it('thinking 协议不兼容会终止当前路由并立即回退，避免同一会话反复命中', () => {
+    const failure = normalizeRouteFailure({ code: 'INVALID_REQUEST', status: 400, message: 'The `content[].thinking` in the thinking mode must be passed back to the API.' }, route)
+    expect(failure.kind).toBe('protocol_incompatible')
+    expect(isTerminalRouteFailure(failure)).toBe(true)
+    expect(getRouteRecoveryPolicy(failure)).toEqual({ isolate: true, retryDelayMs: 1_800_000 })
+  })
+
   it('提示区分池不可用、适配器缺失、上下文过长与真正额度', () => {
     expect(getFailureHint('pool "gpt-6-sol" exhausted: every member is unavailable or failed')).toContain('具体成员故障原因尚不确定')
     expect(getFailureHint('NO_ADAPTER: provider not registered')).toContain('检查 provider')
     expect(getFailureHint('No eligible account')).toContain('不证明订阅额度耗尽')
     expect(getFailureHint('CONTEXT_WINDOW_EXCEEDED')).toContain('先压缩')
+    expect(getFailureHint('The `content[].thinking` in the thinking mode must be passed back to the API')).toContain('thinking 消息格式')
     expect(getFailureHint('HTTP 401')).toContain('订阅账号请检查登录状态')
     expect(getFailureHint('UNSUPPORTED_REASONING_EFFORT')).toContain('其它合法档位仍可使用')
     expect(getFailureHint('QUOTA')).toContain('停止原故障域重试')

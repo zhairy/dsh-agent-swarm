@@ -1,6 +1,6 @@
 // 百工会话的模型显示（浏览器端）：聊天窗口里的「调用模型」行与会话头部的当前模型徽标。
 // 本文件是 client bundle 的模块体之一：scripts/build-client.mjs 把它与设置页一起打包，
-// 并把 __SWARM_DISPLAY__ 替换为从 lib/ 读出的 13 个预设 ID 与供应商中文名。
+// 事件投影在 model-events.js，避免事件契约与 React 展示层互相耦合。
 //
 // 「调用模型」行只读取宿主已经记录的会话事件，不写入任何自定义事件：
 // - assistant/message 的 source 记录了每一步实际作答的供应商与模型（含回退与容灾升级之后的模型）；
@@ -14,18 +14,19 @@ const h = React.createElement
 let HostModal
 try { HostModal = require('@deepseek-ai/dsh-client-ui-primitives').Modal } catch { HostModal = undefined }
 
-/** @type {{ presets: string[], providers: Record<string, string> }} */
-const DISPLAY = __SWARM_DISPLAY__
-
-const NS = 'swarmModelCalls'
-/** swarm-core 条目的设置命名空间（与设置页一致） */
-const SWARM_NAMESPACE = 'swarm-core'
-const KIND = 'swarm-model-call'
-const HEADER_KIND = 'swarm-request-route'
-const MARKER_KIND = 'swarm-session-marker'
-/** 百工 persona（天枢、12 个角色预设与委派出的专家）都包含这个标记 */
-const SWARM_MARKER = 'dsh-agent-swarm'
-const PRESETS = new Set(DISPLAY.presets)
+const {
+  DISPLAY,
+  NS,
+  SWARM_NAMESPACE,
+  KIND,
+  providerLabel,
+  isSwarmPreset,
+  readHeaderRoute,
+  readMessageRoute,
+  markerDefinition,
+  headerDefinition,
+  modelCallDefinition
+} = require('@swarm/model-events')
 
 const zh = {
   title: '调用模型',
@@ -43,120 +44,10 @@ const en = {
   badge: 'Last requested model', next: 'Next selection', unknownEffort: 'unreported', controls: 'Model & recovery', actual: 'Actual attempt', actualUnknown: 'No host attempt observation yet', selectedNext: 'Selected for next call', state: 'State', refresh: 'Refresh status', select: 'Select model', stop: 'Cancel current call', continue: 'Continue task safely', busy: 'Working…', provider: 'Provider', model: 'Model', effortDefault: 'Host default', chooseProvider: 'Select provider', chooseModel: 'Select model', stopping: 'Cancellation requested; waiting for host quiescence. The task has not resumed.', savedNext: 'Next model selection saved; a new observed attempt confirms it took effect.', resumed: 'Continuation admitted to the task pipeline; execution and acceptance remain separate.', reconcile: 'I checked possible side effects and current task progress', reconcileHint: 'This does not clear unknown mutation leases; the host must still perform workspace recovery checks.', steering: 'Continuation guidance (optional)', retryRoute: 'Allow one controlled retry of the selected route', forceRetry: 'Bypass plugin cooldown once, respecting the service reset time', routeHint: 'Switching during a run cancels the old call first. Continue after quiescence to avoid replaying writes.', unavailable: 'Control plane unavailable', phase_idle: 'Idle', phase_running: 'Running', phase_waiting: 'Waiting for network or retry', phase_stopping: 'Waiting for cancellation', phase_paused: 'Paused', 'phase_recovery-required': 'Host reconciliation required', close: 'Close'
 }
 
-const providerLabel = (provider) => DISPLAY.providers[provider] ?? provider
 Object.assign(zh, { stopped: '宿主已确认本轮结束；可继续未完成任务。' })
 Object.assign(en, { stopped: 'The host confirmed this run ended; unfinished work can be continued.' })
 Object.assign(zh, { unknownModel: '实际模型未由宿主报告' })
 Object.assign(en, { unknownModel: 'Actual model not reported by the host' })
-
-/** request/header 的路由与推理强度 */
-const readHeaderRoute = (event) => {
-  const config = event?.data?.header?.config
-  if (config === null || typeof config !== 'object' || typeof config.provider !== 'string' || typeof config.model !== 'string') return undefined
-  return { provider: config.provider, model: config.model, ...(typeof config.reasoningEffort === 'string' ? { reasoningEffort: config.reasoningEffort } : {}) }
-}
-
-/** assistant/message 记录的实际作答模型 */
-const readMessageRoute = (event) => {
-  const source = event?.data?.message?.source
-  if (source === null || typeof source !== 'object' || source.kind !== 'model' || typeof source.provider !== 'string' || typeof source.model !== 'string') return undefined
-  return { provider: source.provider, model: source.model }
-}
-
-const readSystemText = (event) => {
-  const content = event?.data?.message?.content
-  return Array.isArray(content) ? content.filter((block) => block?.type === 'text' && typeof block.text === 'string').map((block) => block.text).join('\n') : ''
-}
-
-const isDurable = (event) => Number.isInteger(event?.seq)
-
-const startOnly = (event) => ({ id: String(event.seq), role: 'start' })
-
-/** 会话标记：是否百工会话（未知时为 undefined，由渲染时的 agentPreset 投影决定） */
-const markerDefinition = {
-  kind: MARKER_KIND,
-  target: 'chat',
-  match: (event) => (event.type === 'system/message' || event.type === 'agent-preset/selected') && isDurable(event) ? startOnly(event) : null,
-  start: (_context, match, reader) => {
-    const previous = reader?.previous?.(MARKER_KIND)?.state
-    if (match.event.type === 'agent-preset/selected') {
-      const preset = match.event.data?.agentPreset
-      return { swarm: typeof preset === 'string' ? PRESETS.has(preset) : previous?.swarm }
-    }
-    const text = readSystemText(match.event)
-    return { swarm: text === '' ? previous?.swarm : text.includes(SWARM_MARKER) }
-  },
-  update: (context) => context.state,
-  buildViewNode: () => null
-}
-
-/** 最近一次请求头：只提供推理强度，不渲染 */
-const headerDefinition = {
-  kind: HEADER_KIND,
-  target: 'chat',
-  match: (event) => event.type === 'request/header' && isDurable(event) && readHeaderRoute(event) !== undefined ? startOnly(event) : null,
-  start: (_context, match) => readHeaderRoute(match.event),
-  update: (context) => context.state,
-  buildViewNode: () => null
-}
-
-const turnOf = (match) => {
-  const location = match.location
-  if (location?.kind === 'step' || location?.kind === 'turn') return location.turn.turn
-  return typeof match.event.data?.turn === 'number' ? match.event.data.turn : undefined
-}
-
-/** 「调用模型」行：每次调用一个节点；repeat 表示与同一轮上一次调用的模型相同（「每轮首次」模式下不渲染） */
-const modelCallDefinition = {
-  kind: KIND,
-  target: 'chat',
-  match: (event) => isDurable(event) && ((event.type === 'assistant/message' && readMessageRoute(event) !== undefined) || event.type === 'assistant/attempt') ? startOnly(event) : null,
-  start: (_context, match, reader) => {
-    const previous = reader?.previous?.(KIND)?.state
-    const header = reader?.previous?.(HEADER_KIND)?.state
-    const route = readMessageRoute(match.event) ?? (match.event.type === 'assistant/attempt' ? header : undefined)
-    if (route === undefined) return undefined
-    const marker = reader?.previous?.(MARKER_KIND)?.state
-    const turn = turnOf(match)
-    const effort = header !== undefined && header.provider === route.provider && header.model === route.model ? header.reasoningEffort : undefined
-    const sameRoute = previous !== undefined && previous.provider === route.provider && previous.model === route.model && previous.reasoningEffort === effort
-    const sameTurn = previous !== undefined && previous.turn === turn
-    const location = match.location
-    return {
-      seq: match.event.seq,
-      time: match.event.time,
-      ...(turn === undefined ? {} : { turn }),
-      provider: route.provider,
-      model: route.model,
-      source: match.event.type === 'assistant/attempt' ? 'request-header-attempt' : 'assistant-message',
-      failedAttempt: match.event.type === 'assistant/attempt',
-      ...(effort === undefined ? {} : { reasoningEffort: effort }),
-      repeat: sameRoute && sameTurn,
-      switched: sameTurn && !sameRoute,
-      ...(sameTurn && !sameRoute ? { from: { provider: previous.provider, model: previous.model } } : {}),
-      ...(marker?.swarm === undefined ? {} : { swarm: marker.swarm }),
-      anchorSeq: location?.kind === 'step' ? (location.step.start?.seq ?? match.event.seq) : match.event.seq
-    }
-  },
-  update: (context) => context.state,
-  buildViewNode: (context) => {
-    const state = context.state
-    if (context.start === undefined || state === undefined) return null
-    const visible = state.swarm !== false
-    // 已经发布过的行改为隐藏而不是删除，保持 Chat 的节点键稳定
-    if (!visible && context.current?.get?.('chat')?.kind !== KIND) return null
-    return {
-      key: context.key,
-      kind: KIND,
-      id: context.id,
-      target: 'chat',
-      anchorSeq: state.anchorSeq,
-      location: context.start.location,
-      visibility: visible ? 'visible' : 'hidden',
-      data: state
-    }
-  }
-}
 
 const style = {
   row: { display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0', fontSize: 13, lineHeight: '22px', minWidth: 0 },
@@ -170,8 +61,6 @@ const style = {
     background: 'var(--dsw-alias-bg-module-platform)', color: 'var(--dsw-alias-label-primary)'
   }
 }
-
-const isSwarmPreset = (value) => typeof value === 'string' && PRESETS.has(value)
 
 const routeText = (t, route) =>
   `${route.model} · ${providerLabel(route.provider)}（${route.provider}） · ${t('effort')} ${route.reasoningEffort ?? t('unknownEffort')}`

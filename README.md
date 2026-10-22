@@ -13,6 +13,17 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.2）
 - 新建会话选「百工模式」即可使用；Jev API key 可选
 
+### 3.1 的变化
+
+| 变化 | 说明 |
+|---|---|
+| **长会话不再从某条消息后整段消失** | GitHub Issue #1：`swarm-model-call` 在分页或长会话的事件窗口缺少 `request/header` 时不再从 `start()` 返回 `undefined`。它返回继承上一状态的隐藏占位，渲染层丢弃该节点，宿主事件订阅器不会中断；下一条调用也不会误报「切换模型」。普通会话同样受保护。 |
+| **thinking 协议错误不再重复命中** | DeepSeek 返回 `The content[].thinking ... must be passed back` 时归类为 `protocol_incompatible`，当前请求立即回退并隔离该路由，避免同一会话反复调用同一不兼容模型。 |
+| **目标受阻时给出可执行恢复处方** | `swarm_status` 新增 `blockedRecovery`：区分协议不兼容、路由耗尽、规划服务故障、连续无进展、缺门禁和验证缺口，给出推荐角色与下一步。天枢按处方最多做一次只读诊断或对应专家修复，不靠重复改卡、重复评分或重放业务写入恢复。 |
+| **pnpm 11 本地 tarball 安装说明** | 使用 `minimumReleaseAgeIgnoreMissingTime: true`，只跳过 registry 中没有发布时间信息的本地包；`minimumReleaseAgeExclude` 只接受精确版本，不能写 semver range。 |
+| **原生 Agent Team 只读镜像（默认关闭）** | 启用 DSH 原生 Agent Team 后，可在会话头部查看已有成员、共享任务、实时状态、owner、依赖和写入范围，并打开成员会话。镜像不创建成员、不修改共享任务、不调用 `spawn_teammate` 或原生 `complete`；百工仍是唯一任务、证据、租约和执行控制器。 |
+| **本地 tarball 可直接 link 安装** | 新增 `scripts/install-profile.mjs`，校验并解包发布包后以内容摘要目录和 `link:` 接入 profile，避免 pnpm 回查未发布的 registry 版本。四层自我进化仍只提供分阶段路线，3.1.0 不自动修改提示、工具或工作流。 |
+
 ### 3.0 的变化
 
 | 变化 | 说明 |
@@ -112,6 +123,17 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 
 - Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.2 recommended)
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
+
+### What's new in 3.1
+
+| Change | Details |
+|---|---|
+| **Long conversations no longer stop rendering** | GitHub Issue #1: `swarm-model-call` no longer returns `undefined` from `start()` when a paginated/long event window has no `request/header`. A hidden placeholder inherits the previous state and is dropped by the renderer, so the host event subscription remains intact; the next attempt is not falsely reported as a model switch. Ordinary sessions are protected by the same contract. |
+| **Thinking-protocol failures are isolated** | `The content[].thinking ... must be passed back` is classified as `protocol_incompatible`; the current request fails over immediately and the route is isolated instead of being retried repeatedly in the same session. |
+| **Blocked goals get a recovery prescription** | `swarm_status` now returns `blockedRecovery` for protocol incompatibility, route exhaustion, planning-service failure, no progress, missing gates and verification gaps. Tian Shu uses the recommended role and next action once, without repeating equivalent cards, scores or business mutations. |
+| **pnpm 11 tarball guidance** | Installation docs use `minimumReleaseAgeIgnoreMissingTime: true`, which skips only local packages without registry publish-time metadata. `minimumReleaseAgeExclude` accepts exact versions only and rejects semver ranges. |
+| **Read-only native Agent Team mirror (off by default)** | When native DSH Agent Team is enabled, the session header can show existing members, shared tasks, live status, owner, dependencies and write scopes, and open member sessions. It never creates members, edits tasks, calls `spawn_teammate` or native `complete`; the swarm remains the sole task, evidence, lease and execution controller. |
+| **Link-based local tarball installer** | `scripts/install-profile.mjs` validates and unpacks a release tarball into a digest-addressed local bundle and wires it with `link:`, avoiding registry lookups for unpublished versions. Four-layer self-evolution remains a staged roadmap; 3.1.0 does not auto-modify prompts, tools or workflows. |
 
 ### What's new in 3.0
 

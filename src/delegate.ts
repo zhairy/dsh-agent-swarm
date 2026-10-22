@@ -277,6 +277,15 @@ export const getOutputText = (result: SubagentResultLike): string =>
   result.output.filter((block) => block.type === 'text' && typeof block.text === 'string').map((block) => block.text as string).join('\n')
 
 /**
+ * DSH/DeepSeek 在连续会话回放含 thinking 的助手历史时可能要求特定协议签名。
+ * 若宿主明确拒绝该历史，继续在同一个子会话里追加只会重复失败；调用方应新建干净子会话。
+ */
+export const isThinkingReplayFailure = (error: string | undefined): boolean =>
+  typeof error === 'string'
+  && /content\[\]\.thinking/i.test(error)
+  && /(thinking mode|passed back to the api|passed back)/i.test(error)
+
+/**
  * 独立性要求避开的模型家族：御史避开实现者，验算避开研算
  * @param {DelegableRoleId} role - 本次角色
  * @param {SuanHengMode | undefined} mode - 算衡模式
@@ -857,7 +866,11 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
         exec.signal.removeEventListener('abort', onAbort)
       }
       deps.hub.MarkConsumed(threadId)
-      const result: SubagentResultLike = { output: [...(info.lastAssistantMessage ?? [])], stopReason: info.stopReason }
+      const result: SubagentResultLike = {
+        output: [...(info.lastAssistantMessage ?? [])],
+        stopReason: info.stopReason,
+        ...(info.diagnostic === undefined ? {} : { diagnostic: info.diagnostic })
+      }
       const structured = ParseNativeOutput(getOutputText(result))
       evaluation = withRouteTerminal(getEvaluation(input.role, input.mode, result, structured), threadId)
       if (deps.routeState.isManualPaused(threadId)) {
@@ -865,6 +878,40 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
           ? { ...evaluation, status: 'failed', summary: '子会话已人工暂停，等待确认副作用后安全继续', error: 'manual-intervention', unresolved: [...evaluation.unresolved, '人工取消后的副作用与任务进度需要核对；本轮未自动重放'] }
           : { ...evaluation, status: 'failed', summary: '子会话执行失败，已暂停等待恢复', error: deps.routeState.getTerminal(threadId) ?? evaluation.error ?? 'request-failed-paused', unresolved: [...evaluation.unresolved, '需依据实际错误恢复当前任务，未自动重放旧操作'] }
         break
+      }
+      if (isThinkingReplayFailure(evaluation.error) && exec.controlledThreadId === undefined) {
+        if (attempt >= config.agents.maxRetries) {
+          evaluation = {
+            ...evaluation,
+            unresolved: [...evaluation.unresolved, '宿主连续拒绝 thinking 历史回放；自动重建会话次数已用尽，需要升级宿主或人工核对']
+          }
+          break
+        }
+        AddRetry(session, record, retries, {
+          attempt: attempt + 1,
+          reason: '宿主拒绝 thinking 历史回放；关闭损坏的连续会话，改用新会话从任务卡和当前工作区恢复',
+          action: 'restart'
+        })
+        session.threads.Update(threadId, { busy: false, closed: true })
+        deps.routeState.DelAgent(threadId)
+        await deps.onChildEnd?.(threadId, 'thinking-replay-incompatible')
+        threadId = deps.newChildId()
+        style = newStyle
+        thread = {
+          threadId, key, role: input.role, ...(input.mode === undefined ? {} : { mode: input.mode }),
+          rounds: 0, busy: true, closed: false, allowWeb: input.allow_web === true, style, taskIds: [],
+          history: [], createdAt: deps.now(), lastUsedAt: deps.now()
+        }
+        session.threads.Add(thread)
+        Arm(threadId)
+        await deps.onChildStart?.({ agentId: threadId, task, record, role: input.role, signal: exec.signal, persistent: true, input, parent: exec.agent })
+        appended = false
+        started = false
+        content = [{
+          type: 'text',
+          text: `${getThreadPromptText(task, input, record.delegationId, style)}\n\n【宿主协议恢复】上一位同角色会话因 thinking 历史回放契约失效而被关闭。请先从当前任务卡、证据和真实工作区核对已有进展，再继续完成；不要假定旧会话的未提交口头结论有效，也不要重复已完成的高风险副作用。`
+        }]
+        continue
       }
       const retry = getRetryReason(evaluation, result, exec)
       if (deps.routeState.getTerminal(threadId) !== undefined || retry === undefined || attempt >= config.agents.maxRetries) break

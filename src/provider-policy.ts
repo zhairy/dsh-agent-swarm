@@ -2,7 +2,8 @@ import type { LlmFailureLike } from './host-contract.js'
 import type { RouteInfo } from './routes.js'
 
 export type FailureKind = 'quota_exhausted' | 'pool_exhausted' | 'insufficient_balance' | 'auth_invalid'
-  | 'model_unavailable' | 'rate_limited' | 'network_transient' | 'service_transient' | 'context_exceeded' | 'capability_mismatch' | 'unknown'
+  | 'model_unavailable' | 'rate_limited' | 'network_transient' | 'service_transient' | 'context_exceeded' | 'capability_mismatch'
+  | 'protocol_incompatible' | 'unknown'
 
 /** 只存适配器返回的不透明身份，不保存账号或凭据。缺失时只隔离当前路由。 */
 export interface RouteResourcePolicy {
@@ -63,7 +64,7 @@ export const getRouteFailure = (error: unknown): RouteFailureMetadata => {
   if (['account', 'plan', 'model', 'pool', 'unknown'].includes(String(facts.quotaScope))) value.quotaScope = facts.quotaScope as RouteResourcePolicy['quotaScope']
   return value
 }
-const KINDS = new Set<FailureKind>(['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable', 'rate_limited', 'network_transient', 'service_transient', 'context_exceeded', 'capability_mismatch', 'unknown'])
+const KINDS = new Set<FailureKind>(['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable', 'rate_limited', 'network_transient', 'service_transient', 'context_exceeded', 'capability_mismatch', 'protocol_incompatible', 'unknown'])
 const POOL = /\bpool\s+["']([^"']+)["']\s+exhausted\b/i
 const QUOTA = /\busage limit(?:\s+(?:reached|exceeded))?\b|\b(?:you(?:'|’)ve|you have) hit your (?:usage )?limit\b|\bexceeded (?:your )?(?:current )?quota\b|\b(?:quota|credits?)(?:\s+(?:has|have)\s+been)?\s+(?:exhausted|exceeded|depleted)\b|额度(?:已)?(?:耗尽|用尽)|计划(?:额度)?(?:耗尽|用尽)/i
 const BALANCE = /insufficient (?:balance|funds)|balance (?:exhausted|depleted)|余额不足/i
@@ -71,19 +72,20 @@ const MODEL = /Unpurchased|Access to model denied|not eligible for (?:using )?(?
 const AUTH = /\binvalid (?:api key|credentials?)\b|\bauthentication failed\b|\btoken (?:(?:has|is) )?expired\b|\b(?:not logged in|login required|please (?:log in|login|sign in))\b/i
 const RATE_WINDOW = /\b(?:rpm|tpm)\b|per (?:second|minute)|每(?:秒|分钟)|concurrent (?:requests|limit)|并发(?:请求|限制)/i
 const CONTEXT = /context[_ -]window[_ -]exceeded|maximum context (?:length|window)|context (?:length|window)[^\n]*(?:exceeded|too (?:large|long))|exceeded (?:the )?model token limit|prompt (?:is )?too long/i
+const THINKING_CONTRACT = /content\[\]\.thinking[^\n]*thinking mode[^\n]*must be passed back|thinking (?:content|block)s?[^\n]*must be passed back/i
 
 /** Probe delays, not subscription reset times. A new logical request admits at most one half-open owner. */
 export const ROUTE_RECOVERY_COOLDOWNS_MS: Readonly<Record<FailureKind, number>> = Object.freeze({
   quota_exhausted: 30 * 60_000, insufficient_balance: 30 * 60_000,
   pool_exhausted: 60_000, auth_invalid: 120_000, model_unavailable: 120_000,
   rate_limited: 30_000, network_transient: 10_000, service_transient: 15_000,
-  context_exceeded: 0, capability_mismatch: 0, unknown: 30_000
+  context_exceeded: 0, capability_mismatch: 0, protocol_incompatible: 30 * 60_000, unknown: 30_000
 })
 const MAX_PROBE_DELAY_MS: Readonly<Record<FailureKind, number>> = Object.freeze({
   quota_exhausted: 4 * 60 * 60_000, insufficient_balance: 4 * 60 * 60_000,
   pool_exhausted: 5 * 60_000, auth_invalid: 15 * 60_000, model_unavailable: 15 * 60_000,
   rate_limited: 5 * 60_000, network_transient: 60_000, service_transient: 120_000,
-  context_exceeded: 0, capability_mismatch: 0, unknown: 5 * 60_000
+  context_exceeded: 0, capability_mismatch: 0, protocol_incompatible: 4 * 60 * 60_000, unknown: 5 * 60_000
 })
 const POOL_AUTH_HINT_MAX_MS = 30 * 60_000
 export const getRouteRecoveryPolicy = (failure: Pick<NormalizedRouteFailure, 'kind' | 'providerRetryAfterMs'>, retryCount = 1): { isolate: boolean; retryDelayMs: number } => {
@@ -124,7 +126,8 @@ export const normalizeRouteFailure = (failure: RouteFailureMetadata, route: Rout
   const pool = POOL.exec(message)?.[1]
   let kind: FailureKind = failure.kind !== undefined && KINDS.has(failure.kind as FailureKind) ? failure.kind as FailureKind : 'unknown'
   if (kind === 'unknown') {
-    if (code === 'CONTEXT_WINDOW_EXCEEDED' || CONTEXT.test(message)) kind = 'context_exceeded'
+    if (THINKING_CONTRACT.test(message)) kind = 'protocol_incompatible'
+    else if (code === 'CONTEXT_WINDOW_EXCEEDED' || CONTEXT.test(message)) kind = 'context_exceeded'
     else if (['IMAGE_UNSUPPORTED', 'UNSUPPORTED_OPTION', 'UNSUPPORTED_REASONING_EFFORT'].includes(code)) kind = 'capability_mismatch'
     // 订阅模型池以 AUTH 报告耗尽时，根因是池内账号凭据被拒，按认证失效处理（同 provider 其余模型一并跳过）；
     // 其他 AUTH 不够具体（任何带 401/403 的消息、可能因断网失败的令牌刷新），按状态码与消息细分
@@ -157,4 +160,4 @@ export const normalizeRouteFailure = (failure: RouteFailureMetadata, route: Rout
   }
 }
 export const isTerminalRouteFailure = (failure: NormalizedRouteFailure): boolean =>
-  ['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable'].includes(failure.kind)
+  ['quota_exhausted', 'pool_exhausted', 'insufficient_balance', 'auth_invalid', 'model_unavailable', 'protocol_incompatible'].includes(failure.kind)

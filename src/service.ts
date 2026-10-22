@@ -51,7 +51,7 @@ import {
   type GateRequirement,
   type TaskCard
 } from './policy.js'
-import { intRouteStateRegistry, type RouteStateRegistry } from './route-state.js'
+import { intRouteStateRegistry, type RequestRecoveryState, type RouteStateRegistry } from './route-state.js'
 import { FindRoleByPresetId, getPermissionLabel, getRoleInfo, isWriteAllowed, type DelegableRoleId, type RoleId } from './role-registry.js'
 import { getRouteKey, getRouteLabel, createRouteMetadataCache, createRouteFailureObserver, intRouteProbe, type RouteInfo, type RouteProbe } from './routes.js'
 import { ParseSessionPlan, getRuleSessionPlan, getSessionQuestions, getSessionState, intChildEndHub, intThreadRegistry, type SessionPlan, type ThreadInfo } from './threads.js'
@@ -67,6 +67,7 @@ import { waitForPlanning } from './planning-wait.js'
 import { getArtifactSnapshot } from './artifacts.js'
 import { getToolApprovalDenial, getHostApprovalPolicy, getApprovalPolicyDiagnostics } from './approval-policy.js'
 import { getCheckpoint } from './checkpoint.js'
+import { getBlockedRecovery } from './blocked-recovery.js'
 import { createFeatureSession, type FeatureSession } from './feature-session.js'
 import { StateStoreError } from './state-store.js'
 import { calculate } from './math/operators.js'
@@ -361,7 +362,7 @@ const getDelegationView = (d: DelegationRecord, verbose: boolean) => ({
   ...(verbose ? { structured: d.structured, evidence: d.evidence, attempts: d.attempts, evidenceAssessmentDetails: d.evidenceAssessment } : {})
 })
 
-const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean, externalEditAt: number) => {
+const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean, externalEditAt: number, recovery?: RequestRecoveryState | null) => {
   const current = getCurrentDelegations(task, delegations, task.artifactSnapshot?.digest)
   const gates = getEffectiveGates(task.gates, current, externalEditAt)
   const check = getAcceptanceCheck(gates, current, task.acceptance?.resolutions ?? [], externalEditAt, task.card.perf)
@@ -376,6 +377,11 @@ const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: 
     intentHistoryNote: task.intentHistoryNote ?? null,
     planningReview: task.planningReview ?? null, checkpoint: task.checkpoint ?? null, workflowMode: config.workflow.mode,
     planningRecovery: getPlanningRecovery(task, config.planningReview.maxFixRounds),
+    blockedRecovery: getBlockedRecovery({
+      task: { acceptance: task.acceptance, checkpoint: task.checkpoint, planningReview: task.planningReview },
+      gates: check.statuses,
+      recovery
+    }),
     recovered: task.recovered ?? false,
     contextRefs: (task.contextRefs ?? []).map((material) => material.ref),
     contextArtifacts: task.contextRefs ?? [],
@@ -435,6 +441,14 @@ const describeUnknownTask = (session: SessionStateInfo, taskId: string): string 
  */
 export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const sessions = new Map<string, SessionStateInfo>()
+  /** subagent/end 不带错误正文；从子会话 turn/end 暂存本轮失败，交给连续会话恢复分类。 */
+  const childTurnErrors = new Map<string, string>()
+  const rememberChildTurnError = (sessionId: string, message: string | undefined): void => {
+    childTurnErrors.delete(sessionId)
+    if (message === undefined || routeState.getChildRole(sessionId) === undefined) return
+    childTurnErrors.set(sessionId, message.slice(0, 4000))
+    if (childTurnErrors.size > 256) childTurnErrors.delete(childTurnErrors.keys().next().value!)
+  }
   let closing = false
   let disposal: Promise<void> | undefined
   const schedulers = new Map<string, ReturnType<typeof createDelegationScheduler>>()
@@ -1624,7 +1638,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const tasks = (typeof input.task_id === 'string' ? [getTaskOrThrow(session, input.task_id)] : session.store.getTasks())
       .map((task) => deriveReconciledTask(session, deriveIntentRefresh(task, exec.agent)))
     const views = tasks.map((task) => ({
-      ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session)),
+      ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null),
       stateRefreshRequired: !isTaskVersionCurrent(task, getTaskOrThrow(session, task.taskId)), publishedRevisions: getTaskBinding(getTaskOrThrow(session, task.taskId))
     }))
     const capabilityRequest = raw as { capability_tags?: string[]; allow_write_roles?: boolean }
@@ -2067,11 +2081,21 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     getRoleForAgent,
     isManagedAgent,
     OnSubagentEnd: (info) => {
-      agentControl.MarkRunSettled(info.id, info.stopReason); routeState.ReleaseAgent(info.id); hub.Emit(info)
+      const diagnostic = info.diagnostic ?? (info.stopReason === 'error' ? childTurnErrors.get(info.id) : undefined)
+      childTurnErrors.delete(info.id)
+      agentControl.MarkRunSettled(info.id, info.stopReason); routeState.ReleaseAgent(info.id)
+      hub.Emit(diagnostic === undefined ? info : { ...info, diagnostic })
       retryChildLeases(info.id)
     },
-    OnAgentDisposed: retryChildLeases,
+    OnAgentDisposed: (childId) => { childTurnErrors.delete(childId); retryChildLeases(childId) },
     OnJobEvent: (sessionId, event) => {
+      if (event.type === 'turn/end') {
+        if (event.data?.reason?.kind !== 'error') { rememberChildTurnError(sessionId, undefined); return }
+        const raw = event.data.reason.error
+        const message = typeof raw === 'string' ? raw : raw?.message
+        if (typeof message === 'string' && message.trim() !== '') rememberChildTurnError(sessionId, message)
+        return
+      }
       if (event.type !== 'job/registered' && event.type !== 'job/settled') return
       const data = event.data
       if (data?.owner !== sessionId || typeof data.jobId !== 'string') return
@@ -2096,7 +2120,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       if (session === undefined || session.rootAgent === undefined || !isRootTianShu(session.rootAgent)) throw new SwarmError('PERMISSION_DENIED', '该会话不是已登记的百工根会话')
       const stored = getTaskOrThrow(session, taskId)
       const task = deriveReconciledTask(session, deriveIntentRefresh(stored, session.rootAgent))
-      const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session))
+      const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session), routeState.getRecovery(sessionId) ?? null)
       return { ...view,
         diagrams: { ...view.diagrams, stateRefreshRequired: task !== stored },
         scheduling: schedulerFor(sessionId).status(),
