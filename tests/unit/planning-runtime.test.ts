@@ -116,10 +116,15 @@ describe('automatic planning review through the service', () => {
     // This fixture emits no actual request observation. A proposed starting
     // model cannot become a claim about the model that performed the review.
     expect(task.planningReview?.agent.reviewer).not.toHaveProperty('model')
+    expect(task.planningReview?.agent.reviewer).not.toHaveProperty('provider')
+    const control = await runtime.service.getAgentViewForRpc(runtime.exec().agent.id, task.planningReview!.agent.reviewer!.agentId)
+    expect(control).toMatchObject({ persistent: false, reason: 'one-shot-settled' })
+    expect(control).not.toHaveProperty('actual')
     expect(runtime.calls).toHaveLength(1)
     expect(runtime.calls[0]?.toolFilter?.allow).not.toContain('write')
     expect(runtime.calls[0]?.toolFilter?.allow).not.toContain('bash')
     expect(runtime.calls[0]?.maxDepth).toBe(1)
+    expect(runtime.calls[0]?.persona).toContain('dsh-agent-swarm')
     await expect(runtime.service.delegate({ task_id: task.task_id, node_id: 'accept', role: 'mou_ding', prompt: '跳过依赖' }, runtime.exec())).rejects.toThrow()
     const result = await runtime.service.delegate({ task_id: task.task_id, node_id: 'analysis', role: 'mou_ding', prompt: '交付分析', session: 'oneshot', backend: 'api' }, runtime.exec())
     expect(result.status).toBe('completed')

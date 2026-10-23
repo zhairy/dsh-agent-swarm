@@ -13,13 +13,17 @@ interface RecoveryRun extends ScenarioRunInfo {
   recoveryEvents: Array<{ type: string; data?: unknown }>
   recoveryTerminal?: string
   agentErrors?: Array<{ message?: string; code?: string }>
-  planningReviewers?: Array<{ sessionId: string; model: string; tools: string[]; outputSchemaProperties: string[]; snapshotDigest: string; requestText: string; requestRevision: number; requestRefs?: Array<{ source: string; text?: string; textRef?: string }>; mermaid: string; workflow: unknown; planningScope?: { kind: string; deferred: string[] }; seesAgentResult: boolean; seesJevResult: boolean; readResult?: string; mutationResult?: string; mutationIsError?: boolean }>
+  planningReviewers?: Array<{ sessionId: string; model: string; tools: string[]; outputSchemaProperties: string[]; snapshotDigest: string; requestText: string; requestRevision: number; requestRefs?: Array<{ source: string; text?: string; textRef?: string }>; mermaid: string; workflow: unknown; planningScope?: { kind: string; deferred: string[] }; seesAgentResult: boolean; seesJevResult: boolean; readResult?: string; mutationResult?: string; mutationIsError?: boolean; missingContextResult?: string; missingContextIsError?: boolean }>
   planningStatus?: { tasks: Array<{ planningReview?: unknown; acceptance?: { status: string } }> }
   hostApis?: { start: boolean; startActivation: boolean }
   analysisReadResult?: string
   analysisContext?: { taskId: string; crossTaskId: string; tools: string[]; indexResult: string; indexIsError: boolean;
-    readResult: string; readIsError: boolean; crossTaskResult: string; crossTaskIsError: boolean }
+    readResult: string; readIsError: boolean; crossTaskResult: string; crossTaskIsError: boolean; missingResult: string; missingIsError: boolean }
   questionRequests?: number
+  planningControlBefore?: unknown
+  planningControlSelected?: unknown
+  planningControlAfter?: unknown
+  planningRunObserved?: unknown
   questionTranscript?: { questionCall: { id: string; name: string; arguments: string }; questionResult: {
     id: string; role: string; source: { kind: string; callId: string }; toolCallId: string; isError: boolean; content: Array<{ type: string; text?: string }>
   } }
@@ -110,6 +114,25 @@ describe('真实 AgentLoop：pool exhausted 9060669ms 与终态恢复', () => {
 })
 
 describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () => {
+  it.each(['planning-model-switch', 'planning-model-switch-failure'])('%s：一次性规划审核登记实际模型；在途旧请求成功或401后新选择均真正接手', async (scenario) => {
+    const failed = scenario === 'planning-model-switch-failure'
+    const provider = failed ? 'swarm-selected-mock' : 'swarm-mock'
+    const run = await runRecovery(scenario, getRoutesOverlay(), 'normal', undefined, {
+      config: { planningReview: { enabled: true, requireJev: false }, workflow: { mode: 'enforced' }, jev: { enabled: false } }
+    })
+    expect(run.status, run.error ?? run.stderr).toBe('done')
+    const reviewer = run.planningReviewers![0]!
+    expect(run.planningControlBefore).toMatchObject({ persistent: false, phase: 'running', actual: { route: { provider: 'swarm-mock', model: 'role-yu_shi' } } })
+    expect(run.planningRunObserved).toMatchObject({ route: 'swarm-mock/role-yu_shi', routeSource: 'agent-loop-attempt', actualRoute: { provider: 'swarm-mock', model: 'role-yu_shi' } })
+    expect(run.planningControlSelected).toMatchObject({ persistent: false, phase: 'running', paused: false, selectedNext: { model: 'reviewer-switched' }, actual: { route: { model: 'role-yu_shi' } } })
+    expect(run.recoveryRequests.filter((request) => request.sessionId === reviewer.sessionId).map((request) => [request.provider, request.model])).toEqual([
+      ['swarm-mock', 'role-yu_shi'], ...Array.from({ length: failed ? 4 : 3 }, () => [provider, 'reviewer-switched'])
+    ])
+    expect(reviewer.readResult).toContain('recovery fixture')
+    expect(reviewer.mutationIsError).toBe(true)
+    expect(run.planningStatus?.tasks[0]?.planningReview).toMatchObject({ status: 'pass_with_degradation', agent: { reviewer: { agentId: reviewer.sessionId, provider, model: 'reviewer-switched', fresh: true, readOnly: true } } })
+    expect(run.planningControlAfter).toMatchObject({ persistent: false, oneShotSettled: true, reason: 'one-shot-settled', actual: { route: { model: 'reviewer-switched' }, state: 'settled' } })
+  })
   it('真实 ask_user_question 成功结果经 deriveMessages 进入需求来源，新审核绑定确认且重试不增长', async () => {
     const run = await runRecovery('planning-question-reply', getRoutesOverlay(), 'normal', undefined, {
       config: { planningReview: { enabled: true, requireJev: false }, workflow: { mode: 'enforced' }, jev: { enabled: false } }
@@ -173,6 +196,13 @@ describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () =>
       expect(reviewer.tools.some((name) => ['write', 'edit', 'bash', 'pwsh', ...governanceTools].includes(name) || name.startsWith('jev_') || name.startsWith('swarm_message_'))).toBe(false)
       expect(reviewer.seesAgentResult || reviewer.seesJevResult).toBe(false)
       expect(reviewer.readResult).toContain('recovery fixture')
+      expect(reviewer.missingContextIsError, reviewer.missingContextResult).toBe(false)
+      const missingPlanningContext = JSON.parse(reviewer.missingContextResult!)
+      expect(missingPlanningContext).toMatchObject({ ok: false, code: 'CONTEXT_REFERENCE_UNAVAILABLE',
+        mayUseForImplementation: false, recovery: 'relist_current_materials' })
+      expect(missingPlanningContext).not.toHaveProperty('text')
+      expect(missingPlanningContext.materials.length).toBeGreaterThan(0)
+      expect(missingPlanningContext.materials.every((item: { kind: string }) => !['author-reasoning', 'history', 'experience'].includes(item.kind))).toBe(true)
       expect(reviewer.mutationIsError, reviewer.mutationResult).toBe(true)
       expect(existsSync(join(run.workspace, 'planner-should-not-write.txt'))).toBe(false)
       expect(reviewer.mermaid).toContain('flowchart TD')
@@ -221,6 +251,12 @@ describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () =>
           materials: expect.arrayContaining([expect.objectContaining({ kind: 'contract', ref: expect.any(String), digest: expect.any(String) })]) })
         expect(context.readIsError, context.readResult).toBe(false)
         expect(JSON.parse(context.readResult).text).toContain('README.md')
+        expect(context.missingIsError, context.missingResult).toBe(false)
+        const missingExecutionContext = JSON.parse(context.missingResult)
+        expect(missingExecutionContext).toMatchObject({ ok: false, code: 'CONTEXT_REFERENCE_UNAVAILABLE',
+          mayUseForImplementation: false, recovery: 'relist_current_materials',
+          materials: JSON.parse(context.indexResult).materials })
+        expect(missingExecutionContext).not.toHaveProperty('text')
         expect(context.crossTaskId).not.toBe(run.taskId)
         expect(context.crossTaskIsError, context.crossTaskResult).toBe(true)
         // 校验任务绑定拒绝，不把“不存在任务”或“工具缺失”冒充权限隔离。

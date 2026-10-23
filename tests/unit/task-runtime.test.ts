@@ -521,6 +521,36 @@ describe('task execution through the public service', () => {
     expect(taskView(runtime, created.task_id).flow?.state?.nodes[scenario.node]).toEqual(before)
   })
 
+  it.each(reviewCases)('returns only permitted current references when blind $role reads a missing context', async (scenario) => {
+    const options = { pending: false }
+    const runtime = await makeRuntime(options)
+    const created = await runtime.service.AddTaskCard(card({ flags: scenario.flags }), runtime.exec())
+    await runtime.service.delegate({ task_id: created.task_id, role: 'mou_ding', prompt: '作者先形成探索材料', backend: 'api', session: 'oneshot' }, runtime.exec())
+    const rootIndex = await runtime.service.ReadContext({ task_id: created.task_id }, runtime.exec()) as { materials: Array<{ ref: string; kind: string; cardRevision: number }> }
+    expect(rootIndex.materials.some((item) => item.kind === 'author-reasoning')).toBe(true)
+    const authorRefs = rootIndex.materials.filter((item) => item.kind === 'author-reasoning').map((item) => item.ref)
+    options.pending = true
+    const blind = trackWork(runtime.service.delegate({ task_id: created.task_id, role: scenario.role,
+      ...(scenario.mode === undefined ? {} : { mode: scenario.mode }), node_id: scenario.node,
+      prompt: '先独立读取允许材料，缺失引用不得恢复作者过程', backend: 'api', session: 'oneshot' }, runtime.exec()))
+    await vi.waitFor(() => expect(runtime.runs).toHaveLength(2))
+    const child = runtime.runs[1]!.agent
+    let recovery: unknown
+    await vi.waitFor(async () => {
+      recovery = await runtime.service.ReadContext({ ref: 'ctx-11207567-742d-476c-9932-e8d6911840d3' }, runtime.exec(child))
+      expect(recovery).toMatchObject({ ok: false, code: 'CONTEXT_REFERENCE_UNAVAILABLE', mayUseForImplementation: false })
+    })
+    const result = recovery as typeof rootIndex & Record<string, unknown>
+    expect(result).not.toHaveProperty('text')
+    expect(result.materials.length).toBeGreaterThan(0)
+    expect(result.materials.every((item) => !['author-reasoning', 'history', 'experience'].includes(item.kind)
+      && item.cardRevision === created.cardRevision)).toBe(true)
+    expect(result.materials.some((item) => authorRefs.includes(item.ref))).toBe(false)
+    for (const ref of authorRefs) await expect(runtime.service.ReadContext({ ref }, runtime.exec(child))).rejects.toThrow('独立盲审')
+    runtime.runs[1]!.release()
+    await blind
+  })
+
   it.each(reviewCases)('allows direct $role peer response after frozen blind review without reopening the completed node', async (scenario) => {
     const runtime = await makeRuntime({ pending: true, config: { persistence: { enabled: true }, messageBus: { enabled: true } } })
     await writeFile(join(runtime.home, 'subject.ts'), 'export const subject = 1')

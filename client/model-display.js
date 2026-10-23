@@ -48,6 +48,8 @@ Object.assign(zh, { stopped: '宿主已确认本轮结束；可继续未完成�
 Object.assign(en, { stopped: 'The host confirmed this run ended; unfinished work can be continued.' })
 Object.assign(zh, { unknownModel: '实际模型未由宿主报告' })
 Object.assign(en, { unknownModel: 'Actual model not reported by the host' })
+Object.assign(zh, { oneShotHint: '一次性审核或委派：选择只影响下一次模型请求，当前调用继续运行；若本轮已结束，需在父会话发起新审核或委派。', oneShotSettled: '一次性子会话已结束；在父会话发起新审核或委派。', inherited: '当前使用角色路由链', overridden: '已显式覆盖本子会话模型（保留角色回退链）' })
+Object.assign(en, { oneShotHint: 'One-shot review or delegation: selection affects the next model request only. The current request continues; start a new review or delegation in the parent after settlement.', oneShotSettled: 'This one-shot child has ended. Start a new review or delegation in the parent.', inherited: 'Using the role routing chain', overridden: 'Explicit model override for this child (role fallbacks remain)' })
 
 const style = {
   row: { display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0', fontSize: 13, lineHeight: '22px', minWidth: 0 },
@@ -130,7 +132,7 @@ class AgentModelController {
   dispose () { this.disposed = true; this.generation += 1; this.listeners.clear() }
   getView (raw) {
     const value = raw?.control ?? raw
-    if (value?.childId !== this.address.childId || value?.parentSessionId !== this.address.parentSessionId || !Number.isSafeInteger(value.revision) || value.revision < 1 || typeof value.phase !== 'string') throw new Error('invalid host agent-control view')
+    if (value?.childId !== this.address.childId || value?.parentSessionId !== this.address.parentSessionId || !Number.isSafeInteger(value.revision) || value.revision < 1 || typeof value.phase !== 'string' || typeof value.persistent !== 'boolean') throw new Error('invalid host agent-control view')
     return value
   }
   async load () {
@@ -170,11 +172,11 @@ class AgentModelController {
       const route = this.state.draft
       if (route.provider === '' || route.model === '') return
       input.route = { provider: route.provider, model: route.model, ...(route.reasoningEffort === '' ? {} : { reasoningEffort: route.reasoningEffort }) }
-      input.interruptRunning = ['running', 'waiting', 'stopping'].includes(view.phase)
+      input.interruptRunning = view.persistent === true && ['running', 'waiting', 'stopping'].includes(view.phase)
       if (this.state.retryRoute) input.retryRoute = true
       if (this.state.retryRoute && this.state.forceRetry) input.forceRetry = true
     } else if (action === 'continue') {
-      if (!canContinue(view) || (view.needsSideEffectReview === true && !this.state.confirmSafeToContinue)) return
+      if (view.persistent !== true || !canContinue(view) || (view.needsSideEffectReview === true && !this.state.confirmSafeToContinue)) return
       if (this.state.confirmSafeToContinue) input.confirmSafeToContinue = true
       if (this.state.steering.trim() !== '') input.steering = this.state.steering.trim()
     }
@@ -213,13 +215,14 @@ function AgentControlPanel ({ controller, t }) {
   const models = provider?.models ?? []
   const model = models.find((item) => item.id === state.draft.model)
   const efforts = model?.reasoning?.efforts ?? []
-  const readonly = view?.persistent !== true
+  const readonly = view === undefined || (view.persistent !== true && (view.oneShotSettled === true || view.reason === 'one-shot-settled' || view.paused || ['stopping', 'recovery-required'].includes(view.phase)))
   const disabled = state.busy || state.status !== 'ready'
   const field = (label, element) => h('label', { style: controlStyle.field }, h('span', null, t(label)), element)
   const route = view?.actual?.route
   return h('div', { style: controlStyle.panel, 'data-swarm-agent-control': controller.address.childId, role: 'region', 'aria-label': t('controls') },
     h('p', { style: controlStyle.line }, `${t('actual')}：${route === undefined ? t('actualUnknown') : routeText(t, route)}`),
     view?.selectedNext === undefined ? null : h('p', { style: controlStyle.line }, `${t('selectedNext')}：${routeText(t, view.selectedNext)}`),
+    view === undefined ? null : h('p', { style: controlStyle.line }, t(view.selectedNext === undefined ? 'inherited' : 'overridden')),
     h('p', { style: controlStyle.line, role: 'status' }, `${t('state')}：${view === undefined ? t('unavailable') : t(`phase_${view.phase}`)}`),
     state.error === undefined ? null : h('p', { role: 'alert', style: { ...controlStyle.line, color: 'var(--dsw-alias-state-error-primary, #c92a2a)' } }, state.error),
     state.notice === undefined ? null : h('p', { role: 'status', style: controlStyle.line }, t(state.notice)),
@@ -227,10 +230,11 @@ function AgentControlPanel ({ controller, t }) {
       field('provider', state.catalogStatus === 'ready' ? h('select', { style: controlStyle.input, value: state.draft.provider, disabled, 'aria-label': t('provider'), onChange: (event) => controller.setDraft({ provider: event.target.value }) }, h('option', { value: '' }, t('chooseProvider')), ...state.groups.map((item) => h('option', { key: item.id, value: item.id }, `${item.name ?? providerLabel(item.id)}（${item.id}）`)), state.draft.provider !== '' && provider === undefined ? h('option', { value: state.draft.provider }, state.draft.provider) : null) : h('input', { style: controlStyle.input, value: state.draft.provider, disabled, 'aria-label': t('provider'), onChange: (event) => controller.setDraft({ provider: event.target.value }) })),
       field('model', state.catalogStatus === 'ready' ? h('select', { style: controlStyle.input, value: state.draft.model, disabled, 'aria-label': t('model'), onChange: (event) => controller.setDraft({ model: event.target.value }) }, h('option', { value: '' }, t('chooseModel')), ...models.map((item) => h('option', { key: item.id, value: item.id }, item.id)), state.draft.model !== '' && model === undefined ? h('option', { value: state.draft.model }, state.draft.model) : null) : h('input', { style: controlStyle.input, value: state.draft.model, disabled, 'aria-label': t('model'), onChange: (event) => controller.setDraft({ model: event.target.value }) })),
       field('effort', efforts.length > 0 ? h('select', { style: controlStyle.input, value: state.draft.reasoningEffort, disabled, 'aria-label': t('effort'), onChange: (event) => controller.setDraft({ reasoningEffort: event.target.value }) }, h('option', { value: '' }, t('effortDefault')), ...efforts.map((item) => h('option', { key: item.id, value: item.id }, item.id))) : h('input', { style: controlStyle.input, value: state.draft.reasoningEffort, disabled: disabled || state.catalogStatus === 'ready', placeholder: t('effortDefault'), 'aria-label': t('effort'), onChange: (event) => controller.setDraft({ reasoningEffort: event.target.value }) })),
-      h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.retryRoute, disabled, onChange: (event) => controller.setOptions({ retryRoute: event.target.checked, forceRetry: false }) }), t('retryRoute')),
-      state.retryRoute ? h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.forceRetry, disabled, onChange: (event) => controller.setOptions({ forceRetry: event.target.checked }) }), t('forceRetry')) : null,
-      h('p', { style: controlStyle.line }, t('routeHint'))),
-    !canContinue(view) ? null : h(React.Fragment, null,
+      view.persistent !== true ? null : h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.retryRoute, disabled, onChange: (event) => controller.setOptions({ retryRoute: event.target.checked, forceRetry: false }) }), t('retryRoute')),
+      view.persistent === true && state.retryRoute ? h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.forceRetry, disabled, onChange: (event) => controller.setOptions({ forceRetry: event.target.checked }) }), t('forceRetry')) : null,
+      h('p', { style: controlStyle.line }, t(view.persistent === true ? 'routeHint' : 'oneShotHint'))),
+    view?.oneShotSettled !== true && view?.reason !== 'one-shot-settled' ? null : h('p', { style: controlStyle.line }, t('oneShotSettled')),
+    view?.persistent !== true || !canContinue(view) ? null : h(React.Fragment, null,
       view.needsSideEffectReview === true ? h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.confirmSafeToContinue, disabled, onChange: (event) => controller.setOptions({ confirmSafeToContinue: event.target.checked }) }), t('reconcile'), h('p', { style: controlStyle.line }, t('reconcileHint'))) : null,
       field('steering', h('textarea', { style: controlStyle.input, value: state.steering, maxLength: 8000, disabled, 'aria-label': t('steering'), onChange: (event) => controller.setOptions({ steering: event.target.value }) }))),
     h('div', { style: controlStyle.actions },

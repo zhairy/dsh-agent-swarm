@@ -13,7 +13,16 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.2）
 - 新建会话选「百工模式」即可使用；Jev API key 可选
 
-### 3.1 的变化
+### 3.1.1 的变化
+
+- 规划审核会话识别为百工子会话，实际模型由宿主请求记录展示；模型与恢复面板区分实际调用和后续选择。
+- 一次性审核可选择下一请求模型，当前请求不中断；连续专家保留取消、沉寂确认和安全继续流程。
+- 失效上下文引用返回当前任务授权索引，重新选择 ref/digest 即可继续读取；不恢复旧版本权限。
+- 文件发现支持相对子目录、有界索引与输出；宿主搜索容量溢出和 Fetch 404 保留原错误并说明恢复方式。
+- 已复核经验的适用条件参与有界检索；自我进化按 [3.1.1–3.1.4 路线](docs/plans/2026-10-23-self-evolution-3.1.1-through-3.1.4.md) 逐步交付。
+- 真正需要人工决定时，天枢调用 `ask_user_question`，不以重复思考代替授权交互；未答复不表示同意。
+
+### 3.1.0 的变化
 
 | 变化 | 说明 |
 |---|---|
@@ -124,7 +133,16 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 - Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.2 recommended)
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
 
-### What's new in 3.1
+### What's new in 3.1.1
+
+- Planning-review child sessions display models observed by the host; the controls distinguish actual attempts from next-request selections.
+- One-shot reviewers can select the next request model without interrupting the in-flight request. Persistent experts retain cancellation, settlement and safe continuation.
+- Obsolete context references return the current authorized index without reviving old permissions.
+- File discovery supports bounded relative-directory scans; search overflow and Fetch endpoint failures retain their error status and offer recovery guidance.
+- Reviewed experiences can match bounded applicability text. Self-evolution follows the staged [3.1.1–3.1.4 roadmap](docs/plans/2026-10-23-self-evolution-3.1.1-through-3.1.4.md).
+- Tian Shu uses `ask_user_question` for necessary human decisions; silence never grants permission.
+
+### What's new in 3.1.0
 
 | Change | Details |
 |---|---|

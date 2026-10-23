@@ -32,6 +32,19 @@ describe('local bounded reviewed memory references', () => {
     expect(result.matches).toHaveLength(1)
     expect(result.retrieval).toBe('bounded-lexical')
   })
+  it('recalls task-specific applicability while preserving full exclusions and verification requirements', () => {
+    const record = entry({ conclusion: 'Prefer a bounded retry and inspect current evidence',
+      appliesWhen: ['DeepSeek thinking protocol failure after session continuation'],
+      doesNotApplyWhen: ['Business-side irreversible work already completed'] })
+    const result = queryReviewedExperiences([record], { text: 'DeepSeek thinking' }, 1000)
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0]).toMatchObject({ applicabilityUnverified: true,
+      appliesWhen: record.appliesWhen, doesNotApplyWhen: record.doesNotApplyWhen,
+      verification: record.verification, source: record.source })
+    expect(result.requiresVerification).toBe(true)
+    expect(queryReviewedExperiences([record], { text: 'DeepSeek thinking', excludeTaskId: record.source.taskId }, 1000).matches).toEqual([])
+    expect(queryReviewedExperiences([entry({ ...record, status: 'candidate' })], { text: 'DeepSeek thinking' }, 1000).matches).toEqual([])
+  })
   it('preserves all exclusion conditions or omits an oversized reference entirely', () => {
     const excessive = entry({ id: 'too-large', doesNotApplyWhen: ['condition'.repeat(1000)] })
     const good = entry({ id: 'good' })

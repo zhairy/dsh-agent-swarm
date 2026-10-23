@@ -34,6 +34,7 @@ import { ensureRolePresetsForActivationHost } from './preset-registration.js'
 import { intSwarmService, type LoggerLike } from './service.js'
 import { getHostApprovalPolicy, getToolApprovalDecision } from './approval-policy.js'
 import { inspectChildRecovery, inspectRootPreference } from './host-recovery.js'
+import { getToolRecoveryResult } from './tool-recovery.js'
 import type { RouteInfo } from './routes.js'
 
 /** 宿主行：提供 agentSwarm 服务、注册写操作守卫与设置页 RPC，本身不向模型注册工具 */
@@ -176,9 +177,10 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   if (tools !== undefined) ctx.effect(() => tools.guard((execution) => service.getGuardReason(execution)))
   // This stage follows admission and the monotonic guards. A rejected tool is
   // never evidence that a writer actually entered the execution pipeline.
-  ctx.on('tools/execute', (execution: ToolExecutionLike, next: () => Promise<unknown>) => {
+  ctx.on('tools/execute', async (execution: ToolExecutionLike, next: () => Promise<unknown>) => {
     service.ObserveToolDispatch(execution)
-    return next()
+    const result = await next()
+    return service.isManagedAgent(execution.agent) ? getToolRecoveryResult(execution.name, result) : result
   })
   // Wrap the complete downstream policy, retaining its deny/cancel/ask. Host approval and
   // monotonic role/revision/workspace guards remain authoritative after this seam.

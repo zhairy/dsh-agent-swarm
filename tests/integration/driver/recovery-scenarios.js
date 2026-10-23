@@ -8,6 +8,14 @@ const phaseCard = { title: '阶段规划活性集成', goal: '本阶段只读分
   planningScope: { kind: 'phase', deliverables: ['只读分析 README.md 并报告依据'], deferred: ['后续实施完整系统'], rationale: '先确认源码证据，再实施完整系统；始终禁止自动启用实盘' } }
 
 export const RECOVERY_SCENARIOS = {
+  'planning-model-switch': {
+    planning: true, preset: 'tian-shu', userText: '只读分析 README.md 并提供真实文件依据',
+    root: [
+      { tool: 'swarm_task_card', args: { title: '一次性规划审核模型切换', goal: '只读分析 README.md 并提供真实文件依据', acceptance: ['结论引用 README.md'], scope: ['README.md'], flags: {} } },
+      { tool: 'swarm_status', args: { task_id: '$TASK', verbose: true } },
+      { text: 'PLANNING SWITCH DONE' }
+    ]
+  },
   'planning-question-reply': {
     planning: true, preset: 'tian-shu', userText: '只读分析 README.md；下一阶段修复需要另行确认。',
     root: [
@@ -60,6 +68,7 @@ export const RECOVERY_SCENARIOS = {
   'recovery-child-continuable': { recovery: true, preset: 'tian-shu', root: [taskCard, delegate('tan_wei', 'new'), { text: 'RECOVERY DONE' }] },
   'recovery-write-once': { recovery: true, preset: 'tian-shu', root: [{ ...taskCard, args: { ...taskCard.args, flags: { changesCode: true } } }, delegate('ji_feng', 'oneshot'), { text: 'RECOVERY DONE' }] }
 }
+RECOVERY_SCENARIOS['planning-model-switch-failure'] = RECOVERY_SCENARIOS['planning-model-switch']
 
 export const getRecoveryFailure = (model) => {
   if (model === 'fail-pool') return { code: 'SERVER_ERROR', status: 503, message: 'pool "claude-opus-5-5" exhausted: every member is unavailable or failed', providerRetryAfterMs: 9060669 }
@@ -111,6 +120,8 @@ export const apply = (ctx) => {
   const scenarioName = process.env.SWARM_RECOVERY_SCENARIO
   if (!scenarioName) return
   const scenario = RECOVERY_SCENARIOS[scenarioName]
+  const planningModelSwitch = scenarioName === 'planning-model-switch' || scenarioName === 'planning-model-switch-failure'
+  const latePlanningFailure = scenarioName === 'planning-model-switch-failure'
   const out = process.env.SWARM_DRIVER_OUT
   const state = { scenario: scenarioName, recoveryRequests: [], recoveryEvents: [], agentErrors: [], results: [], children: [], rootTools: [], failQuotaHits: 0, childMessages: [], rootNotices: 0, planningReviewers: [],
     hostApis: { start: typeof ctx.subagents.start === 'function', startActivation: typeof ctx.subagents.startActivation === 'function' } }
@@ -161,14 +172,37 @@ export const apply = (ctx) => {
             seesAgentResult: Object.hasOwn(snapshot, 'agent'), seesJevResult: Object.hasOwn(snapshot, 'jev') }
           state.planningReviewers.push(reviewer)
         }
-        if (step === 0) { yield* toolChunks('read', { file_path: 'README.md' }); return }
+        if (step === 0) {
+          if (planningModelSwitch && state.planningControlSelected === undefined) {
+            const service = ctx.get('agentSwarm')
+            const parentSessionId = ctx.agents.get(sessionId).session.header.parentSession
+            const view = await service.getAgentViewForRpc(parentSessionId, sessionId)
+            state.planningControlBefore = view
+            state.planningRunObserved = service.getStatus({ task_id: state.taskId }, { agent: ctx.agents.get(parentSessionId), signal: new AbortController().signal }).planningRuns[0]
+            state.planningControlSelected = await service.ControlAgentForRpc({ parentSessionId, childId: sessionId, expectedRevision: view.revision,
+              action: 'select', route: { provider: latePlanningFailure ? 'swarm-selected-mock' : 'swarm-mock', model: 'reviewer-switched' }, interruptRunning: false })
+            if (latePlanningFailure) {
+              // 旧实际请求在新选择之后才401，不能把新模型标成失败。
+              childSteps.set(sessionId, 0)
+              yield { type: 'finish', reason: { kind: 'error', failure: { status: 401, code: 'AUTH_ERROR', message: 'old in-flight request returned 401 after manual selection' } } }
+              return
+            }
+          }
+          yield* toolChunks('read', { file_path: 'README.md' }); return
+        }
         if (step === 1) {
           reviewer.readResult = textOf(options.messages?.at(-1))
+          yield* toolChunks('swarm_context_read', { task_id: snapshot.taskId, ref: 'ctx-11207567-742d-476c-9932-e8d6911840d3' }); return
+        }
+        if (step === 2) {
+          const last = options.messages?.findLast(message => message.role === 'tool')
+          reviewer.missingContextResult = textOf(last)
+          reviewer.missingContextIsError = last?.isError === true
           yield* toolChunks('write', { file_path: 'planner-should-not-write.txt', content: 'must be rejected\n' }); return
         }
         reviewer.mutationResult = textOf(options.messages?.at(-1))
         reviewer.mutationIsError = options.messages?.at(-1)?.isError === true
-        if (step > 2) throw new Error('真实宿主未接受规划 structured_output，停止而非重复提交')
+        if (step > 3) throw new Error('真实宿主未接受规划 structured_output，停止而非重复提交')
         const dimension = { verdict: 'pass', summary: '独立对照 R1/A1/analysis：分析步骤产出对应结论，源码箭头与冻结流程相同', evidenceRefs: ['R1', 'A1', 'analysis', 'workflow', 'mermaid'] }
         yield* submit({ snapshotDigest: snapshot.snapshotDigest, verdict: 'pass',
           goalReview: dimension, designReview: dimension, mermaidReview: dimension,
@@ -214,15 +248,20 @@ export const apply = (ctx) => {
         if (step === 2) {
           state.analysisContext.readResult = textOf(last)
           state.analysisContext.readIsError = last?.isError === true
-          yield* toolChunks('swarm_context_read', { task_id: state.analysisContext.crossTaskId }); return
+          yield* toolChunks('swarm_context_read', { task_id: state.taskId, ref: 'ctx-11207567-742d-476c-9932-e8d6911840d3' }); return
         }
         if (step === 3) {
+          state.analysisContext.missingResult = textOf(last)
+          state.analysisContext.missingIsError = last?.isError === true
+          yield* toolChunks('swarm_context_read', { task_id: state.analysisContext.crossTaskId }); return
+        }
+        if (step === 4) {
           state.analysisContext.crossTaskResult = textOf(last)
           state.analysisContext.crossTaskIsError = last?.isError === true
           yield* toolChunks('read', { file_path: 'README.md' }); return
         }
         state.analysisReadResult = textOf(last)
-        if (step > 4) throw new Error('真实宿主未接受执行 structured_output')
+        if (step > 5) throw new Error('真实宿主未接受执行 structured_output')
         yield* submit({ summary: 'README.md 第一行声明 recovery fixture；结论依据已读取的文件', unresolved: [], constraints: ['结论引用 README.md'],
           options: [{ name: '按文件事实报告', summary: '读取并核对第一行', pros: ['证据可复查'], cons: [] }],
           decisions: [{ point: '输入是什么', recommendation: '测试恢复工作区', reason: 'README.md:1 为 # recovery fixture' }], dependencies: [] })
@@ -238,7 +277,7 @@ export const apply = (ctx) => {
       else yield* textChunks('```json\n' + JSON.stringify(VALID[role]) + '\n```')
     }
   }
-  ctx.llm.registerAdapter(['swarm-mock'], adapter)
+  ctx.llm.registerAdapter(['swarm-mock', ...(latePlanningFailure ? ['swarm-selected-mock'] : [])], adapter)
   ctx.on('session/event', (session, event) => {
     if (event.type === 'llm/retry' || event.type === 'llm/retry-started') state.recoveryEvents.push({ type: event.type, data: event.data, sessionId: session.id })
   })
@@ -267,6 +306,7 @@ export const apply = (ctx) => {
       }
       state.recoveryTerminal = ctx.get('agentSwarm')?.routeState.getTerminal(handle.agent.id)
       if (scenario.planning && state.taskId) state.planningStatus = ctx.get('agentSwarm')?.getStatus({ task_id: state.taskId, verbose: true }, { agent: handle.agent, signal: new AbortController().signal })
+      if (planningModelSwitch) state.planningControlAfter = await ctx.get('agentSwarm').getAgentViewForRpc(sessionId, state.planningReviewers[0].sessionId)
       finish('done')
     } finally { await scope?.[Symbol.asyncDispose]?.() }
   }

@@ -65,7 +65,15 @@ export const queryReviewedExperiences = (entries: readonly ExperienceEntry[], qu
       || !entry.reviewer || !entry.reviewArtifactDigest || entry.source.taskId === query.excludeTaskId
       || (query.problemClass !== undefined && entry.problemClass !== query.problemClass)) continue
     // Score only bounded text; full conditions are preserved separately in the returned reference.
-    const haystack = (entry.problemClass.slice(0, 128) + '\n' + entry.conclusion.slice(0, 4000)).toLowerCase()
+    // Applicability often names the actual task while a distilled conclusion is
+    // generic. Inspect a bounded prefix; retain every full condition below so a
+    // lexical match can never be mistaken for applicability or current evidence.
+    let applicability = ''
+    for (const condition of entry.appliesWhen) {
+      if (applicability.length >= 2000) break
+      applicability += ('\n' + condition).slice(0, 2000 - applicability.length)
+    }
+    const haystack = (entry.problemClass.slice(0, 128) + '\n' + entry.conclusion.slice(0, 4000) + '\n' + applicability).toLowerCase()
     let score = query.problemClass !== undefined ? 1 : 0
     for (const term of terms) if (haystack.includes(term)) score++
     if (score === 0) continue

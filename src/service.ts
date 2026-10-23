@@ -4,6 +4,7 @@ import { getTaskDiagrams } from './task-diagrams.js'
 import { getOrchestrationQuestions, getRuleOrchestration, ParseOrchestrationPlan, type OrchestrationPlan } from './orchestration.js'
 import { createDelegationScheduler } from './scheduler.js'
 import { formatMemoryReferences } from './memory.js'
+import type { ContextPageInfo } from './context-store.js'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { readFile } from 'node:fs/promises'
@@ -99,6 +100,9 @@ export interface PlanningRunView {
   jevStage: 'pending' | 'running' | 'settled'
   reviewerId?: string
   route?: string
+  /** 初始候选与实际请求分开；未观测到 attempt 时不能声称模型已经调用。 */
+  routeSource?: 'selected-initial' | 'agent-loop-attempt'
+  actualRoute?: RouteInfo
 }
 
 /** 服务依赖：宿主服务一律用 getter 延迟读取，适配服务晚于插件就绪的情况 */
@@ -220,7 +224,7 @@ const getRequiredSpawnCapabilities = (subagents: SubagentsLike | undefined): str
   : ['agentOptions', 'outputSchema', 'toolFilter', 'persona', 'depthLimit']
 
 /** 独立规划审核子会话的固定 persona（不是一次委派，不套用御史的委派 persona） */
-const PLANNING_REVIEWER_PERSONA = '你是独立只读的规划审查者。审核原始用户需求、目标、流程和源码，严禁写入、shell 或自行委派。[[swarm:role=yu_shi]]'
+const PLANNING_REVIEWER_PERSONA = '你是 dsh-agent-swarm 的独立只读规划审查者。审核原始用户需求、目标、流程和源码，严禁写入、shell 或自行委派。[[swarm:role=yu_shi]]'
 
 const getExternalEditAt = (task: TaskRecord, session: SessionStateInfo): number =>
   session.rootEditAt >= task.createdAt ? session.rootEditAt : 0
@@ -1413,12 +1417,15 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
             childPrompts.set(run.id, { role: 'yu_shi', persona: PLANNING_REVIEWER_PERSONA })
             progress.reviewerId = run.id
             progress.route = getRouteLabel(route)
+            progress.routeSource = 'selected-initial'
             progress.agentStage = 'reviewing'
             const liveReviewer = deps.getAgent?.(run.id)
             if (liveReviewer !== undefined) ApplyChildToolScope(liveReviewer, 'yu_shi', false)
             childOwners.set(run.id, session.sessionId)
             childSignals.set(run.id, reviewSignal)
             routeState.AddChild(run.id, { chain: candidates, role: 'yu_shi', logicalRequestId: reservationId })
+            agentControl.Register({ childId: run.id, parentSessionId: session.sessionId,
+              delegationId: reservationId, persistent: false, ...getTaskBinding(task) })
             const ready = features.bindings.bind({ agentId: run.id, ...getTaskContextBinding(task, features.workspaceId),
               nodeId: 'planning-review', attemptId: reservationId, threadId: run.id,
               role: 'yu_shi',
@@ -1427,14 +1434,18 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
             childReady.set(run.id, ready)
             await waitForPlanning(ready, reviewSignal)
             const result = await waitForPlanning(run.result, reviewSignal)
-            const observedModel = routeState.getLastRoute(run.id)?.model
-            return { result: result.structured, reviewer: { agentId: run.id, role: 'yu_shi', ...(observedModel === undefined ? {} : { model: observedModel }),
+            const actualRoute = agentControl.get(run.id)?.actual?.route
+            agentControl.MarkRunSettled(run.id, result.stopReason)
+            return { result: result.structured, reviewer: { agentId: run.id, role: 'yu_shi', ...(actualRoute === undefined ? {} : { ...actualRoute }),
               fresh: true, readOnly: true, authorAgentIds: [exec.agent.id, ...session.store.getTaskDelegations(task.taskId).filter((d) => ['ji_feng', 'zhu_jian'].includes(d.role)).flatMap((d) => d.childId ? [d.childId] : [])] } }
           } catch (error) { return { reason: String(error) } }
           finally {
             progress.agentStage = 'settled'
             budget.settle(reservationId)
             if (run !== undefined) {
+              // 总截止或清理超时不等于宿主已经结束；只有 result/subagent/end
+              // 能把实际 attempt 标为沉寂，撤销期间保持停止态并拒绝新选择。
+              if (agentControl.get(run.id)?.reason !== 'one-shot-settled') agentControl.MarkBlocked(run.id, 'planning-review-cleanup-required')
               // 先撤销能力，再有界清理；清理卡死不能阻塞本轮结果与后续审核。
               await features.bindings.revoke(run.id, reviewSignal.aborted ? 'cancelled' : 'completed')
               routeState.DelAgent(run.id)
@@ -1542,7 +1553,21 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     }
     if (typeof args.ref !== 'string') throw new SwarmError('INVALID_ARGS', '上下文 ref 必须为字符串；不传 ref 可列出当前授权材料')
     if (stateRefreshRequired) throw new SwarmError('STALE_EVIDENCE', `材料绑定旧需求或流程（已发布 ${task.requestRevision ?? 1}/${task.cardRevision ?? 1}/${task.workflowRevision ?? 1}，当前需求 ${projectedTask.requestRevision ?? 1}/${projectedTask.cardRevision ?? 1}/${projectedTask.workflowRevision ?? 1}）；先调用 swarm_review_plan 同步当前版本，再不传 ref 重新获取材料引用与 digest。旧 ref 不会自动升级，也不代表当前审核已通过。`)
-    const page = features.contexts.Read(binding ?? getTaskContextBinding(task, features.workspaceId), args.ref, args)
+    let page: ContextPageInfo
+    try {
+      page = features.contexts.Read(binding ?? getTaskContextBinding(task, features.workspaceId), args.ref, args)
+    } catch (error) {
+      // Missing historical refs are a recoverable lookup failure, never an alias
+      // for a new contract. Existing refs still fail closed on every permission,
+      // revision and digest check, including independent blind-review isolation.
+      if (!(error instanceof SwarmError) || error.code !== 'CONTEXT_REFERENCE_UNAVAILABLE') throw error
+      return { ok: false, code: error.code, task_id: task.taskId, ref: args.ref,
+        stateRefreshRequired: false, publishedRevisions: getTaskBinding(task),
+        materials: features.contexts.List(binding ?? getTaskContextBinding(task, features.workspaceId)),
+        mayUseForImplementation: false, recovery: 'relist_current_materials',
+        reason: '该引用在当前授权材料中不存在，可能来自旧版本或其他会话；这不证明状态损坏，也不代表旧材料已取得当前授权。',
+        nextAction: '从 materials 中重新选择当前 ref 和 digest，省略旧 cursor 后重新读取；本次没有返回材料正文、批准或执行凭证。' }
+    }
     const delegationId = task.contextDelegations?.[args.ref]
     if (delegationId === undefined) return { ...page, stateRefreshRequired, ...(stateRefreshRequired ? { text: `[历史材料：需求或流程尚未同步，不是新版本已批准证据。]\n${page.text}` } : {}) }
     const record = session.store.getDelegation(delegationId)
@@ -1567,7 +1592,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const { session, binding, features } = await getToolTask(raw, exec)
     if (binding !== undefined) features.bindings.requireActive(binding.agentId, 'context-read')
     return discoverProjectFiles(getAgentHeader(session.rootAgent ?? exec.agent).cwd ?? process.cwd(), raw as Parameters<typeof discoverProjectFiles>[1], {
-      privateRoots: privateStateRoots()
+      privateRoots: privateStateRoots(), signal: exec.signal
     })
   }
 
@@ -1644,7 +1669,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const capabilityRequest = raw as { capability_tags?: string[]; allow_write_roles?: boolean }
     return { ...getStatusResult(views, session, getDiagnostics(exec.agent)),
       planningRuns: [...reviewProgress.values()].filter(({ rootSessionId, view }) => rootSessionId === session.sessionId && tasks.some((task) => task.taskId === view.task_id))
-        .map(({ view }) => ({ ...view, route: view.reviewerId === undefined ? view.route : routeState.getLastRoute(view.reviewerId) === undefined ? view.route : getRouteLabel(routeState.getLastRoute(view.reviewerId)!), elapsedMs: Math.max(0, now() - view.startedAt) })),
+        .map(({ view }) => {
+          const actual = view.reviewerId === undefined ? undefined : agentControl.get(view.reviewerId)?.actual
+          return { ...view, ...(actual === undefined ? {} : { route: getRouteLabel(actual.route), routeSource: 'agent-loop-attempt' as const, actualRoute: actual.route }), elapsedMs: Math.max(0, now() - view.startedAt) }
+        }),
       scheduling: schedulerFor(session.sessionId).status(),
       roleSuggestions: capabilityRequest.capability_tags === undefined ? [] : suggestRolesByCapabilities(capabilityRequest.capability_tags, { allowWrite: capabilityRequest.allow_write_roles === true }),
       recovery: { quotaEvidence: deps.quotaDiagnostics?.() ?? null, isolatedRoutes: routeState.getHealth(), current: routeState.getRecovery(exec.agent.id) ?? null, nativeInternalRetryCoverage: 'unverified' },

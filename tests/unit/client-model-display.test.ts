@@ -56,6 +56,8 @@ describe('会话事件的识别', () => {
     const system = { type: 'system/message', seq: 3, data: { message: { content: [{ type: 'text', text: '你是「天枢」，dsh-agent-swarm 的主持者' }] } } }
     expect(markerDefinition.match(system)).toEqual({ id: '3', role: 'start' })
     expect(markerDefinition.start(undefined, { event: system }, reader({}))).toEqual({ swarm: true })
+    const reviewer = { ...system, data: { message: { content: [{ type: 'text', text: '你是独立只读规划审查者。[[swarm:role=yu_shi]]' }] } } }
+    expect(markerDefinition.start(undefined, { event: reviewer }, reader({}))).toEqual({ swarm: true })
     const standard = { type: 'agent-preset/selected', seq: 4, data: { agentPreset: 'standard' } }
     expect(markerDefinition.start(undefined, { event: standard }, reader({}))).toEqual({ swarm: false })
     expect(markerDefinition.start(undefined, { event: { ...standard, data: { agentPreset: 'yu-shi' } } }, reader({}))).toEqual({ swarm: true })
@@ -213,6 +215,17 @@ describe('client 入口', () => {
 })
 
 describe('persistent child model controls', () => {
+  it('一次性审核只记录下一请求选择，不要求取消或人工续跑', async () => {
+    const address = { parentSessionId: 'root', childId: 'reviewer' }
+    let view = { ...address, revision: 3, persistent: false, phase: 'running', actual: { route: { provider: 'codex', model: 'old' }, attemptId: 'observed-old' } }
+    const command = vi.fn(async (input: any) => { view = { ...view, revision: 4, selectedNext: input.route } as typeof view; return view })
+    const controller = new AgentModelController(address, { view: async () => view, command })
+    await controller.load()
+    controller.setDraft({ provider: 'codex' }); controller.setDraft({ model: 'next' })
+    await controller.command('select')
+    expect(command).toHaveBeenCalledWith({ ...address, action: 'select', expectedRevision: 3, interruptRunning: false, route: { provider: 'codex', model: 'next' } })
+    expect(controller.getSnapshot().view).toMatchObject({ persistent: false, phase: 'running', actual: { route: { model: 'old' } }, selectedNext: { model: 'next' } })
+  })
   it('CAS commands go to the real control plane; selection receipt never replaces actual attempt evidence', async () => {
     const address = { parentSessionId: 'root', childId: 'child' }
     let view = { ...address, revision: 3, persistent: true, phase: 'running', actual: { route: { provider: 'codex', model: 'old', reasoningEffort: 'high' }, attemptId: 'attempt-old' } }

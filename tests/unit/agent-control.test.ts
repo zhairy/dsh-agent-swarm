@@ -24,6 +24,47 @@ const fixture = (options: { persist?: () => Promise<void>; resume?: () => Promis
 }
 
 describe('persistent subagent control uses actual routing and host settlement', () => {
+  it('一次性规划审核可以切换下一请求，当前 attempt 不被取消或伪改模型，结束后禁止重放', async () => {
+    const routes = intRouteStateRegistry()
+    routes.AddChild('reviewer', { chain: [original], role: 'yu_shi', logicalRequestId: 'plan-1' })
+    const interrupt = vi.fn(async () => undefined)
+    const resume = vi.fn(async () => ({ accepted: true as const }))
+    const control = createAgentControl({ validateRoute: async (route) => route, interrupt, resume, applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause })
+    control.Register({ ...binding, childId: 'reviewer', delegationId: 'plan-1', persistent: false })
+    control.ObserveRequest('reviewer', original)
+    control.MarkAttemptStarted('reviewer', 'reviewer:1', original)
+    const address = () => ({ parentSessionId: 'root', childId: 'reviewer', expectedRevision: control.get('reviewer')!.revision })
+    await control.Select({ ...address(), route: chosen })
+    expect(interrupt).not.toHaveBeenCalled()
+    expect(routes.isManualPaused('reviewer')).toBe(false)
+    expect(control.get('reviewer')).toMatchObject({ phase: 'running', persistent: false, selectedNext: chosen, actual: { route: original } })
+    expect(routes.getRequestOverride({ id: 'reviewer', session: { header: { parentSession: 'root' } } }, original, undefined)).toEqual(chosen)
+    control.MarkAttemptStarted('reviewer', 'reviewer:2', chosen)
+    control.MarkRunSettled('reviewer', 'completed')
+    expect(control.get('reviewer')).toMatchObject({ oneShotSettled: true, reason: 'one-shot-settled', actual: { route: chosen, state: 'settled' } })
+    const settled = control.get('reviewer')!
+    control.ObserveSelection('reviewer', original)
+    control.MarkWaiting('reviewer', true)
+    control.MarkBlocked('reviewer', 'late-error')
+    expect(control.get('reviewer')).toEqual(settled)
+    await expect(control.Select({ ...address(), route: original })).rejects.toThrow('已结束')
+    await expect(control.Continue(address())).rejects.toThrow('一次性')
+    expect(resume).not.toHaveBeenCalled()
+  })
+
+  it('一次性下一请求选择在异步模型校验中结算时拒绝陈旧CAS', async () => {
+    let release!: () => void
+    const applyOverride = vi.fn()
+    const control = createAgentControl({ validateRoute: async (route) => { await new Promise<void>((resolve) => { release = resolve }); return route },
+      interrupt: vi.fn(), resume: vi.fn(), applyOverride, setPaused: vi.fn() })
+    control.Register({ ...binding, persistent: false })
+    const select = control.Select({ parentSessionId: 'root', childId: 'child', expectedRevision: 1, route: chosen })
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    control.MarkRunSettled('child', 'completed')
+    release()
+    await expect(select).rejects.toThrow('状态已改变')
+    expect(applyOverride).not.toHaveBeenCalled()
+  })
   it('model errors leave persistent tasks runnable for in-session retry; cancelled runs pause for direct recovery; duplicate end signals are idempotent', async () => {
     const errored = fixture()
     errored.start()

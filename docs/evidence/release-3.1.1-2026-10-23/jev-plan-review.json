@@ -1,0 +1,201 @@
+{
+  "state": {
+    "release": "3.1.1 candidate, not published",
+    "scope": {
+      "now": [
+        "current authorized context index on missing historical ref; ok=false; no old authorization revival",
+        "bounded applicable-condition lexical recall of independently validated experiences",
+        "actual model visibility for planning reviewer; next-request child selection",
+        "bounded project discovery scoped to existing relative directory; maintain 20MB host cap",
+        "failure hints preserve isError and error code; user has selected host HTTP fetch backend",
+        "ask_user_question guidance; persistent question state machine planned for 3.1.3"
+      ],
+      "later": {
+        "3.1.2": "sandboxed skills/tools candidates",
+        "3.1.3": "server-side verification credentials, global structural history, finite DAG retries, bounded recovery and authorization question lifecycle",
+        "3.1.4": "version governance, opt-in canary and rollback"
+      }
+    },
+    "mathematicalLimits": [
+      "Low adjacent semantic distance is only stalled signal, not evidence of correctness/completion/convergence.",
+      "Finite N states plus novelty against ALL history bounds transitions N-1; nonzero adjacent distance alone permits A-B-A loop.",
+      "DAG alone does not bound infinite replan/reactivation; fixed graph finite retries required.",
+      "Two failed review cycles do not prove statistically significant benefit; mandatory safety edges cannot be pruned."
+    ],
+    "review": {
+      "positiveContext": "7 files 87 tests passed",
+      "negative": "One in-flight selection/fallback race found; must fix before release",
+      "unit": "Initial full run1295 passed/1 outdated error-contract assertion; correction underway",
+      "host": "Production is still3.1.0; user explicitly requires waiting active business session finish before deployment/release"
+    }
+  },
+  "results": {
+    "ask": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "staged": {
+          "type": "noul",
+          "noul": 0.89
+        },
+        "math": {
+          "type": "noul",
+          "noul": 0.9
+        },
+        "release": {
+          "type": "choice",
+          "choice": "hold",
+          "confidence": 1,
+          "probabilities": {
+            "hold": 1,
+            "publish": 0,
+            "bypass": 0
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 796,
+        "output_tokens": 73,
+        "est_cost_usd": 0.000033432
+      },
+      "latency_ms": 655.267
+    },
+    "check": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "probabilities": {
+          "no_completion_proof": 0.93,
+          "no_prune": 0.94,
+          "user_wait": 0.96,
+          "race_blocking": 0.95
+        },
+        "flags": [
+          "no_completion_proof",
+          "no_prune",
+          "user_wait",
+          "race_blocking"
+        ],
+        "uncertain": []
+      },
+      "usage": {
+        "input_tokens": 743,
+        "output_tokens": 77,
+        "est_cost_usd": 0.000031206000000000006
+      },
+      "latency_ms": 616.068
+    },
+    "classify": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "choice": "hold_for_fix_and_host_test",
+        "confidence": 1,
+        "probabilities": {
+          "hold_for_fix_and_host_test": 1,
+          "ready": 0,
+          "cancel_all": 0,
+          "other": 0
+        },
+        "band": "act",
+        "agreement": true,
+        "alternate_choice": "hold_for_fix_and_host_test"
+      },
+      "usage": {
+        "input_tokens": 1568,
+        "output_tokens": 112,
+        "est_cost_usd": 0.00006585600000000001
+      },
+      "latency_ms": 1237.464
+    },
+    "match": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "best_id": "bounded_recovery",
+        "best_text": "Return current authorized index with ok=false; preserve guards; bounded file discovery; user chooses trusted HTTP fetch; preserve errors",
+        "confidence": 1,
+        "abstain_probability": 0,
+        "exists": 0.95,
+        "windows": 1,
+        "exists_by_window": [
+          0.95
+        ],
+        "top3": [
+          {
+            "id": "bounded_recovery",
+            "probability": 1
+          },
+          {
+            "id": "auto_complete",
+            "probability": 0
+          },
+          {
+            "id": "lift_every_limit",
+            "probability": 0
+          }
+        ],
+        "band": "match"
+      },
+      "usage": {
+        "input_tokens": 588,
+        "output_tokens": 71,
+        "est_cost_usd": 0.000024696000000000002
+      },
+      "latency_ms": 615.582
+    },
+    "score": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "score": 2.91,
+        "confidence": 0.91,
+        "probabilities": {
+          "0": 0,
+          "1": 0,
+          "2": 0.09,
+          "3": 0.91
+        },
+        "legend": {
+          "0": "It asserts semantic similarity proves correctness and bypasses safety",
+          "1": "It has vague warnings but leaves unsafe automatic completion",
+          "2": "It separates stalled and completed and lists finite-state assumptions",
+          "3": "It also preserves mandatory review, version binding, and requires regressions before release"
+        },
+        "normalized": 0.9700000000000001
+      },
+      "usage": {
+        "input_tokens": 770,
+        "output_tokens": 17,
+        "est_cost_usd": 0.000032340000000000005
+      },
+      "latency_ms": 1247.314
+    },
+    "screen": {
+      "ok": false,
+      "status": 400,
+      "error": "invalid tool input",
+      "details": [
+        {
+          "loc": [
+            "text"
+          ],
+          "msg": "Input should be a valid string"
+        }
+      ]
+    },
+    "screen-corrected": {
+      "ok": false,
+      "status": 400,
+      "error": "invalid tool input",
+      "details": [
+        {
+          "loc": [
+            "text"
+          ],
+          "msg": "Input should be a valid string"
+        }
+      ]
+    }
+  }
+}

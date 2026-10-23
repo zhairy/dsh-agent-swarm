@@ -1,0 +1,12 @@
+{
+  "src/agent-control.ts": "61d79fa0a80d64404fde65e17cbcbebbd820156e07893bf6f6f1a1d35059b329",
+  "src/route-state.ts": "83bf284b142cb318119676e4034f6b4ac566c6bbffa03d8314f9b6fe73f77e61",
+  "src/service.ts": "04aedf4bdae6b6ec0ca597617556818b963e379f76402e64af56bd1a66f391d3",
+  "src/context-store.ts": "0fa542685d5136b44ac1b545c66dfffc845b114257b7ff61531824d0daf79d23",
+  "src/memory.ts": "1c7c6710bc6979d2267f3f63023761493dc5afa775bc33e621096fef4456d861",
+  "src/project-discovery.ts": "dfc2ae41e0440bbea285b99be256c85163d9e2b569341aef268a3a4191df1387",
+  "src/tool-recovery.ts": "2a181a1ef96ad9f21a342b28435ced783075e0ee56fb220afd5d2217298334f2",
+  "client/model-events.js": "3662d97e43a91295284f002f27e523577548d9a8986f1607fc056b226d636f3d",
+  "client/model-display.js": "1cf13bcd3e5436d94fe36f39613781412cd2b8b870bd44ef359d4f50f3572f47",
+  "src/role-registry.ts": "ae0b7be2841577f0f012397ef1541d74d1155562141bb63ca38039d7912db71e"
+}

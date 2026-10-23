@@ -520,25 +520,37 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     throw new SwarmError('SERVICE_UNAVAILABLE', 'route_chain_exhausted')
   }
 
-  const getChildFallback = (agentId: string, state: ChildStateInfo, failure: LlmFailureLike, failureClass: FailureClass, transient: boolean, config: SwarmConfigInfo, signal?: AbortSignal): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
-    const current = state.chain[state.index] as RouteInfo
+  const getChildFallback = (agentId: string, state: ChildStateInfo, failed: RouteInfo, failure: LlmFailureLike, failureClass: FailureClass, transient: boolean, config: SwarmConfigInfo, signal?: AbortSignal): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
+    const recovery = recoveryOf(agentId)
     const chain = effectiveChain(agentId, state.chain)
-    const start = quotaOrders.has(agentId) ? 0 : state.index + 1
-    if (state.index === 0 || preferredTrials.has(agentId)) delayPreferred(agentId)
-    const tried = new Set([...state.tried, getRouteLabel(current)])
+    // 链指针代表下一请求的选择，不代表在途 attempt。用户可能在旧请求
+    // 返回前换模；失败归属必须沿用 getErrorAction 捕获的实际路由。
+    const selected = state.chain[state.index]
+    const selectionChanged = selected === undefined || !isSameRoute(selected, failed)
+    const start = quotaOrders.has(agentId) || selectionChanged ? 0 : state.index + 1
+    if (!selectionChanged && (state.index === 0 || preferredTrials.has(agentId))) delayPreferred(agentId)
+    const tried = new Set([...state.tried, getRouteLabel(failed)])
+    const changedSelectionAction = (): RequestErrorActionLike => {
+      if (signal?.aborted === true || manualPauses.has(agentId) || recoveries.get(agentId) !== recovery) return undefined
+      const latest = children.get(agentId)
+      // 预检期间只换了下一请求选择：重入既有准入，不丢弃新选择、
+      // 不覆盖新链；释放或跨委派重新登记仍然拒绝旧回调。
+      return latest !== undefined && latest.logicalRequestId === state.logicalRequestId && latest.baseChain === state.baseChain ? { kind: 'retry' } : undefined
+    }
     const moveTo = (base: ChildStateInfo, to: RouteInfo, nextTried: ReadonlySet<string>): RequestErrorActionLike => {
       const index = base.chain.findIndex((route) => sameSelection(route, to))
       if (index < 0) return undefined
       children.set(agentId, { ...base, index, tried: nextTried })
-      if (!isSameRoute(to, current)) state.onFallback?.({ agentId, from: current, to, failure, scope: 'child' })
+      if (!isSameRoute(to, failed)) state.onFallback?.({ agentId, from: failed, to, failure, scope: 'child' })
       return { kind: 'retry' }
     }
     const settle = (next: number | undefined): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
-      if (signal?.aborted === true || manualPauses.has(agentId) || children.get(agentId) !== state) return undefined
+      if (signal?.aborted === true || manualPauses.has(agentId) || recoveries.get(agentId) !== recovery) return undefined
+      if (children.get(agentId) !== state) return changedSelectionAction()
       if (next !== undefined) return moveTo(state, chain[next] as RouteInfo, tried)
       const held = { ...state, tried }
       children.set(agentId, held)
-      return holdOrExhaust(agentId, chain, current, tried, failure, { transient, auth: failureClass === 'auth' }, config, signal, (to) => {
+      return holdOrExhaust(agentId, chain, failed, tried, failure, { transient, auth: failureClass === 'auth' }, config, signal, (to) => {
         const latest = children.get(agentId)
         // 等待期间用户换了模型或状态已更新：不改回等待前的目标，交给准入按最新状态选路
         if (latest !== held) return latest === undefined ? undefined : { kind: 'retry' }
@@ -546,14 +558,15 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       })
     }
     // 先向后找，再从链首环形查找：之前被预检跳过、现已恢复的路由也能接手
-    const findFrom = (from: number): number | undefined => FindNextIndex(chain, from, tried, current, failureClass, health)
+    const findFrom = (from: number): number | undefined => FindNextIndex(chain, from, tried, failed, failureClass, health)
     if (probe === undefined) return settle(findFrom(start) ?? findFrom(0))
     return (async () => {
       for (const from of [start, 0]) for (let next = findFrom(from); next !== undefined; next = findFrom(next + 1)) {
         if (signal?.aborted === true) return undefined
         const candidate = chain[next] as RouteInfo
         const checked = await (signal === undefined ? probe(candidate) : probe(candidate, signal))
-        if (Boolean(signal?.aborted) || manualPauses.has(agentId) || children.get(agentId) !== state) return undefined
+        if (Boolean(signal?.aborted) || manualPauses.has(agentId) || recoveries.get(agentId) !== recovery) return undefined
+        if (children.get(agentId) !== state) return changedSelectionAction()
         if (checked.ok && (state.requireVision !== true || checked.vision)) return settle(next)
         tried.add(getRouteLabel(candidate))
       }
@@ -1131,7 +1144,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
           const fallback = withQuota(() => {
             // 等待期间子智能体可能已被释放或重新登记：以最新状态为准
             const latest = children.get(payload.agent.id)
-            return latest === undefined ? action : getChildFallback(payload.agent.id, latest, payload.failure, failureClass, transient, config, payload.signal)
+            return latest === undefined ? action : getChildFallback(payload.agent.id, latest, failed, payload.failure, failureClass, transient, config, payload.signal)
           })
           return fatal || longWait || failedProbe ? fallback() : getNetworkAwareAction(payload, 'child', config, fallback)
         }

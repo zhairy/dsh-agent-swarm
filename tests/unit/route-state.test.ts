@@ -807,6 +807,49 @@ describe('long-running preferred route recovery', () => {
 })
 
 describe('manual child routing and bounded context recovery', () => {
+  it('旧请求失败后的备用预检期间再换模：返回准入重试并保留最新选择', async () => {
+    const original = { provider: 'provider-a', model: 'old' }
+    const backup = { provider: 'provider-b', model: 'backup' }
+    const chosen = { provider: 'provider-c', model: 'new' }
+    let release!: () => void
+    const registry = intRouteStateRegistry(undefined, async (route) => {
+      if (route.provider === backup.provider) await new Promise<void>((resolve) => { release = resolve })
+      return { ok: true as const, vision: true }
+    })
+    const cfg = getSwarmConfig({ agents: { networkWaitMs: 0 } })
+    registry.AddChild(child.id, { chain: [original, backup], role: 'yu_shi', logicalRequestId: 'plan-in-flight' })
+    registry.getRequestOverride(child, original, undefined, cfg, true)
+    registry.MarkRequestStarted(child.id, 'observed-old', original)
+    const pending = registry.recover({ agent: child, provider: original.provider, failure: { status: 401, code: 'INVALID_REQUEST' } }, async () => undefined, undefined, cfg)
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    registry.SetChildOverride(child.id, chosen)
+    release()
+    expect(await pending).toEqual({ kind: 'retry' })
+    expect(registry.getTerminal(child.id)).toBeUndefined()
+    expect(registry.getRequestOverride(child, original, undefined, cfg, true)).toEqual(chosen)
+    expect(registry.getRecovery(child.id)?.attemptedRoutes).toEqual(['provider-a/old', 'provider-c/new'])
+  })
+
+  it.each([400, 401, 403, 404])('旧在途请求 %s 失败不能把人工新选择误标成已失败，健康新模型真正接手', async (status) => {
+    const original = { provider: 'provider-a', model: 'old' }
+    const chosen = { provider: 'provider-b', model: 'new' }
+    const onFallback = vi.fn()
+    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true as const, vision: true }))
+    const cfg = getSwarmConfig({ agents: { networkWaitMs: 0 } })
+    registry.AddChild(child.id, { chain: [original], role: 'yu_shi', logicalRequestId: 'plan-manual', onFallback })
+    expect(registry.getRequestOverride(child, original, undefined, cfg, true)).toEqual(original)
+    registry.MarkRequestStarted(child.id, 'observed-old', original)
+    registry.SetChildOverride(child.id, chosen)
+    expect(await registry.recover({ agent: child, provider: original.provider, failure: { status, code: 'INVALID_REQUEST', message: 'old request failed after manual selection' } }, async () => undefined, undefined, cfg)).toEqual({ kind: 'retry' })
+    expect(registry.getTerminal(child.id)).toBeUndefined()
+    expect(registry.isRouteAvailable(chosen)).toBe(true)
+    expect(registry.getRecovery(child.id)).toMatchObject({ attemptedRoutes: ['provider-a/old'], lastFailure: { provider: original.provider, model: original.model } })
+    expect(onFallback).toHaveBeenCalledWith(expect.objectContaining({ from: original, to: chosen }))
+    expect(await registry.AdmitRequest(child, original, undefined, cfg, true)).toEqual(chosen)
+    registry.MarkRequestStarted(child.id, 'observed-new', chosen)
+    expect(registry.getRecovery(child.id)?.attemptedRoutes).toEqual(['provider-a/old', 'provider-b/new'])
+  })
+
   it('manual public selections retain trusted declared quota domains and cannot bypass shared quarantine', () => {
     const domain = { accessMode: 'subscription' as const, quotaDomainId: 'trusted-account', quotaScope: 'account' as const }
     const first = { provider: 'codex', model: 'first', policy: domain }

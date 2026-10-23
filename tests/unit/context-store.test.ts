@@ -81,6 +81,20 @@ describe('渐进披露与受控材料引用', () => {
     expect(() => intContextStore().Restore({ ...artifact, layer: 'unknown' })).toThrow('类型')
   })
 
+  it('已替换的引用使用专用恢复错误，不把相同文本的新版本自动当作原授权', () => {
+    const store = intContextStore()
+    const old = store.Add({ binding, layer: 'L0', kind: 'contract', text: '相同合同文本' })
+    const next = { ...binding, requestRevision: 2 }
+    const batch = store.PrepareTaskReplace(next, [{ layer: 'L0', kind: 'contract', text: old.text }])
+    batch.commit(); batch.finalize()
+    expect(batch.artifacts[0]!.digest).toBe(old.digest)
+    expect(() => store.Read(next, old.ref, { expectedDigest: old.digest })).toThrow(expect.objectContaining({
+      code: 'CONTEXT_REFERENCE_UNAVAILABLE', message: expect.stringContaining('新 ref 与 digest')
+    }))
+    expect(store.List(next).map((artifact) => artifact.ref)).toEqual([batch.artifacts[0]!.ref])
+    expect(() => store.Read(binding, batch.artifacts[0]!.ref)).toThrow('需求版本')
+  })
+
   it('需求版本独立于卡片/流程版本，缺省按 legacy 1 处理', () => {
     const store = intContextStore()
     const artifact = store.Add({ binding, layer: 'L0', kind: 'contract', text: '原始需求' })

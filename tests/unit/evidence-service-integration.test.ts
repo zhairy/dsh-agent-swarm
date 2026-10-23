@@ -228,7 +228,16 @@ describe('exploration evidence through actual service delegation and consumption
     const materials = await runtime.service.ReadContext({ task_id: task.task_id }, runtime.exec()) as { materials: Array<{ ref: string; cardRevision: number }> }
     expect(materials.materials).toHaveLength(2)
     expect(materials.materials.every((item) => item.cardRevision === task.cardRevision)).toBe(true)
-    await expect(runtime.service.ReadContext({ task_id: task.task_id, ref: oldRef }, runtime.exec())).rejects.toThrow()
+    const statusBeforeRecovery = runtime.service.getStatus({ task_id: task.task_id, verbose: true }, runtime.exec()).tasks[0]!
+    const recovery = await runtime.service.ReadContext({ task_id: task.task_id, ref: oldRef }, runtime.exec()) as typeof materials & Record<string, unknown>
+    expect(recovery).toMatchObject({ ok: false, code: 'CONTEXT_REFERENCE_UNAVAILABLE',
+      mayUseForImplementation: false, recovery: 'relist_current_materials', materials: materials.materials })
+    expect(recovery).not.toHaveProperty('text')
+    expect(recovery.materials.some((item) => item.ref === oldRef)).toBe(false)
+    expect(recovery.materials.every((item) => item.cardRevision === task.cardRevision)).toBe(true)
+    const statusAfterRecovery = runtime.service.getStatus({ task_id: task.task_id, verbose: true }, runtime.exec()).tasks[0]!
+    expect(statusAfterRecovery.planningReview).toEqual(statusBeforeRecovery.planningReview)
+    expect(statusAfterRecovery.acceptance).toEqual(statusBeforeRecovery.acceptance)
     const current = await runtime.service.ReadContext({ task_id: task.task_id, ref: materials.materials[0]!.ref }, runtime.exec())
     await runtime.service.dispose()
     const restored = await makeRuntime({ home: runtime.home, jev: 'disabled' })

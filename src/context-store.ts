@@ -141,7 +141,7 @@ export const intContextStore = (limits: { maxArtifacts?: number; maxArtifactByte
   }
   const requireArtifact = (binding: ContextBindingInfo, ref: string, expectedDigest?: string): ContextArtifactInfo => {
     const artifact = store.get(ref)
-    if (artifact === undefined) throw new SwarmError('INVALID_ARGS', '上下文引用不存在')
+    if (artifact === undefined) throw new SwarmError('CONTEXT_REFERENCE_UNAVAILABLE', '上下文引用不存在或已被任务版本替换；请不传 ref 重新列出当前任务的授权材料，再使用新 ref 与 digest 读取。不得复用旧引用、猜测私有路径或绕过规划审核')
     const owner = artifact.binding
     if (owner.rootSessionId !== binding.rootSessionId || owner.workspaceId !== binding.workspaceId || owner.taskId !== binding.taskId) throw new SwarmError('INVALID_ARGS', '无权读取其他会话、工作区或任务的材料')
     if (owner.cardRevision !== binding.cardRevision || owner.workflowRevision !== binding.workflowRevision) throw new SwarmError('INVALID_ARGS', '材料版本过期')

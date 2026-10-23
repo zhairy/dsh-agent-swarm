@@ -59,6 +59,17 @@ const makeHost = () => {
 }
 
 describe('宿主插件', () => {
+  it('only augments managed-agent tool failures without changing authoritative outcomes', async () => {
+    const { listeners } = makeHost()
+    const execute = listeners.get('tools/execute') as unknown as (execution: ToolExecutionLike, next: () => Promise<unknown>) => Promise<{ isError: boolean; content: Array<{ text: string }>; error: unknown }>
+    const failure = { isError: true, error: { info: { code: 'SEARCH_RAW_OUTPUT_OVERFLOW' } }, content: [{ text: 'overflow' }] }
+    const managed = { id: 'root-recovery', session: { header: { agentPreset: 'tian-shu' } } }
+    const augmented = await execute({ name: 'glob', agent: managed }, async () => failure)
+    expect(augmented).toMatchObject({ isError: true, error: failure.error })
+    expect(augmented.content).toHaveLength(2)
+    expect(await execute({ name: 'glob', agent: { id: 'ordinary', session: { header: { agentPreset: 'standard' } } } }, async () => failure)).toBe(failure)
+    expect(await execute({ name: 'glob', agent: managed }, async () => ({ ...failure, isError: false }))).toMatchObject({ isError: false, content: failure.content })
+  })
   it('provide agentSwarm 服务并注册写操作守卫', () => {
     const { provided, guards, disposers } = makeHost()
     expect(host.name).toBe('dsh-agent-swarm')
