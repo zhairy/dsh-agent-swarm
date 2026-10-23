@@ -13,6 +13,7 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 
 ### 3.1.1 的变化
 
+- 3.1.0／3.1.1 内存态可通过受限维护交接保留任务、材料引用和预算，未结算工作继续要求恢复核对。
 - 独立规划审核显示实际模型，审核与子智能体对话可安全选择下一请求的模型。
 - 旧上下文引用返回当前授权材料索引；保留版本、摘要与盲审隔离。
 - 搜索超限、Fetch 404 提供明确恢复指引；文件发现支持有界子目录扫描，经验召回补充适用条件。
@@ -129,6 +130,7 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 
 ### What's new in 3.1.1
 
+- Restricted 3.1.0/3.1.1 memory-state handoffs preserve tasks, references and budgets while keeping unsettled work behind recovery checks.
 - Planning reviews show the actual model; review and expert conversations can safely select the next request's model.
 - Obsolete context references return the current authorized index while preserving revision, digest and blind-review isolation.
 - Actionable recovery for search overflow and Fetch 404; bounded subdirectory discovery and applicability-aware reviewed experience recall.
