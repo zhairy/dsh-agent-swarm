@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-代码与隔离验证通过，尚未部署生产或发布 GitHub。用户已明确选择等待正在执行的“请通过 tabby 在 ssh session”业务会话结束后再部署和发布；本轮没有停止该会话。正式 3080 仍是插件 3.1.0，不能把隔离测试写成正式宿主验收。
+代码与隔离验证通过，尚未部署生产或发布 GitHub。用户已明确选择等待正在执行的“请通过 tabby 在 ssh session”业务会话结束后再部署和发布；本轮没有停止该会话。该会话曾短暂 idle，随后又启动新委派，因此继续等待。正式 3080 仍是插件 3.1.0，PID 1363632 未变，不能把隔离测试写成正式宿主验收。
 
 ## 根因与修复
 
@@ -21,7 +21,7 @@
 | --- | --- |
 | `npm run build` 与生成预设 | 通过，源模块重新构建，13个预设生成；仅天枢声明和提示发生预期变化 |
 | `npm run typecheck` | 通过 |
-| `npm test` | 96个文件，1305项通过 |
+| `npm test` | 96个文件，1312项通过（包括随后追加的维护交接回归） |
 | `npm run test:integration` | DSH 0.2.1-rc.2：8个文件，44项通过 |
 | 旧宿主 bundle/flows | DSH 0.2.0-rc.2：2个文件，10项通过；不是对旧宿主全部新UI作全面认证 |
 | 打包入口闭包 | 5入口，79模块，缺失0；最终公共tarball另做隔离安装 |
@@ -34,9 +34,27 @@
 
 集成使用真实宿主 AgentLoop、会话、工具和权限管线，模型响应来自确定性 fixture；它不证明外部模型长期稳定，也不证明真实多小时业务永无停滞。初次全量测试有1个沿用旧ref抛错契约的断言失败，更新为明确的失败恢复断言后全量通过；没有通过删除隔离/审批断言使其通过。
 
+## 内存态交接与最终候选
+
+生产公开 taskView 已确认 `durable:false`。部署前通过受限本机只读维护导出当前 FeatureState，备份目录 `/home/zhairy/.dsh/backup-v3.1.1-handoff/` 为0700、原始状态文件为0600，正文不进入仓库或发布包。捕获时包含4任务、约1.57MiB；真实 `validateFeatureState` 与 `sourceVersion:3.1.0` 信封校验通过。只执行 check-only，没有写 pending 或消费状态；业务恢复运行后，该备份不能作为最终切换快照。
+
+原 `memory-handoff` 来源列表缺少3.1.x。本轮精确增加3.1.0/3.1.1，同schema、身份、目录/文件权限、摘要、4MiB容量和单次消费约束保持有效。未知新版本继续拒绝，旧活跃绑定恢复为 suspended、未结算委派为 recovery_required，不自动重放。反方独立追加3文件44项通过；修改后再次完成全量1312单测和44集成。
+
+- 验证代码提交：`ad0b89d484d5bcccd4f0b43e60dcb788ad94d8c8`。
+- 公开候选分支/提交：`release/v3.1.1` / `ace6cf50c245dc3808f6c5c36b1900c17146e902`，未push。
+- 候选资产：`release-artifacts/v3.1.1/` 中tarball、中英说明、candidate manifest、SHA256SUMS。
+- tarball：1,326,555字节，SHA256 `d0cf3d7b193d50dd4e220d70beaa490dfd1255df276e448b5e92b4fe75b10dc0`。
+- 公共包闭包79模块缺失0；80个编译JS逐文件摘要与已验证源码构建一致；全新npm与pnpm11隔离安装和所有导出检查通过。
+- manifest 保持 `status:candidate` / `releaseReady:false`；没有创建tag或GitHub Release。
+- 正式切换须重新确认持续空闲、捕获最新状态、受限交接、部署唯一宿主、确认任务/引用/版本保全并实测界面。然后才能更新发布状态与校验和、推送及匿名下载验证。
+
+临时维护inspector已关闭，经ss确认只保留原127.0.0.1:3080监听。
+
 ## Jev 与双路审查
 
 已真实调用 `jev_health`、`jev_ask`、`jev_check`、`jev_classify`、`jev_match`、`jev_score`、`jev_screen`，明确输入及结果见 `jev-code-review.json`。
+
+补入交接兼容和最终候选后，又重开全部七类判断，见 `jev-candidate-handoff-review.json`：实际判断为jev-1.14.0，分类 `validated_candidate_waiting_host`，支持候选修复和保留用户选择的等待条件，未将候选说成已经部署发布。
 
 - 判断实际返回 `jev-1.14.0`；health列出账户别名 `jev-latest` / `jev-preview`。
 - 分类：`code_validated_wait_host`，0.99；下一步选择 `wait_then_test`，1.0。均不表示正式宿主已经验收。

@@ -1,0 +1,231 @@
+{
+  "state": {
+    "candidate": "dsh-agent-swarm3.1.1",
+    "fixes": {
+      "reviewModel": "Dedicated reviewer persona now tagged; agentControl.Register(persistent=false) on actual reviewer path; reviewer provider/model/effort stored only from observed actual attempt.",
+      "oneShotSwitch": "Next-request selection is CAS validated and noninterrupting; oneShotSettled monotonically rejects late selection/wait/block updates and manual continuation.",
+      "race": "getChildFallback now takes the observed failed route, not mutable chain index; changed selection re-enters admission only within same logical request and base chain; aborted/disposed callbacks cannot revive.",
+      "context": "Only CONTEXT_REFERENCE_UNAVAILABLE is converted to ok=false plus current authorized index; no text/cursor/approval. Wrong digest, cross-task, stale revision and blind review remain denied.",
+      "discovery": "Relative subdirectory realpath checked; private/external paths denied; skip traversed links;8192entries,1MiBindexpaths,32KiBserializedpagepaths;incompleteexplicit;cancelpropagated.",
+      "experience": "Only independently validated current non-self experiences; add max2000chars applicability text; preserve full conditions and blind exclusions.",
+      "tools": "Only managed failed glob/grep/raw overflow and web_fetch DeepSeek404 results get appended hints; original error+isError retained; no retry/endpoint changes.",
+      "authorization": "Root prompt uses existing ask_user_question for genuinely missing authorization; pending/timeout/decline is not permission. Persistent question lifecycle planned for3.1.3.",
+      "memoryHandoff": "Explicitly add same-schema3.1.0/3.1.1 origins only; strictidentity/owner/mode0600/checksum/4MiB/singleconsumption retained; activebinding restores suspended, unsettledattempt recovery_required; no business replay."
+    },
+    "evidence": {
+      "unit": "96files1312tests passed; typecheck/build passed after handoff change",
+      "integration": "8files44tests passed again on realDSH0.2.1rc.2 mock adapter runtime",
+      "oldHost": "2files10tests passed on DSH0.2.0rc.2 bundle+flows",
+      "race": "Independent counterexample first reproduced P1; fix independently reproduced on400/401/403/404 then3realAgentLoopscenarios; current attempt switches only after actual new call; read works/write denied.",
+      "browser": "Isolated actual host/RPC controls verified hang/high -> cancel+settle -> recovered/max samechild, no pageerrors. Full production3080 candidate UI not yet tested.",
+      "fetch": "Actual /usr/bin/dsh0.2.1rc.2 isolated HTTP provider fetched https://example.com HTTP200,loopback blockedWEB_BLOCKED_URL; user authorized providerchange tohttp, backedup config.",
+      "pack": "Final publiccandidateace6cf50:79modulesmissing0;fresh npm/pnpm11 installs/imports;80JS hashesmatch;tarballSHA256 d0cf3d7b193d50dd4e220d70beaa490dfd1255df276e448b5e92b4fe75b10dc0",
+      "reviews": "positive context/security review pass; negative finalcode review P1fixed; reviews explicitly exclude pending production acceptance.",
+      "handoff": "Actual production memory snapshot4tasks1.57MiB privately backedup;validateFeatureState and real3.1.0 envelopecheckpass;onlycheck-only,nopendingandnoconsumption. Independent3files44tests pass. Backupmustrefreshbeforedeployment."
+    },
+    "future": {
+      "3.1.2": "sandbox skills/tools;independent task progress drawer plus shared scoped store/cancel/retry/stale markers (planned only)",
+      "3.1.3": "server evidence credential/global structured history/finite DAG retries; authorization question lifecycle; status push evaluation",
+      "3.1.4": "governance,opt-in canary,rollback"
+    },
+    "limits": [
+      "semantic similarity never grants success",
+      "mandatory safety review edges never auto-pruned",
+      "finite-state novelty requires ALL-history separation and fixedepoch",
+      "DAG requires bounded activation/replan;N-1transitions proof is conditional",
+      "long-running business task has NOT been rerun to prove permanent absence of errors"
+    ],
+    "production": {
+      "host": "0.2.1rc.2",
+      "installedPlugin": "3.1.0",
+      "pidUnchanged": 1363632,
+      "activeBusinessSessions": 2,
+      "instruction": "Userexplicitlywaitbusinesssessionfinishbeforedeploymentandreleasing; it brieflywentidlethenresumed. No stop/install/restart/push/tag/release performed. Temporaryreadonlyinspector nowclosed."
+    },
+    "candidateSourceCommit": "ad0b89d484d5bcccd4f0b43e60dcb788ad94d8c8"
+  },
+  "results": {
+    "health": {
+      "ok": true,
+      "model": "jev-latest",
+      "answers": {
+        "models": [
+          {
+            "name": "jev-latest",
+            "description": "The latest iteration of TypeSafe's System One Model: Jev",
+            "release_date": "2026-09-10T18:38:01.391457+00:00"
+          },
+          {
+            "name": "jev-preview",
+            "description": "A preview version of `jev-latest`: should be better in most ways",
+            "release_date": "2026-09-10T18:39:06.057655+00:00"
+          }
+        ],
+        "round_trip_latency_ms": 700.265
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "est_cost_usd": 0
+      },
+      "latency_ms": 700.274
+    },
+    "ask": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "compatibility": {
+          "type": "noul",
+          "noul": 0.92
+        },
+        "status": {
+          "type": "choice",
+          "choice": "candidate_waiting",
+          "confidence": 1,
+          "probabilities": {
+            "candidate_waiting": 1,
+            "released": 0,
+            "discard_all": 0
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 1667,
+        "output_tokens": 64,
+        "est_cost_usd": 0.00007001400000000001
+      },
+      "latency_ms": 298.944
+    },
+    "check": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "probabilities": {
+          "noFalseRelease": 0.96,
+          "refreshBackup": 0.93,
+          "handoffBounds": 0.92,
+          "drawerPlanned": 0.95
+        },
+        "flags": [
+          "noFalseRelease",
+          "refreshBackup",
+          "handoffBounds",
+          "drawerPlanned"
+        ],
+        "uncertain": []
+      },
+      "usage": {
+        "input_tokens": 1654,
+        "output_tokens": 84,
+        "est_cost_usd": 0.000069468
+      },
+      "latency_ms": 438.166
+    },
+    "classify": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "choice": "validated_candidate_waiting_host",
+        "confidence": 0.92,
+        "probabilities": {
+          "validated_candidate_waiting_host": 0.94,
+          "release_done": 0,
+          "code_rejected": 0.04,
+          "other": 0.02
+        },
+        "band": "act",
+        "agreement": true,
+        "alternate_choice": "validated_candidate_waiting_host"
+      },
+      "usage": {
+        "input_tokens": 3350,
+        "output_tokens": 118,
+        "est_cost_usd": 0.0001407
+      },
+      "latency_ms": 784.148
+    },
+    "match": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "best_id": "shared_scoped_drawer",
+        "best_text": "Conversation-level drawer withrootSessionId/taskId/generation,oneauthoritativetaskView,sharedstore,cancel,staleindicators,noblindreviewleak",
+        "confidence": 1,
+        "abstain_probability": 0,
+        "exists": 0.87,
+        "windows": 1,
+        "exists_by_window": [
+          0.87
+        ],
+        "top3": [
+          {
+            "id": "shared_scoped_drawer",
+            "probability": 1
+          },
+          {
+            "id": "floating_chat_clone",
+            "probability": 0
+          },
+          {
+            "id": "ui_control_plane",
+            "probability": 0
+          }
+        ],
+        "band": "match"
+      },
+      "usage": {
+        "input_tokens": 640,
+        "output_tokens": 76,
+        "est_cost_usd": 0.000026880000000000004
+      },
+      "latency_ms": 290.885
+    },
+    "score": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "score": 2,
+        "confidence": 1,
+        "probabilities": {
+          "0": 0,
+          "1": 0,
+          "2": 1,
+          "3": 0
+        },
+        "legend": {
+          "0": "No reproduction",
+          "1": "Targeted unit only",
+          "2": "Full unit/realruntimeintegration/adversarial reviews/isolatedpackage verified, production pending",
+          "3": "Actual deployedproduction verified and GitHubdownload verified"
+        },
+        "normalized": 0.6666666666666666
+      },
+      "usage": {
+        "input_tokens": 1644,
+        "output_tokens": 17,
+        "est_cost_usd": 0.00006904800000000001
+      },
+      "latency_ms": 253.778
+    },
+    "screen": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "verdict": "review",
+        "risk": 0.79,
+        "risk_confidence": 0.23,
+        "reasons": {
+          "addresses_agent": 0.59,
+          "issues_instructions": 0.49
+        }
+      },
+      "usage": {
+        "input_tokens": 1993,
+        "output_tokens": 129,
+        "est_cost_usd": 0.000083706
+      },
+      "latency_ms": 300.467
+    }
+  },
+  "errors": []
+}
