@@ -167,3 +167,27 @@ npx vitest run --config vitest.integration.config.ts tests/integration/recovery-
 结果分别为2文件11项通过；隔离集成1文件3项通过、12项因名称过滤跳过，退出码均0。没有把跳过的集成项标为通过。
 
 边界：没有在本审核进程中执行全量类型检查、全量测试、真实生产服务重启、真实收费模型请求或GitHub发布；这些由主线执行并另存证据。本审核不将其他Agent的执行记录写成自己已执行。用户已选择等待生产会话结束后再部署，不能因代码审核通过提前发布。
+
+### 部署前追加：3.1.0内存态维护交接
+
+已独立复核追加的三个文件：`src/memory-handoff.ts`、`tests/unit/memory-handoff.test.ts`、`tests/unit/memory-handoff-service.test.ts`。结论：**未发现新增发布阻断**。
+
+源码仅在既有精确来源allowlist加入真实的`3.1.0`、`3.1.1`；没有开放任意3.x、伪装旧来源版本、新工具/RPC或无身份恢复入口。恢复仍要求同一根会话与工作区，校验完整FeatureState、摘要、4MiB上限、同owner的0600普通单链接文件、受限维护目录，以及消费前后文件身份与内容未变。只有成功初始化后的`commitConsumption`消费pending文件；失败初始化不会提前消费。
+
+已追踪`createFeatureSession`与`recover`：合同引用和正文保持原摘要与身份；先前active绑定恢复为suspended，未结束委派为recovery_required，线程关闭、busy=false，运行节点变blocked。该交接保全数据，不冒充旧业务已完成，也不重放业务副作用。未知未来版本、跨根/跨工作区与不合法schema仍拒绝。
+
+独立执行：
+
+```bash
+npx vitest run tests/unit/memory-handoff.test.ts tests/unit/memory-handoff-service.test.ts tests/unit/host-recovery.test.ts
+```
+
+结果：3文件44项通过，退出码0；其中覆盖3.1.0/3.1.1单次消费、失败初始化保留文件、越界来源与身份拒绝，以及3.1.0上下文/绑定恢复后保持不可激活。未读取或输出生产会话备份正文；生产4任务及内存态的实际交接结果需由主线另行核验。
+
+追加审核绑定：
+
+```text
+1f76b84020ba8c4ad5015ccaea0daadef9c2b7d9d3160920efd192813b10498b  src/memory-handoff.ts
+584a5be298bb79261acd60e72be338f7c4400099c03a9d2d261912ae10611892  tests/unit/memory-handoff.test.ts
+2196cffaa1fb5b58b58432e5536e3184d5ba7fd35e7fc957116fefa02487b3ab  tests/unit/memory-handoff-service.test.ts
+```

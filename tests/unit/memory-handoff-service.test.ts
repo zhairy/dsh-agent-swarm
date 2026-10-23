@@ -10,7 +10,7 @@ import { getWorkspaceId } from '../../src/artifacts.js'
 import { digest } from '../../src/task-model.js'
 import { ValidateTaskCard } from '../../src/policy.js'
 import { getWorkflowDigest, intWorkflowState, type WorkflowDefinition } from '../../src/workflow.js'
-import { createMemoryHandoffEnvelope } from '../../src/memory-handoff.js'
+import { createMemoryHandoffEnvelope, type MemoryHandoffSourceVersion } from '../../src/memory-handoff.js'
 import { atomicStateFile, canonicalStateJson } from '../../src/state-store.js'
 import { intSwarmService, type SwarmService } from '../../src/service.js'
 import type { AgentLike } from '../../src/host-contract.js'
@@ -24,7 +24,7 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })))
 })
 
-const stage = async (status?: 'running' | 'queued', sourceVersion: '2.3.0' | '2.3.1' | '2.3.2' | '2.4.0' | '2.9.0' | '2.9.2' = '2.3.0') => {
+const stage = async (status?: 'running' | 'queued', sourceVersion: MemoryHandoffSourceVersion = '2.3.0', preserveContextAndBinding = false) => {
   const home = await mkdtemp(join(tmpdir(), 'swarm-memory-handoff-service-'))
   homes.push(home)
   await writeFile(join(home, 'source.ts'), 'export const preserved = 42\n')
@@ -72,6 +72,15 @@ const stage = async (status?: 'running' | 'queued', sourceVersion: '2.3.0' | '2.
     budget.settle('original-delegation-reservation', { inputTokens: 42, outputTokens: 7, costUsd: 0.001 })
     budget.observeJev({ inputTokens: 12, outputTokens: 3, costUsd: 0.000001 }, 1)
     await feature.persist('fixture/original-memory-state', tasks, threads)
+    if (preserveContextAndBinding) {
+      const binding = { rootSessionId: root.id, workspaceId, taskId: task.taskId,
+        cardRevision: 2, workflowRevision: 4, requestRevision: 1 }
+      await feature.bindings.bind({ ...binding, agentId: childId, nodeId: 'analysis', attemptId: 'preserved-attempt',
+        threadId: childId, role: 'mou_ding', permissions: ['context-read'] })
+      const artifact = feature.addContext({ binding, layer: 'L0', kind: 'contract', text: '3.1.0 真实合同引用、摘要和绑定必须保留' })
+      tasks.UpdateTask(task.taskId, { contextRefs: [{ ref: artifact.ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind }] })
+      await feature.persist('fixture/context-and-binding', tasks, threads)
+    }
     const state = feature.store.read()
     expect(validateFeatureState(state, { rootSessionId: root.id, workspaceId })).toBe(true)
     const directory = join(home, 'share', 'dsh-agent-swarm', 'maintenance', workspaceId, digest(root.id))
@@ -97,7 +106,7 @@ const runtime = (fixture: Awaited<ReturnType<typeof stage>>) => {
 }
 
 describe('memory handoff through the actual service cold initialization boundary', () => {
-  it.each(['2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.9.0', '2.9.2'] as const)('restores %s T-1, immutable output, revisions and budget, consumes once, and never imports again', async (sourceVersion) => {
+  it.each(['2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.9.0', '2.9.2', '3.1.0', '3.1.1'] as const)('restores %s T-1, immutable output, revisions and budget, consumes once, and never imports again', async (sourceVersion) => {
     const fixture = await stage(undefined, sourceVersion)
     const before = await readFile(fixture.pending, 'utf8')
     const restored = runtime(fixture)
@@ -126,6 +135,30 @@ describe('memory handoff through the actual service cold initialization boundary
     expect(later.service.getStatus({}, later.exec()).tasks).toEqual([])
     expect(await readdir(fixture.directory)).toEqual(consumed)
     expect(later.start).not.toHaveBeenCalled(); expect(later.fetch).not.toHaveBeenCalled()
+  })
+
+  it('restores 3.1.0 context refs and binding identity without reactivating unknown prior work', async () => {
+    const fixture = await stage('running', '3.1.0', true)
+    const expectedArtifact = fixture.state.contexts[0]!
+    const expectedBinding = fixture.state.bindings[fixture.childId]!
+    const restored = await createFeatureSession({ rootSessionId: fixture.root.id, cwd: fixture.home, dshHome: fixture.home,
+      config: fixture.config, tasks: intTaskStore(), threads: intThreadRegistry(), now: () => 140 })
+    try {
+      const state = restored.store.read()
+      expect(validateFeatureState(state, { rootSessionId: fixture.root.id, workspaceId: fixture.workspaceId })).toBe(true)
+      expect(state.tasks[0]?.contextRefs).toEqual(fixture.state.tasks[0]?.contextRefs)
+      expect(state.contexts).toEqual(fixture.state.contexts)
+      expect(restored.contexts.Read(expectedArtifact.binding, expectedArtifact.ref, { expectedDigest: expectedArtifact.digest }))
+        .toMatchObject({ text: expectedArtifact.text, digest: expectedArtifact.digest, cardRevision: 2, workflowRevision: 4, requestRevision: 1 })
+      expect(restored.bindings.get(fixture.childId)).toEqual({ ...expectedBinding, state: 'suspended' })
+      expect(() => restored.bindings.requireActive(fixture.childId, 'context-read')).toThrow('No active host-bound attempt')
+      expect(state.delegations.find((record) => record.delegationId === 'D-2')).toMatchObject({ status: 'failed', error: 'recovery_required' })
+      expect(state.threads[0]).toMatchObject({ threadId: fixture.childId, closed: true, busy: false })
+      expect(await readFile(fixture.pending, 'utf8')).toContain('"sourceVersion":"3.1.0"')
+      await restored.commitRecovery()
+      await expect(readFile(fixture.pending)).rejects.toMatchObject({ code: 'ENOENT' })
+      expect((await readdir(fixture.directory)).filter((name) => name.startsWith('consumed-'))).toHaveLength(1)
+    } finally { await restored.dispose() }
   })
 
   it.each(['queued', 'running'] as const)('converts %s work to recovery-required without spawning or model calls', async (status) => {

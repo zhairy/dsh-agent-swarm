@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createMemoryHandoffEnvelope, loadMemoryHandoff } from '../../src/memory-handoff.js'
+import { createMemoryHandoffEnvelope, loadMemoryHandoff, type MemoryHandoffSourceVersion } from '../../src/memory-handoff.js'
 import { digest } from '../../src/task-model.js'
 import { canonicalStateJson } from '../../src/state-store.js'
 
 const homes: string[] = []
 afterEach(async () => { await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true }))) })
-const setup = async (sourceVersion: '2.3.0' | '2.3.1' | '2.3.2' | '2.4.0' | '2.9.0' | '2.9.2' = '2.3.0') => {
+const setup = async (sourceVersion: MemoryHandoffSourceVersion = '2.3.0') => {
   const dshHome = await mkdtemp(join(tmpdir(), 'swarm-memory-handoff-')); homes.push(dshHome)
   const rootSessionId = 'handoff-root', workspaceId = 'a'.repeat(64)
   const maintenance = join(dshHome, 'share', 'dsh-agent-swarm', 'maintenance')
@@ -24,7 +24,7 @@ const setup = async (sourceVersion: '2.3.0' | '2.3.1' | '2.3.2' | '2.4.0' | '2.9
 }
 
 describe('trusted one-time memory handoff', () => {
-  it.each(['2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.9.0', '2.9.2'] as const)('loads %s without consuming, preserves a failed initializer, then consumes exactly once', async (sourceVersion) => {
+  it.each(['2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.9.0', '2.9.2', '3.1.0', '3.1.1'] as const)('loads %s without consuming, preserves a failed initializer, then consumes exactly once', async (sourceVersion) => {
     const fixture = await setup(sourceVersion)
     const before = await readFile(fixture.pending, 'utf8')
     const loaded = await loadMemoryHandoff<typeof fixture.state>(fixture.input)
@@ -49,6 +49,20 @@ describe('trusted one-time memory handoff', () => {
     const scope = { rootSessionId: 'handoff-root', workspaceId: 'a'.repeat(64), state: {} }
     expect(() => createMemoryHandoffEnvelope({ ...scope, sourceVersion: '2.5.0' as '2.3.1' })).toThrow('ENVELOPE_VERSION')
     expect(() => createMemoryHandoffEnvelope(scope as Parameters<typeof createMemoryHandoffEnvelope>[0])).toThrow('ENVELOPE_VERSION')
+    for (const sourceVersion of ['3.1.2', '3.2.0', '99.0.0']) {
+      expect(() => createMemoryHandoffEnvelope({ ...scope, sourceVersion: sourceVersion as MemoryHandoffSourceVersion })).toThrow('ENVELOPE_VERSION')
+    }
+  })
+
+  it.each(['rootSessionId', 'workspaceId'] as const)('rejects a genuine 3.1.0 envelope with mismatched %s before state validation', async (field) => {
+    const fixture = await setup('3.1.0')
+    fixture.envelope[field] = field === 'rootSessionId' ? 'another-root' : 'b'.repeat(64)
+    const encoded = canonicalStateJson(fixture.envelope)
+    await writeFile(fixture.pending, encoded)
+    await expect(loadMemoryHandoff(fixture.input)).rejects.toMatchObject({ message: 'Memory handoff rejected: SCOPE_MISMATCH' })
+    expect(fixture.input.validate).not.toHaveBeenCalled()
+    expect(await readFile(fixture.pending, 'utf8')).toBe(encoded)
+    expect(await readdir(fixture.directory)).toEqual(['pending.json'])
   })
 
   it('does nothing without a staged handoff or when durable persistence is enabled', async () => {

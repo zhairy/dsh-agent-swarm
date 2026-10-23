@@ -6,7 +6,9 @@ import { canonicalStateJson, StateStoreError, type StateValidationResult } from 
 import { digest } from './task-model.js'
 
 const MAX_BYTES = 4 * 1024 * 1024
-const SOURCE_VERSIONS = ['2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.9.0', '2.9.2'] as const
+// 3.1.0 and 3.1.1 keep the validated FeatureState schema; admit only explicitly
+// checked maintenance origins, never arbitrary newer versions or stale identity.
+const SOURCE_VERSIONS = ['2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.9.0', '2.9.2', '3.1.0', '3.1.1'] as const
 export type MemoryHandoffSourceVersion = typeof SOURCE_VERSIONS[number]
 const sourceVersionValid = (raw: unknown): raw is MemoryHandoffSourceVersion => SOURCE_VERSIONS.some(version => version === raw)
 export interface MemoryHandoffEnvelope<T> {

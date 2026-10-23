@@ -8,5 +8,6 @@
   "src/tool-recovery.ts": "2a181a1ef96ad9f21a342b28435ced783075e0ee56fb220afd5d2217298334f2",
   "client/model-events.js": "3662d97e43a91295284f002f27e523577548d9a8986f1607fc056b226d636f3d",
   "client/model-display.js": "1cf13bcd3e5436d94fe36f39613781412cd2b8b870bd44ef359d4f50f3572f47",
-  "src/role-registry.ts": "ae0b7be2841577f0f012397ef1541d74d1155562141bb63ca38039d7912db71e"
+  "src/role-registry.ts": "ae0b7be2841577f0f012397ef1541d74d1155562141bb63ca38039d7912db71e",
+  "src/memory-handoff.ts": "1f76b84020ba8c4ad5015ccaea0daadef9c2b7d9d3160920efd192813b10498b"
 }
