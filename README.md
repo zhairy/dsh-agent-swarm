@@ -11,6 +11,13 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.2）
 - 新建会话选「百工模式」即可使用；Jev API key 可选
 
+### 3.1.1 的变化
+
+- 独立规划审核显示实际模型，审核与子智能体对话可安全选择下一请求的模型。
+- 旧上下文引用返回当前授权材料索引；保留版本、摘要与盲审隔离。
+- 搜索超限、Fetch 404 提供明确恢复指引；文件发现支持有界子目录扫描，经验召回补充适用条件。
+- 需要人工授权时使用询问工具；后续自我进化按 3.1.1–3.1.4 分批推进，见[路线图](docs/路线图.md)。
+
 ### 3.1 的变化
 
 | 变化 | 说明 |
@@ -119,6 +126,13 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 
 - Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.2 recommended)
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
+
+### What's new in 3.1.1
+
+- Planning reviews show the actual model; review and expert conversations can safely select the next request's model.
+- Obsolete context references return the current authorized index while preserving revision, digest and blind-review isolation.
+- Actionable recovery for search overflow and Fetch 404; bounded subdirectory discovery and applicability-aware reviewed experience recall.
+- Required authorization uses the question tool. Evolution is staged across 3.1.1–3.1.4; see the [roadmap](docs/路线图.md).
 
 ### What's new in 3.1
 

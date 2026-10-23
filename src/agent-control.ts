@@ -31,6 +31,8 @@ export interface AgentControlRecord extends AgentControlBinding {
   /** Request assembly is separate from an observed dispatched attempt. */
   requestedRoute?: RouteInfo
   actual?: ActualAgentAttempt
+  /** 一次性子会话的单调结算锁；显示原因或迟到选择不能重新开放它。 */
+  oneShotSettled?: boolean
   reason?: string
   updatedAt: number
 }
@@ -75,6 +77,7 @@ export const ValidateAgentControlRecords = (raw: unknown): raw is AgentControlRe
       || [value.requestRevision, value.cardRevision, value.workflowRevision].some((item) => item !== undefined && !revision(item))
       || (value.selectedNext !== undefined && !route(value.selectedNext)) || (value.requestedRoute !== undefined && !route(value.requestedRoute))
       || (value.reason !== undefined && (typeof value.reason !== 'string' || value.reason.length > 256))) return false
+    if (value.oneShotSettled !== undefined && (typeof value.oneShotSettled !== 'boolean' || value.persistent === true)) return false
     if (value.actual !== undefined && (!object(value.actual) || !id(value.actual.attemptId) || !route(value.actual.route) || value.actual.source !== 'agent-loop-attempt'
       || (value.actual.delegationId !== undefined && !id(value.actual.delegationId))
       || !['running', 'settled', 'unknown'].includes(String(value.actual.state)) || typeof value.actual.observedAt !== 'number' || !Number.isFinite(value.actual.observedAt))) return false
@@ -127,11 +130,21 @@ export const createAgentControl = (deps: AgentControlDeps) => {
   }
   const stopAndSelect = async (input: AgentControlAddress, selection?: RouteInfo, interruptRunning = true, retry = false, force = false) => locked(input.childId, async () => {
     let current = requireRevision(input)
-    if (selection !== undefined && !current.persistent) throw new SwarmError('INVALID_ARGS', '一次性子智能体的模型由本轮委派决定')
     const selected = selection === undefined ? undefined : publicRoute(await deps.validateRoute(publicRoute(selection)))
     if (selected !== undefined && !route(selected)) throw new SwarmError('INVALID_ARGS', '宿主未返回合法模型配置')
     // validateRoute is asynchronous; a new attempt/settlement invalidates an old browser CAS.
     current = requireRevision(input)
+    if (selected !== undefined && !current.persistent) {
+      if (current.oneShotSettled === true || current.reason === 'one-shot-settled' || current.paused || ['stopping', 'recovery-required'].includes(current.phase)) throw new SwarmError('INVALID_ARGS', '一次性子智能体已结束或正在停止；请在父会话发起新的审核或委派')
+      if (retry || force) throw new SwarmError('INVALID_ARGS', '一次性子智能体仅支持下一请求选择，不支持提前解除冷却')
+      // 一次性审核没有可人工续跑的委派。只在线性化的下一请求边界换模型，
+      // 不取消当前调用、不暂停运行，也不把用户选择写成实际调用证据。
+      // 一次性记录不跨重启保存；验证、覆盖和选择回执之间不 await，
+      // 防止等待持久化期间请求结束后再把覆盖写回已释放会话。
+      deps.applyOverride(current.childId, clone(selected))
+      patch(current, { selectedNext: clone(selected), reason: 'manual-next-request-selection' })
+      return clone(requireRecord(input.parentSessionId, input.childId))
+    }
     if (current.phase === 'recovery-required') {
       deps.setPaused(current.childId, true)
       const next = patch(current, { ...(selected === undefined ? {} : { selectedNext: clone(selected) }), paused: true, phase: 'recovery-required', reason: selected === undefined ? 'manual-cancel-awaiting-reconciliation' : 'manual-selection-awaiting-reconciliation' })
@@ -211,6 +224,7 @@ export const createAgentControl = (deps: AgentControlDeps) => {
     },
     ObserveSelection: (childId: string, selectedNext: RouteInfo) => {
       const current = records.get(childId)
+      if (current?.oneShotSettled === true) return
       const next = publicRoute(selectedNext)
       if (current !== undefined && JSON.stringify(current.selectedNext) !== JSON.stringify(next)) patch(current, { selectedNext: next, reason: 'host-model-selection' })
     },
@@ -222,7 +236,7 @@ export const createAgentControl = (deps: AgentControlDeps) => {
     },
     MarkWaiting: (childId: string, waiting: boolean) => {
       const current = records.get(childId)
-      if (current !== undefined && !current.paused) patch(current, { phase: waiting ? 'waiting' : 'running' })
+      if (current !== undefined && current.oneShotSettled !== true && !current.paused) patch(current, { phase: waiting ? 'waiting' : 'running' })
     },
     /** Only the final allowed mutation tool boundary calls this; role names alone are insufficient. */
     MarkSideEffectRisk: (childId: string) => {
@@ -231,7 +245,7 @@ export const createAgentControl = (deps: AgentControlDeps) => {
     },
     MarkBlocked: (childId: string, reason: string) => {
       const current = records.get(childId)
-      if (current !== undefined) { deps.setPaused(childId, true); patch(current, { phase: 'stopping', paused: true, reason: reason.slice(0, 256) }) }
+      if (current !== undefined && current.oneShotSettled !== true) { deps.setPaused(childId, true); patch(current, { phase: 'stopping', paused: true, reason: reason.slice(0, 256) }) }
     },
     MarkAttemptSettled: (childId: string, attemptId: string) => {
       const current = records.get(childId)
@@ -239,6 +253,7 @@ export const createAgentControl = (deps: AgentControlDeps) => {
     },
     MarkRunSettled: (childId: string, stopReason?: string) => {
       let current = records.get(childId)
+      if (current?.persistent === false && current.oneShotSettled !== true) current = patch(current, { oneShotSettled: true, reason: 'one-shot-settled' })
       if (current !== undefined && stopReason === 'completed' && current.needsSideEffectReview === true) current = patch(current, { needsSideEffectReview: false })
       // 只有取消、打断或回合被拦下才暂停等待人工核对；模型错误不暂停：委派在同一会话里续跑，人工也可直接继续
       if (current?.persistent === true && stopReason !== undefined && stopReason !== 'completed' && !current.paused) {

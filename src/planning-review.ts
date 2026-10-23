@@ -79,7 +79,7 @@ export interface PlanningReviewResult {
   assumptions: Array<{ statement: string; evidence: string }>
   unresolved: string[]
 }
-export interface PlanningReviewerInfo { agentId: string; role: DelegableRoleId; model?: string; fresh: boolean; readOnly: boolean; authorAgentIds?: string[] }
+export interface PlanningReviewerInfo { agentId: string; role: DelegableRoleId; provider?: string; model?: string; reasoningEffort?: string; fresh: boolean; readOnly: boolean; authorAgentIds?: string[] }
 export interface PlanningAgentAssessmentInfo { result?: unknown; reviewer?: PlanningReviewerInfo; reason?: string }
 export interface PlanningJevAssessmentInfo { status: 'ok' | 'unavailable' | 'unknown'; answers?: Record<string, unknown>; reason?: string; model?: string }
 export interface PlanningReviewPolicyInfo { requireJev?: boolean; reviewAbove?: number }

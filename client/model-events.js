@@ -10,6 +10,8 @@ const KIND = 'swarm-model-call'
 const HEADER_KIND = 'swarm-request-route'
 const MARKER_KIND = 'swarm-session-marker'
 const SWARM_MARKER = 'dsh-agent-swarm'
+// 独立规划审核使用专用 persona；它仍带同源角色标记，但没有通用 persona 的包名。
+const SWARM_ROLE_MARKER = /\[\[swarm:role=[a-z_]+\]\]/
 const PRESETS = new Set(DISPLAY.presets)
 
 /** 供应商中文名；未知供应商保留真实 ID。 */
@@ -50,7 +52,7 @@ const markerDefinition = {
       return { swarm: typeof preset === 'string' ? PRESETS.has(preset) : previous?.swarm }
     }
     const text = readSystemText(match.event)
-    return { swarm: text === '' ? previous?.swarm : text.includes(SWARM_MARKER) }
+    return { swarm: text === '' ? previous?.swarm : text.includes(SWARM_MARKER) || SWARM_ROLE_MARKER.test(text) }
   },
   update: (context) => context.state,
   buildViewNode: () => null
