@@ -1,10 +1,12 @@
-# 3.1.1 修复、审核与发布准备
+# 3.1.1 修复、部署与发布验证
 
 日期：2026-10-23。宿主基线：唯一 `/usr/bin/dsh` → `/usr/lib/node_modules/@deepseek-ai/dsh`，版本 0.2.1-rc.2。候选源码 `.work-v3`，版本 3.1.1。
 
 ## 当前状态
 
-代码与隔离验证通过，尚未部署生产或发布 GitHub。用户已明确选择等待正在执行的“请通过 tabby 在 ssh session”业务会话结束后再部署和发布；本轮没有停止该会话。该会话曾短暂 idle，随后又启动新委派，因此继续等待。正式 3080 仍是插件 3.1.0，PID 1363632 未变，不能把隔离测试写成正式宿主验收。
+已在用户确认任务完全停止后完成最新状态交接、本机升级与 GitHub 发布。正式宿主是唯一 `/usr/lib/node_modules/@deepseek-ai/dsh` 0.2.1-rc.2，插件3.1.1，PID2432406，仅监听127.0.0.1:3080。4任务、33委派、53上下文及版本、摘要与证据保全，没有发起业务重放。
+
+Release：<https://github.com/zhairy/dsh-agent-swarm/releases/tag/v3.1.1>。五资产匿名下载、逐字节与SHA256校验完成，远端main、发布分支与标签解析后的提交均为`ace6cf50c245dc3808f6c5c36b1900c17146e902`。
 
 ## 根因与修复
 
@@ -29,12 +31,12 @@
 | 正方审查 | 上下文、隔离、经验、文件发现与错误反馈，专项与真实DSH场景通过 |
 | 反方审查 | 独立复现P1并验证最终修复，400/401/403/404均正确转新路由；代码层阻断解除 |
 | 浏览器模型控制 | 隔离实际DSH/RPC，`hang/high → 取消/沉寂 → recovered/max`，同child、无页面错误 |
-| 3080最终部署与验收 | **待业务会话结束，尚未执行** |
-| GitHub发布及匿名资产校验 | **尚未执行** |
+| 3080最终部署与验收 | 通过：任务交接、长会话、规划审核实际模型、连续专家模型控件、HTTP抓取及访问控制 |
+| GitHub发布及匿名资产校验 | v3.1.1已公开，五资产匿名下载与逐字节校验通过 |
 
 集成使用真实宿主 AgentLoop、会话、工具和权限管线，模型响应来自确定性 fixture；它不证明外部模型长期稳定，也不证明真实多小时业务永无停滞。初次全量测试有1个沿用旧ref抛错契约的断言失败，更新为明确的失败恢复断言后全量通过；没有通过删除隔离/审批断言使其通过。
 
-## 内存态交接与最终候选
+## 交接与候选阶段（历史记录）
 
 生产公开 taskView 已确认 `durable:false`。部署前通过受限本机只读维护导出当前 FeatureState，备份目录 `/home/zhairy/.dsh/backup-v3.1.1-handoff/` 为0700、原始状态文件为0600，正文不进入仓库或发布包。捕获时包含4任务、约1.57MiB；真实 `validateFeatureState` 与 `sourceVersion:3.1.0` 信封校验通过。只执行 check-only，没有写 pending 或消费状态；业务恢复运行后，该备份不能作为最终切换快照。
 
@@ -50,11 +52,25 @@
 
 临时维护inspector已关闭，经ss确认只保留原127.0.0.1:3080监听。
 
+## 正式部署与发布结果
+
+用户确认停止后，重新导出最新内存态，信封1,958,510字节，覆盖4任务、33委派、53上下文。schema、真实3.1.0来源、身份/权限/摘要校验通过后，写入一次性pending；旧PID1363632停止，新PID2432406从已校验tarball启动。冷恢复成功后消费pending，材料正文与digest逐项相同，委派事实与证据保持，旧绑定只有revoked/suspended，没有自动激活或业务重放。原始备份与截图仅保存在0700/0600维护目录，没有写入仓库或发布包。
+
+实际3080界面：原长会话观察到95条模型行及3个流程卡片；历史规划审核显示`gpt-6.1-sol / codex / xhigh`和9条模型行；持久专家面板可加载供应商、模型、推理三个选择框及选择按钮。没有保存改变真实业务子会话的模型；外部模型切换调用的回归依然来自明确标记的真实AgentLoop fixture。3.1.0已经结束且没有控制登记的一次性审核保持只读，不伪造可续跑身份。插件页明确显示3.1.1，页面脚本错误为空。
+
+正式宿主HTTP抓取example.com返回200，私网目标被WEB_BLOCKED_URL拒绝；匿名任务RPC返回401，已认证的四个任务读取成功。投影可能仍提示新需求待同步，刷新并不批准旧版本。实际Jev健康RPC返回jev-1.14.0且成功。profile只有本插件依赖改变，39个bundle列表保持；doctor仍有原有CLI凭据可见性/旧预设提示，未把这些包装成本次兼容故障。
+
+发布资产：`dsh-agent-swarm.tgz`、中英说明、`release-manifest.json`、`SHA256SUMS`。发布前上传全部资产，公开后用禁用curl配置、无GitHub认证的HTTP/1.1请求重新下载，四项校验和及五文件逐字节比对通过。tarball仍为1,326,555字节，SHA256 `d0cf3d7b193d50dd4e220d70beaa490dfd1255df276e448b5e92b4fe75b10dc0`；manifest SHA256 `562b687c031beaca37af0151c678d7f8c5d2a1e76ef07c879bf88383bca65e5c`。
+
+实际证据：[正式Web验收](production-web-verification.json)、[部署反方复核](deployment-negative-review.md)、[发布及匿名下载](publication-verification.json)、[最终Jev结论](jev-publication-completion.json)。本次是一次性维护交接，没有自动开启持久化；没有运行多小时业务来声称永久无停滞。
+
 ## Jev 与双路审查
 
 已真实调用 `jev_health`、`jev_ask`、`jev_check`、`jev_classify`、`jev_match`、`jev_score`、`jev_screen`，明确输入及结果见 `jev-code-review.json`。
 
 补入交接兼容和最终候选后，又重开全部七类判断，见 `jev-candidate-handoff-review.json`：实际判断为jev-1.14.0，分类 `validated_candidate_waiting_host`，支持候选修复和保留用户选择的等待条件，未将候选说成已经部署发布。
+
+实际生产验收后又重开七类判断，见`jev-production-release-review.json`，分类ready_to_publish_bounded_patch（0.99）。发布和匿名下载完成后，最终check/classify/health见`jev-publication-completion.json`，分类completed_with_evidence（0.99）。这些概率为辅助判断，不能替代上述实际校验，也不构成全库无缺陷证明。
 
 - 判断实际返回 `jev-1.14.0`；health列出账户别名 `jev-latest` / `jev-preview`。
 - 分类：`code_validated_wait_host`，0.99；下一步选择 `wait_then_test`，1.0。均不表示正式宿主已经验收。
@@ -73,4 +89,4 @@
 - 本轮仅强化天枢使用现有 `tool-ask-user` 的 `ask_user_question` 提出真正缺少的用户授权；完整去重/持久等待状态机尚未实现，不能宣称已由运行时强制。
 - 独立进度抽屉已评估并写方案，本轮未追加UI改造。抽屉不能自行修复数据刷新，更不能成为第二控制面。
 
-临时网页登录启动令牌曾出现在过宽的网络诊断输出中；后续诊断仅输出脱敏路径。启动令牌按进程生成，将在用户允许条件满足后的受控重启失效；等待期间不因此擅自中断业务。
+临时网页登录启动令牌曾出现在过宽的网络诊断输出中；后续诊断仅输出脱敏路径。该旧启动令牌已随本次受控重启失效；新令牌未输出，已有浏览器身份仍由宿主签名Cookie机制校验。

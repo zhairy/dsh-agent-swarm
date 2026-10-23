@@ -1,0 +1,287 @@
+{
+  "state": {
+    "version": "3.1.1",
+    "validatedSource": "ad0b89d484d5bcccd4f0b43e60dcb788ad94d8c8",
+    "publicCommit": "ace6cf50c245dc3808f6c5c36b1900c17146e902",
+    "fixes": [
+      "Planning reviewer actual model visibility; observed requests separated from next selection",
+      "One-shot next-request CAS selection; in-flight failure attributed to the real old route; settled record monotonic",
+      "Missing context ref returns ok=false authorized current index; stale/version/digest/cross-task/blind guards retained",
+      "Bounded project path discovery and error hints preserve host failure; user's HTTP Fetch choice respected",
+      "Bounded applicability recall; ask_user_question guidance; future automation explicitly planned only",
+      "Explicit same-schema3.1.0/3.1.1 maintenance handoff with owner600/scope/checksum/4MiB/single consumption and no old active binding"
+    ],
+    "tests": {
+      "typecheck": true,
+      "unit": 1312,
+      "integration": {
+        "files": 8,
+        "passed": 44,
+        "host": "0.2.1-rc.2",
+        "models": "deterministic fixtures"
+      },
+      "olderTargeted": {
+        "passed": 10,
+        "host": "0.2.0-rc.2",
+        "commit": "d91e5d6"
+      },
+      "tarball": {
+        "sha256": "d0cf3d7b193d50dd4e220d70beaa490dfd1255df276e448b5e92b4fe75b10dc0",
+        "closure": 79,
+        "missing": 0,
+        "compiledFiles": 80,
+        "isolatedNpmPnpm": true
+      }
+    },
+    "production": {
+      "host": "0.2.1-rc.2",
+      "plugin": "3.1.1",
+      "onlyInstall": "/usr/lib/node_modules/@deepseek-ai/dsh",
+      "oldPidExited": true,
+      "pid": 2432406,
+      "listen": "127.0.0.1:3080",
+      "inspectorClosed": true,
+      "handoff": {
+        "freshBytes": 1958510,
+        "tasks": 4,
+        "delegations": 33,
+        "contexts": 53,
+        "publishedVersionsAndRefsAndDigestsPreserved": true,
+        "delegationFactsPreserved": true,
+        "pendingConsumedOnce": true,
+        "oldActiveBindings": 0,
+        "modelOrBusinessReplaysInitiated": 0
+      },
+      "browser": {
+        "fullProduction3080": true,
+        "planningReviewerHistoryModel": "gpt-6.1-sol / codex / xhigh",
+        "planningRows": 9,
+        "persistentChildSelectFields": 3,
+        "selectButtonEnabled": true,
+        "businessRouteSelectionCommitted": false,
+        "pluginVersionVisible": "3.1.1",
+        "pageErrors": []
+      },
+      "httpFetch": {
+        "public200": true,
+        "loopbackDenied": "WEB_BLOCKED_URL",
+        "anonymousTaskRpc401": true
+      },
+      "liveJevHealth": {
+        "ok": true,
+        "model": "jev-1.14.0"
+      },
+      "profile": {
+        "onlyChangedDependency": "dsh-agent-swarm",
+        "bundleListUnchanged": true,
+        "bundles": 39
+      },
+      "newHostFatalErrors": 0
+    },
+    "review": {
+      "positive": "independent assets audit passed",
+      "negative": "independent final deployment review passed, no blockers"
+    },
+    "limits": [
+      "Historical completed3.1.0 one-shot review without a control record stays read-only and is not fabricated into a resumable agent",
+      "Handoff is one-time, not automatic durable persistence;4MiB limit retained",
+      "New third-party model-switch requests not performed on live business session; real runtime switch tests used fixtures",
+      "No multi-hour postdeployment business-run guarantee",
+      "Drawer/skills/workflow/global novelty/canary remain future3.1.2–3.1.4 plans; semantic stability never authorizes success"
+    ],
+    "publication": {
+      "pushed": false,
+      "tagged": false,
+      "released": false,
+      "action": "Final checks before publishing immutable tarball with notes/manifest/checksums"
+    }
+  },
+  "results": {
+    "health": {
+      "ok": true,
+      "model": "jev-latest",
+      "answers": {
+        "models": [
+          {
+            "name": "jev-latest",
+            "description": "The latest iteration of TypeSafe's System One Model: Jev",
+            "release_date": "2026-09-10T18:38:01.391457+00:00"
+          },
+          {
+            "name": "jev-preview",
+            "description": "A preview version of `jev-latest`: should be better in most ways",
+            "release_date": "2026-09-10T18:39:06.057655+00:00"
+          }
+        ],
+        "round_trip_latency_ms": 2022.642
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "est_cost_usd": 0
+      },
+      "latency_ms": 2022.655
+    },
+    "ask": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "identity": {
+          "type": "noul",
+          "noul": 0.91
+        },
+        "scope": {
+          "type": "noul",
+          "noul": 0.94
+        },
+        "release": {
+          "type": "choice",
+          "choice": "publish_validated_patch",
+          "confidence": 1,
+          "probabilities": {
+            "publish_validated_patch": 1,
+            "wait_for_host": 0,
+            "bypass_guards": 0
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 1577,
+        "output_tokens": 84,
+        "est_cost_usd": 0.000066234
+      },
+      "latency_ms": 432.429
+    },
+    "check": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "probabilities": {
+          "production_installed": 0.9,
+          "no_permission_revival": 0.91,
+          "scope_is_bounded": 0.97,
+          "assets_correspond": 0.84
+        },
+        "flags": [
+          "production_installed",
+          "no_permission_revival",
+          "scope_is_bounded",
+          "assets_correspond"
+        ],
+        "uncertain": []
+      },
+      "usage": {
+        "input_tokens": 1523,
+        "output_tokens": 80,
+        "est_cost_usd": 0.000063966
+      },
+      "latency_ms": 215.468
+    },
+    "classify": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "choice": "ready_to_publish_bounded_patch",
+        "confidence": 0.99,
+        "probabilities": {
+          "ready_to_publish_bounded_patch": 0.99,
+          "hold_production_missing": 0.01,
+          "reject_unsafe": 0,
+          "other": 0
+        },
+        "band": "act",
+        "agreement": true,
+        "alternate_choice": "ready_to_publish_bounded_patch"
+      },
+      "usage": {
+        "input_tokens": 3098,
+        "output_tokens": 126,
+        "est_cost_usd": 0.00013011600000000003
+      },
+      "latency_ms": 564.034
+    },
+    "match": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "best_id": "validated_patch",
+        "best_text": "Publish the tested fixed artifact with evidence-bound manifest; keep historical review controls read-only and future automation staged; verify anonymous downloads",
+        "confidence": 0.99,
+        "abstain_probability": 0.01,
+        "exists": 0.9,
+        "windows": 1,
+        "exists_by_window": [
+          0.9
+        ],
+        "top3": [
+          {
+            "id": "validated_patch",
+            "probability": 0.99
+          },
+          {
+            "id": "expand_unverified",
+            "probability": 0
+          },
+          {
+            "id": "force_replay",
+            "probability": 0
+          }
+        ],
+        "band": "match"
+      },
+      "usage": {
+        "input_tokens": 579,
+        "output_tokens": 69,
+        "est_cost_usd": 0.000024318
+      },
+      "latency_ms": 216.388
+    },
+    "score": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "score": 2,
+        "confidence": 1,
+        "probabilities": {
+          "0": 0,
+          "1": 0,
+          "2": 1,
+          "3": 0
+        },
+        "legend": {
+          "0": "No meaningful reproduction",
+          "1": "Targeted tests only",
+          "2": "Full tests, real runtime integration, adversarial review, isolated package and production host checks; publishing/download pending",
+          "3": "All preceding checks plus completed GitHub publication and independently verified downloaded assets"
+        },
+        "normalized": 0.6666666666666666
+      },
+      "usage": {
+        "input_tokens": 1515,
+        "output_tokens": 17,
+        "est_cost_usd": 0.00006363
+      },
+      "latency_ms": 359.635
+    },
+    "screen": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "verdict": "review",
+        "risk": 0.66,
+        "risk_confidence": 0.33,
+        "reasons": {
+          "addresses_agent": 0.42,
+          "issues_instructions": 0.54
+        }
+      },
+      "usage": {
+        "input_tokens": 1798,
+        "output_tokens": 129,
+        "est_cost_usd": 0.000075516
+      },
+      "latency_ms": 237.74
+    }
+  },
+  "errors": []
+}
