@@ -6,6 +6,7 @@ import { getTaskDiagrams, getArchifyTaskDiagrams, ValidateTaskDiagrams, TASK_DIA
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
 import { getDefaultWorkflow, getWorkflowDigest, intWorkflowState, intOfficialMermaidParser } from '../../src/workflow.js'
 import { getRuleOrchestration } from '../../src/orchestration.js'
+import { loadTaskViewStoreModule } from './client-module-loader.js'
 
 const fixture = (flags: Record<string, boolean> = { changesCode: true }) => {
   const card = ValidateTaskCard({ title: '合同与图表', goal: '保持真实证据', acceptance: ['分别展示完成和验收'], scope: [], flags }).card!
@@ -21,6 +22,7 @@ const client = () => {
   const module = { exports: {} as any }
   new Function('require', 'module', 'exports', readFileSync(join(__dirname, '../../client/task-flow.js'), 'utf8'))((id: string) => {
     if (id === 'react') return { createElement: () => undefined }
+    if (id === '@swarm/task-view-store') return loadTaskViewStoreModule()
     throw new Error('not loaded')
   }, module, module.exports)
   return module.exports.__test__

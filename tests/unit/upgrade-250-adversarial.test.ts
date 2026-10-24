@@ -13,6 +13,7 @@ import { VALID_OUTPUTS } from '../fixtures/valid-outputs.js'
 import * as AgentBindings from '../../src/agent-binding.js'
 import { createFeatureSession } from '../../src/feature-session.js'
 import * as FeatureSessions from '../../src/feature-session.js'
+import { loadTaskViewStoreModule } from './client-module-loader.js'
 import { intTaskStore } from '../../src/evidence.js'
 import { intThreadRegistry } from '../../src/threads.js'
 
@@ -34,16 +35,6 @@ const page = () => {
   const module = { exports: {} as any }
   new Function('require', 'module', 'exports', source)((id: string) => {
     if (id === 'react') return { createElement: () => null, useSyncExternalStore: () => undefined, useEffect: () => undefined }
-    throw new Error(`Unexpected module: ${id}`)
-  }, module, module.exports)
-  return module.exports.__test__
-}
-
-const flowClient = () => {
-  const source = readFileSync(join(__dirname, '../../client/task-flow.js'), 'utf8')
-  const module = { exports: {} as any }
-  new Function('require', 'module', 'exports', source)((id: string) => {
-    if (id === 'react') return { createElement: () => null }
     throw new Error(`Unexpected module: ${id}`)
   }, module, module.exports)
   return module.exports.__test__
@@ -169,44 +160,52 @@ describe('2.5.0 independent adversarial association regressions', () => {
 
   it('a slow task-view response remains current and never overlaps automatic polling', async () => {
     vi.useFakeTimers()
-    const { createTaskPoller } = flowClient(), response = deferred<{ task_id: string }>()
-    const request = vi.fn(() => response.promise), onValue = vi.fn(() => true), onError = vi.fn()
-    const stop = createTaskPoller({ request, onValue, onError })
+    const response = deferred<{ task_id: string }>()
+    const request = vi.fn((_method: string, _payload: unknown, _signal: AbortSignal) => response.promise)
+    const store = loadTaskViewStoreModule().createTaskViewStore({ request })
+    releases.push(() => store.dispose())
+    const source = store.task('root', 'T-1'); const stop = source.subscribe(vi.fn())
     await vi.advanceTimersByTimeAsync(10000)
-    expect(request).toHaveBeenCalledTimes(1); expect(onValue).not.toHaveBeenCalled()
+    expect(request).toHaveBeenCalledTimes(1); expect(source.getSnapshot().value).toBeNull()
     response.resolve({ task_id: 'T-1' }); await vi.advanceTimersByTimeAsync(0)
-    expect(onValue).toHaveBeenCalledWith({ task_id: 'T-1' })
+    expect(source.getSnapshot()).toMatchObject({ value: { task_id: 'T-1' }, error: null })
     await vi.advanceTimersByTimeAsync(4999); expect(request).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1); expect(request).toHaveBeenCalledTimes(2)
     stop(); await vi.advanceTimersByTimeAsync(60000)
-    expect(onError).not.toHaveBeenCalled(); expect(request).toHaveBeenCalledTimes(2)
+    expect(request).toHaveBeenCalledTimes(2)
   })
 
-  it('a timed-out task view stops polling and rejects late publication without pretending transport cancellation', async () => {
+  it('a timed-out task view really aborts and rejects late publication until transport settlement', async () => {
     vi.useFakeTimers()
-    const { createTaskPoller } = flowClient(), response = deferred<{ task_id: string }>()
-    const request = vi.fn(() => response.promise), onValue = vi.fn(), onError = vi.fn()
-    const stop = createTaskPoller({ request, onValue, onError })
+    const response = deferred<{ task_id: string }>()
+    const request = vi.fn((_method: string, _payload: unknown, _signal: AbortSignal) => response.promise)
+    const store = loadTaskViewStoreModule().createTaskViewStore({ request })
+    releases.push(() => store.dispose())
+    const source = store.task('root', 'T-1'); const stop = source.subscribe(vi.fn())
     await vi.advanceTimersByTimeAsync(15000)
-    expect(onError).toHaveBeenCalledTimes(1); expect(request).toHaveBeenCalledTimes(1)
-    response.resolve({ task_id: 'T-1' }); await vi.advanceTimersByTimeAsync(60000)
-    expect(onValue).not.toHaveBeenCalled(); expect(request).toHaveBeenCalledTimes(1)
-    stop()
+    expect(source.getSnapshot()).toMatchObject({ value: null, status: 'unavailable' })
+    expect(request.mock.calls[0]![2].aborted).toBe(true)
+    await vi.advanceTimersByTimeAsync(60000); expect(request).toHaveBeenCalledTimes(1)
+    stop(); response.resolve({ task_id: 'T-1' }); await vi.advanceTimersByTimeAsync(60000)
+    expect(source.getSnapshot().value).toBeNull(); expect(request).toHaveBeenCalledTimes(1)
   })
 
-  it('manual refreshes and a session switch wait for the existing transport and discard obsolete queued reads', async () => {
-    const { createTaskLoader } = flowClient(), loader = createTaskLoader(), response = deferred<string>()
-    const firstRead = vi.fn(() => response.promise), obsoleteRead = vi.fn(() => 'OBSOLETE'), currentRead = vi.fn(() => 'CURRENT')
-    let obsoleteActive = true
-    const first = loader.load(firstRead, () => true)
-    const obsolete = loader.load(obsoleteRead, () => obsoleteActive).catch((error: Error) => error)
-    const current = loader.load(currentRead, () => true)
-    await Promise.resolve(); expect(firstRead).toHaveBeenCalledTimes(1)
-    expect(obsoleteRead).not.toHaveBeenCalled(); expect(currentRead).not.toHaveBeenCalled()
-    obsoleteActive = false; response.resolve('OLD')
-    expect(await first).toBe('OLD'); expect(await obsolete).toBeInstanceOf(Error)
-    expect(await current).toBe('CURRENT'); expect(currentRead).toHaveBeenCalledTimes(1)
-    expect(obsoleteRead).not.toHaveBeenCalled()
+  it('manual refreshes share the existing request; a session switch cannot publish an obsolete root', async () => {
+    vi.useFakeTimers()
+    const response = deferred<{ task_id: string; rootSessionId: string }>()
+    const request = vi.fn((_method, payload) => payload.sessionId === 'old-root' ? response.promise : Promise.resolve({ task_id: 'T-1', rootSessionId: 'new-root' }))
+    const store = loadTaskViewStoreModule().createTaskViewStore({ request })
+    releases.push(() => store.dispose())
+    const old = store.task('old-root', 'T-1'); const stopOld = old.subscribe(vi.fn())
+    const first = old.refresh(), repeated = old.refresh()
+    expect(first).toBe(repeated)
+    await vi.advanceTimersByTimeAsync(0); stopOld()
+    const current = store.task('new-root', 'T-1'); current.subscribe(vi.fn()); await current.refresh()
+    expect(current.getSnapshot().value.rootSessionId).toBe('new-root')
+    response.resolve({ task_id: 'T-1', rootSessionId: 'old-root' }); await vi.advanceTimersByTimeAsync(0)
+    expect(current.getSnapshot().value.rootSessionId).toBe('new-root')
+    expect(old.getSnapshot().value).toBeNull()
+    expect(request.mock.calls.filter(([, payload]) => payload.sessionId === 'old-root')).toHaveLength(1)
   })
 
   it('shutdown checkpoints a published running attempt even when durable child binding has not completed', async () => {

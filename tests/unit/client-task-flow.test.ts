@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { loadTaskViewStoreModule } from './client-module-loader.js'
 
 interface ElementInfo { type: unknown; props: Record<string, unknown>; children: unknown[] }
 const loadModule = (view: unknown = null) => {
@@ -16,6 +17,7 @@ const loadModule = (view: unknown = null) => {
   }
   new Function('require', 'module', 'exports', source)((name: string) => {
     if (name === 'react') return React
+    if (name === '@swarm/task-view-store') return loadTaskViewStoreModule()
     if (name === '@deepseek-ai/dsh-client-ui-primitives') return { MarkdownText: 'MarkdownText' }
     throw new Error(`unexpected require ${name}`)
   }, module, module.exports)
@@ -26,69 +28,6 @@ const textOf = (element: any): string => typeof element === 'string' ? element :
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 describe('真实任务流程客户端投影', () => {
-  it('慢RPC完成后才轮询，15秒超时停止自动重试，迟到结果不覆盖错误', async () => {
-    vi.useFakeTimers()
-    const { createTaskPoller } = loadModule().__test__
-    let resolve: (value: unknown) => void = () => undefined
-    const request = vi.fn(() => new Promise((done) => { resolve = done }))
-    const onValue = vi.fn(); const onError = vi.fn()
-    const stop = createTaskPoller({ request, onValue, onError })
-    await vi.advanceTimersByTimeAsync(6000)
-    expect(request).toHaveBeenCalledTimes(1)
-    resolve({ task_id: 'T-1' })
-    await vi.advanceTimersByTimeAsync(0)
-    expect(onValue).toHaveBeenCalledTimes(1)
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(request).toHaveBeenCalledTimes(2)
-    await vi.advanceTimersByTimeAsync(60000)
-    expect(request).toHaveBeenCalledTimes(2)
-    expect(onError).toHaveBeenCalledTimes(1)
-    resolve({ task_id: 'late' })
-    await vi.advanceTimersByTimeAsync(0)
-    expect(onValue).toHaveBeenCalledTimes(1)
-    stop()
-  })
-  it('失败或已验收停止轮询，卸载后既不发布也不产生后续请求', async () => {
-    vi.useFakeTimers()
-    const { createTaskPoller } = loadModule().__test__
-    const failed = vi.fn().mockRejectedValue(new Error('offline'))
-    const onError = vi.fn()
-    const stopFailed = createTaskPoller({ request: failed, onValue: vi.fn(), onError })
-    await vi.advanceTimersByTimeAsync(60000)
-    expect(failed).toHaveBeenCalledTimes(1); expect(onError).toHaveBeenCalledTimes(1)
-    stopFailed()
-    const accepted = vi.fn().mockResolvedValue({ accepted: true })
-    const stopAccepted = createTaskPoller({ request: accepted, onValue: () => false, onError })
-    await vi.advanceTimersByTimeAsync(60000)
-    expect(accepted).toHaveBeenCalledTimes(1)
-    stopAccepted()
-    let done: (value: unknown) => void = () => undefined
-    const onValue = vi.fn()
-    const stop = createTaskPoller({ request: () => new Promise((resolve) => { done = resolve }), onValue, onError })
-    await vi.advanceTimersByTimeAsync(0)
-    stop(); done({ task: 'late' })
-    await vi.advanceTimersByTimeAsync(60000)
-    expect(onValue).not.toHaveBeenCalled()
-  })
-  it('刷新与任务变更共用单flight，旧等待者失效后不会补发', async () => {
-    const { createTaskLoader } = loadModule().__test__
-    const loader = createTaskLoader()
-    let done: (value: unknown) => void = () => undefined
-    const first = vi.fn(() => new Promise((resolve) => { done = resolve }))
-    const second = vi.fn().mockResolvedValue('new-task')
-    const old = loader.load(first, () => true)
-    await Promise.resolve()
-    let active = true
-    const obsolete = loader.load(second, () => active).catch((error: Error) => error.message)
-    active = false
-    const latest = loader.load(second, () => true)
-    expect(second).not.toHaveBeenCalled()
-    done('old-task')
-    await expect(old).resolves.toBe('old-task')
-    await expect(obsolete).resolves.toContain('disposed')
-    await expect(latest).resolves.toBe('new-task')
-    expect(second).toHaveBeenCalledTimes(1)
-  })
   it('三维审核区分别显示模型意见和代码结论，缺项不显示通过', () => {
     const { getPlanningReviewView, PlanningReviewPanel } = loadModule().__test__
     const empty = getPlanningReviewView(undefined)
@@ -120,12 +59,13 @@ describe('真实任务流程客户端投影', () => {
     module.apply({
       effect: (run: () => unknown) => run(),
       locale: { register: (_namespace: string, value: typeof dictionaries) => { dictionaries = value } },
+      get: () => ({ rpc: { call: vi.fn() } }),
       uiConversation: { events: { register: vi.fn() } },
       slots: { inject: vi.fn() }
     })
     const t = (key: string) => dictionaries[language]![key] ?? key
-    const { TaskFlowRow, PlanningReviewPanel } = module.__test__
-    const node = TaskFlowRow({ node: { data: { taskId: 'T-1', seq: 1, text: '真实工具内容' } }, sessionId: 'session', loadTask: vi.fn(), t })
+    const { TaskFlowContent, PlanningReviewPanel } = module.__test__
+    const node = TaskFlowContent({ taskId: 'T-1', fallback: '真实工具内容', snapshot: { value: { task_id: 'T-1', workflowMode }, status: 'live', updatedAt: 1, error: null }, t })
     expect(textOf(node.children[0].children[1])).toBe(status)
     const panel = textOf(PlanningReviewPanel({ review: undefined, t }))
     expect(panel).toContain(unknownReview)
@@ -158,34 +98,37 @@ describe('真实任务流程客户端投影', () => {
 
   it('RPC 必须绑定当前任务；失败保留原文，不渲染虚假已审核状态', async () => {
     const module = loadModule()
-    const { getTaskFromRpc, TaskFlowRow } = module.__test__
+    const { getTaskFromRpc, TaskFlowContent } = module.__test__
     expect(getTaskFromRpc({ tasks: [{ task_id: 'T-1', goal: '真实目标' }] }, 'T-1').goal).toBe('真实目标')
     expect(() => getTaskFromRpc({ task_id: 'other' }, 'T-1')).toThrow('identity')
-    const node = TaskFlowRow({ node: { data: { taskId: 'T-1', seq: 1, text: '真实工具内容' } }, sessionId: 'session', loadTask: vi.fn().mockRejectedValue(new Error('not authorized')) })
+    const node = TaskFlowContent({ taskId: 'T-1', fallback: '真实工具内容' })
     expect(textOf(node)).toContain('等待审核')
     expect(textOf(node)).not.toContain('已审核')
     expect(node.children.some((child: any) => child?.type === 'MarkdownText' && child.props.text === '真实工具内容')).toBe(true)
   })
 
-  it('注册标准节点与真实 RPC，失败不会吞成成功值', async () => {
+  it('注册标准聊天节点并为当前任务注入共享Store，而不是每行独立RPC', async () => {
     const module = loadModule()
     let registration: any
     let effect: any
-    const call = vi.fn().mockResolvedValue({ ok: true, value: { task_id: 'T-1' } })
+    const connection = { rpc: { call: vi.fn().mockResolvedValue({ ok: true, value: { task_id: 'T-1' } }) } }
     const context = {
       effect: (run: () => unknown) => run(),
       locale: { register: vi.fn() }, uiConversation: { events: { register: vi.fn() } },
-      get: (name: string) => { expect(name).toBe('connection'); return { rpc: { call } } },
-      slots: { inject: (_name: string, run: () => unknown) => { effect = run }, register: (spec: any) => { registration = spec; return () => {} } }
+      get: (name: string) => { expect(name).toBe('connection'); return connection },
+      slots: { inject: (_name: string, run: () => unknown) => { effect = run }, entries: () => [{ options: { id: 'swarm-task-progress' } }], register: (spec: any) => { registration = spec; return () => {} } }
     }
     module.apply(context)
     const generator = effect()
     generator.next()
-    const { loadTask } = registration.inject()
-    expect(await loadTask('session', 'T-1')).toEqual({ task_id: 'T-1' })
-    expect(call).toHaveBeenCalledWith('/api', 'swarm.taskView', { sessionId: 'session', taskId: 'T-1' })
-    call.mockResolvedValue({ ok: false, error: { message: 'not authorized' } })
-    await expect(loadTask('session', 'T-1')).rejects.toThrow('not authorized')
+    const { store, progressAvailable } = registration.inject()
+    expect(progressAvailable).toBe(true)
+    const source = store.task('session', 'T-1')
+    const release = source.subscribe(vi.fn())
+    await source.refresh()
+    expect(source.getSnapshot().value).toEqual({ task_id: 'T-1' })
+    expect(connection.rpc.call).toHaveBeenCalledWith('/api', 'swarm.taskView', { sessionId: 'session', taskId: 'T-1' }, expect.any(AbortSignal))
+    release(); store.dispose()
   })
 
   it('Mermaid 本地懒加载并用 strict；两个请求复用同一加载', async () => {

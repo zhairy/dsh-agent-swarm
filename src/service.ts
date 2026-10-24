@@ -4,6 +4,7 @@ import { getTaskDiagrams } from './task-diagrams.js'
 import { getOrchestrationQuestions, getRuleOrchestration, ParseOrchestrationPlan, type OrchestrationPlan } from './orchestration.js'
 import { createDelegationScheduler } from './scheduler.js'
 import { formatMemoryReferences } from './memory.js'
+import { ValidateToolCandidate, type ToolCandidateMetadata } from './tool-candidate.js'
 import type { ContextPageInfo } from './context-store.js'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -261,6 +262,7 @@ export interface SwarmService {
   MessageAck: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   Experience: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   getTaskViewForRpc: (sessionId: string, taskId: string) => unknown
+  getTaskIndexForRpc: (sessionId: string) => unknown
   getAgentViewForRpc: (parentSessionId: string, childId: string) => Promise<unknown>
   ControlAgentForRpc: (input: AgentControlRpcInput) => Promise<unknown>
   dispose: () => Promise<void>
@@ -1634,9 +1636,25 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     return bus.ack(agent.id, raw as Parameters<typeof bus.ack>[1])
   }
   const Experience: SwarmService['Experience'] = async (raw, exec) => {
-    const { features, binding } = await getToolTask(raw, exec)
+    const { features, binding, session, task, agent } = await getToolTask(raw, exec)
     if (!deps.getConfig().experience.enabled || binding?.blindReview) throw new SwarmError('PERMISSION_DENIED', '经验检索已关闭或当前为独立盲审')
-    const args = raw as { problemClass?: string; includeCandidates?: boolean }
+    const args = raw as { action?: string; problemClass?: string; includeCandidates?: boolean; conclusion?: string; appliesWhen?: string[]; doesNotApplyWhen?: string[]; toolCandidate?: ToolCandidateMetadata }
+    if (args.action === 'record_tool_candidate') {
+      if (!isRootTianShu(agent) || binding !== undefined) throw new SwarmError('PERMISSION_DENIED', '只有天枢根会话可登记工具候选')
+      if (!ValidateToolCandidate(args.toolCandidate) || typeof args.conclusion !== 'string' || !Array.isArray(args.appliesWhen) || args.appliesWhen.length === 0 || !Array.isArray(args.doesNotApplyWhen)) throw new SwarmError('INVALID_ARGS', '候选需要有界来源、适用/排除条件、回滚和禁用执行标记')
+      return session.taskLock.run(async () => {
+        if (closing || exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '候选登记已取消或宿主正在停止')
+        const current = deriveReconciledTask(session, deriveIntentRefresh(getTaskOrThrow(session, task.taskId), agent))
+        if (!isTaskVersionCurrent(current, getTaskBinding(task))) throw new SwarmError('STALE_EVIDENCE', '候选来源任务已变更，请刷新后登记')
+        const source = await getArtifactSnapshot(getAgentHeader(agent).cwd ?? process.cwd(), current.card.scope)
+        if (!source.complete) throw new SwarmError('STALE_EVIDENCE', '候选来源产物不完整，未登记')
+        if (exec.signal.aborted || closing) throw new SwarmError('RECOVERY_REQUIRED', '候选登记已取消或宿主正在停止')
+        return features.experiences.addCandidate({ problemClass: 'tool-candidate', conclusion: args.conclusion!, appliesWhen: args.appliesWhen!, doesNotApplyWhen: args.doesNotApplyWhen!,
+          source: { taskId: task.taskId, cardRevision: current.cardRevision ?? 1, workflowRevision: current.workflowRevision ?? 1, artifactDigest: source.digest, authorId: agent.id },
+          verification: [], counterexamples: [], operatorVersions: [args.toolCandidate!.version], toolCandidate: args.toolCandidate!, expiresAt: now() + 7 * 86400000 })
+      })
+    }
+    if (args.action !== undefined && args.action !== 'list') throw new SwarmError('INVALID_ARGS', '未知经验操作')
     return features.experiences.list(args.problemClass, args.includeCandidates === true).slice(0, 3)
   }
 
@@ -2143,6 +2161,19 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     },
     getDiagnostics
     ,ReviewPlan, Calculate, ReadContext, ProjectFiles, MessageSend, MessageRead, MessageAck, Experience
+    ,getTaskIndexForRpc: async (sessionId) => {
+      const registered = sessions.get(sessionId)
+      const root = registered?.rootAgent ?? deps.getAgent?.(sessionId)
+      if (root === undefined || root.id !== sessionId || !isRootTianShu(root)) throw new SwarmError('PERMISSION_DENIED', '该会话不是已登记的百工根会话')
+      if (closing) throw new SwarmError('RECOVERY_REQUIRED', '宿主正在停止，任务目录暂不可用')
+      const session = registered ?? getSession(sessionId)
+      // 只恢复宿主已加载的真实根；新Tab不能靠目录读取启动模型或重放旧委派。
+      await ensureFeatures(session, root)
+      // 浏览器owner通过宿主认证；此处仅返回该已登记根的目录，不遍历其他根或正文。
+      return { rootSessionId: sessionId, tasks: session.store.getTasks().map(task => ({
+        title: task.card.title, ...getTaskBinding(task), status: task.acceptance?.status ?? 'pending'
+      })) }
+    }
     ,getTaskViewForRpc: (sessionId, taskId) => {
       const session = sessions.get(sessionId)
       if (session === undefined || session.rootAgent === undefined || !isRootTianShu(session.rootAgent)) throw new SwarmError('PERMISSION_DENIED', '该会话不是已登记的百工根会话')

@@ -8,23 +8,50 @@ import { intSwarmService, type SwarmService } from '../../src/service.js'
 
 const fixtures: Array<{ home: string; service: SwarmService }> = []
 afterEach(async () => { for (const fixture of fixtures.splice(0)) { await fixture.service.dispose(); await rm(fixture.home, { recursive: true, force: true }) } })
-const makeFixture = async () => {
+const makeFixture = async (durable = false) => {
   const home = await mkdtemp(join(tmpdir(), 'swarm-task-rpc-'))
-  const config = getSwarmConfig({ jev: { enabled: false }, rootFallback: false, planningReview: { enabled: false } })
+  const config = getSwarmConfig({ jev: { enabled: false }, rootFallback: false, planningReview: { enabled: false }, experience: { enabled: true }, persistence: { enabled: durable } })
   const service = intSwarmService({ getConfig: () => config, getLlm: () => undefined, getSubagents: () => undefined, getTools: () => undefined, getAttachments: () => undefined, getCredentials: () => undefined, dshHome: home, fetch: vi.fn() as unknown as typeof fetch })
   fixtures.push({ home, service })
   const agent = { id: 'registered-root', session: { header: { agentPreset: 'tian-shu', cwd: home } } }
   const result = await service.AddTaskCard({ title: '只读任务', goal: '只规划，不执行或伪造成功', acceptance: ['给出任务流程和真实状态'], scope: [], flags: {} }, { agent, signal: new AbortController().signal })
-  const routes = getRpcRoutes(() => service.jev, { taskView: (sessionId, taskId) => service.getTaskViewForRpc(sessionId, taskId) })
+  const routes = getRpcRoutes(() => service.jev, { taskView: (sessionId, taskId) => service.getTaskViewForRpc(sessionId, taskId), taskIndex: (sessionId) => service.getTaskIndexForRpc(sessionId) })
   const taskRoute = routes.find((route) => route.path === '/api/swarm.taskView')!
   const post = (payload: unknown, method = 'swarm.taskView') => taskRoute.fetch(new Request('http://localhost/api/swarm.taskView', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'rpc-1', method, payload }) }))
-  return { service, routes, post, taskId: result.task_id, sessionId: agent.id }
+  return { service, routes, post, taskId: result.task_id, sessionId: agent.id, agent, home, config }
 }
 
 describe('生产只读 taskView RPC 与本地静态 Mermaid', () => {
+  it('冷打开的真实宿主根可恢复目录，无需先调用模型；任意字符串仍不能建立根', async () => {
+    const first = await makeFixture(true)
+    await first.service.dispose()
+    const network = vi.fn()
+    const restored = intSwarmService({ getConfig: () => first.config, getLlm: () => undefined, getSubagents: () => undefined, getTools: () => undefined, getAttachments: () => undefined, getCredentials: () => undefined, getAgent: (id) => id === first.agent.id ? first.agent : undefined, dshHome: first.home, fetch: network as unknown as typeof fetch })
+    fixtures.push({ home: first.home, service: restored })
+    await expect(restored.getTaskIndexForRpc('arbitrary-root')).rejects.toMatchObject({ code: 'PERMISSION_DENIED' })
+    expect(await restored.getTaskIndexForRpc(first.agent.id)).toMatchObject({ tasks: [{ taskId: first.taskId, title: '只读任务' }] })
+    expect(restored.getTaskViewForRpc(first.agent.id, first.taskId)).toMatchObject({ task_id: first.taskId, planningReview: null, acceptance: null })
+    expect(network).not.toHaveBeenCalled()
+  })
+  it('天枢登记候选只保存隔离元数据，原检索兼容且不生成当前任务批准', async () => {
+    const { service, agent, taskId, sessionId } = await makeFixture()
+    const before = service.getTaskViewForRpc(sessionId, taskId)
+    const toolCandidate = { kind: 'skill', version: '1', artifactRefs: ['proposal.md'], permissions: ['workspace-read'], testRefs: ['future-regression'], rollback: 'Discard candidate', evaluation: 'unavailable', executionEnabled: false }
+    const input = { task_id: taskId, action: 'record_tool_candidate', conclusion: 'Reusable read-only procedure', appliesWhen: ['matching source version'], doesNotApplyWhen: ['financial side effects'], toolCandidate }
+    const result = await service.Experience(input, { agent, signal: new AbortController().signal })
+    expect(result).toMatchObject({ status: 'candidate', toolCandidate, source: { taskId, authorId: agent.id } })
+    expect(await service.Experience({ task_id: taskId }, { agent, signal: new AbortController().signal })).toEqual([])
+    expect(await service.Experience({ task_id: taskId, includeCandidates: true }, { agent, signal: new AbortController().signal })).toHaveLength(1)
+    const { capacity: _oldCapacity, ...oldTaskView } = before as Record<string, unknown>
+    const { capacity: _newCapacity, ...newTaskView } = service.getTaskViewForRpc(sessionId, taskId) as Record<string, unknown>
+    expect(newTaskView).toEqual(oldTaskView)
+    await expect(service.Experience({ ...input, toolCandidate: { ...toolCandidate, executionEnabled: true } }, { agent, signal: new AbortController().signal })).rejects.toMatchObject({ code: 'INVALID_ARGS' })
+    const controller = new AbortController(); controller.abort()
+    await expect(service.Experience(input, { agent, signal: controller.signal })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+  })
   it('实际注册三条 RPC 与固定资产，旧 Jev-only 工厂保留两条', async () => {
     const fixture = await makeFixture()
-    expect(fixture.routes.map((route) => route.path)).toEqual(['/api/swarm.jevStatus', '/api/swarm.jevHealth', '/api/swarm.taskView', MERMAID_ASSET_PATH])
+    expect(fixture.routes.map((route) => route.path)).toEqual(['/api/swarm.jevStatus', '/api/swarm.jevHealth', '/api/swarm.taskView', '/api/swarm.taskIndex', MERMAID_ASSET_PATH])
     expect(getRpcRoutes(() => fixture.service.jev)).toHaveLength(2)
   })
 
@@ -74,5 +101,29 @@ describe('生产只读 taskView RPC 与本地静态 Mermaid', () => {
     const { service, sessionId, taskId } = await makeFixture()
     expect(await RunRpcMethod(service.jev, 'taskView', new AbortController().signal, { sessionId, taskId })).toMatchObject({ ok: false, error: { code: 'swarm/unavailable' } })
     expect(await RunRpcMethod(service.jev, 'jevStatus', new AbortController().signal)).toMatchObject({ ok: true })
+  })
+
+  it('任务目录只投影已登记根的摘要，读取不改任务版本或带出正文', async () => {
+    const { service, sessionId, taskId } = await makeFixture()
+    const before = service.getTaskViewForRpc(sessionId, taskId)
+    const deps = { taskIndex: (id: string) => service.getTaskIndexForRpc(id) }
+    const result = await RunRpcMethod(service.jev, 'taskIndex', new AbortController().signal, { sessionId }, deps)
+    expect(result).toMatchObject({ ok: true, value: { rootSessionId: sessionId, tasks: [{ taskId, title: '只读任务', status: 'pending' }] } })
+    expect(JSON.stringify(result)).not.toContain('只规划，不执行或伪造成功')
+    expect(service.getTaskViewForRpc(sessionId, taskId)).toEqual(before)
+    const denied = await RunRpcMethod(service.jev, 'taskIndex', new AbortController().signal, { sessionId: 'ordinary-or-child' }, deps)
+    expect(denied).toMatchObject({ ok: false, error: { code: 'swarm/permission-denied' } })
+  })
+
+  it('目录拒绝额外身份、畸形输入及取消请求，不能通过参数查询父根', async () => {
+    const { service, sessionId } = await makeFixture()
+    const read = vi.fn((id: string) => service.getTaskIndexForRpc(id))
+    for (const payload of [null, [], {}, { sessionId: '' }, { sessionId, parentSessionId: 'other' }, { sessionId: 'a\n' }]) {
+      expect(await RunRpcMethod(service.jev, 'taskIndex', new AbortController().signal, payload, { taskIndex: read })).toMatchObject({ ok: false, error: { code: 'gateway/bad-request' } })
+    }
+    const controller = new AbortController(); controller.abort()
+    expect(await RunRpcMethod(service.jev, 'taskIndex', controller.signal, { sessionId }, { taskIndex: read })).toMatchObject({ ok: false, error: { code: 'gateway/cancelled' } })
+    expect(read).not.toHaveBeenCalled()
+    expect(await RunRpcMethod(service.jev, 'taskIndex', new AbortController().signal, { sessionId })).toMatchObject({ ok: false, error: { code: 'swarm/unavailable' } })
   })
 })

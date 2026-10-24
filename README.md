@@ -10,8 +10,15 @@
 
 DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文专家（谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔），用任务卡、门禁和真实证据决定是否验收；模型路由按你的订阅配置多层回退，故障时立即切到可用备用，最后一个可用模型短时故障时在预算内等待恢复。
 
-- 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.2）
+- 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.3）
 - 新建会话选「百工模式」即可使用；Jev API key 可选
+
+### 3.1.2 的变化
+
+- 原生“任务进度”Tab集中六个图表视角，按需查看任务、版本、节点状态和证据流；rc.3窄屏可从“更多视图”进入。
+- 聊天与Tab共享只读读取，支持取消、过期提示、连接隔离和失败恢复；关闭视图不停止长期任务。
+- 技能/工具候选保留来源与隔离元数据，不能通过文本复核激活或自动执行。
+- 吸收Ruflo的工作区、只读投影与来源化候选设计，详见[本版变化与后续路线](docs/3.1.2-任务进度与后续路线.md)。
 
 ### 3.1.1 的变化
 
@@ -130,8 +137,15 @@ MIT，见 [LICENSE](LICENSE)。内嵌的 Jev 工具改编自 jev-mcp 0.2.1（MIT
 
 A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" leads 12 Chinese-named experts (requirements, architecture, math, code exploration, research, vision, complex implementation, command execution, small edits, independent review, verification, copywriting) and accepts work only on evidence: task cards, hard gates and real command results. Each role has a multi-layer model chain built from your subscriptions; failures switch to a usable backup immediately, and a short outage of the last usable model is waited out within a budget.
 
-- Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.2 recommended)
+- Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.3 recommended)
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
+
+### What's new in 3.1.2
+
+- A native Task progress view brings six diagram perspectives together, with task selection and version-bound evidence. On narrow rc.3 layouts it can appear under More views.
+- Shared read-only loading adds cancellation, stale snapshots and connection isolation without stopping long-running work.
+- Tool and skill proposals remain quarantined metadata; text reviews cannot activate or execute them.
+- Adopts Ruflo-inspired workspace, read-projection and provenance principles without adding another runtime.
 
 ### What's new in 3.1.1
 

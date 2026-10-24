@@ -1,6 +1,7 @@
 // 流程是宿主状态的派生只读视图；RPC 失败时保留真实工具结果与源码，不伪造通过状态。
 const React = require('react')
 const h = React.createElement
+const { retainTaskViewStore } = require('@swarm/task-view-store')
 let MarkdownText
 try { MarkdownText = require('@deepseek-ai/dsh-client-ui-primitives').MarkdownText } catch { MarkdownText = undefined }
 
@@ -186,40 +187,6 @@ const exportDiagramSnapshot = (bundle) => {
   setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-/** One outstanding transport per component; obsolete queued reads never dispatch after cleanup. */
-const createTaskLoader = () => {
-  let pending
-  const load = (request, active) => {
-    if (!active()) return Promise.reject(new Error('Task view disposed'))
-    if (pending !== undefined) return pending.promise.catch(() => undefined).then(() => load(request, active))
-    const entry = { promise: undefined }
-    entry.promise = Promise.resolve().then(() => { if (!active()) throw new Error('Task view disposed'); return request() }).finally(() => { if (pending === entry) pending = undefined })
-    pending = entry
-    return entry.promise
-  }
-  return { load }
-}
-
-/** Poll after a successful response, never while a request is pending. Error/timeout requires manual retry. */
-const createTaskPoller = ({ request, onValue, onError, intervalMs = 5000, timeoutMs = 15000 }) => {
-  let disposed = false
-  let timer
-  let timeout
-  const run = () => {
-    if (disposed) return
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') { timer = setTimeout(run, intervalMs); return }
-    let expired = false
-    timeout = setTimeout(() => { if (!disposed) { expired = true; onError(new Error('Task view timed out; refresh manually')) } }, timeoutMs)
-    Promise.resolve().then(() => request(() => !disposed && !expired)).then((value) => {
-      if (disposed || expired) return
-      clearTimeout(timeout)
-      if (onValue(value) !== false) timer = setTimeout(run, intervalMs)
-    }).catch((error) => { if (!disposed && !expired) { clearTimeout(timeout); onError(error) } })
-  }
-  run()
-  return () => { disposed = true; clearTimeout(timer); clearTimeout(timeout) }
-}
-
 /** 分开显示代码检查和两类模型意见；没有结果时明确未审核。 */
 const getPlanningReviewView = (review) => {
   const verdict = (value) => ['pass', 'changes_requested', 'unknown', 'needs-clarification', 'review_required', 'unavailable'].includes(value) ? value : 'unknown'
@@ -258,91 +225,137 @@ function PlanningReviewPanel ({ review, t }) {
       h('ul', { style: { paddingLeft: 20 } }, ...value.errors.map((error, index) => h('li', { key: `error-${index}` }, error)), ...value.findings.map((finding, index) => h('li', { key: `finding-${index}` }, `${finding.severity ?? ''} · ${finding.location || translate('unknown')}：${finding.issue ?? ''}`, typeof finding.evidence === 'string' ? h('p', null, finding.evidence) : null, typeof finding.suggestion === 'string' ? h('p', null, finding.suggestion) : null)))))
 }
 
-/** 只从当前会话 RPC 读取；旧响应和卸载后的结果不能覆盖最新视图。 */
-function TaskFlowRow (props) {
-  const { node, sessionId, loadTask, t } = props
-  const translate = typeof t === 'function' ? t : (key) => zh[key] ?? key
-  const data = node?.data
-  const [view, setView] = React.useState(null)
-  const [error, setError] = React.useState(null)
+const EMPTY_TASK_SNAPSHOT = Object.freeze({ value: null, status: 'idle', error: null, updatedAt: null })
+const NO_SUBSCRIBE = () => () => undefined
+const getEmptySnapshot = () => EMPTY_TASK_SNAPSHOT
+const DIAGRAM_KINDS = ['orchestration', 'workflow', 'architecture', 'sequence', 'dataflow', 'lifecycle']
+Object.assign(zh, { historical: '历史工具记录 / 被动只读缓存', contractDetails: '任务合同与规划审核', currentBlock: '当前阻塞', progressTab: '任务进度', openProgress: '请打开「任务进度」选项卡查看完整图表', noRecord: '当前任务未记录此视角。', nodeDetails: '节点详情', selectNode: '选择节点查看依赖与当前事实', dependencies: '依赖', noDependencies: '无前置依赖', lastUpdated: '最近更新', live: '实时快照', settledSnapshot: '终态快照', refreshing: '正在刷新', offline: '连接已断开', idle: '尚未读取', unavailableSnapshot: '尚无可用快照', staleSnapshot: '过期快照', readonly: '只读展示；不会批准、派发、恢复或完成任务。' })
+Object.assign(en, { historical: 'Historical tool record / passive cache', contractDetails: 'Task contract and planning review', currentBlock: 'Current block', progressTab: 'Task progress', openProgress: 'Open the Task progress tab for all diagrams', noRecord: 'This view was not recorded for the task.', nodeDetails: 'Node details', selectNode: 'Select a node to inspect dependencies and observed state', dependencies: 'Dependencies', noDependencies: 'No dependencies', lastUpdated: 'Last updated', live: 'Current snapshot', settledSnapshot: 'Settled snapshot', refreshing: 'Refreshing', offline: 'Disconnected', idle: 'Not loaded', unavailableSnapshot: 'No valid snapshot yet', staleSnapshot: 'Stale snapshot', readonly: 'Read only; does not approve, delegate, resume or complete tasks.' })
+
+const validateTaskView = (value) => {
+  if (value?.diagrams !== undefined && getDiagramBundle(value) === null) throw new Error('Task diagram binding or progress mismatch')
+  return value
+}
+const useTaskSnapshot = (store, root, task, options) => {
+  const passive = options?.passive === true
+  const source = React.useMemo(() => typeof root === 'string' && typeof task === 'string' ? store?.task(root, task, { passive }) : undefined, [store, root, task, passive])
+  return { snapshot: React.useSyncExternalStore(source?.subscribe ?? NO_SUBSCRIBE, source?.getSnapshot ?? getEmptySnapshot), source }
+}
+
+function TaskProgressSummary ({ bundle, t }) {
+  if (bundle === null) return null
+  return h('div', { 'data-swarm-task-progress': '', style: { margin: '10px 0', fontSize: 13 } },
+    h('strong', null, bundle.progress.percent === null ? t('progressUnknown') : `${t('progress')}：${bundle.progress.completed}/${bundle.progress.total} (${bundle.progress.percent}%)`),
+    bundle.progress.percent === null ? null : h('progress', { value: bundle.progress.completed, max: bundle.progress.total, style: { display: 'block', width: '100%', margin: '6px 0' }, 'aria-label': t('progress') }),
+    h('p', { style: { margin: '4px 0' } }, Object.entries(bundle.progress.statuses).map(([status, count]) => `${t(status === 'pending' ? 'nodePending' : status === 'unknown' ? 'unknownNode' : status)} ${count}`).join(' · ')),
+    h('small', null, t('progressBoundary')))
+}
+
+function Freshness ({ snapshot, t }) {
+  const settled = snapshot.value?.acceptance?.status === 'accepted' || snapshot.value?.acceptance?.decision === 'incomplete'
+  const label = snapshot.status === 'stale' ? 'staleSnapshot' : snapshot.status === 'unavailable' ? 'unavailableSnapshot' : snapshot.status === 'live' && settled ? 'settledSnapshot' : snapshot.status
+  return h('p', { style: styles.status, role: 'status', 'aria-live': 'polite', 'data-swarm-freshness': snapshot.status },
+    t(label), snapshot.updatedAt === null ? null : ` · ${t('lastUpdated')} ${new Date(snapshot.updatedAt).toLocaleTimeString()}`,
+    snapshot.error === null ? null : ` · ${snapshot.error}`)
+}
+
+/** 只绘制当前可见视角；源码相同不重新布局，隐藏时取消结果发布而不假称抢占同步解析。 */
+function TaskDiagramPanel ({ view, source, t, preference, setPreference }) {
+  const saved = preference ?? {}
+  const [kind, setKind] = React.useState(saved.kind ?? 'workflow')
+  const [zoom, setZoom] = React.useState(saved.zoom ?? 1)
+  const [selected, setSelected] = React.useState(null)
   const [svg, setSvg] = React.useState(null)
   const [renderError, setRenderError] = React.useState(null)
-  const [refresh, setRefresh] = React.useState(0)
-  const [zoom, setZoom] = React.useState(1)
-  const [diagramKind, setDiagramKind] = React.useState('workflow')
-  const loader = React.useRef(null)
-  if (loader.current === null) loader.current = createTaskLoader()
-  React.useEffect(() => { setView(null); setDiagramKind('workflow'); setZoom(1) }, [sessionId, data?.taskId])
-  React.useEffect(() => {
-    let active = true
-    setError(null)
-    if (typeof sessionId !== 'string' || typeof data?.taskId !== 'string' || typeof loadTask !== 'function') { setError(translate('unavailable')); return () => { active = false } }
-    const stop = createTaskPoller({
-      request: (current) => loader.current.load(() => loadTask(sessionId, data.taskId), () => active && current()),
-      onValue: (value) => {
-        const task = getTaskFromRpc(value, data.taskId)
-        if (active) { setView(task); setError(null) }
-        return task.acceptance?.status !== 'accepted' && task.acceptance?.decision !== 'incomplete'
-      },
-      onError: (cause) => { if (active) { setView(null); setError(String(cause.message ?? cause)) } }
-    })
-    return () => { active = false; stop() }
-  }, [sessionId, data?.taskId, data?.seq, loadTask, refresh])
+  const [visible, setVisible] = React.useState(globalThis.document?.visibilityState !== 'hidden')
   const bundle = getDiagramBundle(view)
-  const diagram = bundle?.views.find((candidate) => candidate.kind === diagramKind)
-  const source = diagram?.mermaid ?? view?.flow?.mermaid ?? view?.mermaid ?? data?.mermaid
+  const diagram = bundle?.views.find((candidate) => candidate.kind === kind)
+  const mermaidSource = bundle === null ? source : diagram?.mermaid
+  const scroll = React.useRef(null)
   React.useEffect(() => {
-    let active = true
-    setSvg(null)
-    setRenderError(null)
-    if (source !== undefined) renderMermaid(source).then((value) => { if (active) setSvg(value) }).catch((cause) => { if (active) setRenderError(String(cause.message ?? cause)) })
-    return () => { active = false }
-  }, [source])
-  if (data === undefined) return null
+    const update = () => setVisible(document.visibilityState !== 'hidden')
+    globalThis.document?.addEventListener?.('visibilitychange', update)
+    return () => globalThis.document?.removeEventListener?.('visibilitychange', update)
+  }, [])
+  React.useEffect(() => {
+    let current = true
+    setSvg(null); setRenderError(null)
+    if (visible && mermaidSource !== undefined) renderMermaid(mermaidSource).then((value) => { if (current) setSvg({ source: mermaidSource, value }) }).catch((error) => { if (current) setRenderError(String(error.message ?? error)) })
+    return () => { current = false }
+  }, [mermaidSource, visible])
+  React.useEffect(() => {
+    if (scroll.current !== null) { scroll.current.scrollTop = saved.scrollTop ?? 0; scroll.current.scrollLeft = saved.scrollLeft ?? 0 }
+  }, [])
+  const changePreference = (nextKind, nextZoom) => {
+    setKind(nextKind); setZoom(nextZoom)
+    setPreference?.({ kind: nextKind, zoom: nextZoom })
+  }
   const definition = view?.flow?.definition ?? view?.workflowDefinition
   const state = view?.flow?.state ?? view?.workflowState
-  // 观察模式不自动审核：没有审核记录时不显示「等待审核」
-  const planningStatus = view?.planningReview?.status ?? (view?.workflowMode === 'enforced' ? 'pending' : 'notReviewed')
-  const markdown = getTaskMarkdown(view, data.text)
-  return h('section', { style: styles.card, 'data-swarm-task-flow': data.taskId, 'aria-label': translate('title') },
-    h('div', { style: styles.header }, h('strong', null, `${translate('title')} · ${data.taskId}`), h('span', { style: styles.status, 'data-planning-status': view === null ? 'pending' : planningStatus }, translate(view === null ? 'pending' : planningStatus)), h('button', { type: 'button', style: styles.button, onClick: () => setRefresh((value) => value + 1) }, translate('refresh'))),
-    error === null ? view === null ? h('p', { role: 'status' }, translate('loading')) : null : h('p', { role: 'status' }, `${translate('unavailable')}：${error}`),
+  const step = definition?.nodes?.find((item) => item.id === selected)
+  return h('div', { 'data-swarm-diagram-panel': '' },
+    bundle === null ? view?.diagrams === undefined ? null : h('p', { role: 'status' }, t('diagramBindingMismatch')) : h('div', { style: { ...styles.header, margin: '10px 0' } },
+      h('label', null, `${t('diagramType')} `, h('select', { value: kind, onChange: (event) => changePreference(event.target.value, 1), 'aria-label': t('diagramType'), 'data-swarm-diagram-type': '', style: { minHeight: 36, maxWidth: '100%' } }, ...DIAGRAM_KINDS.map((item) => h('option', { key: item, value: item }, `${t(item)}${bundle.views.some((candidate) => candidate.kind === item) ? '' : ` · ${t('noRecord')}`}`)))),
+      h('button', { type: 'button', style: styles.button, onClick: () => exportDiagramSnapshot(bundle) }, t('exportSnapshot'))),
+    bundle !== null && diagram === undefined ? h('p', { role: 'status', 'data-swarm-missing-view': kind }, t('noRecord')) : null,
+    diagram === undefined ? null : h('p', { style: styles.status, 'data-swarm-diagram-basis': diagram.kind }, `${diagram.basis}${diagram.truncated > 0 ? `；${t('omitted')} ${diagram.truncated}` : ''} · ${bundle.snapshotDigest.slice(0, 12)}`),
+    bundle?.diagnostics.length > 0 ? h('details', { 'data-swarm-diagram-diagnostics': '' }, h('summary', null, `${t('deviations')} (${bundle.diagnostics.length})`), h('ul', null, ...bundle.diagnostics.map((item, index) => h('li', { key: index }, `${item.code}${item.nodeId === undefined ? '' : ` · ${item.nodeId}`}：${item.message}`)))) : null,
+    svg === null || svg.source !== mermaidSource || !visible ? null : h('div', null,
+      h('div', { style: styles.header }, h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, disabled: zoom >= 3, onClick: () => changePreference(kind, Math.min(3, zoom + 0.5)) }, t('zoomIn')), h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, disabled: zoom <= 1, onClick: () => changePreference(kind, Math.max(1, zoom - 0.5)) }, t('zoomOut')), h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, onClick: () => changePreference(kind, 1) }, t('fit'))),
+      h('div', { ref: scroll, style: { ...styles.diagram, maxHeight: '65vh', overflow: 'auto' }, tabIndex: 0, 'aria-label': t('title'), 'data-swarm-diagram-zoom': String(zoom), onScroll: (event) => setPreference?.({ kind, zoom, scrollTop: event.currentTarget.scrollTop, scrollLeft: event.currentTarget.scrollLeft }) }, h('div', { style: { width: `${zoom * 100}%` }, role: 'img', 'aria-label': t(kind), dangerouslySetInnerHTML: { __html: svg.value } }))),
+    renderError === null ? null : h('p', { role: 'status' }, `${t('renderError')}：${renderError}`),
+    Array.isArray(definition?.nodes) ? h('div', { style: { marginTop: 14 } },
+      h('p', { style: styles.status }, t('selectNode')),
+      h('ol', { style: styles.steps }, ...definition.nodes.map((node) => h('li', { key: node.id }, h('button', { type: 'button', 'aria-pressed': node.id === selected, onClick: () => setSelected(node.id), style: { ...styles.button, marginLeft: 0, textAlign: 'left' } }, `${node.label} · ${t((state?.nodes?.[node.id]?.status ?? 'pending') === 'pending' ? 'nodePending' : state.nodes[node.id].status)}`)))),
+      step === undefined ? null : h('section', { 'data-swarm-node-details': step.id, style: styles.card, 'aria-label': t('nodeDetails') }, h('strong', null, `${step.id} · ${step.label}`), h('p', null, `${step.operation}${step.role === undefined ? '' : ` · ${step.role}`}`), h('p', null, `${t('dependencies')}：${step.dependsOn?.join('、') || t('noDependencies')}`), state?.nodes?.[step.id]?.reason === undefined ? null : h('p', null, state.nodes[step.id].reason))) : null,
+    mermaidSource === undefined ? null : h('details', { 'data-swarm-mermaid-source': '' }, h('summary', null, t('source')), h('pre', { style: styles.source }, mermaidSource)))
+}
+
+function TaskFlowContent ({ taskId, fallback = '', historicalSource, snapshot = EMPTY_TASK_SNAPSHOT, onRefresh, t, compact = false, progressPage = false, source }) {
+  const translate = typeof t === 'function' ? t : (key) => zh[key] ?? key
+  const view = snapshot.value
+  const planningStatus = compact ? 'historical' : view?.planningReview?.status ?? (view?.workflowMode === 'enforced' ? 'pending' : 'notReviewed')
+  const bundle = getDiagramBundle(view)
+  const markdown = compact ? fallback : getTaskMarkdown(view, fallback)
+  const contract = [
     MarkdownText === undefined ? h('pre', { style: styles.source }, markdown) : h(MarkdownText, { text: markdown, streaming: false, labels: EMPTY_LABELS, variant: 'compact' }),
-    h(PlanningReviewPanel, { review: view?.planningReview, t }),
-    bundle === null ? null : h('div', { 'data-swarm-task-progress': '', style: { margin: '10px 0', fontSize: 13 } },
-      h('strong', null, bundle.progress.percent === null ? translate('progressUnknown') : `${translate('progress')}：${bundle.progress.completed}/${bundle.progress.total} (${bundle.progress.percent}%)`),
-      bundle.progress.percent === null ? null : h('progress', { value: bundle.progress.completed, max: bundle.progress.total, style: { display: 'block', width: '100%', margin: '6px 0' }, 'aria-label': translate('progress') }),
-      h('p', { style: { margin: '4px 0' } }, Object.entries(bundle.progress.statuses).map(([status, count]) => `${translate(status === 'pending' ? 'nodePending' : status === 'unknown' ? 'unknownNode' : status)} ${count}`).join(' · ')),
-      h('small', null, translate('progressBoundary'))),
-    view?.stateRefreshRequired === true ? h('p', { role: 'status', 'data-swarm-projection-pending': '' }, translate('projectionPending')) : null,
-    bundle === null ? view?.diagrams === undefined ? null : h('p', { role: 'status' }, translate('diagramBindingMismatch')) : h('div', { style: { ...styles.header, margin: '10px 0' } },
-      h('label', null, `${translate('diagramType')} `, h('select', { value: diagramKind, onChange: (event) => { setDiagramKind(event.target.value); setZoom(1) }, 'aria-label': translate('diagramType'), 'data-swarm-diagram-type': '', style: { minHeight: 36, maxWidth: '100%' } }, ...bundle.views.map((candidate) => h('option', { key: candidate.kind, value: candidate.kind }, translate(candidate.kind))))),
-      h('button', { type: 'button', style: styles.button, onClick: () => exportDiagramSnapshot(bundle) }, translate('exportSnapshot'))),
-    diagram === undefined ? null : h('p', { style: styles.status, 'data-swarm-diagram-basis': diagram.kind }, `${diagram.basis}${diagram.truncated > 0 ? `；${translate('omitted')} ${diagram.truncated}` : ''} · ${bundle.snapshotDigest.slice(0, 12)}`),
-    bundle?.diagnostics.length > 0 ? h('details', { 'data-swarm-diagram-diagnostics': '' }, h('summary', null, `${translate('deviations')} (${bundle.diagnostics.length})`), h('ul', null, ...bundle.diagnostics.map((item, index) => h('li', { key: index }, `${item.code}${item.nodeId === undefined ? '' : ` · ${item.nodeId}`}：${item.message}`)))) : null,
-    svg === null ? null : h('div', null,
-      h('div', { style: styles.header }, h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, disabled: zoom >= 3, onClick: () => setZoom((value) => Math.min(3, value + 0.5)) }, translate('zoomIn')), h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, disabled: zoom <= 1, onClick: () => setZoom((value) => Math.max(1, value - 0.5)) }, translate('zoomOut')), h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, onClick: () => setZoom(1) }, translate('fit'))),
-      h('div', { style: styles.diagram, tabIndex: 0, 'aria-label': translate('title'), 'data-swarm-diagram-zoom': String(zoom) }, h('div', { style: { width: `${zoom * 100}%` }, role: 'img', 'aria-label': translate('title'), dangerouslySetInnerHTML: { __html: svg } }))),
-    renderError === null ? null : h('p', { role: 'status' }, `${translate('renderError')}：${renderError}`),
-    Array.isArray(definition?.nodes) ? h('ol', { style: styles.steps }, ...definition.nodes.map((step) => h('li', { key: step.id }, `${step.label} · ${translate((state?.nodes?.[step.id]?.status ?? 'pending') === 'pending' ? 'nodePending' : state.nodes[step.id].status)}${state?.nodes?.[step.id]?.reason === undefined ? '' : `：${state.nodes[step.id].reason}`}`))) : null,
-    source === undefined ? null : h('details', { 'data-swarm-mermaid-source': '' }, h('summary', null, translate('source')), h('pre', { style: styles.source }, source)))
+    compact ? null : h(PlanningReviewPanel, { review: view?.planningReview, t: translate })
+  ]
+  const progress = h(TaskProgressSummary, { bundle, t: translate })
+  const pending = view?.stateRefreshRequired === true ? h('p', { role: 'status', 'data-swarm-projection-pending': '' }, translate('projectionPending')) : null
+  const blocker = view?.blockedRecovery?.active === true && typeof view.blockedRecovery.summary === 'string' ? h('p', { role: 'status', 'data-swarm-current-block': '' }, `${translate('currentBlock')}：${view.blockedRecovery.summary}`) : null
+  const canvas = compact ? h('p', { style: styles.status }, translate('openProgress')) : h(TaskDiagramPanel, { key: taskId, view, source: view?.flow?.mermaid ?? view?.mermaid ?? historicalSource, t: translate, preference: source?.readPreference(), setPreference: source?.setPreference })
+  return h('section', { style: styles.card, 'data-swarm-task-flow': taskId, 'aria-label': translate('title') },
+    h('div', { style: styles.header }, h('strong', null, `${translate('title')} · ${taskId}`), h('span', { style: styles.status, 'data-planning-status': compact ? 'historical' : view === null ? 'pending' : planningStatus }, translate(compact ? 'historical' : view === null ? 'pending' : planningStatus)), typeof onRefresh !== 'function' ? null : h('button', { type: 'button', style: styles.button, onClick: onRefresh }, translate('refresh'))),
+    h(Freshness, { snapshot, t: translate }),
+    ...(progressPage ? [progress, blocker, pending, canvas, h('details', { 'data-swarm-contract-details': '' }, h('summary', null, translate('contractDetails')), ...contract)] : [...contract, progress, blocker, pending, canvas]))
+}
+
+function TaskFlowRow (props) {
+  const { sessionId, store, node } = props
+  const data = node?.data
+  const compact = props.progressAvailable === true
+  const { snapshot, source } = useTaskSnapshot(store, sessionId, data?.taskId, { passive: compact })
+  if (data === undefined) return null
+  return h(TaskFlowContent, { taskId: data.taskId, fallback: data.text, historicalSource: data.mermaid, snapshot: compact ? { ...snapshot, status: 'historical' } : snapshot, source, onRefresh: source?.refresh, t: props.t, compact })
 }
 
 const inject = ['slots', 'locale', 'uiConversation', 'connection']
 function apply (ctx) {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'swarm-task-flow: dictionaries')
   ctx.effect(() => ctx.uiConversation.events.register(taskFlowDefinition), 'swarm-task-flow: event projection')
-  const loadTask = async (sessionId, taskId) => {
-    const result = await ctx.get('connection').rpc.call('/api', 'swarm.taskView', { sessionId, taskId })
-    if (result?.ok !== true) throw new Error(result?.error?.message ?? 'Task RPC unavailable')
-    return result.value
-  }
+  const retained = retainTaskViewStore(ctx.get('connection'), validateTaskView)
+  ctx.effect(() => retained.release, 'swarm-task-flow: shared reads')
   ctx.slots.inject('conversation.chat.node', function * () {
-    yield ctx.slots.register({ name: 'conversation.chat.node', key: KIND, locale: NS, inject: () => ({ loadTask }) }, TaskFlowRow)
+    yield ctx.slots.register({ name: 'conversation.chat.node', key: KIND, locale: NS, inject: () => ({ store: retained.store, progressAvailable: typeof ctx.slots.entries === 'function' && ctx.slots.entries('conversation.view').some((entry) => entry.options?.id === 'swarm-task-progress') }) }, TaskFlowRow)
   })
 }
 
 exports.inject = inject
 exports.apply = apply
 exports.NS = NS
-exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskFromRpc, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, createTaskLoader, createTaskPoller, TaskFlowRow }
+exports.validateTaskView = validateTaskView
+exports.TaskFlowContent = TaskFlowContent
+exports.useTaskSnapshot = useTaskSnapshot
+exports.dictionaries = { zh, en }
+exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskFromRpc, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, TaskFlowRow, TaskFlowContent, TaskDiagramPanel, TaskProgressSummary, Freshness, validateTaskView, useTaskSnapshot, zh, en, styles, DIAGRAM_KINDS }

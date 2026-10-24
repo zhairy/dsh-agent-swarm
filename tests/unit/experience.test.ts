@@ -2,8 +2,28 @@ import { describe, expect, it } from 'vitest'
 import { createDurableStateStore } from '../../src/state-store.js'
 import { createExperienceRepository, type ExperienceReview, type ExperienceState } from '../../src/experience.js'
 import { SWARM_LAYOUT_OPTIONS } from '../../src/state-chunks.js'
+import { ValidateToolCandidate, type ToolCandidateMetadata } from '../../src/tool-candidate.js'
+
+const toolCandidate: ToolCandidateMetadata = { kind: 'tool', version: 'candidate-1', artifactRefs: ['src/helper.ts'], permissions: ['workspace-read'], testRefs: ['tests/helper.test.ts'], rollback: 'Remove isolated candidate; no runtime activation', evaluation: 'unavailable', executionEnabled: false }
 
 describe('reviewed reusable experiences', () => {
+  it('quarantines bounded tool references, keeps their versions distinct, and refuses text-review promotion', async () => {
+    const store = await createDurableStateStore<ExperienceState>({ directory: '/unused', initialState: { experiences: {} }, enabled: false, ...SWARM_LAYOUT_OPTIONS })
+    const repository = createExperienceRepository(store, { now: () => 1000, verifyReview: () => true })
+    const input = { problemClass: 'tool-candidate', conclusion: 'Bounded wrapper proposal', source: { taskId: 'T1', cardRevision: 1, workflowRevision: 1, artifactDigest: 'a'.repeat(64), authorId: 'author' }, appliesWhen: ['read-only workspace'], doesNotApplyWhen: ['network or production writes'], verification: [], counterexamples: [], operatorVersions: ['1'], toolCandidate, expiresAt: 2000 }
+    const first = await repository.addCandidate(input)
+    expect((await repository.addCandidate(input)).id).toBe(first.id)
+    expect((await repository.addCandidate({ ...input, toolCandidate: { ...toolCandidate, version: 'candidate-2' } })).id).not.toBe(first.id)
+    expect(repository.query({ text: 'wrapper' }).matches).toEqual([])
+    expect(repository.list(undefined, true)).toHaveLength(2)
+    await expect(repository.promote(first.id, { author: 'author', reviewer: 'independent', sourceArtifactDigest: 'a'.repeat(64), reviewArtifactDigest: 'b'.repeat(64), evidenceComplete: true, unresolvedSevere: 0, applicabilityConfirmed: true })).rejects.toMatchObject({ code: 'EXPERIENCE_REVIEW_REQUIRED' })
+    expect(store.read().experiences[first.id]?.status).toBe('candidate')
+    for (const bad of [{ ...toolCandidate, executionEnabled: true }, { ...toolCandidate, evaluation: 'passed' }, { ...toolCandidate, kind: ['skill'] }, { ...toolCandidate, artifactRefs: [] }, { ...toolCandidate, testRefs: ['x'.repeat(513)] }, { ...toolCandidate, command: 'execute-me' }]) {
+      expect(ValidateToolCandidate(bad)).toBe(false)
+      await expect(repository.addCandidate({ ...input, toolCandidate: bad as ToolCandidateMetadata })).rejects.toMatchObject({ code: 'EXPERIENCE_INVALID' })
+    }
+    await store.dispose()
+  })
   it('deduplicates exact live candidates, preserving expired, reviewed and changed-source audit history', async () => {
     let now = 1000
     const store = await createDurableStateStore<ExperienceState>({ directory: '/unused', initialState: { experiences: {} }, enabled: false, ...SWARM_LAYOUT_OPTIONS })

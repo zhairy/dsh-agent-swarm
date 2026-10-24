@@ -13,6 +13,19 @@ const fixture = () => {
 const expected = { rootSessionId: 'root', workspaceId: 'workspace' }
 
 describe('saved task/delegation association validation', () => {
+  it('reads legacy v1 without candidates and rejects activated or malformed candidate metadata on recovery', () => {
+    const state = fixture()
+    const id = '123e4567-e89b-42d3-a456-426614174000'
+    const candidate = { id, problemClass: 'tool-candidate', conclusion: 'quarantined only', source: { taskId: 'T-1', cardRevision: 1, workflowRevision: 1, artifactDigest: 'a'.repeat(64) }, appliesWhen: ['finite scope'], doesNotApplyWhen: [], verification: [], counterexamples: [], operatorVersions: ['1'], status: 'candidate', createdAt: 1, expiresAt: 2,
+      toolCandidate: { kind: 'tool', version: '1', artifactRefs: ['proposal.md'], permissions: [], testRefs: ['regression'], rollback: 'Discard', evaluation: 'unavailable', executionEnabled: false } }
+    Object.assign(state.experiences, { [id]: candidate })
+    expect(validateFeatureState(state, expected)).toBe(true)
+    candidate.toolCandidate.executionEnabled = true
+    expect(validateFeatureState(state, expected)).toBe(false)
+    candidate.toolCandidate.executionEnabled = false
+    candidate.status = 'validated'
+    expect(validateFeatureState(state, expected)).toBe(false)
+  })
   it('accepts a complete one-to-one task ownership index, including an empty task', () => {
     const state = fixture()
     expect(validateFeatureState(state, expected)).toBe(true)
