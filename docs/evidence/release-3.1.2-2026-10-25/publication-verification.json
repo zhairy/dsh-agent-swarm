@@ -1,0 +1,46 @@
+{
+  "url": "https://github.com/zhairy/dsh-agent-swarm/releases/tag/v3.1.2",
+  "anonymous": true,
+  "githubCredentialsSent": false,
+  "curlConfigDisabled": true,
+  "allFiveFilesByteIdentical": true,
+  "checksumsVerified": 4,
+  "assets": [
+    {
+      "name": "dsh-agent-swarm.tgz",
+      "bytes": 1339511,
+      "sha256": "32cb1913c337f0ca8d93d8c2c2d5c11de237c86a0475a2afc2f6ae3980dacb69",
+      "matchesLocal": true
+    },
+    {
+      "name": "RELEASE-NOTES.zh-CN.md",
+      "bytes": 1641,
+      "sha256": "6ca3d630dfdb87921bd1e66a56e04c445da4493e8f72997b9fa6ac2cbc434c3b",
+      "matchesLocal": true
+    },
+    {
+      "name": "RELEASE-NOTES.en.md",
+      "bytes": 1371,
+      "sha256": "3031f361d3325ab1e5c8518ee6169bf712bbc82d605b7fe2016a4081ae682034",
+      "matchesLocal": true
+    },
+    {
+      "name": "release-manifest.json",
+      "bytes": 4951,
+      "sha256": "af41a1d710169fc87575faf839ec47bc6567db7e3e39628878338e739522cfd3",
+      "matchesLocal": true
+    },
+    {
+      "name": "SHA256SUMS",
+      "bytes": 349,
+      "sha256": "5b47d242e162c96a3156587187e17812b90930d6e1272b4899b47142208406ad",
+      "matchesLocal": true
+    }
+  ],
+  "published": true,
+  "publishedAt": "2026-10-24T20:24:29Z",
+  "mainCommit": "f3c5db8150050585f20b18a45f64a3560533b74c",
+  "releaseBranchCommit": "f3c5db8150050585f20b18a45f64a3560533b74c",
+  "peeledTagCommit": "f3c5db8150050585f20b18a45f64a3560533b74c",
+  "remoteRefsAgree": true
+}

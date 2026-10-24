@@ -1,0 +1,11 @@
+{
+  "restartAt": "2026-10-24T20:05:57.137Z",
+  "oldPid": 4083898,
+  "newPid": 4093920,
+  "freshMemorySessionsPreserved": 0,
+  "quantVersion": "0.90.0+rc3.local.1",
+  "bundleCount": 39,
+  "bundleOrderUnchanged": true,
+  "installStatus": "exit0",
+  "frozenLockPassed": true
+}

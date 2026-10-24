@@ -1,0 +1,11 @@
+{
+  "version": "3.1.2",
+  "serverExportsImported": 4,
+  "browserRegistrationChecked": true,
+  "browserFactoryExecutedInNode": false,
+  "browserExecution": "covered separately by real rc.3 Web QA",
+  "compiledJsMatch": 81,
+  "requiredModules": true,
+  "clientHasProgress": true,
+  "productionChanged": false
+}

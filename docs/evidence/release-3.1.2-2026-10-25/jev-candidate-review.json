@@ -1,0 +1,952 @@
+{
+  "schemaVersion": 1,
+  "reviewer": "independent-agent-final_jev_review",
+  "reviewedAt": "2026-10-24T19:39:28.357Z",
+  "startedAt": "2026-10-24T19:36:43.031Z",
+  "timezone": "Asia/Shanghai",
+  "scope": "fixed candidate source and recorded bounded test evidence; no production or release completion certification",
+  "skill": {
+    "name": "typesafe-ai",
+    "path": "/home/zhairy/.agents/skills/typesafe-ai/SKILL.md",
+    "liveDocs": [
+      "https://docs.typesafe.ai/llms.txt",
+      "https://docs.typesafe.ai/primitives/noul",
+      "https://docs.typesafe.ai/confidence"
+    ],
+    "principle": "typed output and probability/concentration are not truth, execution permission or completion proof"
+  },
+  "payload": {
+    "reviewScope": "对固定提交3.1.2候选进行设计/源码与已记录候选测试证据的语义复审。不是部署授权、独立运行测试的替代、生产完成证明或安全沙箱认证。模型只能评估本payload，不能读取仓库/生产进程。",
+    "sourceCommit": "68a9391a43f8d284f20d2bb2fb248ea363c30fe7",
+    "candidateVersion": "3.1.2",
+    "targetHost": "0.2.1-rc.3",
+    "clientSha256": "c579841b6fac0731b8b480f1e670581eab3c3662762e89b5de162711170dd811",
+    "rufloCommit": "fe99f748c577158ec3e517c7b421670a4601f54f",
+    "sourceFacts": [
+      "Ruflo research checkout HEAD equals fixed commit. Task.complete only checks running then sets completed/output; neural judge explicitly uses rule-based qualityScore/positiveRatio. Guidance observations are verified:false and learningEligible:false. Adoption document states principles only, no Ruflo runtime dependency/source copying/second executor.",
+      "Native task progress uses public conversation.view id swarm-task-progress order20. Root-only local UI guard requires tian-shu preset, public session hook, no subagent. Six selectors use one authoritative taskView snapshot, only selected Mermaid SVG is drawn; missing orchestration shows not recorded. Inline and Tab retain same WeakMap(connection) store.",
+      "共享读取Store cap8含目录；成功5秒、deadline15秒、2/5/15秒退避。active仅非passive订阅；compact历史只观察已有缓存，不分配或发请求。每generation/root/task单飞，取消不合作保留pending直到结算；权限拒绝不周期重试；目录minimumBinding拒绝旧正文，终态只对当前live快照成立。",
+      "RPC taskIndex accepts bounded sessionId only and pre-admission AbortSignal check. Service requires already registered or actual host-loaded root agent with matching id and isRootTianShu, then ensureFeatures restores validated persisted/handoff state without LLM dispatch. Directory returns task binding/title/status only. Owner transport authentication and target-root validation are not per-tenant fine-grained ACL.",
+      "record_tool_candidate requires enabled experience, actual root, no blind binding, current task versions, complete current artifact snapshot and cancellation checks inside taskLock. Metadata is strict bounded kind/version/artifactRefs/permissions/testRefs/rollback/evaluation=unavailable/executionEnabled=false. Artifact references are metadata, not authorization or proof those referenced tests executed.",
+      "Experience repository promotes any toolCandidate by immediate EXPERIENCE_REVIEW_REQUIRED even if a caller supplies perfect review facts. Reviewed memory query excludes toolCandidate before recall. V1 restoration accepts absent candidate field but validates present metadata and rejects validated tool candidates. No evaluator, sandbox, automatic loader or tool execution is implemented for candidates.",
+      "Memory handoff only adds literal 3.1.2 to explicit source-version whitelist; schema/checksum/root/workspace validation and exactly-once consumption remain in existing path. It is a supported one-time maintenance handoff, not automatic long-term persistence."
+    ],
+    "p1HistoryAndFixes": [
+      {
+        "problem": "compact历史卡主动轮询并锁住8个缓存槽位，第9个任务不可读。",
+        "fix": "历史卡传passive:true；getSnapshot/getEntry(create=false)不分配；passive订阅不刷新、不锁缓存，活动订阅才使active成立。旧宿主无Tab的inline仍主动读取。",
+        "independentResult": {
+          "id": "compact-historical-cards",
+          "passed": true,
+          "periodicReadsWithProgressTabHidden": 0,
+          "ninthTaskStatus": "live"
+        }
+      },
+      {
+        "problem": "目录版本4先已知，迟到版本3 accepted正文被当live且终态停止轮询。",
+        "fix": "Store保存按三版本分量单调的minimumBinding；落后正文不发布为live。只有live且不落后目录的终态可停止轮询。binding变化在当前transport结算后补读，无并发绕过。",
+        "independentResult": {
+          "id": "late-old-terminal",
+          "passed": true,
+          "taskReads": 3,
+          "directoryReads": 192,
+          "knownRevision": 4,
+          "shownRevision": 4,
+          "status": "live"
+        }
+      },
+      {
+        "problem": "桌面节点按钮被宿主左宽度手柄覆盖，脚本无错误不能视作鼠标通过。",
+        "fix": "仅插件自身页relative/zIndex1；不删除手柄或修改宿主DOM。",
+        "independentBrowserResult": {
+          "sameButtonPoint": [
+            414.5,
+            448.9
+          ],
+          "actualMouseClick": true,
+          "hitTag": "BUTTON",
+          "hitIsButton": true,
+          "nodeDetails": "explore",
+          "handleStillPresent": true
+        }
+      }
+    ],
+    "sourceExcerpts": {
+      "client/task-view-store.js:const hasActiveObserver": "const hasActiveObserver = (root, task) => [...observers].some((observer) => !observer.passive && observer.root === root && observer.task === task)\n  const active = (entry) => !disposed && connected() && entry.generation === generation && visible() && hasActiveObserver(entry.root, entry.task)",
+      "client/task-view-store.js:const terminalCurrent": "const terminalCurrent = (entry) => entry.snapshot.status === 'live' && isTerminal(entry.snapshot.value) && !isBehindBinding(entry.snapshot.value, entry.minimumBinding)",
+      "client/task-view-store.js:const handle =": "const handle = (root, task, passive = false) => ({\n    getSnapshot: () => getEntry(root, task, !passive)?.snapshot ?? HISTORICAL,\n    subscribe: (listener) => {\n      const observer = { root, task, listener, passive }; observers.add(observer)\n      const entry = getEntry(root, task, !passive)\n      if (!passive && entry !== undefined && active(entry)) refreshEntry(entry, true)\n      return () => {\n        observers.delete(observer)\n        const current = getEntry(root, task, false)\n        if (!passive && current !== undefined && !hasActiveObserver(root, task)) invalidate(current)\n        trim()\n      }\n    },\n    refresh: passive ? undefined : () => refreshEntry(getEntry(root, task), true),\n    readPreference: () => preferences.get(JSON.stringify([root, task])),\n    setPreference: (value) => {\n      const key = JSON.stringify([root, task]); const previous = preferences.get(key); preferences.delete(key); preferences.set(key, { ...previous, ...value })\n      if (preferences.size > maxEntries) preferences.delete(preferences.keys().next().value)\n    }\n  })",
+      "src/tool-candidate.ts:export interface ToolCandidateMetadata": "export interface ToolCandidateMetadata {\n  kind: 'skill' | 'tool'\n  version: string\n  artifactRefs: string[]\n  permissions: string[]\n  testRefs: string[]\n  rollback: string\n  evaluation: 'unavailable'\n  executionEnabled: false\n}",
+      "src/experience.ts:// 经验复评不等于": "// 经验复评不等于代码沙箱评测；不能沿用文本经验晋升路径装载工具。\n        if (entry?.toolCandidate !== undefined) throw new ExperienceError('EXPERIENCE_REVIEW_REQUIRED', 'Tool evaluation unavailable; candidate remains quarantined and cannot be activated')",
+      "src/memory.ts:if (entry.toolCandidate": "if (entry.toolCandidate !== undefined || entry.status !== 'validated' || entry.expiresAt <= now || entry.createdAt > now || now - entry.createdAt > maxAgeMs\n      || !entry.reviewer || !entry.reviewArtifactDigest || entry.source.taskId === query.excludeTaskId\n      || (query.problemClass !== undefined && entry.problemClass !== query.problemClass)) continue",
+      "src/service.ts:,getTaskIndexForRpc:": ",getTaskIndexForRpc: async (sessionId) => {\n      const registered = sessions.get(sessionId)\n      const root = registered?.rootAgent ?? deps.getAgent?.(sessionId)\n      if (root === undefined || root.id !== sessionId || !isRootTianShu(root)) throw new SwarmError('PERMISSION_DENIED', '该会话不是已登记的百工根会话')\n      if (closing) throw new SwarmError('RECOVERY_REQUIRED', '宿主正在停止，任务目录暂不可用')\n      const session = registered ?? getSession(sessionId)\n      // 只恢复宿主已加载的真实根；新Tab不能靠目录读取启动模型或重放旧委派。\n      await ensureFeatures(session, root)\n      // 浏览器owner通过宿主认证；此处仅返回该已登记根的目录，不遍历其他根或正文。\n      return { rootSessionId: sessionId, tasks: session.store.getTasks().map(task => ({\n        title: task.card.title, ...getTaskBinding(task), status: task.acceptance?.status ?? 'pending'\n      })) }\n    }"
+    },
+    "testEvidence": {
+      "finalBuildAndTypecheck": "root报告通过；本审核检查编译client摘要与最终浏览器绑定一致。",
+      "fullUnit": {
+        "files": 97,
+        "passed": 1333,
+        "failed": 0,
+        "log": ".omc/release-312/unit-final-pointer.log",
+        "logInspected": true
+      },
+      "integration": {
+        "rc2": 44,
+        "rc3Initial": 44,
+        "rc3Final": 44,
+        "filesEach": 8,
+        "supplier": "显式fixture，不是外部Claude/Codex模型稳定性证明",
+        "logsInspected": true
+      },
+      "independentNegative": {
+        "uiP1Replay": true,
+        "candidateNegativeChecks": [
+          "12 concurrent public service registrations deduplicate",
+          "cancelled action writes nothing",
+          "executionEnabled true rejected",
+          "unknown command metadata rejected",
+          "ordinary non-root denied",
+          "16 concurrent repository additions deduplicate",
+          "capacity failure leaves state and sequence unchanged",
+          "independent text review cannot promote tool",
+          "memory recall excludes tool candidate",
+          "no external/model/tool activation",
+          "version race rejects stale source or commits before update"
+        ],
+        "candidatePassed": true,
+        "candidateExternalCalls": 0,
+        "coldDirectory": {
+          "recordedAt": "2026-10-24T19:25:18.918Z",
+          "passed": true,
+          "boundary": "Actual public service and durable disk recovery; loaded Host getAgent identity supplied by isolated fixture, not a full browser or AgentLoop test",
+          "checks": [
+            "unknown root rejected without activation",
+            "tian-shu child with parentSession rejected",
+            "already-loaded real root callback restores durable directory",
+            "directory exposes only metadata",
+            "view preserves revisions and pending review/acceptance",
+            "no model/network/parent activation"
+          ],
+          "modelCalls": 0,
+          "activations": 0,
+          "productionChanged": false
+        }
+      },
+      "realBrowser": {
+        "hostVersion": "0.2.1-rc.3",
+        "localFixtureOnly": true,
+        "sixViews": [
+          {
+            "kind": "workflow",
+            "svgCount": 1
+          },
+          {
+            "kind": "orchestration",
+            "svgCount": 1
+          },
+          {
+            "kind": "architecture",
+            "svgCount": 1
+          },
+          {
+            "kind": "sequence",
+            "svgCount": 1
+          },
+          {
+            "kind": "dataflow",
+            "svgCount": 1
+          },
+          {
+            "kind": "lifecycle",
+            "svgCount": 1
+          }
+        ],
+        "preferenceRestored": true,
+        "crossRootSameT1": "另一真实fixture root使用自己的T-1身份/标题，未串数据。",
+        "chatCompactNewRpc": 0,
+        "ordinaryNewRpc": 0,
+        "reviewerPresetNewRpc": 0,
+        "hiddenNewRpc": 0,
+        "scriptErrors": [],
+        "narrow": {
+          "clientWidth": 390,
+          "progressWidth": 327,
+          "scrollWidth": 390,
+          "svg": true,
+          "viewport": 390
+        },
+        "performance": {
+          "count": 30,
+          "p95Ms": 67.09999996423721,
+          "p99Ms": 67.40000003576279,
+          "boundary": "Isolated DSH rc.3 with local deterministic fixture; headless Chromium, 390x844; not INP or whole-system capacity",
+          "measurement": "DOM change to replaced SVG plus two animation frames"
+        },
+        "blindReviewBoundary": "浏览器验证御史预设受限空态；真实parentAgent盲审完整原生导航端到端未覆盖，单测/隔离服务另有拒绝验证。"
+      },
+      "rc3PackageCompatibility": {
+        "fourLocalPackages": "manifest追加精确rc3兼容，业务文件hash保持；calculator=14，财经stdev0/sharpe null/ROE10%，浏览器17工具注册，订阅五provider",
+        "officialNative": "codex/claude-code rc3隔离安装与注册通过；没有启动真实native生成",
+        "productionChangedByCompatibilityProbe": false
+      },
+      "publicCandidate": {
+        "rootLatestCheckpoint": "最终公开tarball已生成；SHA256=32cb1913c337f0ca8d93d8c2c2d5c11de237c86a0475a2afc2f6ae3980dacb69，1339511bytes，5入口/80依赖模块/缺失0。npm隔离安装仍在进行，生产仍rc2/plugin3.1.1，尚未stage。本轮仅支持准备受控本机部署，不能说已发布。",
+        "reportedBy": "root final checkpoint",
+        "finalTarballSha256": "32cb1913c337f0ca8d93d8c2c2d5c11de237c86a0475a2afc2f6ae3980dacb69",
+        "bytes": 1339511,
+        "closureEntries": 5,
+        "closureModules": 80,
+        "missing": 0,
+        "isolatedInstall": "passed per final root checkpoint; independent tarball npm install, four server export ESM loads, browser entry registration check without executing factory in Node; real browser execution separately QA",
+        "productionDeployment": "not-started",
+        "finalCompiledJsCompared": 81,
+        "finalCompiledMismatches": 0,
+        "newModulesPresent": true,
+        "clientHasNewTab": true,
+        "actualTarballHashRecomputedByReviewer": true
+      }
+    },
+    "maintenanceIncident": {
+      "cause": "维护者inspector VM中的动态import缺回调引起rc2宿主退出/systemd自动重启；另有未设隔离DSH_HOME的web --help读取生产profile并部署preset，均已披露，不能称生产从未被触及。",
+      "recoveryEvidence": {
+        "recordedAt": "2026-10-24T19:30:19.428Z",
+        "passed": true,
+        "readOnly": true,
+        "productionChanged": false,
+        "scope": "Specified maintenance backup and installed 3.1.1 recovery code only; no raw content/identifiers exported",
+        "sourceVersion": "3.1.1",
+        "canonicalStateSha256": "9503c14a1ddc3edfbf4d880cfc2b6fe878232048695acba25a00b13961a39cb3",
+        "receiptChecksumMatched": true,
+        "originalRecoveredStateMatchedByteForByte": true,
+        "installedRecoveryInitializerSha256": "35ecd2c9ff6c93974ce5cf31cce312b154b4dee9130120102b25f4ac98f8af91",
+        "candidateRecoveryFunctionByteIdentical": true,
+        "installedValidatorPassed": true,
+        "counts": {
+          "sessions": 1,
+          "tasks": 4,
+          "delegations": 33,
+          "contexts": 53
+        },
+        "fileBoundary": {
+          "mode": "0600",
+          "parentMode": "0700",
+          "singleLink": true,
+          "currentUid": true
+        },
+        "limits": [
+          "Matches the pre-incident receipt, not proof of any later state",
+          "Does not restore live model processes, leases, active bindings or goal execution",
+          "Formal handoff consumption and post-upgrade UI must be verified separately",
+          "No inspector attached or production process restarted by this verifier"
+        ]
+      },
+      "rawUserStateSentToJev": false,
+      "nextRequired": "正式切换前重新核对running/待答及是否出现新内存状态，保全冲突；受限handoff仅在成功恢复后消费，不重放业务/模型/旧租约。"
+    },
+    "deploymentStateAtReview": {
+      "host": "0.2.1-rc.2",
+      "plugin": "3.1.1",
+      "upgradeExecuted": false,
+      "pendingHandoffStaged": false,
+      "github312Published": false
+    },
+    "remainingReleaseGates": [
+      "已完成最终tarball隔离安装、4服务器导出ESM加载和81编译JS一致性；正式部署继续绑定该tarball与当前审阅client摘要，部署后再核验实际装载版本。",
+      "正式切换前最新running/待答/内存冲突核对、受支持handoff及成功消费收据。",
+      "唯一生产宿主升级rc3、插件3.1.2和39bundles/config顺序保留、实际Web/旧任务只读核对及回滚条件。",
+      "Git提交/标签、release assets、匿名下载与SHA256核对。"
+    ],
+    "interpretationLimits": [
+      "Jev typed输出/高概率不是程序正确性、执行权限或完成证明；低分与screen review原样保留，不重复刷分。",
+      "taskIndex是宿主owner认证加目标根校验，不等于多租户细粒度ACL。",
+      "取消不停止业务，不抢占同步图表/派生计算。",
+      "30个小图夹具DOM样本不是INP或系统容量，也不能把不同轮次差异归因于CSS因果加速。",
+      "工具候选只metadata，引用不是沙箱实测/执行授权；没有自动评测、执行、装载或自我晋升。",
+      "本次没有增加Jev本地限流或费用/使用预算。"
+    ],
+    "sourceSha256": {
+      "client/task-view-store.js": "50659d10168cdb63a225b35560454e9d21c7a9a9f48f9a9b1a2e3c9df5a8a592",
+      "client/task-progress.js": "039975cc9296eb0e20159e540ca16ffc08d97cd81e89df226fa278e82700d16c",
+      "client/task-flow.js": "7d46aeac1706f9936c0676f6d7127993ba6caf9aa30e36ceffe39b5312c0d9d6",
+      "src/service.ts": "fdbbcaf6757f1320a8a34b725a0cf1b194d63ee95941f5c803ee5f553b811c07",
+      "src/rpc.ts": "f6339092d97b505f47cbdba522195989fa0e80b8d531c77b4e677fdccbb393d5",
+      "src/tool-candidate.ts": "9b351eb6c78c6e7eb2c2ae34230746f932859d10afa1ce9400d3e55199e0dccc",
+      "src/experience.ts": "6b333b43fa2cf71d67022c14fc9b241bf598539ae5ba5cad638696419517f6d1",
+      "src/memory.ts": "67001cbca4e80325022b190e6b31b574f317d107eb92de779a0f9814117d2b22",
+      "src/feature-session.ts": "d15d9f1a7aae6bc4c2bbcbaec254a8e6a4aab9979d0fd581be4a9255e7263d04",
+      "src/memory-handoff.ts": "83a1de582a3dd5e84e9f31f6d90af3581fbe21f487bcc757fd348341ecc1fdc7",
+      "package.json": "5da9eb0c4c3a6597aa8f211836ed2d3309be22e21e2361e342c9605ac45bc4b8",
+      "lib/client.js": "c579841b6fac0731b8b480f1e670581eab3c3662762e89b5de162711170dd811",
+      "tests/unit/client-task-progress.test.ts": "86f385c4bcefe5c80cb1db88cf41fff9251706af42b2544059eba091b54269d8",
+      "tests/unit/rpc-task-view.test.ts": "8e94ddf497763d1e9e76aeb9d1618e4e8cf7fbcfc985a4ab196d135cce5088dc",
+      "tests/unit/experience.test.ts": "8e7fc5d93591e6b98cc874688c14ed6cd23a47ed07da67d952bc3a16a141a6f4",
+      "tests/unit/feature-state-validation.test.ts": "5f39170872ee2aa131c05f83f7b88f8011916f1ae6c4ef362185f5db93d8af72",
+      "tests/unit/memory-handoff.test.ts": "5041dc49c54ff7aac5056d233fcde09e62cc4dc614c51b6213f25cef55babbbb",
+      "docs/plans/2026-10-25-ruflo-design-adoption.md": "9650be3cc2929390c9925684874e7ac33920c78b45d35642f8e44bfc5d9c64d3",
+      "PRD/2026-10-25-ruflo-adoption-and-3.1.2.md": "ece449a97699360157a0898d12314e6633a6219422342b99ce12b9b7718fc187"
+    },
+    "evidenceSha256": {
+      "docs/evidence/release-3.1.2-2026-10-25/positive-review.md": "9890256508c138c0cb60a4f0b0c6110590d844f75e75fed5a5fad96e9c2009ea",
+      "docs/evidence/release-3.1.2-2026-10-25/negative-review.md": "d87a112824b42b5560cbaf4e6aa74fbcca75936134f8f7c85d5b7b7f87fa342e",
+      "docs/evidence/release-3.1.2-2026-10-25/maintenance-incident.md": "23b5e168fc94e42ff047c1ffa3927f449a089503fef016f9d589334708c86e2e",
+      "docs/evidence/release-3.1.2-2026-10-25/independent-negative-results.json": "e54aed042d864a87412e4aee4986333a5481fb89b8e9549bb80e08003590631d",
+      "docs/evidence/release-3.1.2-2026-10-25/qa-browser-bindings.json": "eda649c9c432dccc323d44396903bf2314bf7d8e7f983f20320155a027d0fae0",
+      "docs/evidence/release-3.1.2-2026-10-25/qa-browser-verification.json": "0d6e5fc37db61c3a2b0fb88ef14baf30aa6370b117cf6e23281e0476d482c45d",
+      "docs/evidence/release-3.1.2-2026-10-25/qa-final-layout.json": "b88af35d7f4a53bfd2cd7d42dcea586280fa271c789bd4891aee0bee97f4e3fe",
+      "docs/evidence/release-3.1.2-2026-10-25/qa-pointer-fixed.json": "e22311b7c7fe55a518402e93cde23aa7e1167b9c997d3f2a46eb93018b5b92fa",
+      "docs/evidence/release-3.1.2-2026-10-25/host-rc3-compatibility.json": "92bd278be6539c9599d2310a036c71b581fe9f8f5b3b1c5f425249e1319c5caa",
+      ".omc/release-312/unit-final-pointer.log": "5bbfa9c02dc3adf5e8cc7725b7158da5cdbda81cddf9274e8155fec3e3472fe7",
+      ".omc/release-312/integration-rc2.log": "f815dac561ba8ec8b93b3d5dabf11efcbdad7caa334ccb42da95c231325eb865",
+      ".omc/release-312/integration-rc3.log": "ba1ac65091a17eef5e2551d0f0b5f734fc7e1bee3cfe46d1b7429314671724fb",
+      ".omc/release-312/integration-final-rc3.log": "269f230b37667d43d27f56f6c30e01ced1fadbb6c1899d8d85f9979a393540b8"
+    }
+  },
+  "packageEvidence": {
+    "path": ".omc/release-312/package-validation.json",
+    "sha256": "1108fe5e22b26ee28a1215eff56328b7950dd491e51f9c0504f20630005c0fa4",
+    "summary": {
+      "version": "3.1.2",
+      "serverExportsImported": 4,
+      "browserRegistrationChecked": true,
+      "browserFactoryExecutedInNode": false,
+      "compiledJsMatch": 81,
+      "requiredModules": true,
+      "clientHasProgress": true,
+      "productionChanged": false
+    }
+  },
+  "hashing": {
+    "algorithm": "SHA-256",
+    "payloadCanonicalization": "UTF-8 JSON with recursively sorted object keys, ensure_ascii=false, compact separators; computed after payload frozen",
+    "sourceDigestsCheckedAfterCalls": {
+      "mismatches": [],
+      "count": 19
+    },
+    "payloadSha256": "6d98c9199fde8231782757df4d87857f92c045d72bcb31395a45f6adbe3d1746"
+  },
+  "calls": [
+    {
+      "id": "health-before",
+      "tool": "jev_health",
+      "input": {},
+      "raw": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"ok\": true,\n  \"model\": \"jev-latest\",\n  \"answers\": {\n    \"models\": [\n      {\n        \"name\": \"jev-latest\",\n        \"description\": \"The latest iteration of TypeSafe's System One Model: Jev\",\n        \"release_date\": \"2026-09-10T18:38:01.391457+00:00\"\n      },\n      {\n        \"name\": \"jev-preview\",\n        \"description\": \"A preview version of `jev-latest`: should be better in most ways\",\n        \"release_date\": \"2026-09-10T18:39:06.057655+00:00\"\n      }\n    ],\n    \"round_trip_latency_ms\": 705.836\n  },\n  \"usage\": {\n    \"input_tokens\": 0,\n    \"output_tokens\": 0,\n    \"est_cost_usd\": 0.0\n  },\n  \"latency_ms\": 705.848\n}"
+          }
+        ],
+        "structuredContent": {
+          "ok": true,
+          "model": "jev-latest",
+          "answers": {
+            "models": [
+              {
+                "name": "jev-latest",
+                "description": "The latest iteration of TypeSafe's System One Model: Jev",
+                "release_date": "2026-09-10T18:38:01.391457+00:00"
+              },
+              {
+                "name": "jev-preview",
+                "description": "A preview version of `jev-latest`: should be better in most ways",
+                "release_date": "2026-09-10T18:39:06.057655+00:00"
+              }
+            ],
+            "round_trip_latency_ms": 705.836
+          },
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "est_cost_usd": 0
+          },
+          "latency_ms": 705.848
+        },
+        "isError": false
+      },
+      "inputSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "responseSha256": "37d4f66d2690c5bf0f2101e1adae193a60f23c51cd82da5085e27c17c5558fe3"
+    },
+    {
+      "id": "ask-first",
+      "tool": "jev_ask",
+      "input": {
+        "state": {
+          "$ref": "#/payload"
+        },
+        "questions": {
+          "read_only_boundary": {
+            "type": "noul",
+            "instructions": "仅根据payload的源码片段及限定测试证据，本次原生任务进度/共享Store/目录功能是否保持读取投影与业务执行控制分离？不要把候选测试等同生产验收。",
+            "criteria": {
+              "true": "源码与已记录测试支持只读边界，取消/导航不派发、重放或验收任务。",
+              "false": "已提供证据显示观察页面/目录直接取得业务执行或验收权限，或者边界存在明确矛盾。"
+            }
+          },
+          "p1_repairs": {
+            "type": "noul",
+            "instructions": "已披露的三项P1（历史卡占缓存/主动轮询、目录新版本但旧accepted冻结、鼠标被宽度手柄覆盖）是否都有与当前固定client摘要绑定的直接修复证据？这不是宣称所有潜在bug都不存在。",
+            "criteria": {
+              "true": "每项都有对应实现及相应独立重放/真实鼠标证据。",
+              "false": "至少一项仍仅是口头说明、只换测试点、只键盘通过、或证据属于旧client。"
+            }
+          },
+          "tool_quarantine": {
+            "type": "noul",
+            "instructions": "根据严格metadata、promote强拒绝、memory排除和V1恢复校验，本版本工具候选是否仍为不可执行/不可自我晋升的隔离记录？不要把路径引用当真实沙箱结果。"
+          },
+          "deployment_gate": {
+            "type": "choice",
+            "instructions": "结合尚在进行的隔离安装、尚未stage/升级的生产状态以及维护事件，当前候选适合哪一个下一步？判断仅限本payload证据，不赋予执行权限。",
+            "criteria": {
+              "prepare_controlled_deployment": "候选实现与最终tarball隔离安装证据支持准备受控本机部署；仍须最新状态/交接/生产/发布实测，不能说已发布。",
+              "claim_already_released": "可以现在宣布唯一生产宿主、插件和GitHub资产均已部署发布并无损恢复。",
+              "redesign_required": "当前源码证据存在未解决的确定性控制面或隔离缺陷，必须先重新设计再准备部署。",
+              "insufficient_scope_evidence": "即使只准备受控部署，当前payload也缺乏关键候选实现/修复证据。"
+            }
+          },
+          "maintenance_integrity": {
+            "type": "noul",
+            "instructions": "对维护事件的陈述是否保留了事故与恢复边界：明确误操作重启和profile触及，不发送原文，用既有recover/事故前canonicalSHA核对完整状态，并要求正式切换前再检查新状态且不重放业务？"
+          }
+        }
+      },
+      "resultStatus": "fulfilled",
+      "raw": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"read_only_boundary\": {\n      \"type\": \"noul\",\n      \"noul\": 0.87\n    },\n    \"p1_repairs\": {\n      \"type\": \"noul\",\n      \"noul\": 0.88\n    },\n    \"tool_quarantine\": {\n      \"type\": \"noul\",\n      \"noul\": 0.97\n    },\n    \"deployment_gate\": {\n      \"type\": \"choice\",\n      \"choice\": \"prepare_controlled_deployment\",\n      \"confidence\": 1.0,\n      \"probabilities\": {\n        \"prepare_controlled_deployment\": 1.0,\n        \"claim_already_released\": 0.0,\n        \"redesign_required\": 0.0,\n        \"insufficient_scope_evidence\": 0.0\n      }\n    },\n    \"maintenance_integrity\": {\n      \"type\": \"noul\",\n      \"noul\": 0.94\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 8711,\n    \"output_tokens\": 149,\n    \"est_cost_usd\": 0.000365862\n  },\n  \"latency_ms\": 655.013\n}"
+          }
+        ],
+        "structuredContent": {
+          "ok": true,
+          "model": "jev-1.14.0",
+          "answers": {
+            "read_only_boundary": {
+              "type": "noul",
+              "noul": 0.87
+            },
+            "p1_repairs": {
+              "type": "noul",
+              "noul": 0.88
+            },
+            "tool_quarantine": {
+              "type": "noul",
+              "noul": 0.97
+            },
+            "deployment_gate": {
+              "type": "choice",
+              "choice": "prepare_controlled_deployment",
+              "confidence": 1,
+              "probabilities": {
+                "prepare_controlled_deployment": 1,
+                "claim_already_released": 0,
+                "redesign_required": 0,
+                "insufficient_scope_evidence": 0
+              }
+            },
+            "maintenance_integrity": {
+              "type": "noul",
+              "noul": 0.94
+            }
+          },
+          "usage": {
+            "input_tokens": 8711,
+            "output_tokens": 149,
+            "est_cost_usd": 0.000365862
+          },
+          "latency_ms": 655.013
+        },
+        "isError": false
+      },
+      "inputSha256": "a2016f0cefe65a982c43d493b2c40e43329a1ad54f75a238c3146b46577fc97b",
+      "responseSha256": "bfc178fc9c73e871f55ef8531269422b2b8913b01dad4a9f897d5438d61d0a82"
+    },
+    {
+      "id": "check-first",
+      "tool": "jev_check",
+      "input": {
+        "state": {
+          "$ref": "#/payload"
+        },
+        "propositions": {
+          "candidate_scope_consistent": "本次仅吸收固定Ruflo提交的设计原则，不引入Ruflo依赖/第二执行器；插件候选实现与本轮有限验证的结论范围一致。",
+          "new_binding_prevents_old_terminal_freeze": "当前Store的minimumBinding与terminalCurrent，以及独立版本4/旧accepted重放，支持拒收旧终态并继续重取正文。",
+          "historical_cards_do_not_steal_active_capacity": "当前compact/passive逻辑与独立第9任务live重放支持历史卡不再主动轮询/锁住活动容量。",
+          "recovery_evidence_is_not_future_state_proof": "维护完整状态与事故前checksum匹配的证据，不能证明后续没有新增状态，也不恢复活模型/租约/active binding。",
+          "production_release_already_proven": "当前payload已经证明3.1.2在唯一生产rc3宿主部署成功、handoff消费成功且GitHub匿名下载校验通过。",
+          "precise_perf_boundary": "30个夹具SVG替换加两帧的p95/p99仅支持局部交互观察，不能称INP/极限性能或CSS因果提速。"
+        }
+      },
+      "resultStatus": "fulfilled",
+      "raw": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"probabilities\": {\n      \"candidate_scope_consistent\": 0.88,\n      \"new_binding_prevents_old_terminal_freeze\": 0.93,\n      \"historical_cards_do_not_steal_active_capacity\": 0.92,\n      \"recovery_evidence_is_not_future_state_proof\": 0.95,\n      \"production_release_already_proven\": 0.03,\n      \"precise_perf_boundary\": 0.96\n    },\n    \"flags\": [\n      \"candidate_scope_consistent\",\n      \"new_binding_prevents_old_terminal_freeze\",\n      \"historical_cards_do_not_steal_active_capacity\",\n      \"recovery_evidence_is_not_future_state_proof\",\n      \"precise_perf_boundary\"\n    ],\n    \"uncertain\": []\n  },\n  \"usage\": {\n    \"input_tokens\": 8247,\n    \"output_tokens\": 139,\n    \"est_cost_usd\": 0.00034637400000000004\n  },\n  \"latency_ms\": 330.875\n}"
+          }
+        ],
+        "structuredContent": {
+          "ok": true,
+          "model": "jev-1.14.0",
+          "answers": {
+            "probabilities": {
+              "candidate_scope_consistent": 0.88,
+              "new_binding_prevents_old_terminal_freeze": 0.93,
+              "historical_cards_do_not_steal_active_capacity": 0.92,
+              "recovery_evidence_is_not_future_state_proof": 0.95,
+              "production_release_already_proven": 0.03,
+              "precise_perf_boundary": 0.96
+            },
+            "flags": [
+              "candidate_scope_consistent",
+              "new_binding_prevents_old_terminal_freeze",
+              "historical_cards_do_not_steal_active_capacity",
+              "recovery_evidence_is_not_future_state_proof",
+              "precise_perf_boundary"
+            ],
+            "uncertain": []
+          },
+          "usage": {
+            "input_tokens": 8247,
+            "output_tokens": 139,
+            "est_cost_usd": 0.00034637400000000004
+          },
+          "latency_ms": 330.875
+        },
+        "isError": false
+      },
+      "inputSha256": "71ba493e37ddc5763d93d08a667e2d87ae63821c3e31ed1e3b28c6f084ce6efc",
+      "responseSha256": "9bae9be0c9b4fb4a2ecbe6effec84c51ebfee5528821ac792816467f304609f7"
+    },
+    {
+      "id": "classify-first",
+      "tool": "jev_classify",
+      "input": {
+        "state": {
+          "$ref": "#/payload"
+        },
+        "add_other": true,
+        "ensemble": false,
+        "question": "在明确证据层级下，当前3.1.2候选的下一步状态最符合哪一项？不是问模型是否喜欢此项目。",
+        "labels": {
+          "candidate_ready_for_controlled_deployment_preparation": "源码/独立修复重放/隔离宿主与浏览器/最终tarball隔离安装证据支持准备受控部署；最新状态交接/唯一生产部署/发布验收仍是后续门槛。",
+          "candidate_needs_specific_fix": "payload显示当前候选仍有确定性P1控制/隔离/交互缺陷，必须先修复。",
+          "source_only_insufficient": "只有设计或静态源码，没有直接运行证据支持候选路径。",
+          "already_production_released": "payload直接证明唯一生产升级、恢复及GitHub发布已完成。"
+        }
+      },
+      "resultStatus": "fulfilled",
+      "raw": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"choice\": \"candidate_ready_for_controlled_deployment_preparation\",\n    \"confidence\": 1.0,\n    \"probabilities\": {\n      \"candidate_ready_for_controlled_deployment_preparation\": 1.0,\n      \"candidate_needs_specific_fix\": 0.0,\n      \"source_only_insufficient\": 0.0,\n      \"already_production_released\": 0.0,\n      \"other\": 0.0\n    },\n    \"band\": \"act\"\n  },\n  \"usage\": {\n    \"input_tokens\": 8223,\n    \"output_tokens\": 89,\n    \"est_cost_usd\": 0.00034536600000000005\n  },\n  \"latency_ms\": 273.52\n}"
+          }
+        ],
+        "structuredContent": {
+          "ok": true,
+          "model": "jev-1.14.0",
+          "answers": {
+            "choice": "candidate_ready_for_controlled_deployment_preparation",
+            "confidence": 1,
+            "probabilities": {
+              "candidate_ready_for_controlled_deployment_preparation": 1,
+              "candidate_needs_specific_fix": 0,
+              "source_only_insufficient": 0,
+              "already_production_released": 0,
+              "other": 0
+            },
+            "band": "act"
+          },
+          "usage": {
+            "input_tokens": 8223,
+            "output_tokens": 89,
+            "est_cost_usd": 0.00034536600000000005
+          },
+          "latency_ms": 273.52
+        },
+        "isError": false
+      },
+      "inputSha256": "aa9502d2deda2c11ab38f32542ed2df481b79b89a0c7a337fb0e6b6c97ee310d",
+      "responseSha256": "b19f126a707a231c7df21711ff503db1f01bb0595e25229c9dd10bf417d7e40c"
+    },
+    {
+      "id": "match-first",
+      "tool": "jev_match",
+      "input": {
+        "query": "请选择最符合此固定3.1.2候选的范围：{\"commit\":\"68a9391a43f8d284f20d2bb2fb248ea363c30fe7\",\"changes\":[\"Ruflo research checkout HEAD equals fixed commit. Task.complete only checks running then sets completed/output; neural judge explicitly uses rule-based qualityScore/positiveRatio. Guidance observations are verified:false and learningEligible:false. Adoption document states principles only, no Ruflo runtime dependency/source copying/second executor.\",\"Native task progress uses public conversation.view id swarm-task-progress order20. Root-only local UI guard requires tian-shu preset, public session hook, no subagent. Six selectors use one authoritative taskView snapshot, only selected Mermaid SVG is drawn; missing orchestration shows not recorded. Inline and Tab retain same WeakMap(connection) store.\",\"共享读取Store cap8含目录；成功5秒、deadline15秒、2/5/15秒退避。active仅非passive订阅；compact历史只观察已有缓存，不分配或发请求。每generation/root/task单飞，取消不合作保留pending直到结算；权限拒绝不周期重试；目录minimumBinding拒绝旧正文，终态只对当前live快照成立。\",\"RPC taskIndex accepts bounded sessionId only and pre-admission AbortSignal check. Service requires already registered or actual host-loaded root agent with matching id and isRootTianShu, then ensureFeatures restores validated persisted/handoff state without LLM dispatch. Directory returns task binding/title/status only. Owner transport authentication and target-root validation are not per-tenant fine-grained ACL.\",\"record_tool_candidate requires enabled experience, actual root, no blind binding, current task versions, complete current artifact snapshot and cancellation checks inside taskLock. Metadata is strict bounded kind/version/artifactRefs/permissions/testRefs/rollback/evaluation=unavailable/executionEnabled=false. Artifact references are metadata, not authorization or proof those referenced tests executed.\",\"Experience repository promotes any toolCandidate by immediate EXPERIENCE_REVIEW_REQUIRED even if a caller supplies perfect review facts. Reviewed memory query excludes toolCandidate before recall. V1 restoration accepts absent candidate field but validates present metadata and rejects validated tool candidates. No evaluator, sandbox, automatic loader or tool execution is implemented for candidates.\",\"Memory handoff only adds literal 3.1.2 to explicit source-version whitelist; schema/checksum/root/workspace validation and exactly-once consumption remain in existing path. It is a supported one-time maintenance handoff, not automatic long-term persistence.\"],\"p1Repairs\":[{\"problem\":\"compact历史卡主动轮询并锁住8个缓存槽位，第9个任务不可读。\",\"fix\":\"历史卡传passive:true；getSnapshot/getEntry(create=false)不分配；passive订阅不刷新、不锁缓存，活动订阅才使active成立。旧宿主无Tab的inline仍主动读取。\",\"independentResult\":{\"id\":\"compact-historical-cards\",\"passed\":true,\"periodicReadsWithProgressTabHidden\":0,\"ninthTaskStatus\":\"live\"}},{\"problem\":\"目录版本4先已知，迟到版本3 accepted正文被当live且终态停止轮询。\",\"fix\":\"Store保存按三版本分量单调的minimumBinding；落后正文不发布为live。只有live且不落后目录的终态可停止轮询。binding变化在当前transport结算后补读，无并发绕过。\",\"independentResult\":{\"id\":\"late-old-terminal\",\"passed\":true,\"taskReads\":3,\"directoryReads\":192,\"knownRevision\":4,\"shownRevision\":4,\"status\":\"live\"}},{\"problem\":\"桌面节点按钮被宿主左宽度手柄覆盖，脚本无错误不能视作鼠标通过。\",\"fix\":\"仅插件自身页relative/zIndex1；不删除手柄或修改宿主DOM。\",\"independentBrowserResult\":{\"sameButtonPoint\":[414.5,448.9],\"actualMouseClick\":true,\"hitTag\":\"BUTTON\",\"hitIsButton\":true,\"nodeDetails\":\"explore\",\"handleStillPresent\":true}}],\"production\":{\"host\":\"0.2.1-rc.2\",\"plugin\":\"3.1.1\",\"upgradeExecuted\":false,\"pendingHandoffStaged\":false,\"github312Published\":false},\"tarball\":{\"rootLatestCheckpoint\":\"最终公开tarball已生成；SHA256=32cb1913c337f0ca8d93d8c2c2d5c11de237c86a0475a2afc2f6ae3980dacb69，1339511bytes，5入口/80依赖模块/缺失0。npm隔离安装仍在进行，生产仍rc2/plugin3.1.1，尚未stage。本轮仅支持准备受控本机部署，不能说已发布。\",\"reportedBy\":\"root final checkpoint\",\"finalTarballSha256\":\"32cb1913c337f0ca8d93d8c2c2d5c11de237c86a0475a2afc2f6ae3980dacb69\",\"bytes\":1339511,\"closureEntries\":5,\"closureModules\":80,\"missing\":0,\"isolatedInstall\":\"passed per final root checkpoint; independent tarball npm install, four server export ESM loads, browser entry registration check without executing factory in Node; real browser execution separately QA\",\"productionDeployment\":\"not-started\",\"finalCompiledJsCompared\":81,\"finalCompiledMismatches\":0,\"newModulesPresent\":true,\"clientHasNewTab\":true,\"actualTarballHashRecomputedByReviewer\":true},\"remainingGates\":[\"已完成最终tarball隔离安装、4服务器导出ESM加载和81编译JS一致性；正式部署继续绑定该tarball与当前审阅client摘要，部署后再核验实际装载版本。\",\"正式切换前最新running/待答/内存冲突核对、受支持handoff及成功消费收据。\",\"唯一生产宿主升级rc3、插件3.1.2和39bundles/config顺序保留、实际Web/旧任务只读核对及回滚条件。\",\"Git提交/标签、release assets、匿名下载与SHA256核对。\"]}",
+        "question": "哪份范围描述与query中的实际变化及明确边界最吻合？若没有真实匹配则弃权。",
+        "candidates": {
+          "bounded_read_projection_and_quarantined_candidates": "原生任务进度六视角和共享只读Store；真实根目录冷恢复；三项P1已有直接修复证据；技能/工具候选仅受限metadata不可执行；最终tarball隔离安装通过，可准备受控本机部署，仍待生产交接和发布验证。",
+          "autonomous_tool_execution_runtime": "引入Ruflo运行时和第二执行器，模型自动生成、评估、promote和装载任意工具，允许候选直接拥有执行权。",
+          "completed_production_upgrade_and_release": "已在唯一生产rc3升级插件3.1.2，成功消费handoff、保留39bundles并完成GitHub资产匿名下载校验。",
+          "unrelated_dependency_migration": "本次只是前端框架和数据库技术栈替换，没有任务状态或候选隔离功能。"
+        }
+      },
+      "resultStatus": "fulfilled",
+      "raw": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"best_id\": \"bounded_read_projection_and_quarantined_candidates\",\n    \"best_text\": \"原生任务进度六视角和共享只读Store；真实根目录冷恢复；三项P1已有直接修复证据；技能/工具候选仅受限metadata不可执行；最终tarball隔离安装通过，可准备受控本机部署，仍待生产交接和发布验证。\",\n    \"confidence\": 1.0,\n    \"abstain_probability\": 0.0,\n    \"exists\": 0.95,\n    \"windows\": 1,\n    \"exists_by_window\": [\n      0.95\n    ],\n    \"top3\": [\n      {\n        \"id\": \"bounded_read_projection_and_quarantined_candidates\",\n        \"probability\": 1.0\n      },\n      {\n        \"id\": \"autonomous_tool_execution_runtime\",\n        \"probability\": 0.0\n      },\n      {\n        \"id\": \"completed_production_upgrade_and_release\",\n        \"probability\": 0.0\n      }\n    ],\n    \"band\": \"match\"\n  },\n  \"usage\": {\n    \"input_tokens\": 2596,\n    \"output_tokens\": 100,\n    \"est_cost_usd\": 0.00010903200000000001\n  },\n  \"latency_ms\": 242.923\n}"
+          }
+        ],
+        "structuredContent": {
+          "ok": true,
+          "model": "jev-1.14.0",
+          "answers": {
+            "best_id": "bounded_read_projection_and_quarantined_candidates",
+            "best_text": "原生任务进度六视角和共享只读Store；真实根目录冷恢复；三项P1已有直接修复证据；技能/工具候选仅受限metadata不可执行；最终tarball隔离安装通过，可准备受控本机部署，仍待生产交接和发布验证。",
+            "confidence": 1,
+            "abstain_probability": 0,
+            "exists": 0.95,
+            "windows": 1,
+            "exists_by_window": [
+              0.95
+            ],
+            "top3": [
+              {
+                "id": "bounded_read_projection_and_quarantined_candidates",
+                "probability": 1
+              },
+              {
+                "id": "autonomous_tool_execution_runtime",
+                "probability": 0
+              },
+              {
+                "id": "completed_production_upgrade_and_release",
+                "probability": 0
+              }
+            ],
+            "band": "match"
+          },
+          "usage": {
+            "input_tokens": 2596,
+            "output_tokens": 100,
+            "est_cost_usd": 0.00010903200000000001
+          },
+          "latency_ms": 242.923
+        },
+        "isError": false
+      },
+      "inputSha256": "04f34322c622b2ccd9e7813dfdeb134db069eae357aeaa97cc216b5200120bc1",
+      "responseSha256": "c4cdcaed02b66763ed8e84a8897326ab9d9b517b33d0481dfcc6bcabf56c9618"
+    },
+    {
+      "id": "score-first",
+      "tool": "jev_score",
+      "input": {
+        "state": {
+          "$ref": "#/payload"
+        },
+        "question": "按此有序情境量表评估当前候选证据成熟度。没有生产升级/最终消费/发布验收时不能选最高档；分数不是执行权限、正确率或安全保证。",
+        "levels": [
+          "已提供证据表明存在未解决的关键权限、隔离、数据丢失或必要交互缺陷。",
+          "仅有设计/静态代码与自述；缺少直接执行测试证据。",
+          "有局部单测或隔离验证，但当前候选的宿主/UI或关键P1修复证据仍缺失。",
+          "当前固定候选有单测、双宿主集成、独立负向重放、真实夹具浏览器与tarball隔离安装证据，边界清晰；最新状态交接及唯一生产部署/发布尚待完成。",
+          "除候选验证外，当前同一构建已在唯一生产宿主完成受控升级、最新状态交接消费、旧任务Web复核以及GitHub资产匿名校验。"
+        ]
+      },
+      "resultStatus": "fulfilled",
+      "raw": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"score\": 3.0,\n    \"confidence\": 1.0,\n    \"probabilities\": {\n      \"0\": 0.0,\n      \"1\": 0.0,\n      \"2\": 0.0,\n      \"3\": 1.0,\n      \"4\": 0.0\n    },\n    \"legend\": {\n      \"0\": \"已提供证据表明存在未解决的关键权限、隔离、数据丢失或必要交互缺陷。\",\n      \"1\": \"仅有设计/静态代码与自述；缺少直接执行测试证据。\",\n      \"2\": \"有局部单测或隔离验证，但当前候选的宿主/UI或关键P1修复证据仍缺失。\",\n      \"3\": \"当前固定候选有单测、双宿主集成、独立负向重放、真实夹具浏览器与tarball隔离安装证据，边界清晰；最新状态交接及唯一生产部署/发布尚待完成。\",\n      \"4\": \"除候选验证外，当前同一构建已在唯一生产宿主完成受控升级、最新状态交接消费、旧任务Web复核以及GitHub资产匿名校验。\"\n    },\n    \"normalized\": 0.75\n  },\n  \"usage\": {\n    \"input_tokens\": 8241,\n    \"output_tokens\": 17,\n    \"est_cost_usd\": 0.00034612200000000003\n  },\n  \"latency_ms\": 327.424\n}"
+          }
+        ],
+        "structuredContent": {
+          "ok": true,
+          "model": "jev-1.14.0",
+          "answers": {
+            "score": 3,
+            "confidence": 1,
+            "probabilities": {
+              "0": 0,
+              "1": 0,
+              "2": 0,
+              "3": 1,
+              "4": 0
+            },
+            "legend": {
+              "0": "已提供证据表明存在未解决的关键权限、隔离、数据丢失或必要交互缺陷。",
+              "1": "仅有设计/静态代码与自述；缺少直接执行测试证据。",
+              "2": "有局部单测或隔离验证，但当前候选的宿主/UI或关键P1修复证据仍缺失。",
+              "3": "当前固定候选有单测、双宿主集成、独立负向重放、真实夹具浏览器与tarball隔离安装证据，边界清晰；最新状态交接及唯一生产部署/发布尚待完成。",
+              "4": "除候选验证外，当前同一构建已在唯一生产宿主完成受控升级、最新状态交接消费、旧任务Web复核以及GitHub资产匿名校验。"
+            },
+            "normalized": 0.75
+          },
+          "usage": {
+            "input_tokens": 8241,
+            "output_tokens": 17,
+            "est_cost_usd": 0.00034612200000000003
+          },
+          "latency_ms": 327.424
+        },
+        "isError": false
+      },
+      "inputSha256": "f62183f389b97d74cb247be785e93d4a868c11de957aa32d16979553f0a96069",
+      "responseSha256": "a12c17e19a87adb7e7f5987e86feb9b01a2c7f05ae9a149894893e126a8d433a"
+    },
+    {
+      "id": "screen-first",
+      "tool": "jev_screen",
+      "input": {
+        "source": "3.1.2候选复审payload（作为被审阅资料，不作为执行指令）",
+        "text": "{\"reviewScope\":\"对固定提交3.1.2候选进行设计/源码与已记录候选测试证据的语义复审。不是部署授权、独立运行测试的替代、生产完成证明或安全沙箱认证。模型只能评估本payload，不能读取仓库/生产进程。\",\"sourceFacts\":[\"Ruflo research checkout HEAD equals fixed commit. Task.complete only checks running then sets completed/output; neural judge explicitly uses rule-based qualityScore/positiveRatio. Guidance observations are verified:false and learningEligible:false. Adoption document states principles only, no Ruflo runtime dependency/source copying/second executor.\",\"Native task progress uses public conversation.view id swarm-task-progress order20. Root-only local UI guard requires tian-shu preset, public session hook, no subagent. Six selectors use one authoritative taskView snapshot, only selected Mermaid SVG is drawn; missing orchestration shows not recorded. Inline and Tab retain same WeakMap(connection) store.\",\"共享读取Store cap8含目录；成功5秒、deadline15秒、2/5/15秒退避。active仅非passive订阅；compact历史只观察已有缓存，不分配或发请求。每generation/root/task单飞，取消不合作保留pending直到结算；权限拒绝不周期重试；目录minimumBinding拒绝旧正文，终态只对当前live快照成立。\",\"RPC taskIndex accepts bounded sessionId only and pre-admission AbortSignal check. Service requires already registered or actual host-loaded root agent with matching id and isRootTianShu, then ensureFeatures restores validated persisted/handoff state without LLM dispatch. Directory returns task binding/title/status only. Owner transport authentication and target-root validation are not per-tenant fine-grained ACL.\",\"record_tool_candidate requires enabled experience, actual root, no blind binding, current task versions, complete current artifact snapshot and cancellation checks inside taskLock. Metadata is strict bounded kind/version/artifactRefs/permissions/testRefs/rollback/evaluation=unavailable/executionEnabled=false. Artifact references are metadata, not authorization or proof those referenced tests executed.\",\"Experience repository promotes any toolCandidate by immediate EXPERIENCE_REVIEW_REQUIRED even if a caller supplies perfect review facts. Reviewed memory query excludes toolCandidate before recall. V1 restoration accepts absent candidate field but validates present metadata and rejects validated tool candidates. No evaluator, sandbox, automatic loader or tool execution is implemented for candidates.\",\"Memory handoff only adds literal 3.1.2 to explicit source-version whitelist; schema/checksum/root/workspace validation and exactly-once consumption remain in existing path. It is a supported one-time maintenance handoff, not automatic long-term persistence.\"],\"p1HistoryAndFixes\":[{\"problem\":\"compact历史卡主动轮询并锁住8个缓存槽位，第9个任务不可读。\",\"fix\":\"历史卡传passive:true；getSnapshot/getEntry(create=false)不分配；passive订阅不刷新、不锁缓存，活动订阅才使active成立。旧宿主无Tab的inline仍主动读取。\",\"independentResult\":{\"id\":\"compact-historical-cards\",\"passed\":true,\"periodicReadsWithProgressTabHidden\":0,\"ninthTaskStatus\":\"live\"}},{\"problem\":\"目录版本4先已知，迟到版本3 accepted正文被当live且终态停止轮询。\",\"fix\":\"Store保存按三版本分量单调的minimumBinding；落后正文不发布为live。只有live且不落后目录的终态可停止轮询。binding变化在当前transport结算后补读，无并发绕过。\",\"independentResult\":{\"id\":\"late-old-terminal\",\"passed\":true,\"taskReads\":3,\"directoryReads\":192,\"knownRevision\":4,\"shownRevision\":4,\"status\":\"live\"}},{\"problem\":\"桌面节点按钮被宿主左宽度手柄覆盖，脚本无错误不能视作鼠标通过。\",\"fix\":\"仅插件自身页relative/zIndex1；不删除手柄或修改宿主DOM。\",\"independentBrowserResult\":{\"sameButtonPoint\":[414.5,448.9],\"actualMouseClick\":true,\"hitTag\":\"BUTTON\",\"hitIsButton\":true,\"nodeDetails\":\"explore\",\"handleStillPresent\":true}}],\"maintenanceIncident\":{\"cause\":\"维护者inspector VM中的动态import缺回调引起rc2宿主退出/systemd自动重启；另有未设隔离DSH_HOME的web --help读取生产profile并部署preset，均已披露，不能称生产从未被触及。\",\"recoveryEvidence\":{\"recordedAt\":\"2026-10-24T19:30:19.428Z\",\"passed\":true,\"readOnly\":true,\"productionChanged\":false,\"scope\":\"Specified maintenance backup and installed 3.1.1 recovery code only; no raw content/identifiers exported\",\"sourceVersion\":\"3.1.1\",\"canonicalStateSha256\":\"9503c14a1ddc3edfbf4d880cfc2b6fe878232048695acba25a00b13961a39cb3\",\"receiptChecksumMatched\":true,\"originalRecoveredStateMatchedByteForByte\":true,\"installedRecoveryInitializerSha256\":\"35ecd2c9ff6c93974ce5cf31cce312b154b4dee9130120102b25f4ac98f8af91\",\"candidateRecoveryFunctionByteIdentical\":true,\"installedValidatorPassed\":true,\"counts\":{\"sessions\":1,\"tasks\":4,\"delegations\":33,\"contexts\":53},\"fileBoundary\":{\"mode\":\"0600\",\"parentMode\":\"0700\",\"singleLink\":true,\"currentUid\":true},\"limits\":[\"Matches the pre-incident receipt, not proof of any later state\",\"Does not restore live model processes, leases, active bindings or goal execution\",\"Formal handoff consumption and post-upgrade UI must be verified separately\",\"No inspector attached or production process restarted by this verifier\"]},\"rawUserStateSentToJev\":false,\"nextRequired\":\"正式切换前重新核对running/待答及是否出现新内存状态，保全冲突；受限handoff仅在成功恢复后消费，不重放业务/模型/旧租约。\"},\"remainingReleaseGates\":[\"已完成最终tarball隔离安装、4服务器导出ESM加载和81编译JS一致性；正式部署继续绑定该tarball与当前审阅client摘要，部署后再核验实际装载版本。\",\"正式切换前最新running/待答/内存冲突核对、受支持handoff及成功消费收据。\",\"唯一生产宿主升级rc3、插件3.1.2和39bundles/config顺序保留、实际Web/旧任务只读核对及回滚条件。\",\"Git提交/标签、release assets、匿名下载与SHA256核对。\"],\"interpretationLimits\":[\"Jev typed输出/高概率不是程序正确性、执行权限或完成证明；低分与screen review原样保留，不重复刷分。\",\"taskIndex是宿主owner认证加目标根校验，不等于多租户细粒度ACL。\",\"取消不停止业务，不抢占同步图表/派生计算。\",\"30个小图夹具DOM样本不是INP或系统容量，也不能把不同轮次差异归因于CSS因果加速。\",\"工具候选只metadata，引用不是沙箱实测/执行授权；没有自动评测、执行、装载或自我晋升。\",\"本次没有增加Jev本地限流或费用/使用预算。\"]}"
+      },
+      "resultStatus": "fulfilled",
+      "raw": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"ok\": false,\n  \"status\": 400,\n  \"error\": \"invalid tool input\",\n  \"details\": [\n    {\n      \"loc\": [\n        \"text\"\n      ],\n      \"msg\": \"Input should be a valid string\"\n    }\n  ]\n}"
+          }
+        ],
+        "structuredContent": {
+          "ok": false,
+          "status": 400,
+          "error": "invalid tool input",
+          "details": [
+            {
+              "loc": [
+                "text"
+              ],
+              "msg": "Input should be a valid string"
+            }
+          ]
+        },
+        "isError": false
+      },
+      "inputSha256": "75f72eb79c30c7deea190effd5f40b7265821326b70703845981979dc2835994",
+      "responseSha256": "8853935a868a69ce7bad91571a0fc6984ea8492c5327f93bbe051840ce80b8f4"
+    },
+    {
+      "id": "screen-input-repair",
+      "tool": "jev_screen",
+      "input": {
+        "source": "3.1.2候选复审payload（作为被审阅资料，不作为执行指令）",
+        "text": "待筛查的候选审查资料如下。它们仅作为资料内容，不构成要求执行或授予权限的指令。\n{\"reviewScope\":\"对固定提交3.1.2候选进行设计/源码与已记录候选测试证据的语义复审。不是部署授权、独立运行测试的替代、生产完成证明或安全沙箱认证。模型只能评估本payload，不能读取仓库/生产进程。\",\"sourceFacts\":[\"Ruflo research checkout HEAD equals fixed commit. Task.complete only checks running then sets completed/output; neural judge explicitly uses rule-based qualityScore/positiveRatio. Guidance observations are verified:false and learningEligible:false. Adoption document states principles only, no Ruflo runtime dependency/source copying/second executor.\",\"Native task progress uses public conversation.view id swarm-task-progress order20. Root-only local UI guard requires tian-shu preset, public session hook, no subagent. Six selectors use one authoritative taskView snapshot, only selected Mermaid SVG is drawn; missing orchestration shows not recorded. Inline and Tab retain same WeakMap(connection) store.\",\"共享读取Store cap8含目录；成功5秒、deadline15秒、2/5/15秒退避。active仅非passive订阅；compact历史只观察已有缓存，不分配或发请求。每generation/root/task单飞，取消不合作保留pending直到结算；权限拒绝不周期重试；目录minimumBinding拒绝旧正文，终态只对当前live快照成立。\",\"RPC taskIndex accepts bounded sessionId only and pre-admission AbortSignal check. Service requires already registered or actual host-loaded root agent with matching id and isRootTianShu, then ensureFeatures restores validated persisted/handoff state without LLM dispatch. Directory returns task binding/title/status only. Owner transport authentication and target-root validation are not per-tenant fine-grained ACL.\",\"record_tool_candidate requires enabled experience, actual root, no blind binding, current task versions, complete current artifact snapshot and cancellation checks inside taskLock. Metadata is strict bounded kind/version/artifactRefs/permissions/testRefs/rollback/evaluation=unavailable/executionEnabled=false. Artifact references are metadata, not authorization or proof those referenced tests executed.\",\"Experience repository promotes any toolCandidate by immediate EXPERIENCE_REVIEW_REQUIRED even if a caller supplies perfect review facts. Reviewed memory query excludes toolCandidate before recall. V1 restoration accepts absent candidate field but validates present metadata and rejects validated tool candidates. No evaluator, sandbox, automatic loader or tool execution is implemented for candidates.\",\"Memory handoff only adds literal 3.1.2 to explicit source-version whitelist; schema/checksum/root/workspace validation and exactly-once consumption remain in existing path. It is a supported one-time maintenance handoff, not automatic long-term persistence.\"],\"p1HistoryAndFixes\":[{\"problem\":\"compact历史卡主动轮询并锁住8个缓存槽位，第9个任务不可读。\",\"fix\":\"历史卡传passive:true；getSnapshot/getEntry(create=false)不分配；passive订阅不刷新、不锁缓存，活动订阅才使active成立。旧宿主无Tab的inline仍主动读取。\",\"independentResult\":{\"id\":\"compact-historical-cards\",\"passed\":true,\"periodicReadsWithProgressTabHidden\":0,\"ninthTaskStatus\":\"live\"}},{\"problem\":\"目录版本4先已知，迟到版本3 accepted正文被当live且终态停止轮询。\",\"fix\":\"Store保存按三版本分量单调的minimumBinding；落后正文不发布为live。只有live且不落后目录的终态可停止轮询。binding变化在当前transport结算后补读，无并发绕过。\",\"independentResult\":{\"id\":\"late-old-terminal\",\"passed\":true,\"taskReads\":3,\"directoryReads\":192,\"knownRevision\":4,\"shownRevision\":4,\"status\":\"live\"}},{\"problem\":\"桌面节点按钮被宿主左宽度手柄覆盖，脚本无错误不能视作鼠标通过。\",\"fix\":\"仅插件自身页relative/zIndex1；不删除手柄或修改宿主DOM。\",\"independentBrowserResult\":{\"sameButtonPoint\":[414.5,448.9],\"actualMouseClick\":true,\"hitTag\":\"BUTTON\",\"hitIsButton\":true,\"nodeDetails\":\"explore\",\"handleStillPresent\":true}}],\"maintenanceIncident\":{\"cause\":\"维护者inspector VM中的动态import缺回调引起rc2宿主退出/systemd自动重启；另有未设隔离DSH_HOME的web --help读取生产profile并部署preset，均已披露，不能称生产从未被触及。\",\"recoveryEvidence\":{\"recordedAt\":\"2026-10-24T19:30:19.428Z\",\"passed\":true,\"readOnly\":true,\"productionChanged\":false,\"scope\":\"Specified maintenance backup and installed 3.1.1 recovery code only; no raw content/identifiers exported\",\"sourceVersion\":\"3.1.1\",\"canonicalStateSha256\":\"9503c14a1ddc3edfbf4d880cfc2b6fe878232048695acba25a00b13961a39cb3\",\"receiptChecksumMatched\":true,\"originalRecoveredStateMatchedByteForByte\":true,\"installedRecoveryInitializerSha256\":\"35ecd2c9ff6c93974ce5cf31cce312b154b4dee9130120102b25f4ac98f8af91\",\"candidateRecoveryFunctionByteIdentical\":true,\"installedValidatorPassed\":true,\"counts\":{\"sessions\":1,\"tasks\":4,\"delegations\":33,\"contexts\":53},\"fileBoundary\":{\"mode\":\"0600\",\"parentMode\":\"0700\",\"singleLink\":true,\"currentUid\":true},\"limits\":[\"Matches the pre-incident receipt, not proof of any later state\",\"Does not restore live model processes, leases, active bindings or goal execution\",\"Formal handoff consumption and post-upgrade UI must be verified separately\",\"No inspector attached or production process restarted by this verifier\"]},\"rawUserStateSentToJev\":false,\"nextRequired\":\"正式切换前重新核对running/待答及是否出现新内存状态，保全冲突；受限handoff仅在成功恢复后消费，不重放业务/模型/旧租约。\"},\"remainingReleaseGates\":[\"已完成最终tarball隔离安装、4服务器导出ESM加载和81编译JS一致性；正式部署继续绑定该tarball与当前审阅client摘要，部署后再核验实际装载版本。\",\"正式切换前最新running/待答/内存冲突核对、受支持handoff及成功消费收据。\",\"唯一生产宿主升级rc3、插件3.1.2和39bundles/config顺序保留、实际Web/旧任务只读核对及回滚条件。\",\"Git提交/标签、release assets、匿名下载与SHA256核对。\"],\"interpretationLimits\":[\"Jev typed输出/高概率不是程序正确性、执行权限或完成证明；低分与screen review原样保留，不重复刷分。\",\"taskIndex是宿主owner认证加目标根校验，不等于多租户细粒度ACL。\",\"取消不停止业务，不抢占同步图表/派生计算。\",\"30个小图夹具DOM样本不是INP或系统容量，也不能把不同轮次差异归因于CSS因果加速。\",\"工具候选只metadata，引用不是沙箱实测/执行授权；没有自动评测、执行、装载或自我晋升。\",\"本次没有增加Jev本地限流或费用/使用预算。\"]}"
+      },
+      "reason": "First input was a JavaScript string containing serialized JSON, but MCP returned text type error400. Prefix plain prose once to preserve the same reviewed content in a valid text envelope. Both attempts retained; no scoring resampling.",
+      "raw": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"verdict\": \"review\",\n    \"risk\": 0.41,\n    \"risk_confidence\": 0.59,\n    \"reasons\": {\n      \"addresses_agent\": 0.83\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 2912,\n    \"output_tokens\": 129,\n    \"est_cost_usd\": 0.000122304\n  },\n  \"latency_ms\": 552.861\n}"
+          }
+        ],
+        "structuredContent": {
+          "ok": true,
+          "model": "jev-1.14.0",
+          "answers": {
+            "verdict": "review",
+            "risk": 0.41,
+            "risk_confidence": 0.59,
+            "reasons": {
+              "addresses_agent": 0.83
+            }
+          },
+          "usage": {
+            "input_tokens": 2912,
+            "output_tokens": 129,
+            "est_cost_usd": 0.000122304
+          },
+          "latency_ms": 552.861
+        },
+        "isError": false
+      },
+      "inputSha256": "48b935705d1ba41f80b4e513f40f8990d82a735d9c9ac672f7d74797e8c8a090",
+      "responseSha256": "f822291ff407e30e0298a96cb6fea135b0ff874e4564be96eb9562c61e2c6a3c"
+    },
+    {
+      "id": "health-after",
+      "tool": "jev_health",
+      "input": {},
+      "raw": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"ok\": true,\n  \"model\": \"jev-latest\",\n  \"answers\": {\n    \"models\": [\n      {\n        \"name\": \"jev-latest\",\n        \"description\": \"The latest iteration of TypeSafe's System One Model: Jev\",\n        \"release_date\": \"2026-09-10T18:38:01.391457+00:00\"\n      },\n      {\n        \"name\": \"jev-preview\",\n        \"description\": \"A preview version of `jev-latest`: should be better in most ways\",\n        \"release_date\": \"2026-09-10T18:39:06.057655+00:00\"\n      }\n    ],\n    \"round_trip_latency_ms\": 208.932\n  },\n  \"usage\": {\n    \"input_tokens\": 0,\n    \"output_tokens\": 0,\n    \"est_cost_usd\": 0.0\n  },\n  \"latency_ms\": 208.943\n}"
+          }
+        ],
+        "structuredContent": {
+          "ok": true,
+          "model": "jev-latest",
+          "answers": {
+            "models": [
+              {
+                "name": "jev-latest",
+                "description": "The latest iteration of TypeSafe's System One Model: Jev",
+                "release_date": "2026-09-10T18:38:01.391457+00:00"
+              },
+              {
+                "name": "jev-preview",
+                "description": "A preview version of `jev-latest`: should be better in most ways",
+                "release_date": "2026-09-10T18:39:06.057655+00:00"
+              }
+            ],
+            "round_trip_latency_ms": 208.932
+          },
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "est_cost_usd": 0
+          },
+          "latency_ms": 208.943
+        },
+        "isError": false
+      },
+      "inputSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "responseSha256": "288e3d7a7523fdf48efc3c6424cfce2e1102560c19de8e849c18ba59960e7137"
+    }
+  ],
+  "summary": {
+    "healthBefore": true,
+    "healthAfter": true,
+    "semanticModel": "jev-1.14.0",
+    "ask": {
+      "read_only_boundary": {
+        "type": "noul",
+        "noul": 0.87
+      },
+      "p1_repairs": {
+        "type": "noul",
+        "noul": 0.88
+      },
+      "tool_quarantine": {
+        "type": "noul",
+        "noul": 0.97
+      },
+      "deployment_gate": {
+        "type": "choice",
+        "choice": "prepare_controlled_deployment",
+        "confidence": 1,
+        "probabilities": {
+          "prepare_controlled_deployment": 1,
+          "claim_already_released": 0,
+          "redesign_required": 0,
+          "insufficient_scope_evidence": 0
+        }
+      },
+      "maintenance_integrity": {
+        "type": "noul",
+        "noul": 0.94
+      }
+    },
+    "check": {
+      "probabilities": {
+        "candidate_scope_consistent": 0.88,
+        "new_binding_prevents_old_terminal_freeze": 0.93,
+        "historical_cards_do_not_steal_active_capacity": 0.92,
+        "recovery_evidence_is_not_future_state_proof": 0.95,
+        "production_release_already_proven": 0.03,
+        "precise_perf_boundary": 0.96
+      },
+      "flags": [
+        "candidate_scope_consistent",
+        "new_binding_prevents_old_terminal_freeze",
+        "historical_cards_do_not_steal_active_capacity",
+        "recovery_evidence_is_not_future_state_proof",
+        "precise_perf_boundary"
+      ],
+      "uncertain": []
+    },
+    "classify": {
+      "choice": "candidate_ready_for_controlled_deployment_preparation",
+      "confidence": 1,
+      "probabilities": {
+        "candidate_ready_for_controlled_deployment_preparation": 1,
+        "candidate_needs_specific_fix": 0,
+        "source_only_insufficient": 0,
+        "already_production_released": 0,
+        "other": 0
+      },
+      "band": "act"
+    },
+    "match": {
+      "best_id": "bounded_read_projection_and_quarantined_candidates",
+      "best_text": "原生任务进度六视角和共享只读Store；真实根目录冷恢复；三项P1已有直接修复证据；技能/工具候选仅受限metadata不可执行；最终tarball隔离安装通过，可准备受控本机部署，仍待生产交接和发布验证。",
+      "confidence": 1,
+      "abstain_probability": 0,
+      "exists": 0.95,
+      "windows": 1,
+      "exists_by_window": [
+        0.95
+      ],
+      "top3": [
+        {
+          "id": "bounded_read_projection_and_quarantined_candidates",
+          "probability": 1
+        },
+        {
+          "id": "autonomous_tool_execution_runtime",
+          "probability": 0
+        },
+        {
+          "id": "completed_production_upgrade_and_release",
+          "probability": 0
+        }
+      ],
+      "band": "match"
+    },
+    "score": {
+      "score": 3,
+      "confidence": 1,
+      "probabilities": {
+        "0": 0,
+        "1": 0,
+        "2": 0,
+        "3": 1,
+        "4": 0
+      },
+      "legend": {
+        "0": "已提供证据表明存在未解决的关键权限、隔离、数据丢失或必要交互缺陷。",
+        "1": "仅有设计/静态代码与自述；缺少直接执行测试证据。",
+        "2": "有局部单测或隔离验证，但当前候选的宿主/UI或关键P1修复证据仍缺失。",
+        "3": "当前固定候选有单测、双宿主集成、独立负向重放、真实夹具浏览器与tarball隔离安装证据，边界清晰；最新状态交接及唯一生产部署/发布尚待完成。",
+        "4": "除候选验证外，当前同一构建已在唯一生产宿主完成受控升级、最新状态交接消费、旧任务Web复核以及GitHub资产匿名校验。"
+      },
+      "normalized": 0.75
+    },
+    "screenInitial": {
+      "ok": false,
+      "status": 400,
+      "error": "invalid tool input",
+      "details": [
+        {
+          "loc": [
+            "text"
+          ],
+          "msg": "Input should be a valid string"
+        }
+      ]
+    },
+    "screen": {
+      "verdict": "review",
+      "risk": 0.41,
+      "risk_confidence": 0.59,
+      "reasons": {
+        "addresses_agent": 0.83
+      }
+    },
+    "conclusion": "本轮候选证据支持准备受控本机部署；先完成最新状态核对、受限交接和生产实际验证，再判断发布。",
+    "candidateScopeSupported": true,
+    "productionDeploymentVerified": false,
+    "githubReleaseVerified": false,
+    "executionPermissionGranted": false,
+    "screenPassed": false,
+    "screenReviewDisposition": "保留review。触发项addresses_agent=0.83，资料包含面向agent的约束和维护步骤；只作为被审资料，不能提升为执行指令或授权。未删除风险文字或重试刷成pass。",
+    "resampling": "No scoring/classification/check retries. One screen request repair only after deterministic input400, with both payloads and responses preserved."
+  },
+  "limitations": [
+    "Jev typed输出/高概率不是程序正确性、执行权限或完成证明；低分与screen review原样保留，不重复刷分。",
+    "taskIndex是宿主owner认证加目标根校验，不等于多租户细粒度ACL。",
+    "取消不停止业务，不抢占同步图表/派生计算。",
+    "30个小图夹具DOM样本不是INP或系统容量，也不能把不同轮次差异归因于CSS因果加速。",
+    "工具候选只metadata，引用不是沙箱实测/执行授权；没有自动评测、执行、装载或自我晋升。",
+    "本次没有增加Jev本地限流或费用/使用预算。"
+  ]
+}

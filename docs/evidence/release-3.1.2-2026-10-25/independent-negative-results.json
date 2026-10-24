@@ -1,0 +1,99 @@
+{
+  "recordedAt": "2026-10-24T19:32:16.507083+00:00",
+  "reviewer": "independent-engineering-negative-review",
+  "ui": {
+    "recordedAt": "2026-10-24T19:24:12.144Z",
+    "boundary": "Actual client modules with an isolated observable hook harness; no real-browser rendering, network, models or production state",
+    "tests": [
+      {
+        "id": "compact-historical-cards",
+        "passed": true,
+        "periodicReadsWithProgressTabHidden": 0,
+        "ninthTaskStatus": "live"
+      },
+      {
+        "id": "late-old-terminal",
+        "passed": true,
+        "taskReads": 3,
+        "directoryReads": 192,
+        "knownRevision": 4,
+        "shownRevision": 4,
+        "status": "live"
+      }
+    ],
+    "passed": true
+  },
+  "candidate": {
+    "recordedAt": "2026-10-24T19:26:21.173Z",
+    "passed": true,
+    "checks": [
+      "12 concurrent public service registrations deduplicate",
+      "cancelled action writes nothing",
+      "executionEnabled true rejected",
+      "unknown command metadata rejected",
+      "ordinary non-root denied",
+      "16 concurrent repository additions deduplicate",
+      "capacity failure leaves state and sequence unchanged",
+      "independent text review cannot promote tool",
+      "memory recall excludes tool candidate",
+      "no external/model/tool activation",
+      "version race rejects stale source or commits before update"
+    ],
+    "versionRaceOutcome": "stale-source-rejected",
+    "externalCalls": 0,
+    "productionChanged": false
+  },
+  "coldDirectory": {
+    "recordedAt": "2026-10-24T19:25:18.918Z",
+    "passed": true,
+    "boundary": "Actual public service and durable disk recovery; loaded Host getAgent identity supplied by isolated fixture, not a full browser or AgentLoop test",
+    "checks": [
+      "unknown root rejected without activation",
+      "tian-shu child with parentSession rejected",
+      "already-loaded real root callback restores durable directory",
+      "directory exposes only metadata",
+      "view preserves revisions and pending review/acceptance",
+      "no model/network/parent activation"
+    ],
+    "modelCalls": 0,
+    "activations": 0,
+    "productionChanged": false
+  },
+  "maintenance": {
+    "recordedAt": "2026-10-24T19:30:19.428Z",
+    "passed": true,
+    "readOnly": true,
+    "productionChanged": false,
+    "scope": "Specified maintenance backup and installed 3.1.1 recovery code only; no raw content/identifiers exported",
+    "sourceVersion": "3.1.1",
+    "canonicalStateSha256": "9503c14a1ddc3edfbf4d880cfc2b6fe878232048695acba25a00b13961a39cb3",
+    "receiptChecksumMatched": true,
+    "originalRecoveredStateMatchedByteForByte": true,
+    "installedRecoveryInitializerSha256": "35ecd2c9ff6c93974ce5cf31cce312b154b4dee9130120102b25f4ac98f8af91",
+    "candidateRecoveryFunctionByteIdentical": true,
+    "installedValidatorPassed": true,
+    "counts": {
+      "sessions": 1,
+      "tasks": 4,
+      "delegations": 33,
+      "contexts": 53
+    },
+    "fileBoundary": {
+      "mode": "0600",
+      "parentMode": "0700",
+      "singleLink": true,
+      "currentUid": true
+    },
+    "limits": [
+      "Matches the pre-incident receipt, not proof of any later state",
+      "Does not restore live model processes, leases, active bindings or goal execution",
+      "Formal handoff consumption and post-upgrade UI must be verified separately",
+      "No inspector attached or production process restarted by this verifier"
+    ]
+  },
+  "boundaries": [
+    "UI uses actual modules in an isolated observable hook harness, not browser rendering",
+    "Candidate and cold directory use actual public service/state APIs with isolated Host identity callbacks",
+    "Production lifecycle/release owned by root; no inspector or service restart by this reviewer"
+  ]
+}

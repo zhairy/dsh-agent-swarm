@@ -1,0 +1,15 @@
+{
+  "phase": "final-pointer-fixed-browser-verification",
+  "clientSha256": "c579841b6fac0731b8b480f1e670581eab3c3662762e89b5de162711170dd811",
+  "layout": {
+    "contractCollapsed": true,
+    "diagramBeforeContract": true
+  },
+  "narrow": {
+    "clientWidth": 390,
+    "progressWidth": 327,
+    "scrollWidth": 390,
+    "svg": true,
+    "viewport": 390
+  }
+}

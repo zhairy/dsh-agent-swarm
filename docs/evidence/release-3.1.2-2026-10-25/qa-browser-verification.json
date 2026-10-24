@@ -1,0 +1,388 @@
+{
+  "phase": "final-pointer-fixed-browser-verification",
+  "hostVersion": "0.2.1-rc.3",
+  "fixtureRoot": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+  "localFixtureOnly": true,
+  "chatCompact": {
+    "compactText": true,
+    "errors": [],
+    "flowRows": 1,
+    "panels": 0,
+    "requests": []
+  },
+  "diagrams": [
+    {
+      "kind": "workflow",
+      "root": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+      "svgCount": 1,
+      "svgId": "swarm-flow-1",
+      "taskId": "T-1"
+    },
+    {
+      "kind": "orchestration",
+      "root": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+      "svgCount": 1,
+      "svgId": "swarm-flow-2",
+      "taskId": "T-1"
+    },
+    {
+      "kind": "architecture",
+      "root": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+      "svgCount": 1,
+      "svgId": "swarm-flow-3",
+      "taskId": "T-1"
+    },
+    {
+      "kind": "sequence",
+      "root": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+      "svgCount": 1,
+      "svgId": "swarm-flow-4",
+      "taskId": "T-1"
+    },
+    {
+      "kind": "dataflow",
+      "root": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+      "svgCount": 1,
+      "svgId": "swarm-flow-5",
+      "taskId": "T-1"
+    },
+    {
+      "kind": "lifecycle",
+      "root": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+      "svgCount": 1,
+      "svgId": "swarm-flow-6",
+      "taskId": "T-1"
+    }
+  ],
+  "preferenceRestored": true,
+  "nodeDetails": "explore",
+  "pointerGeometry": {
+    "details": "explore",
+    "hitIsButton": true,
+    "hitTag": "BUTTON",
+    "nodeRect": {
+      "bottom": 463.4375,
+      "height": 29,
+      "left": 345,
+      "right": 484,
+      "top": 434.4375,
+      "width": 139,
+      "x": 345,
+      "y": 434.4375
+    },
+    "pageZIndex": "1",
+    "widthHandles": [
+      {
+        "rect": {
+          "bottom": 800,
+          "height": 724,
+          "left": 406,
+          "right": 416,
+          "top": 76,
+          "width": 10,
+          "x": 406,
+          "y": 76
+        },
+        "side": "left",
+        "zIndex": "0"
+      },
+      {
+        "rect": {
+          "bottom": 800,
+          "height": 724,
+          "left": 1144,
+          "right": 1154,
+          "top": 76,
+          "width": 10,
+          "x": 1144,
+          "y": 76
+        },
+        "side": "right",
+        "zIndex": "0"
+      }
+    ]
+  },
+  "layout": {
+    "contractCollapsed": true,
+    "diagramBeforeContract": true
+  },
+  "crossRoot": {
+    "heading": "QA312另一根任务：身份隔离",
+    "root": "qa312-tian-shu-54410c91-1527-45b8-8b67-3877b6b5cbd1",
+    "task": "T-1"
+  },
+  "ordinary": {
+    "newRequests": [],
+    "restricted": true
+  },
+  "reviewerPreset": {
+    "newRequests": [],
+    "restricted": true
+  },
+  "narrow": {
+    "clientWidth": 390,
+    "progressWidth": 327,
+    "scrollWidth": 390,
+    "svg": true,
+    "viewport": 390
+  },
+  "hidden": {
+    "chatPanels": 0,
+    "newRequests": [],
+    "progressMounted": false
+  },
+  "performance": {
+    "boundary": "Isolated DSH rc.3 with local deterministic fixture; headless Chromium, 390x844; not INP or whole-system capacity",
+    "count": 30,
+    "errors": [],
+    "measurement": "DOM change to replaced SVG plus two animation frames",
+    "p50Ms": 50,
+    "p95Ms": 67.09999996423721,
+    "p99Ms": 67.40000003576279,
+    "samples": [
+      {
+        "kind": "lifecycle",
+        "ms": 67.09999996423721
+      },
+      {
+        "kind": "workflow",
+        "ms": 49.5
+      },
+      {
+        "kind": "orchestration",
+        "ms": 49.80000001192093
+      },
+      {
+        "kind": "architecture",
+        "ms": 50
+      },
+      {
+        "kind": "sequence",
+        "ms": 50.19999998807907
+      },
+      {
+        "kind": "dataflow",
+        "ms": 49.19999998807907
+      },
+      {
+        "kind": "lifecycle",
+        "ms": 66.69999998807907
+      },
+      {
+        "kind": "workflow",
+        "ms": 50
+      },
+      {
+        "kind": "orchestration",
+        "ms": 49.80000001192093
+      },
+      {
+        "kind": "architecture",
+        "ms": 50
+      },
+      {
+        "kind": "sequence",
+        "ms": 49.80000001192093
+      },
+      {
+        "kind": "dataflow",
+        "ms": 50.10000002384186
+      },
+      {
+        "kind": "lifecycle",
+        "ms": 66.5
+      },
+      {
+        "kind": "workflow",
+        "ms": 50.10000002384186
+      },
+      {
+        "kind": "orchestration",
+        "ms": 50
+      },
+      {
+        "kind": "architecture",
+        "ms": 50
+      },
+      {
+        "kind": "sequence",
+        "ms": 50
+      },
+      {
+        "kind": "dataflow",
+        "ms": 49.60000002384186
+      },
+      {
+        "kind": "lifecycle",
+        "ms": 67.40000003576279
+      },
+      {
+        "kind": "workflow",
+        "ms": 66
+      },
+      {
+        "kind": "orchestration",
+        "ms": 49.90000003576279
+      },
+      {
+        "kind": "architecture",
+        "ms": 50.19999998807907
+      },
+      {
+        "kind": "sequence",
+        "ms": 50.19999998807907
+      },
+      {
+        "kind": "dataflow",
+        "ms": 49.30000001192093
+      },
+      {
+        "kind": "lifecycle",
+        "ms": 67
+      },
+      {
+        "kind": "workflow",
+        "ms": 49.70000004768371
+      },
+      {
+        "kind": "orchestration",
+        "ms": 49.79999995231629
+      },
+      {
+        "kind": "architecture",
+        "ms": 50
+      },
+      {
+        "kind": "sequence",
+        "ms": 49.80000001192093
+      },
+      {
+        "kind": "dataflow",
+        "ms": 49.69999998807907
+      }
+    ],
+    "warmup": [
+      {
+        "kind": "workflow",
+        "ms": 48.39999997615814
+      },
+      {
+        "kind": "orchestration",
+        "ms": 50.09999996423721
+      },
+      {
+        "kind": "architecture",
+        "ms": 50.5
+      },
+      {
+        "kind": "sequence",
+        "ms": 49.19999998807907
+      },
+      {
+        "kind": "dataflow",
+        "ms": 66.40000003576279
+      }
+    ]
+  },
+  "runtime": {
+    "errors": [],
+    "requests": [
+      {
+        "at": 1792870395618,
+        "finishedAt": 1792870395624,
+        "path": "/api/swarm.taskIndex",
+        "payload": {
+          "sessionId": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df"
+        },
+        "status": 200
+      },
+      {
+        "at": 1792870395629,
+        "finishedAt": 1792870395638,
+        "path": "/api/swarm.taskView",
+        "payload": {
+          "sessionId": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+          "taskId": "T-1"
+        },
+        "status": 200
+      },
+      {
+        "at": 1792870396702,
+        "finishedAt": 1792870396708,
+        "path": "/api/swarm.taskView",
+        "payload": {
+          "sessionId": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+          "taskId": "T-2"
+        },
+        "status": 200
+      },
+      {
+        "at": 1792870396789,
+        "finishedAt": 1792870396826,
+        "path": "/api/swarm.taskView",
+        "payload": {
+          "sessionId": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+          "taskId": "T-1"
+        },
+        "status": 200
+      },
+      {
+        "at": 1792870397472,
+        "finishedAt": 1792870397481,
+        "path": "/api/swarm.taskIndex",
+        "payload": {
+          "sessionId": "qa312-tian-shu-54410c91-1527-45b8-8b67-3877b6b5cbd1"
+        },
+        "status": 200
+      },
+      {
+        "at": 1792870397483,
+        "finishedAt": 1792870397489,
+        "path": "/api/swarm.taskView",
+        "payload": {
+          "sessionId": "qa312-tian-shu-54410c91-1527-45b8-8b67-3877b6b5cbd1",
+          "taskId": "T-1"
+        },
+        "status": 200
+      },
+      {
+        "at": 1792870411063,
+        "finishedAt": 1792870411121,
+        "path": "/api/swarm.taskIndex",
+        "payload": {
+          "sessionId": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df"
+        },
+        "status": 200
+      },
+      {
+        "at": 1792870411063,
+        "finishedAt": 1792870411121,
+        "path": "/api/swarm.taskView",
+        "payload": {
+          "sessionId": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+          "taskId": "T-1"
+        },
+        "status": 200
+      },
+      {
+        "at": 1792870418566,
+        "finishedAt": 1792870418603,
+        "path": "/api/swarm.taskIndex",
+        "payload": {
+          "sessionId": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df"
+        },
+        "status": 200
+      },
+      {
+        "at": 1792870418566,
+        "finishedAt": 1792870418603,
+        "path": "/api/swarm.taskView",
+        "payload": {
+          "sessionId": "qa312-tian-shu-53fb9066-d39e-46bb-973f-fef440e471df",
+          "taskId": "T-1"
+        },
+        "status": 200
+      }
+    ]
+  }
+}

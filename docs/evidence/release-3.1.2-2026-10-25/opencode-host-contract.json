@@ -1,0 +1,11 @@
+{
+  "supportedProtocols": [
+    "openai-completions",
+    "openai-responses",
+    "anthropic-messages"
+  ],
+  "previewWholeConfigValid": true,
+  "unsupportedProtocolRejected": true,
+  "externalModelCalls": 0,
+  "scriptBackedUp": true
+}

@@ -1,0 +1,56 @@
+{
+  "host": "0.2.1-rc.3",
+  "plugin": "3.1.2",
+  "externalModelGenerationInitiatedByVerification": 0,
+  "diagrams": [
+    {
+      "kind": "workflow",
+      "svgCount": 1
+    },
+    {
+      "kind": "orchestration",
+      "svgCount": 1
+    },
+    {
+      "kind": "architecture",
+      "svgCount": 1
+    },
+    {
+      "kind": "sequence",
+      "svgCount": 1
+    },
+    {
+      "kind": "dataflow",
+      "svgCount": 1
+    },
+    {
+      "kind": "lifecycle",
+      "svgCount": 1
+    }
+  ],
+  "tasks": {
+    "contractCollapsed": true,
+    "freshness": "live",
+    "ids": [
+      "T-1",
+      "T-2",
+      "T-3",
+      "T-4"
+    ]
+  },
+  "taskSwitch": {
+    "oneTask": true,
+    "taskId": "T-4"
+  },
+  "polling": {
+    "visibleNewRequests": 2,
+    "hiddenNewRequests": 0,
+    "windowMs": 6300
+  },
+  "chat": {
+    "modelRows": 95,
+    "progressPanels": 0
+  },
+  "pageErrors": [],
+  "passed": true
+}

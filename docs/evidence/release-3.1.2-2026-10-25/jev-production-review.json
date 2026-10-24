@@ -1,0 +1,326 @@
+{
+  "state": {
+    "scope": "3.1.2正式本机验证后的发布前判断，GitHub尚未推送/发布。所有结论只适用已记录范围。",
+    "sourceCommit": "68a9391a43f8d284f20d2bb2fb248ea363c30fe7",
+    "publicCommit": "f3c5db8150050585f20b18a45f64a3560533b74c",
+    "tarball": {
+      "bytes": 1339511,
+      "sha256": "32cb1913c337f0ca8d93d8c2c2d5c11de237c86a0475a2afc2f6ae3980dacb69",
+      "closure": 80,
+      "missing": 0,
+      "matchingCompiledJs": 81,
+      "isolatedNpm": "4 server exports imported; browser registration shim only, actual factory exercised in real Web"
+    },
+    "validation": {
+      "unit": 1333,
+      "files": 97,
+      "rc2Integration": 44,
+      "rc3Integration": 44,
+      "webFixture": "six charts, cross-root T1, 0 chat/hidden/ordinary RPC, original mouse point now BUTTON, More390, no errors;30 samples p95=67.1ms p99=67.4ms;not INP"
+    },
+    "production": {
+      "core": "0.2.1-rc.3",
+      "plugin": "3.1.2",
+      "cliAndWebVersionAgree": true,
+      "mainPid": 4093920,
+      "automaticRestartsAfterFinalStart": 0,
+      "soleSystemCore": "/usr/lib/node_modules/@deepseek-ai/dsh",
+      "soleWeb": "127.0.0.1:3080",
+      "qa4186AndInspector9229Closed": true,
+      "bundles": 39,
+      "bundleOrderPreserved": true,
+      "dependencyChanges": 8,
+      "localCompat": "5 local metadata-only exact rc3 compatibility copies with unchanged business hashes;2 official native rc3 packages;swarm3.1.2 link",
+      "localSync": "Existing OpenCode timer generated Google protocol unsupported by host; fixed local script to query supportedProtocols, quarantine unsupported, validate whole Config and CAS before write;4 generated routes,1 quarantined;16 actual providers now registered. This local script and other plugins are NOT in Swarm tarball.",
+      "state": {
+        "tasks": 4,
+        "delegations": 33,
+        "contexts": 53,
+        "versionsRefsBodiesDigestsAndDelegationFactsUnchanged": true,
+        "oneTimePendingConsumed": true,
+        "oldBindings": [
+          "revoked",
+          "suspended"
+        ],
+        "businessReplayed": false
+      },
+      "ui": "real restored root,4 tasks,six charts each1 SVG,T4/T1 switches,contractcollapsed,live;visible 2 task RPC and hidden0 over6.3s;95 model rows;no page errors",
+      "anonymousRpc": 401,
+      "realJevHealth": "jev-1.14.0 ok",
+      "firstPnpmInstall": "Done printed but idle cleanup worker remained; SIGTERM logged, then frozen-lockfile exit0 with process-only PNPM_MAX_WORKERS4; no global age/exemption policy changed"
+    },
+    "incidents": {
+      "maintenanceRestart": "VM dynamic import cleanup caused one restart, disclosed; reconstructed full state equals preincident canonicalSHA9503c14a1ddc3edfbf4d880cfc2b6fe878232048695acba25a00b13961a39cb3, independently verified. Later safe sync inspector close, fresh export0 before final maintenance.",
+      "nonIsolatedHelp": "One agent help command mounted original profile and regenerated expert-mode files; no before hashes, boundary disclosed, no claim all profile bytes unchanged."
+    },
+    "limits": [
+      "No multi-hour business or real Codex/Claude generation acceptance",
+      "No full native blind-review navigation E2E certification",
+      "3.1.3/3.1.4 hard receipt/global novelty/full authorization-wait/Canary not implemented",
+      "Jev probabilities are not proof or permission; previous seven-tool candidate screen review retained"
+    ]
+  },
+  "results": [
+    {
+      "status": "fulfilled",
+      "value": {
+        "tool": "jev_check",
+        "request": {
+          "state": {
+            "scope": "3.1.2正式本机验证后的发布前判断，GitHub尚未推送/发布。所有结论只适用已记录范围。",
+            "sourceCommit": "68a9391a43f8d284f20d2bb2fb248ea363c30fe7",
+            "publicCommit": "f3c5db8150050585f20b18a45f64a3560533b74c",
+            "tarball": {
+              "bytes": 1339511,
+              "sha256": "32cb1913c337f0ca8d93d8c2c2d5c11de237c86a0475a2afc2f6ae3980dacb69",
+              "closure": 80,
+              "missing": 0,
+              "matchingCompiledJs": 81,
+              "isolatedNpm": "4 server exports imported; browser registration shim only, actual factory exercised in real Web"
+            },
+            "validation": {
+              "unit": 1333,
+              "files": 97,
+              "rc2Integration": 44,
+              "rc3Integration": 44,
+              "webFixture": "six charts, cross-root T1, 0 chat/hidden/ordinary RPC, original mouse point now BUTTON, More390, no errors;30 samples p95=67.1ms p99=67.4ms;not INP"
+            },
+            "production": {
+              "core": "0.2.1-rc.3",
+              "plugin": "3.1.2",
+              "cliAndWebVersionAgree": true,
+              "mainPid": 4093920,
+              "automaticRestartsAfterFinalStart": 0,
+              "soleSystemCore": "/usr/lib/node_modules/@deepseek-ai/dsh",
+              "soleWeb": "127.0.0.1:3080",
+              "qa4186AndInspector9229Closed": true,
+              "bundles": 39,
+              "bundleOrderPreserved": true,
+              "dependencyChanges": 8,
+              "localCompat": "5 local metadata-only exact rc3 compatibility copies with unchanged business hashes;2 official native rc3 packages;swarm3.1.2 link",
+              "localSync": "Existing OpenCode timer generated Google protocol unsupported by host; fixed local script to query supportedProtocols, quarantine unsupported, validate whole Config and CAS before write;4 generated routes,1 quarantined;16 actual providers now registered. This local script and other plugins are NOT in Swarm tarball.",
+              "state": {
+                "tasks": 4,
+                "delegations": 33,
+                "contexts": 53,
+                "versionsRefsBodiesDigestsAndDelegationFactsUnchanged": true,
+                "oneTimePendingConsumed": true,
+                "oldBindings": [
+                  "revoked",
+                  "suspended"
+                ],
+                "businessReplayed": false
+              },
+              "ui": "real restored root,4 tasks,six charts each1 SVG,T4/T1 switches,contractcollapsed,live;visible 2 task RPC and hidden0 over6.3s;95 model rows;no page errors",
+              "anonymousRpc": 401,
+              "realJevHealth": "jev-1.14.0 ok",
+              "firstPnpmInstall": "Done printed but idle cleanup worker remained; SIGTERM logged, then frozen-lockfile exit0 with process-only PNPM_MAX_WORKERS4; no global age/exemption policy changed"
+            },
+            "incidents": {
+              "maintenanceRestart": "VM dynamic import cleanup caused one restart, disclosed; reconstructed full state equals preincident canonicalSHA9503c14a1ddc3edfbf4d880cfc2b6fe878232048695acba25a00b13961a39cb3, independently verified. Later safe sync inspector close, fresh export0 before final maintenance.",
+              "nonIsolatedHelp": "One agent help command mounted original profile and regenerated expert-mode files; no before hashes, boundary disclosed, no claim all profile bytes unchanged."
+            },
+            "limits": [
+              "No multi-hour business or real Codex/Claude generation acceptance",
+              "No full native blind-review navigation E2E certification",
+              "3.1.3/3.1.4 hard receipt/global novelty/full authorization-wait/Canary not implemented",
+              "Jev probabilities are not proof or permission; previous seven-tool candidate screen review retained"
+            ]
+          },
+          "propositions": {
+            "bounded_local_validation": "所列实际证据支持这次限定范围的本机rc3与插件3.1.2验证，不需要把夹具当真实多小时任务。",
+            "ready_for_github_release": "在上述范围与事件披露下，可以继续已授权的GitHub3.1.2发布及匿名下载校验，尚未声称发布完成。",
+            "local_vs_package": "正确区分本机其它插件/同步脚本修复与Swarm tarball内容。",
+            "state_preserved": "版本/材料/委派事实核对及一次性消费支持任务保全；不等于恢复旧进程、active绑定或业务重放许可。",
+            "do_not_claim_everything_fixed": "不可据此宣称所有长期业务永不受阻或完整3.1.3守卫已经实现。"
+          }
+        },
+        "response": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"probabilities\": {\n      \"bounded_local_validation\": 0.86,\n      \"ready_for_github_release\": 0.79,\n      \"local_vs_package\": 0.91,\n      \"state_preserved\": 0.93,\n      \"do_not_claim_everything_fixed\": 0.98\n    },\n    \"flags\": [\n      \"bounded_local_validation\",\n      \"ready_for_github_release\",\n      \"local_vs_package\",\n      \"state_preserved\",\n      \"do_not_claim_everything_fixed\"\n    ],\n    \"uncertain\": []\n  },\n  \"usage\": {\n    \"input_tokens\": 1608,\n    \"output_tokens\": 103,\n    \"est_cost_usd\": 0.000067536\n  },\n  \"latency_ms\": 659.159\n}"
+            }
+          ],
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "probabilities": {
+                "bounded_local_validation": 0.86,
+                "ready_for_github_release": 0.79,
+                "local_vs_package": 0.91,
+                "state_preserved": 0.93,
+                "do_not_claim_everything_fixed": 0.98
+              },
+              "flags": [
+                "bounded_local_validation",
+                "ready_for_github_release",
+                "local_vs_package",
+                "state_preserved",
+                "do_not_claim_everything_fixed"
+              ],
+              "uncertain": []
+            },
+            "usage": {
+              "input_tokens": 1608,
+              "output_tokens": 103,
+              "est_cost_usd": 0.000067536
+            },
+            "latency_ms": 659.159
+          },
+          "isError": false
+        }
+      }
+    },
+    {
+      "status": "fulfilled",
+      "value": {
+        "tool": "jev_classify",
+        "request": {
+          "state": {
+            "scope": "3.1.2正式本机验证后的发布前判断，GitHub尚未推送/发布。所有结论只适用已记录范围。",
+            "sourceCommit": "68a9391a43f8d284f20d2bb2fb248ea363c30fe7",
+            "publicCommit": "f3c5db8150050585f20b18a45f64a3560533b74c",
+            "tarball": {
+              "bytes": 1339511,
+              "sha256": "32cb1913c337f0ca8d93d8c2c2d5c11de237c86a0475a2afc2f6ae3980dacb69",
+              "closure": 80,
+              "missing": 0,
+              "matchingCompiledJs": 81,
+              "isolatedNpm": "4 server exports imported; browser registration shim only, actual factory exercised in real Web"
+            },
+            "validation": {
+              "unit": 1333,
+              "files": 97,
+              "rc2Integration": 44,
+              "rc3Integration": 44,
+              "webFixture": "six charts, cross-root T1, 0 chat/hidden/ordinary RPC, original mouse point now BUTTON, More390, no errors;30 samples p95=67.1ms p99=67.4ms;not INP"
+            },
+            "production": {
+              "core": "0.2.1-rc.3",
+              "plugin": "3.1.2",
+              "cliAndWebVersionAgree": true,
+              "mainPid": 4093920,
+              "automaticRestartsAfterFinalStart": 0,
+              "soleSystemCore": "/usr/lib/node_modules/@deepseek-ai/dsh",
+              "soleWeb": "127.0.0.1:3080",
+              "qa4186AndInspector9229Closed": true,
+              "bundles": 39,
+              "bundleOrderPreserved": true,
+              "dependencyChanges": 8,
+              "localCompat": "5 local metadata-only exact rc3 compatibility copies with unchanged business hashes;2 official native rc3 packages;swarm3.1.2 link",
+              "localSync": "Existing OpenCode timer generated Google protocol unsupported by host; fixed local script to query supportedProtocols, quarantine unsupported, validate whole Config and CAS before write;4 generated routes,1 quarantined;16 actual providers now registered. This local script and other plugins are NOT in Swarm tarball.",
+              "state": {
+                "tasks": 4,
+                "delegations": 33,
+                "contexts": 53,
+                "versionsRefsBodiesDigestsAndDelegationFactsUnchanged": true,
+                "oneTimePendingConsumed": true,
+                "oldBindings": [
+                  "revoked",
+                  "suspended"
+                ],
+                "businessReplayed": false
+              },
+              "ui": "real restored root,4 tasks,six charts each1 SVG,T4/T1 switches,contractcollapsed,live;visible 2 task RPC and hidden0 over6.3s;95 model rows;no page errors",
+              "anonymousRpc": 401,
+              "realJevHealth": "jev-1.14.0 ok",
+              "firstPnpmInstall": "Done printed but idle cleanup worker remained; SIGTERM logged, then frozen-lockfile exit0 with process-only PNPM_MAX_WORKERS4; no global age/exemption policy changed"
+            },
+            "incidents": {
+              "maintenanceRestart": "VM dynamic import cleanup caused one restart, disclosed; reconstructed full state equals preincident canonicalSHA9503c14a1ddc3edfbf4d880cfc2b6fe878232048695acba25a00b13961a39cb3, independently verified. Later safe sync inspector close, fresh export0 before final maintenance.",
+              "nonIsolatedHelp": "One agent help command mounted original profile and regenerated expert-mode files; no before hashes, boundary disclosed, no claim all profile bytes unchanged."
+            },
+            "limits": [
+              "No multi-hour business or real Codex/Claude generation acceptance",
+              "No full native blind-review navigation E2E certification",
+              "3.1.3/3.1.4 hard receipt/global novelty/full authorization-wait/Canary not implemented",
+              "Jev probabilities are not proof or permission; previous seven-tool candidate screen review retained"
+            ]
+          },
+          "question": "当前已证实的发布阶段是哪一个？GitHub尚未推送，不能选发布完成。",
+          "labels": {
+            "ready_to_publish_bounded_release": "本机限定范围验证及状态保全完成，可继续GitHub发布和独立资产下载校验",
+            "blocked_by_evidence_gap": "还有必须解决的本轮范围证据缺口，不能发布",
+            "already_published": "GitHub发布和匿名下载校验已经完成"
+          },
+          "ensemble": true
+        },
+        "response": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"choice\": \"ready_to_publish_bounded_release\",\n    \"confidence\": 0.99,\n    \"probabilities\": {\n      \"ready_to_publish_bounded_release\": 0.99,\n      \"blocked_by_evidence_gap\": 0.01,\n      \"already_published\": 0.0,\n      \"other\": 0.0\n    },\n    \"band\": \"act\",\n    \"agreement\": true,\n    \"alternate_choice\": \"ready_to_publish_bounded_release\"\n  },\n  \"usage\": {\n    \"input_tokens\": 3124,\n    \"output_tokens\": 132,\n    \"est_cost_usd\": 0.000131208\n  },\n  \"latency_ms\": 499.54\n}"
+            }
+          ],
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "choice": "ready_to_publish_bounded_release",
+              "confidence": 0.99,
+              "probabilities": {
+                "ready_to_publish_bounded_release": 0.99,
+                "blocked_by_evidence_gap": 0.01,
+                "already_published": 0,
+                "other": 0
+              },
+              "band": "act",
+              "agreement": true,
+              "alternate_choice": "ready_to_publish_bounded_release"
+            },
+            "usage": {
+              "input_tokens": 3124,
+              "output_tokens": 132,
+              "est_cost_usd": 0.000131208
+            },
+            "latency_ms": 499.54
+          },
+          "isError": false
+        }
+      }
+    },
+    {
+      "status": "fulfilled",
+      "value": {
+        "tool": "jev_health",
+        "request": {},
+        "response": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-latest\",\n  \"answers\": {\n    \"models\": [\n      {\n        \"name\": \"jev-latest\",\n        \"description\": \"The latest iteration of TypeSafe's System One Model: Jev\",\n        \"release_date\": \"2026-09-10T18:38:01.391457+00:00\"\n      },\n      {\n        \"name\": \"jev-preview\",\n        \"description\": \"A preview version of `jev-latest`: should be better in most ways\",\n        \"release_date\": \"2026-09-10T18:39:06.057655+00:00\"\n      }\n    ],\n    \"round_trip_latency_ms\": 220.317\n  },\n  \"usage\": {\n    \"input_tokens\": 0,\n    \"output_tokens\": 0,\n    \"est_cost_usd\": 0.0\n  },\n  \"latency_ms\": 220.352\n}"
+            }
+          ],
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-latest",
+            "answers": {
+              "models": [
+                {
+                  "name": "jev-latest",
+                  "description": "The latest iteration of TypeSafe's System One Model: Jev",
+                  "release_date": "2026-09-10T18:38:01.391457+00:00"
+                },
+                {
+                  "name": "jev-preview",
+                  "description": "A preview version of `jev-latest`: should be better in most ways",
+                  "release_date": "2026-09-10T18:39:06.057655+00:00"
+                }
+              ],
+              "round_trip_latency_ms": 220.317
+            },
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "est_cost_usd": 0
+            },
+            "latency_ms": 220.352
+          },
+          "isError": false
+        }
+      }
+    }
+  ]
+}
