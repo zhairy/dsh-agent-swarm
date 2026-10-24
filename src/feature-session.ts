@@ -24,6 +24,7 @@ import { validateEvidenceAssessment } from './evidence-assessment.js'
 import { ValidateDelegateInput } from './delegate.js'
 import { loadMemoryHandoff } from './memory-handoff.js'
 import { SwarmError } from './util/errors.js'
+import { ValidateToolCandidate } from './tool-candidate.js'
 
 /**
  * 内存态（persistence.enabled=false）不写日志与快照，持久化的 4MiB 上限不适用；
@@ -293,6 +294,7 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
     }
     for (const [index, [id, entry]] of Object.entries(state.experiences).entries()) {
       at(`$.experiences[${index}]`, 'EXPERIENCE_FORMAT')
+      if (object(entry) && entry.toolCandidate !== undefined && (!ValidateToolCandidate(entry.toolCandidate) || entry.status === 'validated')) return invalid()
       if (!object(entry) || entry.id !== id || !uuidPattern.test(id) || !['candidate', 'validated', 'deprecated'].includes(entry.status) || !object(entry.source) || !tasks.has(entry.source.taskId) || !positive(entry.source.cardRevision) || !positive(entry.source.workflowRevision) || !hashPattern.test(entry.source.artifactDigest) || typeof entry.problemClass !== 'string' || typeof entry.conclusion !== 'string' || !['appliesWhen', 'doesNotApplyWhen', 'verification', 'counterexamples', 'operatorVersions'].every((key) => strings(entry[key as keyof ExperienceEntry])) || !Number.isFinite(entry.createdAt) || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= entry.createdAt || (entry.status === 'validated' && (!identifier(entry.reviewer) || !hashPattern.test(entry.reviewArtifactDigest ?? ''))) || (entry.status === 'deprecated' && typeof entry.deprecationReason !== 'string')) return invalid()
     }
     return { ok: true }

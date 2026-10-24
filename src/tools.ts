@@ -420,9 +420,14 @@ export const apply = (ctx: PluginContextLike): void => {
     getToolDefinition({ name: 'swarm_review_plan', description: '独立只读 Agent 与 Jev 复审当前目标、流程设计和 Mermaid。返回具体阻塞维度；同一负结论复用，须修正实质合同而非刷分。bypass_cache 仅刷新通过结论；故障可重试。不能代替实现后验证。',
       parameters: { ...taskParameters, properties: { ...taskParameters.properties, bypass_cache: { type: 'boolean' } } },
       execute: (args, exec) => service.ReviewPlan(args, getExec(exec)), render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => false }),
-    getToolDefinition({ name: 'swarm_experience', description: '检索最多三条有出处、版本与失效条件的经验；候选不能当作已验证事实，盲审不能读取经验。',
-      parameters: { type: 'object', properties: { task_id: { type: 'string' }, problemClass: { type: 'string' }, includeCandidates: { type: 'boolean' } }, additionalProperties: false },
-      execute: service.Experience, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => true })
+    getToolDefinition({ name: 'swarm_experience', description: '默认检索最多三条有出处的经验；候选不等于验证事实，盲审不可读。天枢可用record_tool_candidate登记技能/工具来源与隔离元数据；本版本无沙箱评测，不晋升、不执行、不装载候选。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' }, action: { type: 'string', enum: ['list', 'record_tool_candidate'] }, problemClass: { type: 'string' }, includeCandidates: { type: 'boolean' },
+        conclusion: { type: 'string' }, appliesWhen: { type: 'array', items: { type: 'string' } }, doesNotApplyWhen: { type: 'array', items: { type: 'string' } },
+        toolCandidate: { type: 'object', properties: { kind: { type: 'string', enum: ['skill', 'tool'] }, version: { type: 'string' },
+          artifactRefs: { type: 'array', items: { type: 'string' } }, permissions: { type: 'array', items: { type: 'string' } }, testRefs: { type: 'array', items: { type: 'string' } },
+          rollback: { type: 'string' }, evaluation: { type: 'string', enum: ['unavailable'] }, executionEnabled: { type: 'boolean', description: '只能为false，运行时强制校验；所有引用与文本均有界' } }, required: ['kind', 'version', 'artifactRefs', 'permissions', 'testRefs', 'rollback', 'evaluation', 'executionEnabled'], additionalProperties: false }
+      }, additionalProperties: false },
+      execute: service.Experience, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: (args) => (args as { action?: string }).action !== 'record_tool_candidate' })
   ]
   for (const definition of definitions) ctx.effect(() => tools.register(definition))
   const skills = ctx.get('skills') as SkillsLike | undefined

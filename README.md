@@ -8,8 +8,15 @@
 
 DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文专家（谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔），用任务卡、门禁和真实证据决定是否验收；模型路由按你的订阅配置多层回退，故障时立即切到可用备用，最后一个可用模型短时故障时在预算内等待恢复。
 
-- 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.2）
+- 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.3）
 - 新建会话选「百工模式」即可使用；Jev API key 可选
+
+### 3.1.2 的变化
+
+- 新增原生「任务进度」选项卡，集中查看六种图表视角、任务版本、进度及节点详情；窄屏遵循 DSH 原生「更多」菜单。
+- 图表共享读取与取消机制；失败保留过期快照，迟到响应不覆盖当前任务，关闭展示不停止长期任务。
+- 工具/技能候选仅记录来源、权限、测试和回滚信息，尚未独立评测时不可执行，不自动装载工具。
+- 核对并吸收 Ruflo 的模块分工与证据化候选思路；保持百工唯一执行控制器，详见[本版变化与后续路线](docs/3.1.2-任务进度与后续路线.md)。
 
 ### 3.1.1 的变化
 
@@ -125,8 +132,15 @@ MIT，见 [LICENSE](LICENSE)。内嵌的 Jev 工具改编自 jev-mcp 0.2.1（MIT
 
 A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" leads 12 Chinese-named experts (requirements, architecture, math, code exploration, research, vision, complex implementation, command execution, small edits, independent review, verification, copywriting) and accepts work only on evidence: task cards, hard gates and real command results. Each role has a multi-layer model chain built from your subscriptions; failures switch to a usable backup immediately, and a short outage of the last usable model is waited out within a budget.
 
-- Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.2 recommended)
+- Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.3 recommended)
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
+
+### What's new in 3.1.2
+
+- A native Task progress view brings six diagram perspectives, task revisions, progress and node details together, respecting DSH's responsive More menu.
+- Shared cancellable reads retain stale snapshots on failures and reject late results; closing a view does not cancel long-running work.
+- Tool/skill candidates record provenance, permissions, planned tests and rollback references; they remain non-executable without independent evaluation.
+- Selected Ruflo architecture ideas inform the roadmap while Agent Swarm remains the sole execution controller. See [this release and the roadmap](docs/3.1.2-任务进度与后续路线.md).
 
 ### What's new in 3.1.1
 

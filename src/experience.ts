@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { DurableStateStore } from './state-store.js'
 import { queryReviewedExperiences, type MemoryQuery } from './memory.js'
 import { getValueDigest } from './workflow.js'
+import { ValidateToolCandidate, type ToolCandidateMetadata } from './tool-candidate.js'
 
 export interface ExperienceSource {
   taskId: string
@@ -26,6 +27,7 @@ export interface ExperienceEntry {
   reviewer?: string
   reviewArtifactDigest?: string
   deprecationReason?: string
+  toolCandidate?: ToolCandidateMetadata
 }
 export interface ExperienceState { experiences: Record<string, ExperienceEntry> }
 export interface ExperienceReview {
@@ -47,12 +49,13 @@ export const createExperienceRepository = <T extends ExperienceState>(store: Dur
   const identity = (entry: Omit<ExperienceEntry, 'id' | 'status' | 'createdAt' | 'expiresAt' | 'reviewer' | 'reviewArtifactDigest' | 'deprecationReason'>) => getValueDigest({
     problemClass: entry.problemClass, appliesWhen: entry.appliesWhen, doesNotApplyWhen: entry.doesNotApplyWhen,
     conclusion: entry.conclusion, source: entry.source, verification: entry.verification,
-    counterexamples: entry.counterexamples, operatorVersions: entry.operatorVersions
+    counterexamples: entry.counterexamples, operatorVersions: entry.operatorVersions, ...(entry.toolCandidate === undefined ? {} : { toolCandidate: entry.toolCandidate })
   })
   return {
     addCandidate: async (input: Omit<ExperienceEntry, 'id' | 'status' | 'createdAt' | 'reviewer' | 'reviewArtifactDigest' | 'deprecationReason'>): Promise<ExperienceEntry> => {
       if (typeof input.conclusion !== 'string' || input.conclusion.length < 1 || input.conclusion.length > 4000 || typeof input.problemClass !== 'string' || input.problemClass.length < 1 || input.problemClass.length > 128 || !digest.test(input.source?.artifactDigest ?? '') || !Number.isSafeInteger(input.source.cardRevision) || input.source.cardRevision < 1 || !Number.isSafeInteger(input.source.workflowRevision) || input.source.workflowRevision < 1 || !Number.isFinite(input.expiresAt) || input.expiresAt <= now()) throw new ExperienceError('EXPERIENCE_INVALID', 'Candidate needs a bounded conclusion, source revisions/digest and future expiry')
       for (const key of ['appliesWhen', 'doesNotApplyWhen', 'verification', 'counterexamples', 'operatorVersions'] as const) if (!Array.isArray(input[key]) || input[key].length > 32 || input[key].some((s) => typeof s !== 'string' || s.length > 2000)) throw new ExperienceError('EXPERIENCE_INVALID', 'Invalid bounded experience fields')
+      if (input.toolCandidate !== undefined && !ValidateToolCandidate(input.toolCandidate)) throw new ExperienceError('EXPERIENCE_INVALID', 'Tool candidates require bounded references and disabled execution')
       const createdAt = now(), inputIdentity = identity(input)
       let entry: ExperienceEntry = { ...structuredClone(input), id: randomUUID(), status: 'candidate', createdAt }
       // 补丁在 store 的互斥区内按冻结基线求值：去重与容量检查对最新的已提交候选成立。
@@ -70,6 +73,8 @@ export const createExperienceRepository = <T extends ExperienceState>(store: Dur
       let result!: ExperienceEntry
       await store.update('experience/promote', { build: async (state) => {
         const entry = state.experiences[id]
+        // 经验复评不等于代码沙箱评测；不能沿用文本经验晋升路径装载工具。
+        if (entry?.toolCandidate !== undefined) throw new ExperienceError('EXPERIENCE_REVIEW_REQUIRED', 'Tool evaluation unavailable; candidate remains quarantined and cannot be activated')
         if (entry === undefined || entry.status !== 'candidate' || entry.expiresAt <= now() || !review.evidenceComplete || review.unresolvedSevere !== 0 || !review.applicabilityConfirmed || !review.reviewer || review.reviewer === review.author || (entry.source.authorId !== undefined && entry.source.authorId !== review.author) || !digest.test(review.reviewArtifactDigest) || review.sourceArtifactDigest !== entry.source.artifactDigest || entry.verification.length === 0 || options.verifyReview === undefined || !await options.verifyReview(entry, review)) throw new ExperienceError('EXPERIENCE_REVIEW_REQUIRED', 'Promotion needs independently verified current source evidence, an independent reviewer and no unresolved severe findings')
         result = { ...entry, status: 'validated', reviewer: review.reviewer, reviewArtifactDigest: review.reviewArtifactDigest }
         return { set: { experiences: { [id]: result } } }

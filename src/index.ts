@@ -211,6 +211,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     for (const route of getRpcRoutes(() => service.jev, {
       quotaView: (force, signal) => { if (force) quotaSource.invalidate(); return quotaReader.read({ routes: quotaRoutes(), force, signal }) },
       taskView: (sessionId, taskId) => service.getTaskViewForRpc(sessionId, taskId),
+      taskIndex: (sessionId) => service.getTaskIndexForRpc(sessionId),
       agentView: service.getAgentViewForRpc, agentControl: service.ControlAgentForRpc
     })) scoped.effect(() => connection.fetch.register(route))
   })

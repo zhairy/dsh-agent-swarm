@@ -13,7 +13,7 @@ import { SwarmError } from './util/errors.js'
 
 export const RPC_PREFIX = 'swarm.'
 export const RPC_METHODS = ['jevStatus', 'jevHealth'] as const
-export type RpcMethod = typeof RPC_METHODS[number] | 'taskView' | 'agentView' | 'agentControl' | 'quotaView'
+export type RpcMethod = typeof RPC_METHODS[number] | 'taskView' | 'taskIndex' | 'agentView' | 'agentControl' | 'quotaView'
 export interface AgentControlRpcInput {
   parentSessionId: string
   childId: string
@@ -29,6 +29,7 @@ export interface AgentControlRpcInput {
 export interface TaskRpcDepsInfo {
   quotaView?: (force: boolean, signal: AbortSignal) => unknown | Promise<unknown>
   taskView?: (sessionId: string, taskId: string) => unknown | Promise<unknown>
+  taskIndex?: (sessionId: string) => unknown | Promise<unknown>
   agentView?: (parentSessionId: string, childId: string) => unknown | Promise<unknown>
   agentControl?: (input: AgentControlRpcInput) => unknown | Promise<unknown>
 }
@@ -70,6 +71,11 @@ export const RunRpcMethod = async (jev: JevHub, method: RpcMethod, signal: Abort
     if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return failure('gateway/bad-request', 'taskView payload must contain sessionId and taskId')
     const input = payload as Record<string, unknown>
     const validId = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '' && value.length <= 128 && !/[\u0000-\u001F\u007F]/.test(value)
+    if (method === 'taskIndex') {
+      if (Object.keys(input).some(key => key !== 'sessionId') || !validId(input.sessionId)) return failure('gateway/bad-request', 'taskIndex accepts only a bounded sessionId')
+      if (signal.aborted) return failure('gateway/cancelled', 'Task index read cancelled before admission')
+      return deps?.taskIndex === undefined ? failure('swarm/unavailable', 'taskIndex service unavailable') : { ok: true, value: await deps.taskIndex(input.sessionId) }
+    }
     if (method === 'agentView' || method === 'agentControl') {
       const allowed = method === 'agentView' ? ['parentSessionId', 'childId'] : ['parentSessionId', 'childId', 'expectedRevision', 'action', 'route', 'interruptRunning', 'retryRoute', 'forceRetry', 'confirmSafeToContinue', 'steering']
       if (Object.keys(input).some((key) => !allowed.includes(key)) || !validId(input.parentSessionId) || !validId(input.childId)) return failure('gateway/bad-request', 'agent controls require bounded parentSessionId and childId')
@@ -88,6 +94,7 @@ export const RunRpcMethod = async (jev: JevHub, method: RpcMethod, signal: Abort
     }
     if (Object.keys(input).some((key) => !['sessionId', 'taskId'].includes(key)) || !validId(input.sessionId) || !validId(input.taskId)) return failure('gateway/bad-request', 'taskView accepts only bounded string sessionId and taskId')
     if (deps?.taskView === undefined) return failure('swarm/unavailable', 'taskView service unavailable')
+    if (signal.aborted) return failure('gateway/cancelled', 'Task view read cancelled before admission')
     return { ok: true, value: await deps.taskView(input.sessionId, input.taskId) }
   } catch (error) {
     if (error instanceof JevCredentialError) return failure(error.reason === 'credential-permission-denied' ? 'swarm/permission-denied' : 'swarm/credential-unavailable', error.reason)
@@ -102,7 +109,7 @@ export const RunRpcMethod = async (jev: JevHub, method: RpcMethod, signal: Abort
  * @returns {FetchRouteLike[]} 路由
  */
 export const getRpcRoutes = (getJev: () => JevHub, deps?: TaskRpcDepsInfo): FetchRouteLike[] => {
-  const methods: RpcMethod[] = [...RPC_METHODS, ...(deps?.quotaView === undefined ? [] : ['quotaView' as const]), ...(deps?.taskView === undefined ? [] : ['taskView' as const]), ...(deps?.agentView === undefined ? [] : ['agentView' as const]), ...(deps?.agentControl === undefined ? [] : ['agentControl' as const])]
+  const methods: RpcMethod[] = [...RPC_METHODS, ...(deps?.quotaView === undefined ? [] : ['quotaView' as const]), ...(deps?.taskView === undefined ? [] : ['taskView' as const]), ...(deps?.taskIndex === undefined ? [] : ['taskIndex' as const]), ...(deps?.agentView === undefined ? [] : ['agentView' as const]), ...(deps?.agentControl === undefined ? [] : ['agentControl' as const])]
   const routes = methods.map((method): FetchRouteLike => {
     const full = `${RPC_PREFIX}${method}`
     return {
