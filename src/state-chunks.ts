@@ -43,14 +43,14 @@ export const LEGACY_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
   planningBudgets: { kind: 'dict' }
 })
 
-/** 当前布局版本：2 = delegations 按任务分桶。日志行的 `layout` 数字必须与它一致才能直接增量续写。 */
-export const LAYOUT_VERSION = 2
+/** 3加入独立安全段；1为扁平委派，2为按任务分桶，旧指纹不可随新字段改变。 */
+export const LAYOUT_VERSION = 3
 
 /**
  * dsh-agent-swarm 的状态分片规格；通用 state-store 不假定任何段名，
  * 调用方（feature-session）注入本规格后才会获得分片级增量收益。
  */
-export const SWARM_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
+export const PRE_GUARD_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
   tasks: { kind: 'list', keyOf: itemKey('taskId') },
   // 委派按任务分桶：段内分片数 = 任务数，而不是历史委派总数。
   delegations: { kind: 'list', keyOf: itemKey('delegationId'), bucketOf: itemKey('taskId') },
@@ -65,6 +65,12 @@ export const SWARM_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
   budgets: { kind: 'dict' },
   planningBudgets: { kind: 'dict' }
 })
+export const SWARM_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
+  ...PRE_GUARD_SEGMENT_SPECS,
+  runtimeControls: { kind: 'dict' },
+  progressHistory: { kind: 'dict' },
+  authorizationDecisions: { kind: 'dict' }
+})
 
 /**
  * 当前布局的完整 store 选项。
@@ -73,6 +79,7 @@ export const SWARM_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
 export const SWARM_LAYOUT_OPTIONS = Object.freeze({
   segments: SWARM_SEGMENT_SPECS,
   legacySegments: LEGACY_SEGMENT_SPECS,
+  legacyLayouts: { 1: LEGACY_SEGMENT_SPECS, 2: PRE_GUARD_SEGMENT_SPECS },
   layoutVersion: LAYOUT_VERSION
 })
 

@@ -25,6 +25,9 @@ import { ValidateDelegateInput } from './delegate.js'
 import { loadMemoryHandoff } from './memory-handoff.js'
 import { SwarmError } from './util/errors.js'
 import { ValidateToolCandidate } from './tool-candidate.js'
+import { createAuthorizationRepository, ValidateAuthorizationDecision, type AuthorizationState } from './authorization-wait.js'
+import { createProgressGuard, ValidateProgressControl, ValidateProgressPage, type ProgressGuardState, type ProgressPage } from './progress-guard.js'
+import { ValidateVerificationReceipt } from './verification-receipt.js'
 
 /**
  * 内存态（persistence.enabled=false）不写日志与快照，持久化的 4MiB 上限不适用；
@@ -41,9 +44,9 @@ export interface FeatureRuntimeSnapshot {
   rootUpgradeExplicit: string[]
 }
 
-interface FeatureState extends MessageState, ExperienceState {
+interface FeatureState extends MessageState, ExperienceState, AuthorizationState, ProgressGuardState {
   runtime?: FeatureRuntimeSnapshot
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   tasks: TaskRecord[]
   delegations: DelegationRecord[]
   threads: ThreadInfo[]
@@ -61,6 +64,8 @@ export interface FeatureSession {
   bus?: MessageBus
   contexts: ContextStore
   experiences: ReturnType<typeof createExperienceRepository<FeatureState>>
+  authorizations: ReturnType<typeof createAuthorizationRepository<FeatureState>>
+  progress: ReturnType<typeof createProgressGuard<FeatureState>>
   budgetFor: (task: TaskRecord) => ExecutionBudget
   planningBudgetFor: (task: TaskRecord) => ExecutionBudget
   getRestoredAgentControls: () => AgentControlRecord[]
@@ -94,9 +99,80 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
  * 而材料字节正是状态体积的主体，这一步让提交成本不再随材料字节线性增长。
  */
 const verifiedFrozenContexts = new WeakSet<object>()
+const verifiedFrozenProgressPages = new WeakSet<object>()
+
+/** Stable task lineage: presentation labels/revisions and model-selected UUIDs do not reset history. */
+export const getTaskRuntimeLineage = (input: { rootSessionId: string; workspaceId: string; taskId: string }): string => getValueDigest({
+  rootSessionId: input.rootSessionId, workspaceId: input.workspaceId, taskId: input.taskId
+})
 
 /** Only stable quarantine facts are durable. A process-local half-open claimant is never resumed. */
 export const validatePersistedRouteHealth = validateRouteHealthSnapshot
+
+/** Cross references stay bounded; unchanged frozen pages skip reparsing/hashing all prior projections. */
+const inspectRuntimeGuards = (state: FeatureState, tasks: ReadonlyMap<string, TaskRecord>, expected: { rootSessionId: string; workspaceId: string }): StateValidationReport => {
+  let path = '$.runtimeControls', code = 'RUNTIME_GUARD_FORMAT'
+  const invalid = (): StateValidationReport => ({ ok: false, issues: [{ path, code }] })
+  try {
+    const controls = state.runtimeControls ?? {}, pages = state.progressHistory ?? {}, decisions = state.authorizationDecisions ?? {}
+    if (Object.keys(controls).length > 128 || Object.keys(pages).length > 128 * 32 || Object.keys(decisions).length > 128) return invalid()
+    const taskLineages = new Map<string, string>()
+    const histories = new Map<string, { pages: Map<number, ProgressPage>; fingerprints: Set<string>; count: number; hits: number }>()
+    for (const [index, [key, control]] of Object.entries(controls).entries()) {
+      path = `$.runtimeControls[${index}]`; code = 'RUNTIME_CONTROL_OWNER'
+      if (!ValidateProgressControl(control) || key !== control.lineageId || control.rootSessionId !== expected.rootSessionId || control.workspaceId !== expected.workspaceId || control.taskIds.length === 0
+        || !control.taskIds.some(taskId => taskId === '@root' || tasks.has(taskId))) return invalid()
+      for (const taskId of control.taskIds) {
+        if (taskLineages.has(taskId) && taskLineages.get(taskId) !== key) return invalid()
+        taskLineages.set(taskId, key)
+      }
+    }
+    for (const [index, [key, page]] of Object.entries(pages).entries()) {
+      path = `$.progressHistory[${index}]`; code = 'PROGRESS_HISTORY_FORMAT'
+      const reusable = object(page) && Object.isFrozen(page) && verifiedFrozenProgressPages.has(page)
+      if (!reusable && !ValidateProgressPage(page)) return invalid()
+      if (!reusable && Object.isFrozen(page) && Object.isFrozen(page.items) && page.items.every(item => Object.isFrozen(item))) verifiedFrozenProgressPages.add(page)
+      code = 'PROGRESS_HISTORY_OWNER'
+      if (key !== `${page.lineageId}:${page.page}` || controls[page.lineageId] === undefined) return invalid()
+      const history = histories.get(page.lineageId) ?? { pages: new Map(), fingerprints: new Set(), count: 0, hits: 0 }
+      if (history.pages.has(page.page)) return invalid()
+      history.pages.set(page.page, page)
+      for (const item of page.items) {
+        if (history.fingerprints.has(item.fingerprint)) return invalid()
+        history.fingerprints.add(item.fingerprint); history.count++; history.hits += item.hits
+      }
+      histories.set(page.lineageId, history)
+    }
+    for (const [index, [lineageId, control]] of Object.entries(controls).entries()) {
+      path = `$.runtimeControls[${index}]`; code = 'PROGRESS_HISTORY_INDEX'
+      const history = histories.get(lineageId)
+      const requiredPages = Math.ceil(control.historyCount / 32)
+      if ((history?.count ?? 0) !== control.historyCount || (history?.pages.size ?? 0) !== requiredPages
+        || (history?.hits ?? 0) > control.activations || control.activations < control.historyCount
+        || (control.lastFingerprint !== undefined && !history?.fingerprints.has(control.lastFingerprint))) return invalid()
+      for (let number = 0; number < requiredPages; number++) {
+        const page = history!.pages.get(number)
+        if (page === undefined || page.items.length !== (number === requiredPages - 1 ? control.historyCount - number * 32 : 32)) return invalid()
+      }
+    }
+    const taskDecisionCounts = new Map<string, number>()
+    for (const [index, [key, decision]] of Object.entries(decisions).entries()) {
+      path = `$.authorizationDecisions[${index}]`; code = 'AUTHORIZATION_DECISION_OWNER'
+      if (!ValidateAuthorizationDecision(decision) || key !== decision.id) return invalid()
+      const binding = decision.questionBinding, task = tasks.get(binding.taskId)
+      if (binding.rootSessionId !== expected.rootSessionId || binding.workspaceId !== expected.workspaceId || (task === undefined && binding.taskId !== '@root')
+        || binding.lineageId !== (taskLineages.get(binding.taskId) ?? getTaskRuntimeLineage({ ...expected, taskId: binding.taskId }))) return invalid()
+      code = 'AUTHORIZATION_DECISION_VERSION'
+      for (const current of [binding, decision.appliesToBinding].filter(value => value !== undefined)) {
+        if (task !== undefined && ['cardRevision', 'workflowRevision', 'requestRevision'].some(key => current[key as 'cardRevision'] > (task[key as 'cardRevision'] ?? 1))) return invalid()
+      }
+      const count = (taskDecisionCounts.get(binding.taskId) ?? 0) + 1
+      if (count > 64) { code = 'AUTHORIZATION_DECISION_CAPACITY'; return invalid() }
+      taskDecisionCounts.set(binding.taskId, count)
+    }
+    return { ok: true }
+  } catch { return invalid() }
+}
 
 /** Verify complete runtime contracts before exposing or replaying any saved state. */
 export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: string; workspaceId: string }): StateValidationReport => {
@@ -104,7 +180,13 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
   const at = (nextPath: string, nextCode: string) => { path = nextPath; code = nextCode }
   const invalid = (): StateValidationReport => ({ ok: false, issues: [{ path, code }] })
   try {
-    if (!object(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.tasks) || !Array.isArray(raw.delegations) || !Array.isArray(raw.threads) || !Array.isArray(raw.contexts) || !['bindings', 'bindingHistory', 'messages', 'messageAcks', 'experiences', 'budgets'].every((key) => object(raw[key]))) return invalid()
+    if (!object(raw) || ![1, 2].includes(Number(raw.schemaVersion)) || typeof raw.schemaVersion !== 'number'
+      || !Array.isArray(raw.tasks) || !Array.isArray(raw.delegations) || !Array.isArray(raw.threads) || !Array.isArray(raw.contexts)
+      || !['bindings', 'bindingHistory', 'messages', 'messageAcks', 'experiences', 'budgets'].every((key) => object(raw[key]))) return invalid()
+    at('$.schemaVersion', 'GUARD_SCHEMA_VERSION')
+    const safetyFields = ['runtimeControls', 'progressHistory', 'authorizationDecisions'] as const
+    if ((raw.schemaVersion === 1 && safetyFields.some(key => Object.hasOwn(raw, key)))
+      || (raw.schemaVersion === 2 && safetyFields.some(key => !object(raw[key])))) return invalid()
     const state = raw as unknown as FeatureState
     at('$.runtime', 'RUNTIME_FORMAT')
     if (state.runtime !== undefined) {
@@ -123,6 +205,7 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
       at(`$.tasks[${index}]`, 'TASK_FORMAT')
       if (!object(task) || !identifier(task.taskId) || tasks.has(task.taskId) || task.sessionId !== expected.rootSessionId || (task.workspaceId !== undefined && task.workspaceId !== expected.workspaceId) || ValidateTaskCard(task.card).card === undefined || !strings(task.delegationIds) || new Set(task.delegationIds).size !== task.delegationIds.length || !Number.isSafeInteger(task.rounds) || task.rounds < 0 || !Number.isFinite(task.createdAt) || !Number.isFinite(task.updatedAt) || ![task.cardRevision, task.workflowRevision, task.requestRevision].every(optionalRevision) || (task.intentLastDigest !== undefined && !/^[a-f0-9]{64}$/.test(task.intentLastDigest))) return invalid()
       at(`$.tasks[${index}].intentRefs`, 'INTENT_REFERENCE_FORMAT')
+      if (task.runtimeGoalId !== undefined && (state.schemaVersion !== 2 || !identifier(task.runtimeGoalId))) return invalid()
       if (task.intentRefs !== undefined && (!Array.isArray(task.intentRefs) || task.intentRefs.length === 0
         || task.intentRefs.some(ref => !object(ref) || Object.keys(ref).some(key => !['source', 'text'].includes(key))
           || typeof ref.source !== 'string' || ref.source.trim() === '' || typeof ref.text !== 'string' || ref.text.trim() === '')
@@ -135,6 +218,13 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
       if (task.acceptance !== undefined) {
         const a = task.acceptance
         if (!object(a) || !['accept', 'reject', 'incomplete'].includes(a.decision) || !['accepted', 'blocked', 'recorded'].includes(a.status) || !strings(a.missing) || !strings(a.unresolved) || typeof a.summary !== 'string' || typeof a.stopReason !== 'string' || !Number.isFinite(a.at) || !Array.isArray(a.resolutions) || a.resolutions.some((r) => !object(r) || !identifier(r.delegationId) || !Number.isSafeInteger(r.index) || r.index < 0 || typeof r.resolution !== 'string')) return invalid()
+        const receipt = (a as { verificationReceipt?: unknown }).verificationReceipt
+        if (receipt !== undefined) {
+          at(`$.tasks[${index}].acceptance.verificationReceipt`, 'VERIFICATION_RECEIPT_BINDING')
+          if (state.schemaVersion !== 2 || a.status !== 'accepted' || a.decision !== 'accept' || !ValidateVerificationReceipt(receipt)
+            || receipt.binding.rootSessionId !== expected.rootSessionId || receipt.binding.workspaceId !== expected.workspaceId || receipt.binding.taskId !== task.taskId
+            || ['requestRevision', 'cardRevision', 'workflowRevision'].some(key => receipt.binding[key as 'requestRevision'] > (task[key as 'requestRevision'] ?? 1))) return invalid()
+        }
       }
       at(`$.tasks[${index}].workflowDefinition`, 'WORKFLOW_CONTRACT')
       if (task.workflowDefinition !== undefined) {
@@ -155,6 +245,8 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
       if ([task.planningFixRounds, task.planningAutoReviewRuns].some((value) => value !== undefined && (!Number.isSafeInteger(value) || value < 0))) return invalid()
       tasks.set(task.taskId, task)
     }
+    const runtimeValidation = inspectRuntimeGuards(state, tasks, expected)
+    if (!runtimeValidation.ok) return runtimeValidation
     const recordIds = new Set<string>()
     const recordsById = new Map<string, DelegationRecord>()
     const recordIdsByTask = new Map<string, Set<string>>()
@@ -307,6 +399,16 @@ export const validateFeatureState = (raw: unknown, expected: { rootSessionId: st
 
 const recover = (state: FeatureState): FeatureState => {
   const copy = structuredClone(state)
+  copy.schemaVersion = 2
+  copy.runtimeControls ??= {}
+  copy.progressHistory ??= {}
+  copy.authorizationDecisions ??= {}
+  for (const decision of Object.values(copy.authorizationDecisions)) {
+    if (!['prepared', 'waiting', 'unavailable'].includes(decision.phase)) continue
+    decision.phase = 'reconcile-required'
+    decision.reason = 'restart-requires-host-reconciliation'
+    decision.decisionRevision++
+  }
   const recordsById = new Map(copy.delegations.map((record) => [record.delegationId, record]))
   const uncertain = new Set(copy.delegations.filter((record) => (['queued', 'running'].includes(record.status) || record.finalization === 'processing')).map((record) => record.delegationId))
   for (const control of copy.agentControls ?? []) if (uncertain.has(control.delegationId)) {
@@ -356,16 +458,25 @@ export const createFeatureSession = async (input: {
 }): Promise<FeatureSession> => {
   const workspaceId = await getWorkspaceId(input.cwd)
   const directory = join(input.config.persistence.directory || join(input.dshHome, 'share', 'dsh-agent-swarm', 'state'), workspaceId, digest(input.rootSessionId))
-  const initialState: FeatureState = { schemaVersion: 1, tasks: [], delegations: [], threads: [], budgets: {},
-    bindings: {}, bindingHistory: {}, messages: {}, messageAcks: {}, experiences: {}, contexts: [] }
+  const initialState: FeatureState = { schemaVersion: 2, tasks: [], delegations: [], threads: [], budgets: {},
+    bindings: {}, bindingHistory: {}, messages: {}, messageAcks: {}, experiences: {}, contexts: [],
+    runtimeControls: {}, progressHistory: {}, authorizationDecisions: {} }
   const handoff = await loadMemoryHandoff<FeatureState>({ dshHome: input.dshHome, rootSessionId: input.rootSessionId, workspaceId,
     persistenceEnabled: input.config.persistence.enabled,
     validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }) })
+  // A current-version export cannot legitimately omit its security history.
+  // Only real legacy producers may enter the schema-1 migration path.
+  if (handoff?.sourceVersion === '3.1.3' && handoff.state.schemaVersion !== 2) throw new StateStoreError('RECOVERY_REQUIRED', 'Memory handoff rejected: current producer omitted runtime guard schema; pending record retained')
   const configuredLimit = input.config.persistence.maxStateBytes
   const store = await createDurableStateStore({ directory, initialState: handoff === undefined ? initialState : recover(handoff.state), enabled: input.config.persistence.enabled,
     ...(configuredLimit > 0 ? { maxStateBytes: configuredLimit } : input.config.persistence.enabled ? {} : { maxStateBytes: MEMORY_MODE_MAX_STATE_BYTES }),
     validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }),
     ...SWARM_LAYOUT_OPTIONS, recover })
+  // A legacy sequence-zero snapshot does not invoke the store's recovery callback.
+  // Publish the schema fence before exposing any new guard repository to callers.
+  try {
+    if (store.readFields?.(['schemaVersion']).schemaVersion === 1) await store.commit('state/guard-schema-migrated', draft => recover(draft))
+  } catch (error) { await store.dispose(); throw error }
   const saved = store.read()
   // Older versions charged planning review reservations against implementation calls.
   // Preserve sent work and observation records, but classify these known reservations correctly.
@@ -526,6 +637,8 @@ export const createFeatureSession = async (input: {
       return actual !== undefined && getCanonicalJson(actual) === getCanonicalJson(supplied)
     }
   })
+  const authorizations = createAuthorizationRepository(store, { now: input.now })
+  const progress = createProgressGuard(store, input.now, { rootSessionId: input.rootSessionId, workspaceId })
   // 增量提交装配器：各存储的写入口记录脏键，persist 只把这些脏键翻译成"变更分片"补丁。
   // 未触碰分片沿用已提交缓存；提交失败时脏键保留，重试会再次携带同一批键。
   const committedBudgetSignatures = new Map<string, string>()
@@ -581,7 +694,7 @@ export const createFeatureSession = async (input: {
     getRestoredRuntime: () => saved.runtime === undefined ? undefined : structuredClone(saved.runtime),
     commitRecovery: async () => { await handoff?.commitConsumption() },
     finishBudgetFor: (task) => budgets.get(task.taskId) ?? budgetFor(task),
-    experiences,
+    experiences, authorizations, progress,
     promoteCandidateWithEvidence: async (id) => {
       const lease = await promotionLeases.acquire(input.cwd, 'experience:' + input.rootSessionId + ':' + id, 'verify')
       try {

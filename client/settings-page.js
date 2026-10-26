@@ -8,6 +8,7 @@
 
 const React = require('react')
 const h = React.createElement
+const { SETTINGS_TABS, ROUTE_DRAG_TYPE, getNextSettingsTab, moveRouteLayer } = require('@swarm/settings-navigation')
 
 /**
  * @typedef {{ provider: string, model: string, reasoningEffort?: string, policy?: Record<string, unknown> }} RouteInfo
@@ -26,6 +27,7 @@ const MATH = DATA.math
 const NS = 'settings.swarmAgents'
 const EMPTY_SLOT = Object.freeze({ provider: '', model: '', reasoningEffort: '' })
 const NO_UPGRADE = Object.freeze({ enabled: false, chain: [], triggers: [] })
+let settingsControllerSequence = 0
 /** 与宿主 DEFAULT_AGENTS_CONFIG 一致；构建时由 DATA.policy 注入，缺失时用这份兜底 */
 const POLICY_DEFAULTS = Object.freeze({ language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every', nativeTeamProjection: false, ...(DATA.policy?.defaults ?? {}) })
 const SESSION_POLICIES = ['auto', 'continuable', 'oneshot']
@@ -314,6 +316,21 @@ Object.assign(en, {
 })
 
 // ───────────────────────── 纯逻辑（单元测试覆盖） ─────────────────────────
+
+Object.assign(zh, {
+  settingsCategories: '设置分类', tabOverview: '概览与 Jev', tabModels: '模型路由', tabExecution: '专家执行', tabGuards: '规划与审批', tabMath: '数学工具',
+  tabOverviewHint: '查看模型路由概况及 Jev 凭据；不显示或估算订阅余额。', tabModelsHint: '为每位专家设置主模型、备用模型与升级模型。拖动或使用上下移动调整顺序，保存后生效。',
+  tabExecutionHint: '设置语言、连续会话、重试与网络恢复，以及模型调用记录的展示。', tabGuardsHint: '配置规划审核与工具审批；业务授权不能覆盖宿主禁止策略。', tabMathHint: '配置纯函数算子、数值模式与计算资源边界。',
+  categoryDirty: '待保存', categoryInvalid: '需修正', routeOverview: '路由概况', configuredAgents: '专家路由', customizedAgents: '自定义路由', routeConfigurationNote: '未管理的工作流、经验与存储字段仍由宿主配置保留；切换分类不会丢弃草稿。',
+  dragLayer: '拖动排序', moveLayerUp: '上移', moveLayerDown: '下移', reorderSaved: '顺序已调整，保存后生效。', chainDragHint: '主模型固定在首位；备用模型可拖动或用上下移动排序。手柄支持 Alt + ↑ / ↓。', upgradeDragHint: '升级链可整体排序，首位是升级首选；常规主模型与备用链不受影响。'
+})
+Object.assign(en, {
+  settingsCategories: 'Settings categories', tabOverview: 'Overview & Jev', tabModels: 'Model routes', tabExecution: 'Expert execution', tabGuards: 'Planning & approvals', tabMath: 'Math tools',
+  tabOverviewHint: 'Inspect route configuration and Jev credentials; subscription balances are neither displayed nor estimated.', tabModelsHint: 'Choose each expert’s primary, backup and escalation models. Drag or use Move up/down; save to apply the new order.',
+  tabExecutionHint: 'Configure output language, continuous sessions, retries, network recovery and model-call presentation.', tabGuardsHint: 'Configure planning review and tool approvals. Business authorization never overrides a host denial.', tabMathHint: 'Configure pure operators, numeric modes and calculation resource boundaries.',
+  categoryDirty: 'Unsaved', categoryInvalid: 'Needs correction', routeOverview: 'Route overview', configuredAgents: 'Expert routes', customizedAgents: 'Customized routes', routeConfigurationNote: 'Unmanaged workflow, experience and storage fields remain intact. Switching categories keeps all drafts.',
+  dragLayer: 'Drag to reorder', moveLayerUp: 'Move up', moveLayerDown: 'Move down', reorderSaved: 'Order changed. Save to apply it.', chainDragHint: 'The primary stays first. Drag backups or use Move up/down. The handle also supports Alt + ↑ / ↓.', upgradeDragHint: 'Reorder the full escalation chain; its first item is preferred. The regular primary and backups stay unchanged.'
+})
 
 const asRecord = (value) => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {})
 
@@ -644,6 +661,13 @@ class SwarmAgentsController {
     this.ctx = ctx
     this.form = ctx.configForms.get(DATA.namespace)
     this.drafts = new Map()
+    this.activeTab = 'overview'
+    this.layerIds = new Map()
+    this.layerSequence = 0
+    this.dragSequence = 0
+    this.drag = undefined
+    this.instanceId = globalThis.crypto?.randomUUID?.() ?? `settings-${Date.now()}-${++settingsControllerSequence}`
+    this.formRevision = this.form.getSnapshot().revision
     /** 会话与重试策略的草稿；undefined 表示没有修改 */
     this.policyDraft = undefined
     this.approvalsDraft = undefined
@@ -662,6 +686,9 @@ class SwarmAgentsController {
     this.getSnapshot = this.getSnapshot.bind(this)
     this.unsubscribe = this.form.subscribe(() => {
       const revision = this.form.getSnapshot().revision
+      this.cancelLayerDrag()
+      if (!this.saving && !this.hasDrafts() && revision !== this.formRevision) this.layerIds.clear()
+      this.formRevision = revision
       if (!this.saving && this.hasDrafts() && this.draftRevision !== undefined && revision !== this.draftRevision) this.conflicted = true
       this.publish()
     })
@@ -674,11 +701,102 @@ class SwarmAgentsController {
 
   getSnapshot () { return this.snapshot }
 
+  setSettingsTab (id) {
+    if (!SETTINGS_TABS.some(tab => tab.id === id) || this.disposed) return
+    this.cancelLayerDrag()
+    this.activeTab = id
+    this.publish()
+  }
+
+  getLayerIds (agentKey, target, count) {
+    if (!['chain', 'upgrade'].includes(target) || !Number.isSafeInteger(count) || count < 0) return []
+    const key = `${agentKey}:${target}`
+    let ids = this.layerIds.get(key)
+    if (ids === undefined) { ids = []; this.layerIds.set(key, ids) }
+    while (ids.length < count) ids.push(`${this.instanceId}:${++this.layerSequence}`)
+    if (ids.length > count) ids.length = count
+    return ids
+  }
+
+  canReorder () {
+    return this.canEdit() && !this.conflicted && (this.draftRevision === undefined || this.draftRevision === this.form.getSnapshot().revision)
+  }
+
+  cancelLayerDrag () { this.drag = undefined }
+
+  startLayerDrag (agentKey, slotId, target = 'chain') {
+    this.cancelLayerDrag()
+    if (!this.canReorder()) return undefined
+    const agent = DATA.agents.find(row => row.key === agentKey)
+    if (agent === undefined) return undefined
+    const slots = this.slotsOf(this.view(agent), target)
+    if (slots === undefined || slots.length < 2) return undefined
+    const ids = this.getLayerIds(agentKey, target, slots.length)
+    if (ids.indexOf(slotId) < (target === 'chain' ? 1 : 0)) return undefined
+    const token = `${this.instanceId}:drag:${++this.dragSequence}`
+    this.drag = { agentKey, target, slotId, token, order: ids.join('|'), revision: this.form.getSnapshot().revision }
+    return token
+  }
+
+  canDropLayer (agentKey, toId, target = 'chain') {
+    const drag = this.drag
+    if (!this.canReorder() || drag === undefined || drag.agentKey !== agentKey || drag.target !== target || drag.revision !== this.form.getSnapshot().revision) return false
+    const agent = DATA.agents.find(row => row.key === agentKey)
+    if (agent === undefined) return false
+    const slots = this.slotsOf(this.view(agent), target)
+    if (slots === undefined) return false
+    const ids = this.getLayerIds(agentKey, target, slots.length)
+    return drag.order === ids.join('|') && moveRouteLayer(slots, ids, drag.slotId, toId, target) !== undefined
+  }
+
+  dropLayer (agentKey, toId, target, token) {
+    const drag = this.drag
+    const valid = typeof token === 'string' && token === drag?.token && this.canDropLayer(agentKey, toId, target)
+    this.cancelLayerDrag()
+    return valid ? this.moveLayerById(agentKey, drag.slotId, toId, target) : false
+  }
+
+  moveLayerById (agentKey, fromId, toId, target = 'chain') {
+    if (!this.canReorder()) return false
+    const agent = DATA.agents.find(row => row.key === agentKey)
+    if (agent === undefined) return false
+    const slots = this.slotsOf(this.view(agent), target)
+    if (slots === undefined) return false
+    const ids = this.getLayerIds(agentKey, target, slots.length)
+    const next = moveRouteLayer(slots, ids, fromId, toId, target)
+    if (next === undefined) return false
+    this.edit(agentKey, draft => {
+      if (target === 'chain') draft.slots = next.slots
+      else draft.upgrade.slots = next.slots
+      this.layerIds.set(`${agentKey}:${target}`, next.ids)
+    }, 'reorderSaved')
+    return true
+  }
+
+  moveLayerByStep (agentKey, slotId, direction, target = 'chain') {
+    if (direction !== -1 && direction !== 1) return false
+    const ids = this.layerIds.get(`${agentKey}:${target}`) ?? []
+    const index = ids.indexOf(slotId)
+    return index < 0 ? false : this.moveLayerById(agentKey, slotId, ids[index + direction], target)
+  }
+
+  setSlotById (agentKey, slotId, patch, target = 'chain') {
+    const index = this.layerIds.get(`${agentKey}:${target}`)?.indexOf(slotId) ?? -1
+    if (index >= 0) this.setSlot(agentKey, index, patch, target)
+  }
+
+  removeLayerById (agentKey, slotId, target = 'chain') {
+    const index = this.layerIds.get(`${agentKey}:${target}`)?.indexOf(slotId) ?? -1
+    if (index >= 0) this.removeLayer(agentKey, index, target)
+  }
+
   dispose () {
     this.disposed = true
     this.catalogGeneration += 1
     this.unsubscribe()
     this.listeners.clear()
+    this.cancelLayerDrag()
+    this.layerIds.clear()
   }
 
   routes () { return asRecord(this.form.getSnapshot().value).routes }
@@ -807,19 +925,20 @@ class SwarmAgentsController {
   }
 
   /** 编辑一个角色：取得草稿后执行 change，再清理与已保存一致的草稿并发布 */
-  edit (agentKey, change) {
+  edit (agentKey, change, notice) {
     const agent = DATA.agents.find((row) => row.key === agentKey)
     if (agent === undefined || !this.canEdit()) return
+    this.cancelLayerDrag()
     const draft = this.beginDraft(agent)
     change(draft, agent)
-    this.notice = undefined
     this.dropIfClean(agent)
+    this.notice = this.hasDrafts() ? notice : undefined
     this.publish()
   }
 
   /** target 为 'chain'（常规路由）或 'upgrade'（容灾升级） */
   slotsOf (draft, target) {
-    return target === 'upgrade' ? draft.upgrade?.slots : draft.slots
+    return target === 'upgrade' ? draft.upgrade?.slots : target === 'chain' ? draft.slots : undefined
   }
 
   setSlot (agentKey, index, patch, target = 'chain') {
@@ -840,7 +959,10 @@ class SwarmAgentsController {
   addLayer (agentKey, target = 'chain') {
     this.edit(agentKey, (draft) => {
       const slots = this.slotsOf(draft, target)
-      if (slots !== undefined) slots.push({ ...EMPTY_SLOT })
+      if (slots !== undefined) {
+        this.getLayerIds(agentKey, target, slots.length).push(`${this.instanceId}:${++this.layerSequence}`)
+        slots.push({ ...EMPTY_SLOT })
+      }
     })
   }
 
@@ -849,6 +971,7 @@ class SwarmAgentsController {
       const slots = this.slotsOf(draft, target)
       // 常规链保留主模型；升级链至少保留一层（可停用整个升级）
       if (slots === undefined || index <= 0 || index >= slots.length) return
+      this.getLayerIds(agentKey, target, slots.length).splice(index, 1)
       slots.splice(index, 1)
     })
   }
@@ -870,6 +993,9 @@ class SwarmAgentsController {
   resetAgent (agentKey) {
     const agent = DATA.agents.find((row) => row.key === agentKey)
     if (agent === undefined || !this.canEdit()) return
+    this.cancelLayerDrag()
+    this.layerIds.delete(`${agentKey}:chain`)
+    this.layerIds.delete(`${agentKey}:upgrade`)
     if (!this.hasDrafts()) this.draftRevision = this.form.getSnapshot().revision
     this.drafts.set(agent.key, { reset: true, slots: getSlots(agent.defaults), upgrade: getUpgradeView(agent, undefined) })
     this.notice = undefined
@@ -892,6 +1018,8 @@ class SwarmAgentsController {
 
   discard () {
     if (this.saving) return
+    this.cancelLayerDrag()
+    this.layerIds.clear()
     this.drafts.clear()
     this.policyDraft = undefined
     this.approvalsDraft = undefined
@@ -904,6 +1032,7 @@ class SwarmAgentsController {
   }
 
   async save () {
+    this.cancelLayerDrag()
     if (!this.canEdit() || !this.hasDrafts()) return
     const snapshot = this.form.getSnapshot()
     if (this.draftRevision !== undefined && snapshot.revision !== this.draftRevision) {
@@ -1001,6 +1130,8 @@ class SwarmAgentsController {
 
   resetConnection () {
     if (this.disposed) return
+    this.cancelLayerDrag()
+    this.layerIds.clear()
     this.saving = false
     this.drafts.clear()
     this.policyDraft = undefined
@@ -1052,6 +1183,7 @@ class SwarmAgentsController {
       errors: this.planningDraft === undefined ? {} : getPlanningErrors(this.planningDraft) }
     return {
       status: snapshot.status,
+      activeTab: this.activeTab,
       writable: snapshot.writable,
       rows,
       policy,
@@ -1201,7 +1333,7 @@ const color = {
 }
 
 const style = {
-  section: { display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 },
+  section: { display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0, overflowWrap: 'anywhere' },
   heading: { margin: 0, fontSize: 18, fontWeight: 600, color: color.primary },
   description: { margin: 0, fontSize: 13, lineHeight: 1.6, color: color.secondary },
   banner: { fontSize: 13, color: color.secondary, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
@@ -1211,12 +1343,15 @@ const style = {
   title: { fontSize: 12, color: color.tertiary },
   tag: { fontSize: 11, padding: '1px 8px', borderRadius: 999, cornerShape: 'round', border: `1px solid ${color.border}`, color: color.secondary },
   note: { fontSize: 12, color: color.tertiary, margin: 0, lineHeight: 1.5 },
-  grid: { display: 'grid', gridTemplateColumns: '56px minmax(0,1fr) minmax(0,1.4fr) minmax(0,0.8fr) 26px', gap: '6px 8px', alignItems: 'center' },
+  routeList: { display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 },
+  routeRow: { border: `1px solid ${color.border}`, borderRadius: 8, padding: 8, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 },
+  routeFields: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,140px),1fr))', gap: 8, minWidth: 0 },
+  routeActions: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', maxWidth: '100%', gap: 4, marginLeft: 'auto' },
+  tabs: { display: 'flex', gap: 6, flexWrap: 'wrap', borderBottom: `1px solid ${color.border}`, paddingBottom: 8 },
   slotLabel: { fontSize: 12, color: color.secondary },
   select: { height: 30, minWidth: 0, width: '100%', padding: '0 8px', font: 'inherit', fontSize: 12, borderRadius: 8, border: `1px solid ${color.border}`, background: color.layer, color: color.primary },
-  error: { gridColumn: '2 / -1', fontSize: 11, color: color.danger, marginTop: -2 },
   spacer: { flex: 1 },
-  footer: { position: 'sticky', bottom: 0, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', padding: '10px 0', borderTop: `1px solid ${color.border}`, background: 'var(--dsw-alias-bg-layer-2, #f7f8fb)' },
+  footer: { position: 'sticky', bottom: 0, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', padding: '10px 0', borderTop: `1px solid ${color.border}`, background: 'var(--dsw-alias-bg-layer-2, #f7f8fb)' },
   btn: { font: 'inherit', fontSize: 13, padding: '5px 14px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${color.border}`, background: 'none', color: color.secondary },
   btnSmall: { font: 'inherit', fontSize: 12, padding: '2px 10px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${color.border}`, background: 'none', color: color.secondary },
   btnLink: { font: 'inherit', fontSize: 12, padding: '2px 0', border: 'none', background: 'none', color: color.secondary, cursor: 'pointer', justifySelf: 'start' },
@@ -1227,8 +1362,8 @@ const style = {
   upgradeTitle: { fontSize: 13, fontWeight: 600, color: color.primary },
   switchLabel: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: color.secondary, cursor: 'pointer' },
   chips: { display: 'flex', flexWrap: 'wrap', gap: 6 },
-  chip: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '2px 10px', borderRadius: 999, cornerShape: 'round', border: `1px solid ${color.border}`, color: color.secondary, cursor: 'pointer', userSelect: 'none' },
-  policyGrid: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '10px 14px' },
+  chip: { display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%', boxSizing: 'border-box', fontSize: 12, padding: '2px 10px', borderRadius: 999, cornerShape: 'round', border: `1px solid ${color.border}`, color: color.secondary, cursor: 'pointer', userSelect: 'none' },
+  policyGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,220px),1fr))', gap: '10px 14px' },
   field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 },
   fieldLabel: { fontSize: 12, color: color.secondary },
   input: { height: 30, minWidth: 0, width: '100%', boxSizing: 'border-box', padding: '0 8px', font: 'inherit', fontSize: 12, borderRadius: 8, border: `1px solid ${color.border}`, background: color.layer, color: color.primary },
@@ -1293,29 +1428,61 @@ function EffortSelect ({ t, slot, label, groups, disabled, onChange }) {
   }, h('option', { value: '' }, t('effortDefault')), ...options)
 }
 
-/** 一组路由层：每层 供应商 / 模型 / 推理强度 / 删除，末尾「添加一层」 */
-function LayerGrid ({ t, rowKey, target, slots, errors, groups, editable, controller }) {
-  const cells = slots.flatMap((slot, index) => {
-    const label = layerLabel(t, target, index)
-    const onChange = (patch) => controller.setSlot(rowKey, index, patch, target)
-    const common = { t, slot, label, groups, disabled: !editable, onChange }
-    const error = errors[index]
-    return [
-      h('span', { key: `l${index}`, style: style.slotLabel }, label, h('small', { style: { display: 'block', fontWeight: 400 }, 'data-route-access-mode': getResourceAccessMode(slot) }, t(`resource_${getResourceAccessMode(slot)}`))),
-      h(ProviderSelect, { key: `p${index}`, ...common }),
-      h(ModelSelect, { key: `m${index}`, ...common }),
-      h(EffortSelect, { key: `e${index}`, ...common }),
-      index === 0
-        ? h('span', { key: `r${index}` })
-        : h('button', { key: `r${index}`, type: 'button', style: style.btnRemove, disabled: !editable, title: t('removeLayer'), 'aria-label': `${t('removeLayer')}：${label}`, onClick: () => controller.removeLayer(rowKey, index, target) }, '×'),
-      error === undefined ? null : h('span', { key: `x${index}`, style: style.error, role: 'alert' }, t(error))
-    ]
-  })
-  return h('div', { style: style.grid },
-    ...cells,
-    h('span', { key: 'add-pad' }),
-    h('button', { key: 'add', type: 'button', style: style.btnLink, disabled: !editable, onClick: () => controller.addLayer(rowKey, target) }, target === 'upgrade' ? t('addUpgradeLayer') : t('addLayer'))
-  )
+function RouteLayerRow ({ t, rowKey, rowName, target, slot, slotId, index, length, error, groups, editable, controller }) {
+  const label = layerLabel(t, target, index)
+  const accessibleLabel = `${rowName ?? rowKey} ${label}`
+  const minimum = target === 'chain' ? 1 : 0
+  const movable = index >= minimum && length - minimum > 1
+  const onChange = patch => controller.setSlotById(rowKey, slotId, patch, target)
+  const common = { t, slot, label: accessibleLabel, groups, disabled: !editable, onChange }
+  const move = direction => controller.moveLayerByStep(rowKey, slotId, direction, target)
+  return h('div', {
+    role: 'listitem', style: style.routeRow, 'data-swarm-route-layer': slotId, 'data-swarm-route-index': index,
+    onDragOver: event => {
+      if (!editable || !controller.canDropLayer(rowKey, slotId, target)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    },
+    onDrop: event => {
+      event.preventDefault(); event.stopPropagation()
+      if (editable) controller.dropLayer(rowKey, slotId, target, event.dataTransfer?.getData?.(ROUTE_DRAG_TYPE))
+    }
+  },
+  h('div', { style: style.cardHead },
+    h('strong', { style: style.slotLabel }, label),
+    h('small', { style: style.title, 'data-route-access-mode': getResourceAccessMode(slot) }, t(`resource_${getResourceAccessMode(slot)}`)),
+    h('div', { style: style.routeActions },
+      index < minimum ? null : h('button', {
+        type: 'button', style: { ...style.btnRemove, cursor: editable && movable ? 'grab' : 'default' }, disabled: !editable || !movable, draggable: editable && movable,
+        title: `${t('dragLayer')}：${accessibleLabel}`, 'aria-label': `${t('dragLayer')}：${accessibleLabel}`, 'data-swarm-route-drag': slotId,
+        onDragStart: event => {
+          const token = controller.startLayerDrag(rowKey, slotId, target)
+          if (token === undefined || !event.dataTransfer) { event.preventDefault(); return }
+          try { event.dataTransfer.setData(ROUTE_DRAG_TYPE, token); event.dataTransfer.effectAllowed = 'move' }
+          catch { controller.cancelLayerDrag(); event.preventDefault() }
+        },
+        onDragEnd: () => controller.cancelLayerDrag(),
+        onKeyDown: event => {
+          if (event.key === 'Escape') controller.cancelLayerDrag()
+          if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
+          event.preventDefault(); move(event.key === 'ArrowUp' ? -1 : 1)
+        }
+      }, '⠿'),
+      index < minimum ? null : h('button', { type: 'button', style: style.btnRemove, disabled: !editable || index <= minimum, title: t('moveLayerUp'), 'aria-label': `${t('moveLayerUp')}：${accessibleLabel}`, 'data-swarm-route-move': 'up', onClick: () => move(-1) }, '↑'),
+      index < minimum ? null : h('button', { type: 'button', style: style.btnRemove, disabled: !editable || index >= length - 1, title: t('moveLayerDown'), 'aria-label': `${t('moveLayerDown')}：${accessibleLabel}`, 'data-swarm-route-move': 'down', onClick: () => move(1) }, '↓'),
+      index === 0 ? null : h('button', { type: 'button', style: style.btnRemove, disabled: !editable, title: t('removeLayer'), 'aria-label': `${t('removeLayer')}：${accessibleLabel}`, onClick: () => controller.removeLayerById(rowKey, slotId, target) }, '×'))),
+  h('div', { style: style.routeFields }, h(ProviderSelect, common), h(ModelSelect, common), h(EffortSelect, common)),
+  error === undefined ? null : h('p', { style: { fontSize: 11, color: color.danger, margin: 0 }, role: 'alert' }, t(error)))
+}
+
+/** 每行使用控制器持有的稳定身份；排序后事件按ID查找当前位置，不捕获旧数组索引。 */
+function LayerGrid ({ t, rowKey, rowName, target, slots, errors, groups, editable, controller }) {
+  const ids = controller.getLayerIds(rowKey, target, slots.length)
+  return h('div', { style: style.routeList, 'data-swarm-route-chain': `${rowKey}:${target}` },
+    h('p', { style: style.note }, t(target === 'upgrade' ? 'upgradeDragHint' : 'chainDragHint')),
+    h('div', { role: 'list', style: style.routeList, 'aria-label': `${rowName ?? rowKey} ${target === 'upgrade' ? t('upgradeTitle') : t('tabModels')}` },
+      ...slots.map((slot, index) => h(RouteLayerRow, { key: ids[index], t, rowKey, rowName, target, slot, slotId: ids[index], index, length: slots.length, error: errors[index], groups, editable, controller }))),
+    h('button', { type: 'button', style: style.btnLink, disabled: !editable, onClick: () => controller.addLayer(rowKey, target) }, target === 'upgrade' ? t('addUpgradeLayer') : t('addLayer')))
 }
 
 /** 容灾升级区块：只在可升级的角色上显示 */
@@ -1332,7 +1499,7 @@ function UpgradeBlock ({ t, row, groups, editable, controller }) {
       ? h(React.Fragment, null,
         h('p', { style: style.note }, t('upgradeHint')),
         row.upgradeNote === undefined ? null : h('p', { style: style.note }, row.upgradeNote),
-        h(LayerGrid, { t, rowKey: row.key, target: 'upgrade', slots: upgrade.slots, errors: row.errors.upgrade, groups, editable, controller }),
+        h(LayerGrid, { t, rowKey: row.key, rowName: row.name, target: 'upgrade', slots: upgrade.slots, errors: row.errors.upgrade, groups, editable, controller }),
         h('span', { style: style.slotLabel }, t('triggers')),
         h('div', { style: style.chips },
           ...DATA.triggers.map((trigger) => h('label', {
@@ -1604,19 +1771,63 @@ function AgentCard ({ t, row, groups, editable, controller }) {
         : null
     ),
     row.note === undefined ? null : h('p', { style: style.note }, row.note),
-    h(LayerGrid, { t, rowKey: row.key, target: 'chain', slots: row.slots, errors: row.errors.chain, groups, editable, controller }),
+    h(LayerGrid, { t, rowKey: row.key, rowName: row.name, target: 'chain', slots: row.slots, errors: row.errors.chain, groups, editable, controller }),
     row.upgrade === undefined ? null : h(UpgradeBlock, { t, row, groups, editable, controller })
   )
+}
+
+const getSettingsTabState = (state, id) => {
+  if (id === 'models') return { dirty: state.rows.some(row => row.dirty), invalid: state.rows.some(row => row.dirty && hasErrors(row.errors)) }
+  if (id === 'execution') return { dirty: state.policy.dirty, invalid: Object.values(state.policy.errors).some(error => error !== undefined) }
+  if (id === 'guards') return { dirty: state.approvals.dirty || state.planning.dirty, invalid: state.approvals.error !== undefined || Object.keys(state.planning.errors).length > 0 }
+  if (id === 'math') return { dirty: state.math.dirty, invalid: Object.keys(state.math.errors).length > 0 }
+  return { dirty: false, invalid: false }
+}
+
+function SettingsCategoryTabs ({ state, t, controller }) {
+  return h('div', { role: 'tablist', 'aria-label': t('settingsCategories'), style: style.tabs },
+    ...SETTINGS_TABS.map(tab => {
+      const flag = getSettingsTabState(state, tab.id)
+      const selected = state.activeTab === tab.id
+      return h('button', {
+        key: tab.id, id: `swarm-settings-tab-${tab.id}`, type: 'button', role: 'tab', tabIndex: selected ? 0 : -1,
+        'aria-selected': selected, 'aria-controls': `swarm-settings-panel-${tab.id}`, 'data-swarm-settings-tab': tab.id,
+        style: { ...style.btn, ...(selected ? { color: color.primary, borderColor: color.primary, fontWeight: 600 } : {}) },
+        onClick: () => controller.setSettingsTab(tab.id),
+        onKeyDown: event => {
+          const next = getNextSettingsTab(tab.id, event.key)
+          if (next === undefined) return
+          event.preventDefault(); controller.setSettingsTab(next)
+          event.currentTarget.parentElement?.querySelector(`[data-swarm-settings-tab="${next}"]`)?.focus()
+        }
+      }, t(tab.label), flag.invalid ? h('small', { style: { marginLeft: 6, color: color.danger } }, t('categoryInvalid')) : flag.dirty ? h('small', { style: { marginLeft: 6 } }, t('categoryDirty')) : null)
+    }))
+}
+
+function SettingsOverview ({ state, t, jev }) {
+  return h(React.Fragment, null,
+    jev === undefined ? null : h(JevKeyCard, { key: 'jev', t, jev }),
+    h('div', { style: style.card },
+      h('h3', { style: { ...style.name, margin: 0 } }, t('routeOverview')),
+      h('p', { style: style.description }, `${t('configuredAgents')}：${state.rows.length} · ${t('customizedAgents')}：${state.rows.filter(row => row.custom).length}`),
+      h('p', { style: style.note }, t('routeConfigurationNote'))))
+}
+
+const getSettingsPanel = (id, { state, t, jev, editable, controller }) => {
+  if (id === 'overview') return h(SettingsOverview, { state, t, jev })
+  if (id === 'models') return state.rows.map(row => h(AgentCard, { key: row.key, t, row, groups: state.catalog.groups, editable, controller }))
+  if (id === 'execution') return h(PolicyCard, { t, policy: state.policy, editable, controller })
+  if (id === 'guards') return h(React.Fragment, null, h(PlanningCard, { t, planning: state.planning, editable, controller }), h(ApprovalsCard, { t, approvals: state.approvals, editable, controller }))
+  return h(MathCard, { t, math: state.math, editable, controller })
 }
 
 function SwarmAgentsSection ({ controller, jev }) {
   const state = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const t = controller.t
   React.useEffect(() => {
-    if (state.catalog.status === 'idle') controller.loadCatalog()
-  }, [controller, state.catalog.status])
+    if (state.activeTab === 'models' && state.catalog.status === 'idle') controller.loadCatalog()
+  }, [controller, state.activeTab, state.catalog.status])
   const editable = state.status === 'ready' && state.writable && !state.saving
-  const groups = state.catalog.groups
   const banner = []
   if (state.status === 'unavailable') banner.push(t('unavailable'))
   else if (state.status === 'loading') banner.push(t('loading'))
@@ -1634,20 +1845,18 @@ function SwarmAgentsSection ({ controller, jev }) {
       ? h('span', { style: { fontSize: 12, color: color.success } }, t('saved'))
       : state.notice === 'saveFailed'
         ? h('span', { style: { fontSize: 12, color: color.danger } }, t('saveFailed'))
-        : null
+        : state.notice === 'reorderSaved' ? h('span', { style: { fontSize: 12, color: color.secondary } }, t('reorderSaved')) : null
   return h('section', { style: style.section, 'data-swarm-settings': 'agents' },
     h('h2', { style: style.heading }, t('title')),
-    h('p', { style: style.description }, t('description')),
-    jev === undefined ? null : h(JevKeyCard, { key: 'jev', t, jev }),
+    h('p', { style: style.description }, t(SETTINGS_TABS.find(tab => tab.id === state.activeTab)?.hint ?? 'tabOverviewHint')),
     ...banner.map((text, index) => h('div', { key: `b${index}`, style: style.banner }, text)),
-    catalogLine,
-    h(ApprovalsCard, { key: 'approvals', t, approvals: state.approvals, editable, controller }),
-    h(PolicyCard, { key: 'policy', t, policy: state.policy, editable, controller }),
-    h(PlanningCard, { key: 'planning', t, planning: state.planning, editable, controller }),
-    h(MathCard, { key: 'math', t, math: state.math, editable, controller }),
-    ...state.rows.map((row) => h(AgentCard, { key: row.key, t, row, groups, editable, controller })),
+    h(SettingsCategoryTabs, { state, t, controller }),
+    ...SETTINGS_TABS.map(tab => h('div', {
+      key: tab.id, id: `swarm-settings-panel-${tab.id}`, role: 'tabpanel', 'aria-labelledby': `swarm-settings-tab-${tab.id}`,
+      hidden: state.activeTab !== tab.id, tabIndex: 0, style: { ...style.section, display: state.activeTab === tab.id ? 'flex' : 'none' }, 'data-swarm-settings-panel': tab.id
+    }, state.activeTab === tab.id ? h(React.Fragment, null, tab.id === 'models' ? catalogLine : null, getSettingsPanel(tab.id, { state, t, jev, editable, controller })) : null)),
     h('div', { style: style.footer },
-      notice,
+      h('span', { role: 'status', 'aria-live': 'polite' }, notice),
       h('span', { style: style.spacer }),
       h('button', { type: 'button', style: style.btn, disabled: !state.dirty || state.saving, onClick: () => controller.discard() }, t('discard')),
       h('button', {
@@ -1696,4 +1905,4 @@ function apply (ctx) {
 exports.inject = inject
 exports.apply = apply
 exports.NS = NS
-exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, getMath, getMathErrors, buildMath, getPlanning, getPlanningErrors, buildPlanning, PlanningCard, MathCard, ApprovalsCard, JevTestLine, LayerGrid, SwarmAgentsController, JevKeyController, DATA }
+exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, getMath, getMathErrors, buildMath, getPlanning, getPlanningErrors, buildPlanning, PlanningCard, MathCard, ApprovalsCard, JevTestLine, LayerGrid, RouteLayerRow, SettingsCategoryTabs, SwarmAgentsSection, getSettingsTabState, SwarmAgentsController, JevKeyController, DATA }

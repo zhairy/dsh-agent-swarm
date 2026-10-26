@@ -288,9 +288,31 @@ export interface SessionProjectionsLike {
   stateOf: (session: unknown, key: string) => unknown
 }
 
+/** Public DSH goal lifecycle; disarm changes process-local activation, not durable phase. */
+export interface GoalRefLike { id: string; revision: number }
+export interface GoalViewLike extends GoalRefLike {
+  phase: 'active' | 'paused' | 'blocked' | 'complete'
+  activation: 'armed' | 'disarmed'
+  roundsStarted: number
+  maxGoalRounds: number
+}
+export interface GoalsLike {
+  get: (agent: AgentLike) => GoalViewLike | undefined
+  disarm: (agent: AgentLike) => GoalViewLike | undefined
+  resume?: (agent: AgentLike, ref: GoalRefLike) => GoalViewLike
+}
+
+/** Optional public question service used for capability diagnostics; no permission mutation. */
+export interface UserQuestionsLike {
+  continued?: (agent: AgentLike) => readonly { callId: string; state: string; questions: readonly unknown[] }[]
+}
+
 /** agent/request-error 的载荷；signal 为本轮的取消信号（DSH 0.2.0 起提供） */
 export interface RequestErrorPayloadLike {
   agent: AgentLike
+  /** Actual Host request position; older adapters may omit it. */
+  turn?: number
+  step?: number
   provider: string
   failure: LlmFailureLike
   signal?: AbortSignal

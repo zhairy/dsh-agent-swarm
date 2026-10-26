@@ -361,7 +361,7 @@ export interface DelegateDepsInfo {
   /** 联网探测：出错重试前若已断网，等待网络恢复而不是按固定间隔重试 */
   network?: NetworkMonitorInfo
   onChildStart?: (info: { agentId: string; task: TaskRecord; record: DelegationRecord; role: DelegableRoleId; signal: AbortSignal; persistent?: boolean; input?: DelegateInput; parent?: AgentLike }) => void | Promise<void>
-  onChildEnd?: (agentId: string, stopReason?: string) => void | Promise<void>
+  onChildEnd?: (agentId: string, stopReason?: string, completed?: { attemptId: string; delegationId: string }) => void | Promise<void>
   /** 0.2.1-alpha：在启动子智能体前登记角色与 allow_web，供宿主 agent/created 首次装配前限制工具面 */
   noteChildScope?: (request: ChildScopeRequest) => void
 }
@@ -822,12 +822,12 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
         if (error instanceof DispatchAdmissionError) {
           session.threads.Update(threadId, { busy: false, ...(!started ? { closed: true } : {}) })
           deps.routeState.DelAgent(threadId)
-          await deps.onChildEnd?.(threadId, 'not-admitted')
+          await deps.onChildEnd?.(threadId, 'not-admitted', { attemptId: record.attemptId ?? record.delegationId, delegationId: record.delegationId })
           throw error
         }
         if (exec.controlledThreadId !== undefined) {
           session.threads.Update(threadId, { busy: false })
-          await deps.onChildEnd?.(threadId, 'not-admitted')
+          await deps.onChildEnd?.(threadId, 'not-admitted', { attemptId: record.attemptId ?? record.delegationId, delegationId: record.delegationId })
           return { evaluation: { status: 'failed', summary: '指定持久子会话未接受继续请求', error: reason, unresolved: ['未创建替代会话或重放旧操作'], evidence: [] }, childId: threadId, retries, session: { kind: 'continuable', threadId, appended: true, source: plan.source, reason: plan.reason } }
         }
         attempts.push({ route: getRouteLabel(usable[0] as RouteInfo), backend: 'spawn', outcome: 'failed', reason: `${started ? 'send' : 'start'}: ${reason}` })
@@ -894,7 +894,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
         })
         session.threads.Update(threadId, { busy: false, closed: true })
         deps.routeState.DelAgent(threadId)
-        await deps.onChildEnd?.(threadId, 'thinking-replay-incompatible')
+        await deps.onChildEnd?.(threadId, 'thinking-replay-incompatible', { attemptId: record.attemptId ?? record.delegationId, delegationId: record.delegationId })
         threadId = deps.newChildId()
         style = newStyle
         thread = {
@@ -926,7 +926,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const finalRoute = deps.routeState.getLastRoute(threadId) ?? deps.routeState.getChild(threadId)?.route
     const updated = session.threads.AddRound(threadId, { delegationId: record.delegationId, taskId: task.taskId, request: input.prompt, summary: evaluation.summary, status: evaluation.status }, deps.now())
     session.threads.Update(threadId, { seenRevisions: { ...updated?.seenRevisions, [task.taskId]: { cardRevision: task.cardRevision ?? 1, workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1 } } })
-    await deps.onChildEnd?.(threadId)
+    await deps.onChildEnd?.(threadId, undefined, { attemptId: record.attemptId ?? record.delegationId, delegationId: record.delegationId })
     return {
       evaluation,
       childId: threadId,

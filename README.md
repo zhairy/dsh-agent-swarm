@@ -2,6 +2,8 @@
 
 [中文](#中文) · [English](#english)
 
+![Model call lines in the chat and the model badge in the session header](assets/screenshots/model-calls.png)
+
 ---
 
 ## 中文
@@ -11,30 +13,39 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.3）
 - 新建会话选「百工模式」即可使用；Jev API key 可选
 
+### 3.1.3 的变化
+
+- 百工设置按五类选项卡组织，备用模型链支持拖拽、按钮和键盘排序。
+- 修复订阅耗尽与人工换模竞态，恢复委派会重新取得当前任务的执行身份。
+- 真实用户问答进入可恢复等待；服务端验收凭证与全历史结构守卫阻止无证据完成和重复空转。
+- 适用范围、存储兼容与后续路线见 [3.1.3 运行守卫与路由恢复](docs/3.1.3-运行守卫与路由恢复.md)。
+
 ### 3.1.2 的变化
 
-- 新增原生「任务进度」选项卡，集中查看六种图表视角、任务版本、进度及节点详情；窄屏遵循 DSH 原生「更多」菜单。
-- 图表共享读取与取消机制；失败保留过期快照，迟到响应不覆盖当前任务，关闭展示不停止长期任务。
-- 工具/技能候选仅记录来源、权限、测试和回滚信息，尚未独立评测时不可执行，不自动装载工具。
-- 核对并吸收 Ruflo 的模块分工与证据化候选思路；保持百工唯一执行控制器，详见[本版变化与后续路线](docs/3.1.2-任务进度与后续路线.md)。
+- 原生“任务进度”Tab集中六个图表视角，按需查看任务、版本、节点状态和证据流；rc.3窄屏可从“更多视图”进入。
+- 聊天与Tab共享只读读取，支持取消、过期提示、连接隔离和失败恢复；关闭视图不停止长期任务。
+- 技能/工具候选保留来源与隔离元数据，不能通过文本复核激活或自动执行。
+- 吸收Ruflo的工作区、只读投影与来源化候选设计，详见[本版变化与后续路线](docs/3.1.2-任务进度与后续路线.md)。
 
 ### 3.1.1 的变化
 
-- 3.1.0／3.1.1 内存态可通过受限维护交接保留任务、材料引用和预算，未结算工作继续要求恢复核对。
-- 独立规划审核显示实际模型，审核与子智能体对话可安全选择下一请求的模型。
-- 旧上下文引用返回当前授权材料索引；保留版本、摘要与盲审隔离。
-- 搜索超限、Fetch 404 提供明确恢复指引；文件发现支持有界子目录扫描，经验召回补充适用条件。
-- 需要人工授权时使用询问工具；后续自我进化按 3.1.1–3.1.4 分批推进，见[路线图](docs/路线图.md)。
+- 规划审核会话识别为百工子会话，实际模型由宿主请求记录展示；模型与恢复面板区分实际调用和后续选择。
+- 一次性审核可选择下一请求模型，当前请求不中断；连续专家保留取消、沉寂确认和安全继续流程。
+- 失效上下文引用返回当前任务授权索引，重新选择 ref/digest 即可继续读取；不恢复旧版本权限。
+- 文件发现支持相对子目录、有界索引与输出；宿主搜索容量溢出和 Fetch 404 保留原错误并说明恢复方式。
+- 已复核经验的适用条件参与有界检索；自我进化按 [3.1.1–3.1.4 路线](docs/plans/2026-10-23-self-evolution-3.1.1-through-3.1.4.md) 逐步交付。
+- 真正需要人工决定时，天枢调用 `ask_user_question`，不以重复思考代替授权交互；未答复不表示同意。
 
-### 3.1 的变化
+### 3.1.0 的变化
 
 | 变化 | 说明 |
 |---|---|
 | **长会话不再从某条消息后整段消失** | GitHub Issue #1：`swarm-model-call` 在分页或长会话的事件窗口缺少 `request/header` 时不再从 `start()` 返回 `undefined`。它返回继承上一状态的隐藏占位，渲染层丢弃该节点，宿主事件订阅器不会中断；下一条调用也不会误报「切换模型」。普通会话同样受保护。 |
-| **thinking 协议错误不再重复命中** | DeepSeek 返回 `The content[].thinking ... must be passed back` 时归类为 `protocol_incompatible`，当前请求立即回退并隔离该路由；连续子会话会关闭损坏会话，从任务卡、证据和真实工作区恢复。 |
+| **thinking 协议错误不再重复命中** | DeepSeek 返回 `The content[].thinking ... must be passed back` 时归类为 `protocol_incompatible`，当前请求立即回退并隔离该路由，避免同一会话反复调用同一不兼容模型。 |
 | **目标受阻时给出可执行恢复处方** | `swarm_status` 新增 `blockedRecovery`：区分协议不兼容、路由耗尽、规划服务故障、连续无进展、缺门禁和验证缺口，给出推荐角色与下一步。天枢按处方最多做一次只读诊断或对应专家修复，不靠重复改卡、重复评分或重放业务写入恢复。 |
+| **pnpm 11 本地 tarball 安装说明** | 使用 `minimumReleaseAgeIgnoreMissingTime: true`，只跳过 registry 中没有发布时间信息的本地包；`minimumReleaseAgeExclude` 只接受精确版本，不能写 semver range。 |
 | **原生 Agent Team 只读镜像（默认关闭）** | 启用 DSH 原生 Agent Team 后，可在会话头部查看已有成员、共享任务、实时状态、owner、依赖和写入范围，并打开成员会话。镜像不创建成员、不修改共享任务、不调用 `spawn_teammate` 或原生 `complete`；百工仍是唯一任务、证据、租约和执行控制器。 |
-| **本地 tarball 可直接 link 安装** | 新增 `scripts/install-profile.mjs`，校验并解包发布包、安装运行时依赖、以内容摘要目录和 `link:` 接入 profile，并登记到 `dsh.profile.bundles`，避免 pnpm 回查未发布的 registry 版本。 |
+| **本地 tarball 可直接 link 安装** | 新增 `scripts/install-profile.mjs`，校验并解包发布包后以内容摘要目录和 `link:` 接入 profile，避免 pnpm 回查未发布的 registry 版本。四层自我进化仍只提供分阶段路线，3.1.0 不自动修改提示、工具或工作流。 |
 
 ### 3.0 的变化
 
@@ -108,16 +119,17 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 
 ### 开发（仅源码仓库）
 
-公开源码树不附维护测试、沙箱或同步脚本。
-
 本节命令面向源码仓库。预构建 npm 包提供运行时文件、使用文档与维护工具，不包含源码构建或测试环境。
 
 | 命令 | 作用 |
 |---|---|
 | `npm run build` | 编译 `src/` 到 `lib/` 并生成浏览器端 bundle |
-| `npm run typecheck` | 仅检查 `src/` |
+| `npm run typecheck` | 类型检查（含测试） |
+| `npm test` / `npm run coverage` | 单元测试 / 覆盖率 |
+| `npm run test:integration` | 在 `.sandbox/` 安装真实 DSH，用 mock LLM 跑端到端场景 |
 | `npm run gen:presets -- --dsh "$(npm root -g)/@deepseek-ai/dsh/node_modules"` | 以 DSH 的 standard 预设为底重新生成 13 个预设 |
 | `npm run doctor -- --profile <p>` | 只读检查本机环境（不输出密钥） |
+| `npm run sync-dsh -- --version <x>` | 适配新版 DSH：重新生成预设并跑全部测试 |
 | `npm run pack:release` | 构建、校验入口依赖闭包并打包发布物 |
 
 升级、回退与卸载见 [docs/升级与回退.md](docs/升级与回退.md)。
@@ -135,30 +147,39 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 - Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.3 recommended)
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
 
+### What's new in 3.1.3
+
+- Categorized settings and accessible drag, button and keyboard ordering for fallback routes.
+- Safer fallback during quota exhaustion and model changes; resumed delegates acquire a fresh execution binding.
+- Recoverable user-decision waits, server-issued acceptance receipts and bounded structural loop detection.
+- See [runtime guard scope and compatibility](docs/3.1.3-运行守卫与路由恢复.md).
+
 ### What's new in 3.1.2
 
-- A native Task progress view brings six diagram perspectives, task revisions, progress and node details together, respecting DSH's responsive More menu.
-- Shared cancellable reads retain stale snapshots on failures and reject late results; closing a view does not cancel long-running work.
-- Tool/skill candidates record provenance, permissions, planned tests and rollback references; they remain non-executable without independent evaluation.
-- Selected Ruflo architecture ideas inform the roadmap while Agent Swarm remains the sole execution controller. See [this release and the roadmap](docs/3.1.2-任务进度与后续路线.md).
+- A native Task progress view brings six diagram perspectives together, with task selection and version-bound evidence. On narrow rc.3 layouts it can appear under More views.
+- Shared read-only loading adds cancellation, stale snapshots and connection isolation without stopping long-running work.
+- Tool and skill proposals remain quarantined metadata; text reviews cannot activate or execute them.
+- Adopts Ruflo-inspired workspace, read-projection and provenance principles without adding another runtime.
 
 ### What's new in 3.1.1
 
-- Restricted 3.1.0/3.1.1 memory-state handoffs preserve tasks, references and budgets while keeping unsettled work behind recovery checks.
-- Planning reviews show the actual model; review and expert conversations can safely select the next request's model.
-- Obsolete context references return the current authorized index while preserving revision, digest and blind-review isolation.
-- Actionable recovery for search overflow and Fetch 404; bounded subdirectory discovery and applicability-aware reviewed experience recall.
-- Required authorization uses the question tool. Evolution is staged across 3.1.1–3.1.4; see the [roadmap](docs/路线图.md).
+- Planning-review child sessions display models observed by the host; the controls distinguish actual attempts from next-request selections.
+- One-shot reviewers can select the next request model without interrupting the in-flight request. Persistent experts retain cancellation, settlement and safe continuation.
+- Obsolete context references return the current authorized index without reviving old permissions.
+- File discovery supports bounded relative-directory scans; search overflow and Fetch endpoint failures retain their error status and offer recovery guidance.
+- Reviewed experiences can match bounded applicability text. Self-evolution follows the staged [3.1.1–3.1.4 roadmap](docs/plans/2026-10-23-self-evolution-3.1.1-through-3.1.4.md).
+- Tian Shu uses `ask_user_question` for necessary human decisions; silence never grants permission.
 
-### What's new in 3.1
+### What's new in 3.1.0
 
 | Change | Details |
 |---|---|
 | **Long conversations no longer stop rendering** | GitHub Issue #1: `swarm-model-call` no longer returns `undefined` from `start()` when a paginated/long event window has no `request/header`. A hidden placeholder inherits the previous state and is dropped by the renderer, so the host event subscription remains intact; the next attempt is not falsely reported as a model switch. Ordinary sessions are protected by the same contract. |
-| **Thinking-protocol failures are isolated** | `The content[].thinking ... must be passed back` is classified as `protocol_incompatible`; the current request fails over immediately, the route is isolated, and a damaged child conversation is rebuilt from the task card, evidence and real workspace. |
+| **Thinking-protocol failures are isolated** | `The content[].thinking ... must be passed back` is classified as `protocol_incompatible`; the current request fails over immediately and the route is isolated instead of being retried repeatedly in the same session. |
 | **Blocked goals get a recovery prescription** | `swarm_status` now returns `blockedRecovery` for protocol incompatibility, route exhaustion, planning-service failure, no progress, missing gates and verification gaps. Tian Shu uses the recommended role and next action once, without repeating equivalent cards, scores or business mutations. |
+| **pnpm 11 tarball guidance** | Installation docs use `minimumReleaseAgeIgnoreMissingTime: true`, which skips only local packages without registry publish-time metadata. `minimumReleaseAgeExclude` accepts exact versions only and rejects semver ranges. |
 | **Read-only native Agent Team mirror (off by default)** | When native DSH Agent Team is enabled, the session header can show existing members, shared tasks, live status, owner, dependencies and write scopes, and open member sessions. It never creates members, edits tasks, calls `spawn_teammate` or native `complete`; the swarm remains the sole task, evidence, lease and execution controller. |
-| **Link-based local tarball installer** | `scripts/install-profile.mjs` validates and unpacks a release tarball, installs runtime dependencies, wires a digest-addressed local bundle with `link:` and registers it in `dsh.profile.bundles`, avoiding registry lookups for unpublished versions. |
+| **Link-based local tarball installer** | `scripts/install-profile.mjs` validates and unpacks a release tarball into a digest-addressed local bundle and wires it with `link:`, avoiding registry lookups for unpublished versions. Four-layer self-evolution remains a staged roadmap; 3.1.0 does not auto-modify prompts, tools or workflows. |
 
 ### What's new in 3.0
 
@@ -214,16 +235,17 @@ Seven embedded Jev judgment tools (`jev_check`, `jev_classify`, `jev_score`, `je
 
 ### Development (source checkout only)
 
-The public source tree omits maintenance tests, sandbox tooling and sync scripts.
-
 These commands target a source checkout. The prebuilt npm package includes runtime files, usage documentation and maintenance tools, not a source-build or test environment.
 
 | Command | Purpose |
 |---|---|
 | `npm run build` | compile `src/` to `lib/` and build the browser bundle |
-| `npm run typecheck` | type-check `src/` only |
+| `npm run typecheck` | type-check sources and tests |
+| `npm test` / `npm run coverage` | unit tests / coverage |
+| `npm run test:integration` | install a real DSH under `.sandbox/` and run end-to-end scenarios against a mock LLM |
 | `npm run gen:presets -- --dsh "$(npm root -g)/@deepseek-ai/dsh/node_modules"` | regenerate the 13 presets from DSH's standard preset |
 | `npm run doctor -- --profile <p>` | read-only environment check (never prints secrets) |
+| `npm run sync-dsh -- --version <x>` | adapt to a new DSH version: regenerate presets and run all tests |
 | `npm run pack:release` | build, verify the entry dependency closure and pack the release tarball |
 
 Upgrade, rollback and removal: [docs/升级与回退.md](docs/升级与回退.md) (Chinese).

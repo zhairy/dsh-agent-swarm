@@ -43,7 +43,7 @@ export interface AgentBindingRegistry {
   get: (agentId: string) => AgentBinding | undefined
   requireActive: (agentId: string, permission?: string) => AgentBinding
   getHistorical: (binding: Pick<AgentBinding, 'agentId' | 'generation' | 'leaseEpoch'>) => AgentBinding | undefined
-  revoke: (agentId: string, reason?: AgentBinding['revocationReason']) => Promise<void>
+  revoke: (agentId: string, reason?: AgentBinding['revocationReason'], expectedAttemptId?: string) => Promise<void>
   suspend: (agentId: string) => Promise<void>
   completeBlindReview: (agentId: string) => Promise<void>
 }
@@ -109,10 +109,12 @@ export const createAgentBindingRegistry = <T extends BindingState>(store: Durabl
       return structuredClone(binding)
     },
     getHistorical: (binding) => store.readPath === undefined ? store.read().bindingHistory[bindingKey(binding)] : store.readPath<AgentBinding>(['bindingHistory', bindingKey(binding)]),
-    revoke: async (agentId, reason = 'untrusted') => {
+    revoke: async (agentId, reason = 'untrusted', expectedAttemptId) => {
       await store.update('binding/revoke', { build: async (state) => {
         const old = state.bindings[agentId]
-        if (old === undefined) return {}
+        // A previous round may finish persistence after the same child has
+        // already received a new authorized attempt. Never revoke that attempt.
+        if (old === undefined || (expectedAttemptId !== undefined && old.attemptId !== expectedAttemptId)) return {}
         const next: AgentBinding = { ...old, state: 'revoked', revocationReason: reason }
         const history = { [bindingKey(old)]: next }
         const prunable = await pruneHistory(state.bindingHistory, agentId, { [bindingKey(old)]: next })
