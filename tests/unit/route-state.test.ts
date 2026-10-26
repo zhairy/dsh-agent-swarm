@@ -34,7 +34,7 @@ describe('automatic source quota routing', () => {
     const registry = intRouteStateRegistry(undefined, probe, { orderQuotaRoutes, onRouteSuccess })
     const listeners = new Map<string, (...args: any[]) => any>()
     applyRuntime({
-      get: (name: string) => name === 'agentSwarm' ? { routeState: registry, getConfig: () => cfg, WaitAgentReady: async () => undefined } : name === 'sessionProjections' ? { stateOf: () => ({ pending: false }) } : undefined,
+      get: (name: string) => name === 'agentSwarm' ? { routeState: registry, getConfig: () => cfg, WaitAgentReady: async () => undefined, BeforeManagedRequest: async () => undefined } : name === 'sessionProjections' ? { stateOf: () => ({ pending: false }) } : undefined,
       on: (event: string, listener: (...args: any[]) => any) => { listeners.set(event, listener) }
     } as unknown as PluginContextLike, { role: 'tian_shu' })
     const request = () => listeners.get('agent/request')!({ agent: root, turn: 0, step: 0, signal: new AbortController().signal }, async () => primary)
@@ -146,7 +146,7 @@ describe('automatic source quota routing', () => {
       if (transition === 'dispose') registry.DelAgent(root.id)
       else registry.RecordUserSelection(root.id, api)
       release()
-      expect(await pending).toBeUndefined()
+      expect(await pending).toEqual(transition === 'dispose' ? undefined : { kind: 'retry' })
       if (transition === 'dispose') expect(registry.getRecoveryDiagnostics()).toEqual({ agents: 0, logicalRequests: 0, logicalStates: 0, disposedTerminals: 0 })
       else expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(api)
     }
@@ -1394,7 +1394,7 @@ describe.skipIf(!existsSync(resolve(hostRoot, 'dsh-llm-retry/lib/index.js')))(`ç
     const registry = intRouteStateRegistry()
     let ready!: () => void
     const readiness = new Promise<void>((resolve) => { ready = resolve })
-    ctx.provide('agentSwarm', { routeState: registry, getConfig: () => cfg, WaitAgentReady: () => readiness })
+    ctx.provide('agentSwarm', { routeState: registry, getConfig: () => cfg, WaitAgentReady: () => readiness, BeforeManagedRequest: async () => undefined })
     applyRuntime(scoped.ctx as PluginContextLike, { role: 'tian_shu' })
     const agent = { id: 'real-host', session: { header: {}, append: (type: string) => events.push(type) } }
     const controller = new AbortController()

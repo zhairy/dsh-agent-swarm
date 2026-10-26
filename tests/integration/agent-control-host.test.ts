@@ -18,7 +18,7 @@ const phase = async (workspace: string, scenario: string, options: { persistence
   const overlay = `${workspace}.${scenario}.overlay.yml`
   const writer = scenario === 'manual-writer'
   const longrun = scenario === 'preferred-recovery'
-  const initialModel = longrun ? 'preferred' : writer ? 'writer-hang' : scenario.includes('isolated') ? 'fail-pool' : 'hang'
+  const initialModel = longrun ? 'preferred' : writer ? 'writer-hang' : scenario === 'native-timeout-followup' ? 'fail-timeout' : scenario.includes('isolated') ? 'fail-pool' : 'hang'
   writeFileSync(overlay, YAML.stringify([
     { id: 'swarm-core', config: { rootFallback: false, jev: { enabled: false }, planningReview: { enabled: false }, workflow: { mode: 'advisory' }, persistence: { enabled: options.persistence === true }, agents: { maxRetries: 3, retryBackoffMs: 1, networkWaitMs: 0 }, routes: { [writer ? 'ji_feng' : 'tan_wei']: { chain: [{ provider: 'swarm-control-mock', model: initialModel }, ...(longrun ? [{ provider: 'swarm-control-mock', model: 'backup' }] : [])] } } } },
     { insert: [
@@ -35,6 +35,20 @@ const phase = async (workspace: string, scenario: string, options: { persistence
 }
 
 describe('real DSH continuable child manual model controls', () => {
+  for (const scenario of ['native-isolated-followup', 'native-timeout-followup']) it(`unadmitted native followup is stopped before a model, and legal same-child recovery works after ${scenario}`, async () => {
+    const result = await phase(workspaceFixture(), scenario)
+    expect(result.firstDelegation.status).toBe('failed')
+    expect(result.requestsAfterNativeFollowup).toEqual(result.requestsBeforeNativeFollowup)
+    expect(result.nativeRecoveryHint).toContain('执行授权已结束')
+    expect(result.nativeRecoveryHint).toContain('继续')
+    expect(result.continueReceipt).toMatchObject({ accepted: true })
+    expect(result.duplicateContinueRefusal).toMatchObject({ code: 'STALE_EVIDENCE' })
+    expect(result.authorizedRecoveryRead).toContain('Agent control integration fixture')
+    expect(new Set(result.requests.map((item: { sessionId: string }) => item.sessionId))).toEqual(new Set([result.childId]))
+    expect(result.resumedDelegation.status).toBe('completed')
+    expect(result.controls[2].actual.delegationId).not.toBe(result.firstDelegation.delegationId)
+    expect(result.secondDelegation.status).toBe('completed')
+  })
   it('a real automatic fallback header does not pin a persistent child; the next tool step recovers its preferred model', async () => {
     const result = await phase(workspaceFixture(), 'preferred-recovery')
     expect(result.requests.map((item: { model: string }) => item.model)).toEqual(['preferred', 'backup', 'preferred'])

@@ -10,6 +10,7 @@ import type { WorkflowDefinition, WorkflowStateInfo } from './workflow.js'
 import type { PlanningReviewRecord } from './planning-review.js'
 import type { ArtifactSnapshot } from './artifacts.js'
 import type { CheckpointInfo } from './checkpoint.js'
+import type { VerificationReceipt } from './verification-receipt.js'
 
 export type DelegationStatus = GateDelegationView['status']
 export type BackendKind = 'spawn' | 'codex' | 'codex-edit' | 'claude-plan' | 'claude-edit'
@@ -119,10 +120,15 @@ export interface AcceptanceRecord {
   stopReason: string
   resolutions: FindingResolution[]
   at: number
+  /** 仅服务端在当前独立证据校验与 accepted 同一事务中生成；旧验收缺失时仅为历史。 */
+  verificationReceipt?: VerificationReceipt
+  assessment?: AssessmentInfo
 }
 
 /** 任务记录 */
 export interface TaskRecord {
+  /** Stable Host goal owner; revisions remain separately bound by receipts. */
+  runtimeGoalId?: string
   taskId: string
   sessionId: string
   card: TaskCard

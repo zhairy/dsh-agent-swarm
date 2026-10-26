@@ -5,6 +5,18 @@ import { SWARM_LAYOUT_OPTIONS } from '../../src/state-chunks.js'
 
 const input: BindingInput = { agentId: 'actual-host-child', rootSessionId: 'root', workspaceId: 'workspace', taskId: 'task', nodeId: 'node', attemptId: 'attempt', threadId: 'thread', role: 'suan_heng', cardRevision: 1, workflowRevision: 1, permissions: ['pure-calc', 'message-read'], blindReview: true }
 describe('host-owned agent binding generations', () => {
+  it('a late old-round revoke cannot withdraw a newly authorized attempt for the same child', async () => {
+    const store = await createDurableStateStore<BindingState>({ directory: '/unused', enabled: false, initialState: { bindings: {}, bindingHistory: {} }, ...SWARM_LAYOUT_OPTIONS })
+    const registry = createAgentBindingRegistry(store)
+    const first = await registry.bind(input)
+    const second = await registry.bind({ ...input, attemptId: 'fresh-authorized-attempt' })
+    await registry.revoke(input.agentId, 'completed', first.attemptId)
+    expect(registry.requireActive(input.agentId)).toMatchObject({ attemptId: second.attemptId, generation: first.generation + 1 })
+    expect(registry.getHistorical(first)?.state).toBe('revoked')
+    await registry.revoke(input.agentId, 'completed', second.attemptId)
+    expect(() => registry.requireActive(input.agentId)).toThrow('active')
+    await store.dispose()
+  })
   it('archives binding history beyond the per-agent bound instead of growing the state forever', async () => {
     const store = await createDurableStateStore<BindingState>({ directory: '/unused', enabled: false, initialState: { bindings: {}, bindingHistory: {} }, ...SWARM_LAYOUT_OPTIONS })
     const archived: AgentBinding[] = []

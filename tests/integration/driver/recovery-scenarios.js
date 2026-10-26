@@ -63,6 +63,7 @@ export const RECOVERY_SCENARIOS = {
     ]
   },
   'recovery-pool-backup': { recovery: true, preset: 'tian-shu', root: [{ text: 'RECOVERY DONE' }] },
+  'recovery-pool-thrown': { recovery: true, preset: 'tian-shu', root: [{ text: 'RECOVERY DONE' }] },
   'recovery-all-quota': { recovery: true, preset: 'tian-shu', root: [{ text: 'UNEXPECTED SUCCESS' }] },
   'recovery-child-oneshot': { recovery: true, preset: 'tian-shu', root: [taskCard, delegate('tan_wei', 'oneshot'), { text: 'RECOVERY DONE' }] },
   'recovery-child-continuable': { recovery: true, preset: 'tian-shu', root: [taskCard, delegate('tan_wei', 'new'), { text: 'RECOVERY DONE' }] },
@@ -71,6 +72,7 @@ export const RECOVERY_SCENARIOS = {
 RECOVERY_SCENARIOS['planning-model-switch-failure'] = RECOVERY_SCENARIOS['planning-model-switch']
 
 export const getRecoveryFailure = (model) => {
+  if (model === 'fail-pool-thrown') return { code: 'RATE_LIMIT', status: 429, message: 'pool "claude-opus-5-5" exhausted: every member is cooling down; earliest member recovers in 14h24m', providerRetryAfterMs: 51_840_000 }
   if (model === 'fail-pool') return { code: 'SERVER_ERROR', status: 503, message: 'pool "claude-opus-5-5" exhausted: every member is unavailable or failed', providerRetryAfterMs: 9060669 }
   if (model === 'fail-quota-a' || model === 'fail-quota-b') return { code: 'QUOTA', status: 429, message: 'mock subscription quota exhausted' }
   return undefined
@@ -139,6 +141,7 @@ export const apply = (ctx) => {
     return { answers: request.questions.map(question => ({ id: question.id, selected: ['允许隔离修复'] })) }
   })
   let rootStep = 0
+  let LlmError
   const childSteps = new Map()
   const adapter = {
     providerInfo: (provider) => ({ id: provider, name: 'Recovery integration mock' }),
@@ -152,6 +155,7 @@ export const apply = (ctx) => {
       recordRecoveryRequest(state, options)
       const submit = value => toolChunks('structured_output', options.tools?.find(item => item.name === 'structured_output')?.parameters?.properties?.value ? { value } : value)
       const failure = getRecoveryFailure(options.model)
+      if (options.model === 'fail-pool-thrown') { state.adapterThrows = (state.adapterThrows ?? 0) + 1; throw new LlmError(failure.message, failure.code, failure) }
       if (failure) { state.failQuotaHits += failure.code === 'QUOTA' ? 1 : 0; yield { type: 'finish', reason: { kind: 'error', failure } }; return }
       const reviewPrompt = (options.messages ?? []).map(textOf).find((text) => text.includes('快照（完整当前合同与源码）：'))
       if (reviewPrompt !== undefined) {
@@ -283,6 +287,7 @@ export const apply = (ctx) => {
   })
   ctx.on('agent/error', ({ error }) => state.agentErrors.push({ message: String(error?.message ?? error), code: error?.code }))
   const run = async () => {
+    if (scenarioName === 'recovery-pool-thrown') ({ LlmError } = await import(pathToFileURL(join(process.env.SWARM_RECOVERY_SDK_MODULES, '@deepseek-ai/dsh-llm/lib/index.js')).href))
     for (let attempt = 0; ; attempt++) {
       try { await ctx.agentPresets.resolve(scenario.preset); break } catch (error) { if (attempt > 75) throw error; await new Promise((resolve) => setTimeout(resolve, 200)) }
     }
@@ -298,6 +303,9 @@ export const apply = (ctx) => {
       state.subagentProviders = ctx.subagents.list()
       handle.agent.followup(Object.freeze({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: scenario.userText ?? 'recovery integration test' }], source: { kind: 'user' } }))
       await handle.agent.whenIdle()
+      state.runtimeStatus = ctx.get('agentSwarm')?.getStatus({}, { agent: handle.agent, signal: new AbortController().signal })
+      state.committedToolResults = handle.agent.session.deriveMessages().filter(message => message.role === 'tool')
+        .map(message => ({ isError: message.isError === true, text: message.content?.filter(block => block.type === 'text').map(block => block.text).join('\n') ?? '' }))
       if (scenarioName === 'planning-question-reply') {
         const messages = handle.agent.session.deriveMessages()
         const questionCall = messages.flatMap(message => message.role === 'assistant' ? message.content : []).find(block => block.type === 'tool-call' && block.name === 'ask_user_question')
@@ -315,3 +323,5 @@ export const apply = (ctx) => {
 }
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'

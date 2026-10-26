@@ -1,0 +1,15 @@
+{
+  "host": "/usr/lib/node_modules/@deepseek-ai/dsh@0.2.1-rc.3",
+  "mode": "isolated SDK profile; deterministic local adapter; no external LLM or production port",
+  "files": {
+    "plugin/lib/authorization-runtime.js": "62d27f04d1fb609e91e05b70eaa70e617fd9553c70cfe9837ea5653f101e564c",
+    "plugin/lib/authorization-wait.js": "4fc40eb823538240501b42be817f161bb2b7439f50620c8a033e9b645554b971",
+    "plugin/lib/authorization-host.js": "2d68c8e84af31113000f2b03947dfcde6cadc9a47010328f731f751e66500d88",
+    "plugin/lib/service.js": "55333c38415e90a72389a44306780155eda002f97ef6c827663b69dc925feb91",
+    "plugin/lib/index.js": "cd5d3a916f128be40ea967689602921a0eb0374d812bb1d2087dcceb2d6d7c2f",
+    "plugin/lib/runtime.js": "edc95d114aaac99f364693be1d2f6422d09bb40e48caa4654ab662f5a9cf8469",
+    "plugin/presets/tian-shu.patch.yml": "c0b01a64514089ea3582347584fc63c1a3ed5be92d1fe5d431b922122820743b",
+    "driver/driver.js": "ca3c08e5548f19ab6b8e127ee9a0be9b1f4c71cd90983d037d4009f41ac84afe",
+    "patch.json": "df7875433a99b5703722d3cdd36813ee8f0b46d508491aefc689b19c071560ed"
+  }
+}

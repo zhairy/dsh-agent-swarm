@@ -1,0 +1,10 @@
+{
+  "packageVersion": "3.1.3",
+  "note": "Coordinator hook compiled; outer service pump injection is verified separately by root",
+  "modules": {
+    "authorization-runtime.js": "b2ab6e5374d9d7fa4b1314e3f0bdab72647bda5aad5611c77929c9f8e3c84eb2",
+    "service.js": "dedada288c7d02a32722e99d74e6c11abde70fcc30c64de82752b5fb931a6edd",
+    "index.js": "cd5d3a916f128be40ea967689602921a0eb0374d812bb1d2087dcceb2d6d7c2f",
+    "runtime.js": "edc95d114aaac99f364693be1d2f6422d09bb40e48caa4654ab662f5a9cf8469"
+  }
+}

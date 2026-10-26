@@ -1,0 +1,118 @@
+{
+  "recordedAt": "2026-10-26T03:56:43.448Z",
+  "scope": "Owned route/recovery changes, not final whole-release certification",
+  "productionChanged": false,
+  "dependenciesAdded": false,
+  "configurationAdded": false,
+  "persistedFieldsAdded": false,
+  "tests": {
+    "unit": {
+      "files": 10,
+      "passed": 272
+    },
+    "actualHost": {
+      "agentControlCasesPassed": 8,
+      "thrownPoolCasesPassed": 2,
+      "hostVersion": "0.2.1-rc.3",
+      "vendor": "Explicit isolated mock adapters, actual LlmError/AgentLoop/ToolRuntime/Subagent/RPC; no Claude/Codex upstream requests"
+    },
+    "browser": {
+      "artifact": "routing-recovery-browser-qa.json",
+      "sameComponentAndHost": true,
+      "productionAuthMiddleware": false
+    },
+    "latestFocusedRegression": {
+      "files": 3,
+      "passed": 15,
+      "includesSettledOneShotPreModelGuard": true
+    }
+  },
+  "nativeCases": [
+    {
+      "scenario": "native-isolated-followup",
+      "status": "done",
+      "firstStatus": "failed",
+      "rejectedNativeModelCalls": 0,
+      "preciseRecoveryHint": true,
+      "sameChild": true,
+      "resumedStatus": "completed",
+      "freshDelegation": true,
+      "duplicateContinueRefusal": "STALE_EVIDENCE",
+      "authorizedRead": true
+    },
+    {
+      "scenario": "native-timeout-followup",
+      "status": "done",
+      "firstStatus": "failed",
+      "rejectedNativeModelCalls": 0,
+      "preciseRecoveryHint": true,
+      "sameChild": true,
+      "resumedStatus": "completed",
+      "freshDelegation": true,
+      "duplicateContinueRefusal": "STALE_EVIDENCE",
+      "authorizedRead": true
+    }
+  ],
+  "thrownPool": [
+    {
+      "status": "done",
+      "adapterThrows": 1,
+      "models": [
+        "fail-pool-thrown",
+        "root"
+      ],
+      "retryEvents": 0,
+      "fallbackGapMs": 22
+    },
+    {
+      "status": "done",
+      "adapterThrows": 1,
+      "models": [
+        "fail-pool-thrown",
+        "root"
+      ],
+      "retryEvents": 0,
+      "fallbackGapMs": 21
+    }
+  ],
+  "writeRecovery": {
+    "status": "done",
+    "writeCalls": 1,
+    "beforeAndAfterIdentical": true,
+    "withoutConfirmationRefused": "RECOVERY_REQUIRED",
+    "sameChild": true
+  },
+  "compatibility": {
+    "optionalErrorPosition": [
+      "turn",
+      "step"
+    ],
+    "olderOmittedFields": "existing signal/route observation fallback",
+    "onChildEnd": "optional completed attempt identity, no wire change",
+    "bindingRevoke": "optional expectedAttemptId; old two-argument callers remain valid"
+  },
+  "remainingBoundary": [
+    "Native direct inbox transfer cannot be atomically reauthorized through the current public SDK; the real existing safe-continue control is verified instead",
+    "Adapter stream exceptions were verified through actual SDK normalization; native CLI internal recovery and arbitrary prepareCall exceptions are not certified",
+    "Known provider reset floors, role blind-review, context revisions, unknown side effects and workspace leases remain authoritative",
+    "A final whole-repository rebuild is owned by root; current work-in-progress service interface hooks may temporarily block compilation"
+  ],
+  "sourceSha256AtEvidence": {
+    "src/route-state.ts": "6bd8ce208307e835dc0d8f9824a2fdd119e7d649623069787fd3fb1b70e0fa1a",
+    "src/agent-binding.ts": "23a0416b85edd111e3a554cc383eaadde2f550717b872c5ec3eb257aaeb4bad1",
+    "src/delegate.ts": "dd660bdcd2dee7b64878331ce2b87008803ebf7cbdc4e0d918f774bb4670f221",
+    "src/service.ts": "c9d31de1e7b16b34fa0e6d994b218738ac4075ed37ea11a5b2667a9a3cef72a3",
+    "src/host-contract.ts": "de10e1e944207e5dbdac319e635a2ff05a9f6701bef158865fc5fb93c0a773c5"
+  },
+  "integrationStatus": {
+    "latestBuild": "blocked-by-root-service-hook-wiring",
+    "missing": [
+      "BeforeManagedStep",
+      "BeforeManagedTool",
+      "ObserveManagedToolResult",
+      "BeforeManagedRequest",
+      "ObserveManagedMessage"
+    ],
+    "ownedSectionsFrozen": true
+  }
+}

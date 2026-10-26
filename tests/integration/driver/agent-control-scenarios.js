@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
  * Only the model response is deterministic, including one genuinely cancellable hang. */
 export const name = 'swarm-agent-control-integration'
 export const inject = ['agentSwarm', 'llm', 'agents', 'agentPresets', 'subagents']
-export const CONTROL_MODEL_CATALOG = [{ id: 'swarm-control-mock', name: '隔离测试供应商', models: ['hang', 'recovered', 'fail-pool', 'writer-hang', 'preferred', 'backup'].map((id) => ({ id, name: id, reasoning: { efforts: [{ id: 'high', name: 'High' }, { id: 'max', name: 'Max' }], defaultEffort: 'high' } })) }]
+export const CONTROL_MODEL_CATALOG = [{ id: 'swarm-control-mock', name: '隔离测试供应商', models: ['hang', 'recovered', 'fail-pool', 'fail-timeout', 'writer-hang', 'preferred', 'backup'].map((id) => ({ id, name: id, reasoning: { efforts: [{ id: 'high', name: 'High' }, { id: 'max', name: 'Max' }], defaultEffort: 'high' } })) }]
 const validOutputs = JSON.parse(readFileSync(new URL('../../fixtures/valid-outputs.json', import.meta.url), 'utf8'))
 function* tool (name, args) {
   const id = 'call_' + randomUUID().slice(0, 8); const raw = JSON.stringify(args)
@@ -30,7 +30,9 @@ const until = async (test, message) => {
 export const apply = (ctx) => {
   const browser = process.env.SWARM_AGENT_CONTROL_SCENARIO === 'browser-manual'
   const retryIsolated = process.env.SWARM_AGENT_CONTROL_SCENARIO === 'manual-retry-isolated'
-  const isolated = retryIsolated || process.env.SWARM_AGENT_CONTROL_SCENARIO === 'manual-isolated'
+  const nativeTimeout = process.env.SWARM_AGENT_CONTROL_SCENARIO === 'native-timeout-followup'
+  const nativeGuard = nativeTimeout || process.env.SWARM_AGENT_CONTROL_SCENARIO === 'native-isolated-followup'
+  const isolated = retryIsolated || nativeGuard || process.env.SWARM_AGENT_CONTROL_SCENARIO === 'manual-isolated'
   const restartSave = process.env.SWARM_AGENT_CONTROL_SCENARIO === 'restart-save'
   const restartLoad = process.env.SWARM_AGENT_CONTROL_SCENARIO === 'restart-load'
   const writer = process.env.SWARM_AGENT_CONTROL_SCENARIO === 'manual-writer'
@@ -79,11 +81,17 @@ export const apply = (ctx) => {
         yield { type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER_ERROR', status: 503, message: 'pool "manual-control-test" exhausted: every member is unavailable or failed', providerRetryAfterMs: 9060669 } } }
         return
       }
+      if (nativeTimeout && options.model === 'fail-timeout') {
+        yield { type: 'finish', reason: { kind: 'error', failure: { code: 'TIMEOUT', message: 'isolated provider request timed out' } } }
+        return
+      }
       if (options.model === 'hang' || options.model === 'writer-hang') {
         await new Promise((resolve) => { if (options.signal.aborted) resolve(); else options.signal.addEventListener('abort', resolve, { once: true }) })
         return
       }
       if (writer && options.model === 'recovered' && state.requests.filter((item) => item.model === 'recovered').length === 1) { yield* tool('read', { file_path: 'hello.txt' }); return }
+      if (nativeGuard && options.model === 'recovered' && state.requests.filter((item) => item.model === 'recovered').length === 1) { yield* tool('read', { file_path: 'README.md' }); return }
+      if (nativeGuard && state.authorizedRecoveryRead === undefined) state.authorizedRecoveryRead = (options.messages?.at(-1)?.content ?? []).filter((item) => item.type === 'text').map((item) => item.text).join('\n')
       if (writer) state.writerReadResult = (options.messages?.at(-1)?.content ?? []).filter((item) => item.type === 'text').map((item) => item.text).join('\n')
       yield* text('```json\n' + JSON.stringify(writer ? validOutputs.ji_feng : validOutputs.tan_wei) + '\n```')
     }
@@ -134,7 +142,7 @@ export const apply = (ctx) => {
       state.taskId = card.task_id
       const delegated = service.delegate({ task_id: card.task_id, role: writer ? 'ji_feng' : 'tan_wei', session: 'new', backend: 'api', prompt: writer ? '只写 hello.txt 一次，再核对；已完成的写入不要重放' : '只读检查 README.md' }, exec)
       delegated.catch(() => undefined)
-      const initialModel = longrun ? 'preferred' : writer ? 'writer-hang' : isolated ? 'fail-pool' : 'hang'
+      const initialModel = longrun ? 'preferred' : writer ? 'writer-hang' : nativeTimeout ? 'fail-timeout' : isolated ? 'fail-pool' : 'hang'
       const nextModel = retryIsolated ? 'fail-pool' : 'recovered'
       const first = await until(() => state.requests.find((item) => item.model === initialModel), 'the real child attempt did not start')
       const childId = first.sessionId
@@ -168,6 +176,15 @@ export const apply = (ctx) => {
         return
       }
       if (isolated) { state.firstDelegation = await delegated; view = await until(async () => { const item = await read(); return item.phase === 'idle' && item.reason?.startsWith('host-run-failed:') ? item : undefined }, 'a real failed child did not expose direct recovery') }
+      if (nativeGuard) {
+        const endedBefore = state.ends.length
+        state.requestsBeforeNativeFollowup = [...state.requests]
+        await ctx.subagents.sendMessage(handle.agent, childId, [{ type: 'text', text: '原生继续探针：不经过百工重新预约，不应启动模型或工具。' }], { signal: new AbortController().signal })
+        await until(() => state.ends.length > endedBefore, 'unadmitted native followup did not settle')
+        state.requestsAfterNativeFollowup = [...state.requests]
+        state.nativeRecoveryHint = state.agentErrors?.at(-1)?.message
+        view = await read()
+      }
       await service.ControlAgentForRpc({ parentSessionId: handle.agent.id, childId, expectedRevision: view.revision, action: 'select', route: { provider: 'swarm-control-mock', model: nextModel, reasoningEffort: 'max' }, interruptRunning: !isolated, ...(retryIsolated ? { retryRoute: true, forceRetry: true } : {}) })
       state.firstDelegation = await delegated
       view = await until(async () => { const item = await read(); return item.phase === (isolated ? 'idle' : 'paused') ? item : undefined }, 'interrupt receipt incorrectly failed to reach real host settlement')
@@ -195,9 +212,14 @@ export const apply = (ctx) => {
         return
       }
       state.continueReceipt = await service.ControlAgentForRpc({ parentSessionId: handle.agent.id, childId, expectedRevision: view.revision, action: 'continue', steering: writer ? '真实写入已完成，仅read当前 hello.txt核对，不重做write' : '继续未完成的只读探索，保留当前任务合同', ...(writer ? { confirmSafeToContinue: true } : {}) })
+      if (nativeGuard) {
+        try { await service.ControlAgentForRpc({ parentSessionId: handle.agent.id, childId, expectedRevision: view.revision, action: 'continue' }) }
+        catch (error) { state.duplicateContinueRefusal = { code: error.code, message: error.message } }
+      }
       await until(() => state.requests.length >= 2 && state.requests.at(-1)?.model === nextModel, 'manual route did not become an actual model request')
       view = await until(async () => { const item = await read(); return item.phase === 'idle' && item.actual?.route?.model === nextModel && item.actual?.delegationId !== state.controls[0].delegationId ? item : undefined }, 'resumed real child did not settle on selected model')
       state.controls.push(view)
+      if (nativeGuard) state.resumedDelegation = await until(() => service.getStatus({ task_id: card.task_id, verbose: true }, exec).tasks[0].delegations.find((item) => item.delegationId === view.delegationId && !['queued', 'running'].includes(item.status)), 'authorized recovery delegation did not finish finalization')
       state.statusAfterContinue = service.getStatus({ task_id: card.task_id, verbose: true }, exec)
       state.healthAfterContinue = service.routeState.getHealth()
       if (writer) { state.fileAfterContinue = readFileSync('hello.txt', 'utf8'); finish('done'); return }

@@ -13,6 +13,13 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.3）
 - 新建会话选「百工模式」即可使用；Jev API key 可选
 
+### 3.1.3 的变化
+
+- 百工设置按五类选项卡组织，备用模型链支持拖拽、按钮和键盘排序。
+- 修复订阅耗尽与人工换模竞态，恢复委派会重新取得当前任务的执行身份。
+- 真实用户问答进入可恢复等待；服务端验收凭证与全历史结构守卫阻止无证据完成和重复空转。
+- 适用范围、存储兼容与后续路线见 [3.1.3 运行守卫与路由恢复](docs/3.1.3-运行守卫与路由恢复.md)。
+
 ### 3.1.2 的变化
 
 - 原生“任务进度”Tab集中六个图表视角，按需查看任务、版本、节点状态和证据流；rc.3窄屏可从“更多视图”进入。
@@ -139,6 +146,13 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 
 - Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.3 recommended)
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
+
+### What's new in 3.1.3
+
+- Categorized settings and accessible drag, button and keyboard ordering for fallback routes.
+- Safer fallback during quota exhaustion and model changes; resumed delegates acquire a fresh execution binding.
+- Recoverable user-decision waits, server-issued acceptance receipts and bounded structural loop detection.
+- See [runtime guard scope and compatibility](docs/3.1.3-运行守卫与路由恢复.md).
 
 ### What's new in 3.1.2
 

@@ -183,6 +183,7 @@ export const apply = (ctx) => {
       state.subagentProviders = ctx.subagents.list()
       handle.agent.followup(Object.freeze({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: 'integration test' }], source: { kind: 'user' } }))
       await handle.agent.whenIdle()
+      state.runtimeStatus = ctx.get('agentSwarm')?.getStatus({}, { agent: handle.agent, signal: new AbortController().signal })
       finish('done')
     } finally {
       await scope?.[Symbol.asyncDispose]?.()

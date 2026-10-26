@@ -196,6 +196,7 @@ export const ACCEPT_PARAMETERS: JsonSchemaObject = {
     task_id: { type: 'string' },
     decision: { type: 'string', enum: ['accept', 'reject', 'incomplete'], description: 'accept=申请验收；reject=不接受并进入修复轮次；incomplete=如实记录未完成' },
     summary: { type: 'string', description: '验收说明' },
+    verification_token: { type: 'string', description: '可选服务器验收receipt ID，仅可复用当前有效快照；错误、伪造或过期token拒绝，不降级兼容' },
     unresolved: strList('未解决问题'),
     stopReason: { type: 'string', description: '停止理由' },
     findingResolutions: {

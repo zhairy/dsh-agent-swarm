@@ -1,0 +1,1306 @@
+{
+  "hostVersion": "0.2.1-rc.3",
+  "provider": "deterministic-local-fixture",
+  "requestedWaitMs": 1000,
+  "sessions": {
+    "five-minute-pending": {
+      "kind": "five-minute-pending",
+      "sessionId": "auth-313-five-minute-pending-1d28311e-9a10-40e2-b82f-3d666df27367",
+      "requests": [
+        {
+          "at": 1792988935369,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        },
+        {
+          "at": 1792988937723,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        },
+        {
+          "at": 1792988937761,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        }
+      ],
+      "questionRequests": 1,
+      "events": [
+        {
+          "seq": 3,
+          "type": "goal/change",
+          "operation": "create",
+          "phase": "active"
+        },
+        {
+          "seq": 4,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 5,
+          "type": "turn/start"
+        },
+        {
+          "seq": 6,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 7,
+          "type": "step/start"
+        },
+        {
+          "seq": 8,
+          "type": "system/message"
+        },
+        {
+          "seq": 9,
+          "type": "user/message"
+        },
+        {
+          "seq": 10,
+          "type": "user/message"
+        },
+        {
+          "seq": 11,
+          "type": "user/message"
+        },
+        {
+          "seq": 12,
+          "type": "request/header"
+        },
+        {
+          "seq": 13,
+          "type": "request/context"
+        },
+        {
+          "seq": 14,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 15,
+          "type": "tool/call"
+        },
+        {
+          "seq": 16,
+          "type": "tool/result"
+        },
+        {
+          "seq": 17,
+          "type": "step/end"
+        },
+        {
+          "seq": 18,
+          "type": "turn/end",
+          "reason": "blocked"
+        },
+        {
+          "seq": 19,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 20,
+          "type": "turn/start"
+        },
+        {
+          "seq": 21,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 22,
+          "type": "turn/end",
+          "reason": "blocked"
+        },
+        {
+          "seq": 23,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 24,
+          "type": "turn/start"
+        },
+        {
+          "seq": 25,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 26,
+          "type": "step/start"
+        },
+        {
+          "seq": 27,
+          "type": "user/message"
+        },
+        {
+          "seq": 28,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 29,
+          "type": "step/end"
+        },
+        {
+          "seq": 30,
+          "type": "turn/end",
+          "reason": "completed"
+        },
+        {
+          "seq": 31,
+          "type": "goal/change",
+          "operation": "resume",
+          "phase": "active"
+        },
+        {
+          "seq": 32,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 33,
+          "type": "turn/start"
+        },
+        {
+          "seq": 34,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 35,
+          "type": "step/start"
+        },
+        {
+          "seq": 36,
+          "type": "user/message"
+        },
+        {
+          "seq": 37,
+          "type": "request/header"
+        },
+        {
+          "seq": 38,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 39,
+          "type": "step/end"
+        },
+        {
+          "seq": 40,
+          "type": "turn/end",
+          "reason": "completed"
+        },
+        {
+          "seq": 41,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 42,
+          "type": "turn/start"
+        },
+        {
+          "seq": 43,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 44,
+          "type": "turn/end",
+          "reason": "blocked"
+        }
+      ],
+      "errors": [],
+      "goalChanges": [
+        {
+          "operation": "create",
+          "id": "goal-8211a793-485a-4ac0-9f0c-a2ea75a5d73e",
+          "revision": 1,
+          "phase": "active",
+          "activation": "armed"
+        },
+        {
+          "operation": "resume",
+          "id": "goal-8211a793-485a-4ac0-9f0c-a2ea75a5d73e",
+          "revision": 2,
+          "phase": "active",
+          "activation": "armed"
+        }
+      ],
+      "taskId": "T-1",
+      "timedSchema": true,
+      "callId": "call_auth_166fc8d2",
+      "questionResult": {
+        "isError": false,
+        "pending": true,
+        "answerBatch": false,
+        "callId": "call_auth_166fc8d2"
+      },
+      "waitBaseline": {
+        "requests": 1,
+        "goal": {
+          "id": "goal-8211a793-485a-4ac0-9f0c-a2ea75a5d73e",
+          "revision": 1,
+          "objective": "隔离授权验收 five-minute-pending",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988935302,
+          "updatedAt": 1792988935302,
+          "activation": "disarmed"
+        },
+        "at": 1792988936567
+      },
+      "observedMs": 1000,
+      "waitFinal": {
+        "requests": 1,
+        "goal": {
+          "id": "goal-8211a793-485a-4ac0-9f0c-a2ea75a5d73e",
+          "revision": 1,
+          "objective": "隔离授权验收 five-minute-pending",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988935302,
+          "updatedAt": 1792988935302,
+          "activation": "disarmed"
+        },
+        "observedMs": 1001.0384919999997,
+        "at": 1792988937568
+      },
+      "afterWrongSource": {
+        "requests": 1,
+        "goal": {
+          "id": "goal-8211a793-485a-4ac0-9f0c-a2ea75a5d73e",
+          "revision": 1,
+          "objective": "隔离授权验收 five-minute-pending",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988935302,
+          "updatedAt": 1792988935302,
+          "activation": "disarmed"
+        }
+      },
+      "answerAccepted": true,
+      "duplicateReplyError": "REPLY_QUEUED",
+      "afterAnswer": {
+        "goal": {
+          "id": "goal-8211a793-485a-4ac0-9f0c-a2ea75a5d73e",
+          "revision": 2,
+          "objective": "隔离授权验收 five-minute-pending",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 2,
+          "createdAt": 1792988935302,
+          "updatedAt": 1792988937731,
+          "activation": "disarmed"
+        },
+        "requests": 3,
+        "status": {
+          "task_id": "T-1",
+          "cardRevision": 1,
+          "workflowRevision": 1,
+          "requestRevision": 2,
+          "intentSource": "host"
+        }
+      },
+      "persistedDecisions": [
+        {
+          "phase": "answered",
+          "hostCallId": "call_auth_166fc8d2",
+          "questionBinding": {
+            "cardRevision": 1,
+            "lineageId": "b89f99cc54856d74b10511d7c79c75d720769c4fb2beb2e0ab9215c47b26f011",
+            "requestRevision": 1,
+            "rootSessionId": "auth-313-five-minute-pending-1d28311e-9a10-40e2-b82f-3d666df27367",
+            "taskId": "T-1",
+            "workflowRevision": 1,
+            "workspaceId": "3bfa64584d234d0cacb0ee1322ebcc08061bbea311831dba3cdd27c1b34e92a1"
+          },
+          "appliesToBinding": {
+            "cardRevision": 1,
+            "lineageId": "b89f99cc54856d74b10511d7c79c75d720769c4fb2beb2e0ab9215c47b26f011",
+            "requestRevision": 2,
+            "rootSessionId": "auth-313-five-minute-pending-1d28311e-9a10-40e2-b82f-3d666df27367",
+            "taskId": "T-1",
+            "workflowRevision": 1,
+            "workspaceId": "3bfa64584d234d0cacb0ee1322ebcc08061bbea311831dba3cdd27c1b34e92a1"
+          },
+          "answerOrigin": {
+            "callId": "call_auth_166fc8d2",
+            "kind": "user-question-reply",
+            "messageId": "54a931f0-c889-439e-b4d0-33c61e8729ee"
+          },
+          "answers": [
+            {
+              "id": "scope",
+              "selectedIndices": [
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "manual-paused": {
+      "kind": "manual-paused",
+      "sessionId": "auth-313-manual-paused-b11c2b61-2574-49ce-9b22-91b8436019b1",
+      "requests": [
+        {
+          "at": 1792988937979,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        },
+        {
+          "at": 1792988939188,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        }
+      ],
+      "questionRequests": 1,
+      "events": [
+        {
+          "seq": 3,
+          "type": "goal/change",
+          "operation": "create",
+          "phase": "active"
+        },
+        {
+          "seq": 4,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 5,
+          "type": "turn/start"
+        },
+        {
+          "seq": 6,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 7,
+          "type": "step/start"
+        },
+        {
+          "seq": 8,
+          "type": "system/message"
+        },
+        {
+          "seq": 9,
+          "type": "user/message"
+        },
+        {
+          "seq": 10,
+          "type": "user/message"
+        },
+        {
+          "seq": 11,
+          "type": "user/message"
+        },
+        {
+          "seq": 12,
+          "type": "request/header"
+        },
+        {
+          "seq": 13,
+          "type": "request/context"
+        },
+        {
+          "seq": 14,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 15,
+          "type": "tool/call"
+        },
+        {
+          "seq": 16,
+          "type": "tool/result"
+        },
+        {
+          "seq": 17,
+          "type": "step/end"
+        },
+        {
+          "seq": 18,
+          "type": "turn/end",
+          "reason": "blocked"
+        },
+        {
+          "seq": 19,
+          "type": "goal/change",
+          "operation": "pause",
+          "phase": "paused"
+        },
+        {
+          "seq": 20,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 21,
+          "type": "turn/start"
+        },
+        {
+          "seq": 22,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 23,
+          "type": "step/start"
+        },
+        {
+          "seq": 24,
+          "type": "user/message"
+        },
+        {
+          "seq": 25,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 26,
+          "type": "step/end"
+        },
+        {
+          "seq": 27,
+          "type": "turn/end",
+          "reason": "completed"
+        }
+      ],
+      "errors": [],
+      "goalChanges": [
+        {
+          "operation": "create",
+          "id": "goal-5cc684f7-9f6f-4279-8603-683e46ec608e",
+          "revision": 1,
+          "phase": "active",
+          "activation": "armed"
+        },
+        {
+          "operation": "pause",
+          "id": "goal-5cc684f7-9f6f-4279-8603-683e46ec608e",
+          "revision": 2,
+          "phase": "paused",
+          "activation": "disarmed"
+        }
+      ],
+      "taskId": "T-1",
+      "timedSchema": true,
+      "callId": "call_auth_2dd21a68",
+      "questionResult": {
+        "isError": false,
+        "pending": true,
+        "answerBatch": false,
+        "callId": "call_auth_2dd21a68"
+      },
+      "waitBaseline": {
+        "requests": 1,
+        "goal": {
+          "id": "goal-5cc684f7-9f6f-4279-8603-683e46ec608e",
+          "revision": 1,
+          "objective": "隔离授权验收 manual-paused",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988937945,
+          "updatedAt": 1792988937945,
+          "activation": "disarmed"
+        },
+        "at": 1792988939164
+      },
+      "answerAccepted": true,
+      "duplicateReplyError": "REPLY_QUEUED",
+      "afterAnswer": {
+        "goal": {
+          "id": "goal-5cc684f7-9f6f-4279-8603-683e46ec608e",
+          "revision": 2,
+          "objective": "隔离授权验收 manual-paused",
+          "phase": "paused",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988937945,
+          "updatedAt": 1792988939164,
+          "activation": "disarmed"
+        },
+        "requests": 2,
+        "status": {
+          "task_id": "T-1",
+          "cardRevision": 1,
+          "workflowRevision": 1,
+          "requestRevision": 2,
+          "intentSource": "host"
+        }
+      },
+      "persistedDecisions": [
+        {
+          "phase": "answered",
+          "hostCallId": "call_auth_2dd21a68",
+          "questionBinding": {
+            "cardRevision": 1,
+            "lineageId": "096109ae290bbf1f89aa31e07bb2c78870a2bb2856b30504e40b3285b823b18c",
+            "requestRevision": 1,
+            "rootSessionId": "auth-313-manual-paused-b11c2b61-2574-49ce-9b22-91b8436019b1",
+            "taskId": "T-1",
+            "workflowRevision": 1,
+            "workspaceId": "3bfa64584d234d0cacb0ee1322ebcc08061bbea311831dba3cdd27c1b34e92a1"
+          },
+          "appliesToBinding": {
+            "cardRevision": 1,
+            "lineageId": "096109ae290bbf1f89aa31e07bb2c78870a2bb2856b30504e40b3285b823b18c",
+            "requestRevision": 2,
+            "rootSessionId": "auth-313-manual-paused-b11c2b61-2574-49ce-9b22-91b8436019b1",
+            "taskId": "T-1",
+            "workflowRevision": 1,
+            "workspaceId": "3bfa64584d234d0cacb0ee1322ebcc08061bbea311831dba3cdd27c1b34e92a1"
+          },
+          "answerOrigin": {
+            "callId": "call_auth_2dd21a68",
+            "kind": "user-question-reply",
+            "messageId": "d7ab46e2-1281-4ea2-832b-c39af91fdaca"
+          },
+          "answers": [
+            {
+              "id": "scope",
+              "selectedIndices": [
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "replaced-goal": {
+      "kind": "replaced-goal",
+      "sessionId": "auth-313-replaced-goal-fbf4fdf6-0185-4638-9354-1ab117f7155f",
+      "requests": [
+        {
+          "at": 1792988939422,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        },
+        {
+          "at": 1792988940765,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        }
+      ],
+      "questionRequests": 1,
+      "events": [
+        {
+          "seq": 3,
+          "type": "goal/change",
+          "operation": "create",
+          "phase": "active"
+        },
+        {
+          "seq": 4,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 5,
+          "type": "turn/start"
+        },
+        {
+          "seq": 6,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 7,
+          "type": "step/start"
+        },
+        {
+          "seq": 8,
+          "type": "system/message"
+        },
+        {
+          "seq": 9,
+          "type": "user/message"
+        },
+        {
+          "seq": 10,
+          "type": "user/message"
+        },
+        {
+          "seq": 11,
+          "type": "user/message"
+        },
+        {
+          "seq": 12,
+          "type": "request/header"
+        },
+        {
+          "seq": 13,
+          "type": "request/context"
+        },
+        {
+          "seq": 14,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 15,
+          "type": "tool/call"
+        },
+        {
+          "seq": 16,
+          "type": "tool/result"
+        },
+        {
+          "seq": 17,
+          "type": "step/end"
+        },
+        {
+          "seq": 18,
+          "type": "turn/end",
+          "reason": "blocked"
+        },
+        {
+          "seq": 19,
+          "type": "goal/change",
+          "operation": "clear"
+        },
+        {
+          "seq": 20,
+          "type": "goal/change",
+          "operation": "create",
+          "phase": "active"
+        },
+        {
+          "seq": 21,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 22,
+          "type": "turn/start"
+        },
+        {
+          "seq": 23,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 24,
+          "type": "turn/end",
+          "reason": "blocked"
+        },
+        {
+          "seq": 25,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 26,
+          "type": "turn/start"
+        },
+        {
+          "seq": 27,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 28,
+          "type": "step/start"
+        },
+        {
+          "seq": 29,
+          "type": "user/message"
+        },
+        {
+          "seq": 30,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 31,
+          "type": "step/end"
+        },
+        {
+          "seq": 32,
+          "type": "turn/end",
+          "reason": "completed"
+        }
+      ],
+      "errors": [],
+      "goalChanges": [
+        {
+          "operation": "create",
+          "id": "goal-22a5d16e-fb3b-43ec-9f30-41f143bc5f1c",
+          "revision": 1,
+          "phase": "active",
+          "activation": "armed"
+        },
+        {
+          "operation": "clear"
+        },
+        {
+          "operation": "create",
+          "id": "goal-460fa2ba-5be1-4e7a-8164-d47cf4c2a9a9",
+          "revision": 1,
+          "phase": "active",
+          "activation": "armed"
+        }
+      ],
+      "taskId": "T-1",
+      "timedSchema": true,
+      "callId": "call_auth_e51d1cb3",
+      "questionResult": {
+        "isError": false,
+        "pending": true,
+        "answerBatch": false,
+        "callId": "call_auth_e51d1cb3"
+      },
+      "waitBaseline": {
+        "requests": 1,
+        "goal": {
+          "id": "goal-22a5d16e-fb3b-43ec-9f30-41f143bc5f1c",
+          "revision": 1,
+          "objective": "隔离授权验收 replaced-goal",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988939378,
+          "updatedAt": 1792988939378,
+          "activation": "disarmed"
+        },
+        "at": 1792988940625
+      },
+      "answerAccepted": true,
+      "duplicateReplyError": "REPLY_QUEUED",
+      "afterAnswer": {
+        "goal": {
+          "id": "goal-460fa2ba-5be1-4e7a-8164-d47cf4c2a9a9",
+          "revision": 1,
+          "objective": "替换后的隔离目标，不得由旧回答恢复",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 0,
+          "createdAt": 1792988940627,
+          "updatedAt": 1792988940627,
+          "activation": "disarmed"
+        },
+        "requests": 2,
+        "status": {
+          "task_id": "T-1",
+          "cardRevision": 1,
+          "workflowRevision": 1,
+          "requestRevision": 2,
+          "intentSource": "host"
+        }
+      },
+      "persistedDecisions": [
+        {
+          "phase": "answered",
+          "hostCallId": "call_auth_e51d1cb3",
+          "questionBinding": {
+            "cardRevision": 1,
+            "lineageId": "ea8d86af8bc0980a8e699c7815a35f76436abb1a48fb55f637f24132049790df",
+            "requestRevision": 1,
+            "rootSessionId": "auth-313-replaced-goal-fbf4fdf6-0185-4638-9354-1ab117f7155f",
+            "taskId": "T-1",
+            "workflowRevision": 1,
+            "workspaceId": "3bfa64584d234d0cacb0ee1322ebcc08061bbea311831dba3cdd27c1b34e92a1"
+          },
+          "appliesToBinding": {
+            "cardRevision": 1,
+            "lineageId": "ea8d86af8bc0980a8e699c7815a35f76436abb1a48fb55f637f24132049790df",
+            "requestRevision": 2,
+            "rootSessionId": "auth-313-replaced-goal-fbf4fdf6-0185-4638-9354-1ab117f7155f",
+            "taskId": "T-1",
+            "workflowRevision": 1,
+            "workspaceId": "3bfa64584d234d0cacb0ee1322ebcc08061bbea311831dba3cdd27c1b34e92a1"
+          },
+          "answerOrigin": {
+            "callId": "call_auth_e51d1cb3",
+            "kind": "user-question-reply",
+            "messageId": "04d5b265-af1c-45ad-b320-53bd8efe1fcd"
+          },
+          "answers": [
+            {
+              "id": "scope",
+              "selectedIndices": [
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "manual-stopped": {
+      "kind": "manual-stopped",
+      "sessionId": "auth-313-manual-stopped-776961c5-3d65-40ec-96ce-f2d81e3fa664",
+      "requests": [
+        {
+          "at": 1792988941032,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        }
+      ],
+      "questionRequests": 1,
+      "events": [
+        {
+          "seq": 3,
+          "type": "goal/change",
+          "operation": "create",
+          "phase": "active"
+        },
+        {
+          "seq": 4,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 5,
+          "type": "turn/start"
+        },
+        {
+          "seq": 6,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 7,
+          "type": "step/start"
+        },
+        {
+          "seq": 8,
+          "type": "system/message"
+        },
+        {
+          "seq": 9,
+          "type": "user/message"
+        },
+        {
+          "seq": 10,
+          "type": "user/message"
+        },
+        {
+          "seq": 11,
+          "type": "user/message"
+        },
+        {
+          "seq": 12,
+          "type": "request/header"
+        },
+        {
+          "seq": 13,
+          "type": "request/context"
+        },
+        {
+          "seq": 14,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 15,
+          "type": "tool/call"
+        },
+        {
+          "seq": 16,
+          "type": "tool/result"
+        },
+        {
+          "seq": 17,
+          "type": "step/end"
+        },
+        {
+          "seq": 18,
+          "type": "turn/end",
+          "reason": "aborted"
+        },
+        {
+          "seq": 19,
+          "type": "goal/change",
+          "operation": "pause",
+          "phase": "paused"
+        }
+      ],
+      "errors": [],
+      "goalChanges": [
+        {
+          "operation": "create",
+          "id": "goal-5cea71bc-4e04-42d7-8392-4df8ab12d191",
+          "revision": 1,
+          "phase": "active",
+          "activation": "armed"
+        },
+        {
+          "operation": "pause",
+          "id": "goal-5cea71bc-4e04-42d7-8392-4df8ab12d191",
+          "revision": 2,
+          "phase": "paused",
+          "activation": "disarmed"
+        }
+      ],
+      "taskId": "T-1",
+      "timedSchema": true,
+      "callId": "call_auth_4a8ec3d8",
+      "questionResult": {
+        "isError": true,
+        "pending": false,
+        "answerBatch": false
+      },
+      "waitBaseline": {
+        "requests": 1,
+        "goal": {
+          "id": "goal-5cea71bc-4e04-42d7-8392-4df8ab12d191",
+          "revision": 2,
+          "objective": "隔离授权验收 manual-stopped",
+          "phase": "paused",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988940967,
+          "updatedAt": 1792988941062,
+          "activation": "disarmed"
+        },
+        "at": 1792988941264
+      },
+      "answerAfterStop": false,
+      "afterStop": {
+        "requests": 1,
+        "goal": {
+          "id": "goal-5cea71bc-4e04-42d7-8392-4df8ab12d191",
+          "revision": 2,
+          "objective": "隔离授权验收 manual-stopped",
+          "phase": "paused",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988940967,
+          "updatedAt": 1792988941062,
+          "activation": "disarmed"
+        }
+      },
+      "persistedDecisions": [
+        {
+          "phase": "cancelled",
+          "hostCallId": "call_auth_4a8ec3d8",
+          "questionBinding": {
+            "cardRevision": 1,
+            "lineageId": "0e751cf3001b75a09166efbcd8e2f76acc25be64c526b4e9d6922479cbbfbbee",
+            "requestRevision": 1,
+            "rootSessionId": "auth-313-manual-stopped-776961c5-3d65-40ec-96ce-f2d81e3fa664",
+            "taskId": "T-1",
+            "workflowRevision": 1,
+            "workspaceId": "3bfa64584d234d0cacb0ee1322ebcc08061bbea311831dba3cdd27c1b34e92a1"
+          }
+        }
+      ]
+    },
+    "no-answerer": {
+      "kind": "no-answerer",
+      "sessionId": "auth-313-no-answerer-bf8aff4a-82f5-4cf2-a2c4-ab12024bf65f",
+      "requests": [
+        {
+          "at": 1792988941734,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        }
+      ],
+      "questionRequests": 1,
+      "events": [
+        {
+          "seq": 3,
+          "type": "goal/change",
+          "operation": "create",
+          "phase": "active"
+        },
+        {
+          "seq": 4,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 5,
+          "type": "turn/start"
+        },
+        {
+          "seq": 6,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 7,
+          "type": "step/start"
+        },
+        {
+          "seq": 8,
+          "type": "system/message"
+        },
+        {
+          "seq": 9,
+          "type": "user/message"
+        },
+        {
+          "seq": 10,
+          "type": "user/message"
+        },
+        {
+          "seq": 11,
+          "type": "user/message"
+        },
+        {
+          "seq": 12,
+          "type": "request/header"
+        },
+        {
+          "seq": 13,
+          "type": "request/context"
+        },
+        {
+          "seq": 14,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 15,
+          "type": "tool/call"
+        },
+        {
+          "seq": 16,
+          "type": "tool/result"
+        },
+        {
+          "seq": 17,
+          "type": "step/end"
+        },
+        {
+          "seq": 18,
+          "type": "turn/end",
+          "reason": "blocked"
+        }
+      ],
+      "errors": [],
+      "goalChanges": [
+        {
+          "operation": "create",
+          "id": "goal-114a51ce-befc-411f-ab4c-07106e6fa574",
+          "revision": 1,
+          "phase": "active",
+          "activation": "armed"
+        }
+      ],
+      "taskId": "T-1",
+      "timedSchema": true,
+      "callId": "call_auth_ff1d4d1d",
+      "questionResult": {
+        "isError": false,
+        "pending": true,
+        "answerBatch": false,
+        "callId": "call_auth_ff1d4d1d"
+      },
+      "waitBaseline": {
+        "requests": 1,
+        "goal": {
+          "id": "goal-114a51ce-befc-411f-ab4c-07106e6fa574",
+          "revision": 1,
+          "objective": "隔离授权验收 no-answerer",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988941637,
+          "updatedAt": 1792988941637,
+          "activation": "disarmed"
+        },
+        "at": 1792988942972
+      },
+      "noAnswererStable": {
+        "requests": 1,
+        "goal": {
+          "id": "goal-114a51ce-befc-411f-ab4c-07106e6fa574",
+          "revision": 1,
+          "objective": "隔离授权验收 no-answerer",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988941637,
+          "updatedAt": 1792988941637,
+          "activation": "disarmed"
+        }
+      },
+      "persistedDecisions": [
+        {
+          "phase": "waiting",
+          "hostCallId": "call_auth_ff1d4d1d",
+          "questionBinding": {
+            "cardRevision": 1,
+            "lineageId": "23587502bc219892b112dfd309b267c45dc5698bd9b6f992cc517074a83f2978",
+            "requestRevision": 1,
+            "rootSessionId": "auth-313-no-answerer-bf8aff4a-82f5-4cf2-a2c4-ab12024bf65f",
+            "taskId": "T-1",
+            "workflowRevision": 1,
+            "workspaceId": "3bfa64584d234d0cacb0ee1322ebcc08061bbea311831dba3cdd27c1b34e92a1"
+          }
+        }
+      ]
+    },
+    "inline-answer": {
+      "kind": "inline-answer",
+      "sessionId": "auth-313-inline-answer-1af0a413-9849-4086-95a7-b9e6c0dbb6b5",
+      "requests": [
+        {
+          "at": 1792988944444,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        },
+        {
+          "at": 1792988944572,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        }
+      ],
+      "questionRequests": 1,
+      "events": [
+        {
+          "seq": 3,
+          "type": "goal/change",
+          "operation": "create",
+          "phase": "active"
+        },
+        {
+          "seq": 4,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 5,
+          "type": "turn/start"
+        },
+        {
+          "seq": 6,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 7,
+          "type": "step/start"
+        },
+        {
+          "seq": 8,
+          "type": "system/message"
+        },
+        {
+          "seq": 9,
+          "type": "user/message"
+        },
+        {
+          "seq": 10,
+          "type": "user/message"
+        },
+        {
+          "seq": 11,
+          "type": "user/message"
+        },
+        {
+          "seq": 12,
+          "type": "request/header"
+        },
+        {
+          "seq": 13,
+          "type": "request/context"
+        },
+        {
+          "seq": 14,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 15,
+          "type": "tool/call"
+        },
+        {
+          "seq": 16,
+          "type": "tool/result"
+        },
+        {
+          "seq": 17,
+          "type": "step/end"
+        },
+        {
+          "seq": 18,
+          "type": "step/start"
+        },
+        {
+          "seq": 19,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 20,
+          "type": "step/end"
+        },
+        {
+          "seq": 21,
+          "type": "turn/end",
+          "reason": "completed"
+        },
+        {
+          "seq": 22,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 23,
+          "type": "turn/start"
+        },
+        {
+          "seq": 24,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 25,
+          "type": "turn/end",
+          "reason": "blocked"
+        }
+      ],
+      "errors": [],
+      "goalChanges": [
+        {
+          "operation": "create",
+          "id": "goal-64c32ee3-3e7b-4a76-8c46-c797cec3ab9b",
+          "revision": 1,
+          "phase": "active",
+          "activation": "armed"
+        }
+      ],
+      "taskId": "T-1",
+      "timedSchema": true,
+      "callId": "call_auth_4e84098d",
+      "questionResult": {
+        "isError": false,
+        "pending": false,
+        "answerBatch": true
+      },
+      "inlineResult": {
+        "requests": 2,
+        "goal": {
+          "id": "goal-64c32ee3-3e7b-4a76-8c46-c797cec3ab9b",
+          "revision": 1,
+          "objective": "隔离授权验收 inline-answer",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988944338,
+          "updatedAt": 1792988944338,
+          "activation": "disarmed"
+        },
+        "requestRevision": 2
+      },
+      "persistedDecisions": [
+        {
+          "phase": "answered",
+          "hostCallId": "call_auth_4e84098d",
+          "questionBinding": {
+            "cardRevision": 1,
+            "lineageId": "d4cc849668a91d570b5e2af0e8d30408ed491e1c2a0690073a7fbf5db08fdcea",
+            "requestRevision": 1,
+            "rootSessionId": "auth-313-inline-answer-1af0a413-9849-4086-95a7-b9e6c0dbb6b5",
+            "taskId": "T-1",
+            "workflowRevision": 1,
+            "workspaceId": "3bfa64584d234d0cacb0ee1322ebcc08061bbea311831dba3cdd27c1b34e92a1"
+          },
+          "appliesToBinding": {
+            "cardRevision": 1,
+            "lineageId": "d4cc849668a91d570b5e2af0e8d30408ed491e1c2a0690073a7fbf5db08fdcea",
+            "requestRevision": 2,
+            "rootSessionId": "auth-313-inline-answer-1af0a413-9849-4086-95a7-b9e6c0dbb6b5",
+            "taskId": "T-1",
+            "workflowRevision": 1,
+            "workspaceId": "3bfa64584d234d0cacb0ee1322ebcc08061bbea311831dba3cdd27c1b34e92a1"
+          },
+          "answerOrigin": {
+            "callId": "call_auth_4e84098d",
+            "kind": "tool-result"
+          },
+          "answers": [
+            {
+              "id": "scope",
+              "selectedIndices": [
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "errors": [],
+  "startedAt": "2026-10-26T04:28:54.113Z",
+  "status": "done",
+  "finishedAt": "2026-10-26T04:29:04.872Z"
+}

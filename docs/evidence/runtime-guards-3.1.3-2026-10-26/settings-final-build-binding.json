@@ -1,0 +1,15 @@
+{
+  "host": "0.2.1-rc.3",
+  "pluginVersion": "3.1.3",
+  "isolatedPort": 4187,
+  "productionTouched": false,
+  "sha256": {
+    "package.json": "b30f38f536e7859a30e6c4133c08cdc67bdd7240917adc5ad4bf934045423090",
+    "lib/client.js": "ac96ad060babc58bed3745be5618364f353a767ef6a8bd9dd59c3bc67a72d4ac",
+    "lib/index.js": "cd5d3a916f128be40ea967689602921a0eb0374d812bb1d2087dcceb2d6d7c2f",
+    "client/settings-page.js": "fefcdd9a0b30ca1a5c2975059dfb1b1fd4b5bd249133ed612a2135a89d7ebf24",
+    "client/settings-navigation.js": "02af812d3d5fe3641345977a62fc134e18466588a87d5c63a4deccf03bbe9659",
+    "client/task-flow.js": "fe5541a51a7fbec99932fbf50c094a041179fbe3873fb2d8fb628be410870b97",
+    "scripts/build-client.mjs": "903ccdec67e5118fe36eb27e0a7f8a4d2e6df956d9e137cddc2d0740596e0723"
+  }
+}

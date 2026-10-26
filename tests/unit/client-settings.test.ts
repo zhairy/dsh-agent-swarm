@@ -24,16 +24,19 @@ const DATA = {
 }
 
 /** 以 CommonJS 方式执行设置页源码：注入测试数据与最小 React 桩 */
-const loadPage = (): any => {
+const loadPage = (reactOverrides: Record<string, unknown> = {}): any => {
   const source = readFileSync(join(__dirname, '../../client/settings-page.js'), 'utf8')
     .replace('const DATA = __SWARM_DATA__', `const DATA = ${JSON.stringify(DATA)}`)
   const module = { exports: {} as any }
+  const navigation = { exports: {} as any }
+  new Function('module', 'exports', readFileSync(join(__dirname, '../../client/settings-navigation.js'), 'utf8'))(navigation, navigation.exports)
   const react = {
     createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]) => ({ type, props, children }),
-    useSyncExternalStore: () => undefined, useEffect: () => undefined, Fragment: 'fragment'
+    useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(), useEffect: () => undefined, Fragment: 'fragment', ...reactOverrides
   }
   new Function('require', 'module', 'exports', source)((id: string) => {
     if (id === 'react') return react
+    if (id === '@swarm/settings-navigation') return navigation.exports
     throw new Error(`unexpected require ${id}`)
   }, module, module.exports)
   return module.exports
@@ -502,6 +505,141 @@ describe('任务流程与规划审核设置', () => {
       { op: 'set', path: ['workflow'], value: { maxNodes: 24 } },
       { op: 'set', path: ['planningReview'], value: { futureSetting: 'keep' } }
     ])
+  })
+})
+
+describe('3.1.3 settings categories and stable route ordering', () => {
+  const tree = (node: any): any[] => Array.isArray(node) ? node.flatMap(tree) : node && typeof node === 'object' ? [node, ...(node.children ?? []).flatMap(tree)] : []
+  const dataTransfer = () => {
+    const values = new Map<string, string>()
+    return { setData: (key: string, value: string) => values.set(key, value), getData: (key: string) => values.get(key) ?? '', effectAllowed: '', dropEffect: '' }
+  }
+  const rowElement = (controller: any, agentKey: string, target: string, index: number) => {
+    const row = rowOf(controller, agentKey), slots = target === 'upgrade' ? row.upgrade.slots : row.slots
+    return page.__test__.RouteLayerRow({ t: (key: string) => key, rowKey: agentKey, rowName: row.name, target, slot: slots[index], slotId: controller.getLayerIds(agentKey, target, slots.length)[index], index, length: slots.length, groups: CATALOG.value.groups, editable: true, controller })
+  }
+
+  it('native drag reorder keeps the primary fixed, keeps reasoning/policy with the model and edits the moved identity', async () => {
+    const policy = { accessMode: 'subscription', quotaDomainId: 'account:q', futureMetadata: { keep: true } }
+    const original = { routes: { tian_shu: { escalation: 'codex', chain: [route('o', 'astra'), { ...route('q', 'a'), reasoningEffort: 'high', policy }, { ...route('g', 'k'), reasoningEffort: 'low' }, route('d', 'a')] } }, agents: { language: 'ja' }, persistence: { enabled: true, custom: 'kept' }, experience: { enabled: true }, jev: { apiKeyEnv: 'CUSTOM_REF' } }
+    const form = createForm(original), controller = new SwarmAgentsController(createCtx(form))
+    await controller.loadCatalog()
+    const ids = [...controller.getLayerIds('tian_shu', 'chain', 4)]
+    const dragged = rowElement(controller, 'tian_shu', 'chain', 1), destination = rowElement(controller, 'tian_shu', 'chain', 3)
+    const handle = tree(dragged).find(node => node.props?.['data-swarm-route-drag'])
+    const event = { dataTransfer: dataTransfer(), preventDefault: vi.fn(), stopPropagation: vi.fn() }
+    handle.props.onDragStart(event)
+    destination.props.onDragOver(event)
+    expect(event.preventDefault).toHaveBeenCalledTimes(1)
+    destination.props.onDrop(event)
+    handle.props.onDragEnd()
+    expect(rowOf(controller, 'tian_shu').slots.map((s: any) => s.model)).toEqual(['astra', 'k', 'a', 'a'])
+    expect(controller.getLayerIds('tian_shu', 'chain', 4)).toEqual([ids[0], ids[2], ids[3], ids[1]])
+    // 使用排序前已建立的真实select回调，仍只能修改被移动项。
+    const effortComponent = tree(dragged).find(node => node.type?.name === 'EffortSelect')
+    const effortSelect = effortComponent.type(effortComponent.props)
+    effortSelect.props.onChange({ target: { value: '' } })
+    expect(rowOf(controller, 'tian_shu').slots[3]).toMatchObject({ provider: 'q', model: 'a', reasoningEffort: '', policy })
+    expect(rowOf(controller, 'tian_shu').slots[1]).toMatchObject({ provider: 'g', model: 'k', reasoningEffort: 'low' })
+    await controller.save()
+    const saved = form.getSnapshot().value as any
+    expect(saved.routes.tian_shu).toMatchObject({ escalation: 'codex', chain: [route('o', 'astra'), { ...route('g', 'k'), reasoningEffort: 'low' }, route('d', 'a'), { ...route('q', 'a'), policy }] })
+    expect(saved.persistence).toEqual(original.persistence)
+    expect(saved.experience).toEqual(original.experience)
+    expect(saved.agents).toEqual(original.agents)
+    expect(saved.jev).toEqual(original.jev)
+    expect(ids.some(id => JSON.stringify(saved).includes(id))).toBe(false)
+    const reopened = new SwarmAgentsController(createCtx(createForm(saved)))
+    expect(rowOf(reopened, 'tian_shu').slots).toEqual(rowOf(controller, 'tian_shu').slots)
+  })
+
+  it('rejects primary, cross-agent, cross-chain and forged drops without creating a draft; cancelled drags stay cancelled', () => {
+    const controller = new SwarmAgentsController(createCtx(createForm({ routes: {} })))
+    const normal = controller.getLayerIds('tian_shu', 'chain', 4), other = controller.getLayerIds('shu_ji', 'chain', 4), upgrade = controller.getLayerIds('tian_shu', 'upgrade', 1)
+    expect(controller.startLayerDrag('tian_shu', normal[0])).toBeUndefined()
+    expect(controller.moveLayerById('tian_shu', normal[1], normal[0])).toBe(false)
+    let token = controller.startLayerDrag('tian_shu', normal[1])
+    expect(controller.dropLayer('shu_ji', other[2], 'chain', token)).toBe(false)
+    token = controller.startLayerDrag('tian_shu', normal[1])
+    expect(controller.dropLayer('tian_shu', upgrade[0], 'upgrade', token)).toBe(false)
+    controller.startLayerDrag('tian_shu', normal[1])
+    expect(controller.dropLayer('tian_shu', normal[2], 'chain', 'foreign-data')).toBe(false)
+    token = controller.startLayerDrag('tian_shu', normal[1])
+    controller.cancelLayerDrag()
+    expect(controller.dropLayer('tian_shu', normal[2], 'chain', token)).toBe(false)
+    expect(controller.getSnapshot().dirty).toBe(false)
+    const firstRow = rowElement(controller, 'tian_shu', 'chain', 0)
+    expect(tree(firstRow).some(node => node.props?.draggable === true)).toBe(false)
+  })
+
+  it('reorders all escalation positions with up/down buttons while regular route, triggers and policies stay intact', async () => {
+    const upgradePolicy = { accessMode: 'metered_api', quotaDomainId: 'account:api' }
+    const form = createForm({ routes: { tian_shu: { upgrade: { enabled: true, chain: [{ ...route('q', 'a'), reasoningEffort: 'high', policy: upgradePolicy }, route('g', 'k')], triggers: ['ambiguous'] } } } })
+    const controller = new SwarmAgentsController(createCtx(form))
+    const before = rowOf(controller, 'tian_shu').slots
+    const ids = [...controller.getLayerIds('tian_shu', 'upgrade', 2)]
+    const second = rowElement(controller, 'tian_shu', 'upgrade', 1)
+    tree(second).find(node => node.props?.['data-swarm-route-move'] === 'up').props.onClick()
+    expect(rowOf(controller, 'tian_shu').slots).toEqual(before)
+    expect(rowOf(controller, 'tian_shu').upgrade.slots.map((s: any) => s.provider)).toEqual(['g', 'q'])
+    expect(controller.getLayerIds('tian_shu', 'upgrade', 2)).toEqual([ids[1], ids[0]])
+    await controller.save()
+    expect((form.getSnapshot().value as any).routes.tian_shu.upgrade).toEqual({ enabled: true, chain: [route('g', 'k'), { ...route('q', 'a'), reasoningEffort: 'high', policy: upgradePolicy }], triggers: ['ambiguous'] })
+  })
+
+  it('invalidates drag and stale edit callbacks on authoritative revision, discard, tab change and read-only snapshots', () => {
+    const form = createForm({ routes: {} }), controller = new SwarmAgentsController(createCtx(form))
+    let ids = [...controller.getLayerIds('tian_shu', 'chain', 4)]
+    let token = controller.startLayerDrag('tian_shu', ids[1])
+    form.replace({ revision: 2 })
+    expect(controller.dropLayer('tian_shu', ids[2], 'chain', token)).toBe(false)
+    controller.setSlotById('tian_shu', ids[1], { reasoningEffort: 'high' })
+    expect(controller.getSnapshot().dirty).toBe(false)
+    ids = [...controller.getLayerIds('tian_shu', 'chain', 4)]
+    token = controller.startLayerDrag('tian_shu', ids[1])
+    controller.setSettingsTab('models'); controller.setSettingsTab('guards')
+    expect(controller.dropLayer('tian_shu', ids[2], 'chain', token)).toBe(false)
+    token = controller.startLayerDrag('tian_shu', ids[1])
+    controller.discard()
+    expect(controller.dropLayer('tian_shu', ids[2], 'chain', token)).toBe(false)
+    const readOnly = new SwarmAgentsController(createCtx(createForm({ routes: {} }, { writable: false })))
+    const readIds = readOnly.getLayerIds('tian_shu', 'chain', 4)
+    expect(readOnly.startLayerDrag('tian_shu', readIds[1])).toBeUndefined()
+    expect(readOnly.moveLayerById('tian_shu', readIds[1], readIds[2])).toBe(false)
+    expect(readOnly.getSnapshot().dirty).toBe(false)
+  })
+
+  it('keeps drafts and validation badges across tab changes, with tab/panel links and real keyboard navigation', () => {
+    const controller = new SwarmAgentsController(createCtx(createForm({ routes: {}, experience: { enabled: true } })))
+    controller.t = (key: string) => key
+    controller.setSlot('tian_shu', 1, { reasoningEffort: 'high' })
+    controller.setPolicy({ language: 'en' })
+    controller.setMath({ limits: { maxArrayElements: '0' } })
+    expect(controller.getSnapshot().activeTab).toBe('overview')
+    const tabs = page.__test__.SettingsCategoryTabs({ state: controller.getSnapshot(), t: controller.t, controller })
+    const buttons = tree(tabs).filter(node => node.props?.role === 'tab')
+    expect(buttons).toHaveLength(5)
+    expect(buttons.filter(node => node.props['aria-selected']).map(node => node.props['data-swarm-settings-tab'])).toEqual(['overview'])
+    const focus = vi.fn(), keyboard = { key: 'End', preventDefault: vi.fn(), currentTarget: { parentElement: { querySelector: vi.fn(() => ({ focus })) } } }
+    buttons[0].props.onKeyDown(keyboard)
+    expect(controller.getSnapshot().activeTab).toBe('math')
+    expect(focus).toHaveBeenCalledOnce()
+    expect(page.__test__.getSettingsTabState(controller.getSnapshot(), 'models')).toEqual({ dirty: true, invalid: false })
+    expect(page.__test__.getSettingsTabState(controller.getSnapshot(), 'execution')).toEqual({ dirty: true, invalid: false })
+    controller.setPolicy({ repeatAbove: 'invalid' })
+    expect(page.__test__.getSettingsTabState(controller.getSnapshot(), 'execution')).toEqual({ dirty: true, invalid: true })
+    controller.setPolicy({ repeatAbove: 0.5 })
+    expect(page.__test__.getSettingsTabState(controller.getSnapshot(), 'execution')).toEqual({ dirty: true, invalid: false })
+    expect(page.__test__.getSettingsTabState(controller.getSnapshot(), 'math')).toEqual({ dirty: true, invalid: true })
+    const section = page.__test__.SwarmAgentsSection({ controller })
+    const panels = tree(section).filter(node => node.props?.role === 'tabpanel')
+    expect(panels).toHaveLength(5)
+    expect(panels.filter(node => !node.props.hidden).map(node => node.props['data-swarm-settings-panel'])).toEqual(['math'])
+    expect(panels.every(panel => buttons.some(button => button.props.id === panel.props['aria-labelledby'] && button.props['aria-controls'] === panel.props.id))).toBe(true)
+    controller.setSettingsTab('models')
+    expect(rowOf(controller, 'tian_shu').slots[1].reasoningEffort).toBe('high')
+    expect(controller.getSnapshot().math.errors.maxArrayElements).toBe('errMath')
+    expect(controller.form.mutate).not.toHaveBeenCalled()
   })
 })
 

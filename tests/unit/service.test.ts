@@ -541,6 +541,7 @@ describe('委派、状态与验收', () => {
     const { service } = makeService({ config: { jev: { enabled: false } } })
     service.getGuardReason({ name: 'write', agent: root })
     const { task_id } = await service.AddTaskCard(cardInput({ uiCopy: true }), exec())
+    await service.delegate({ task_id, role: 'miao_bi', prompt: '提供独立可核对的文案交付' }, exec())
     expect((await service.AcceptTask({ task_id, decision: 'accept', summary: 's', stopReason: 's' }, exec())).status).toBe('accepted')
     const child = { id: 'kid-2', session: { header: { agentPreset: 'tian-shu', parentSession: 'root-1' } } }
     service.getGuardReason({ name: 'write', agent: child })

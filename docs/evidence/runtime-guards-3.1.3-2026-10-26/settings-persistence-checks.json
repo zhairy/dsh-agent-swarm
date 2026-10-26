@@ -1,0 +1,33 @@
+{
+  "checks": {
+    "savedRegularOrder": true,
+    "savedBackupEffort": true,
+    "originalBackupEffortPreserved": true,
+    "savedUpgradeOrder": true,
+    "upgradeEffortsPreserved": true,
+    "routePoliciesPreserved": true,
+    "otherRoleChainsPreserved": true,
+    "upgradeTriggersPreserved": true,
+    "languageSaved": true,
+    "extraAgentsFieldsPreserved": true,
+    "mathDraftSaved": true,
+    "approvalsSaved": true,
+    "unmanagedRootFieldsPreserved": true,
+    "temporaryIdsNotPersisted": true
+  },
+  "allPassed": true,
+  "changedSections": [
+    "routes",
+    "memory",
+    "rootFallback",
+    "jev",
+    "agents",
+    "workflow",
+    "planningReview",
+    "persistence",
+    "math",
+    "experience",
+    "approvals"
+  ],
+  "boundary": "Host serializes effective config and materializes schema defaults. Compare original untouched chains and explicitly configured root values; do not compare raw absent upgrade fields to schema-normalized empty upgrade objects."
+}

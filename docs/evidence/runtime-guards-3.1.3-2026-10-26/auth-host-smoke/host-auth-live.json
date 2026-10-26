@@ -1,0 +1,125 @@
+{
+  "hostVersion": "0.2.1-rc.3",
+  "provider": "deterministic-local-fixture",
+  "requestedWaitMs": 1500,
+  "sessions": {
+    "five-minute-pending": {
+      "kind": "five-minute-pending",
+      "sessionId": "auth-313-five-minute-pending-85cb355f-b173-43ee-8b8b-4f530a8a80cc",
+      "requests": [
+        {
+          "at": 1792988078668,
+          "model": "root",
+          "provider": "swarm-auth-313-mock"
+        }
+      ],
+      "questionRequests": 1,
+      "events": [
+        {
+          "seq": 3,
+          "type": "goal/change",
+          "operation": "create",
+          "phase": "active"
+        },
+        {
+          "seq": 4,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 5,
+          "type": "turn/start"
+        },
+        {
+          "seq": 6,
+          "type": "agent/inbox/spliced"
+        },
+        {
+          "seq": 7,
+          "type": "step/start"
+        },
+        {
+          "seq": 8,
+          "type": "system/message"
+        },
+        {
+          "seq": 9,
+          "type": "user/message"
+        },
+        {
+          "seq": 10,
+          "type": "user/message"
+        },
+        {
+          "seq": 11,
+          "type": "user/message"
+        },
+        {
+          "seq": 12,
+          "type": "request/header"
+        },
+        {
+          "seq": 13,
+          "type": "request/context"
+        },
+        {
+          "seq": 14,
+          "type": "assistant/message"
+        },
+        {
+          "seq": 15,
+          "type": "tool/call"
+        },
+        {
+          "seq": 16,
+          "type": "tool/result"
+        },
+        {
+          "seq": 17,
+          "type": "step/end"
+        },
+        {
+          "seq": 18,
+          "type": "turn/end",
+          "reason": "blocked"
+        }
+      ],
+      "errors": [],
+      "goalChanges": [
+        {
+          "operation": "create",
+          "id": "goal-0624c817-528d-4b16-8708-e3f265c80a51",
+          "revision": 1,
+          "phase": "active",
+          "activation": "armed"
+        }
+      ],
+      "taskId": "T-1",
+      "timedSchema": true,
+      "callId": "call_auth_88971d45",
+      "questionResult": {
+        "isError": false,
+        "pending": true,
+        "callId": "call_auth_88971d45"
+      },
+      "waitBaseline": {
+        "requests": 1,
+        "goal": {
+          "id": "goal-0624c817-528d-4b16-8708-e3f265c80a51",
+          "revision": 1,
+          "objective": "隔离授权验收 five-minute-pending",
+          "phase": "active",
+          "maxGoalRounds": 100,
+          "roundsStarted": 1,
+          "createdAt": 1792988078596,
+          "updatedAt": 1792988078596,
+          "activation": "disarmed"
+        },
+        "at": 1792988079858
+      },
+      "observedMs": 1500
+    }
+  },
+  "errors": [],
+  "startedAt": "2026-10-26T04:14:38.187Z",
+  "phase": "five-minute-observation"
+}

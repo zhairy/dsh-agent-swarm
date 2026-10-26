@@ -68,6 +68,14 @@ interface RootStateInfo {
   tried: ReadonlySet<string>
 }
 
+interface RequestRouteObservation {
+  route: RouteInfo
+  recovery: RequestRecoveryState
+  position?: { turn: number; step: number }
+  /** Object identity distinguishes a picker change from an automatic request header. */
+  preference?: RouteInfo
+}
+
 /** 一次等待：开始等待（recovered 未定义）或等待结束。network 为断网等待；route 为等路由恢复（链尾临时故障退避、隔离到期、他人半开探测） */
 export interface NetworkWaitEventInfo {
   agentId: string
@@ -430,6 +438,21 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
   const selectedChain = (chain: RouteInfo[], selected?: RouteInfo) => selected === undefined ? [...chain] : [withDeclaredPolicy(chain, selected), ...chain.filter((item) => !sameSelection(item, selected))]
   const roots = new Map<string, RootStateInfo>()
   const lastRoutes = new Map<string, RouteInfo>()
+  const requestObservations = new Map<string, RequestRouteObservation>()
+  const requestPositions = new Map<string, { turn: number; step: number }>()
+  // The Host retains the same turn signal through request-error. Old turns
+  // cannot borrow a later turn's route after a manual continuation.
+  const signalObservations = new WeakMap<AbortSignal, Map<string, RequestRouteObservation>>()
+  const observedRequest = (payload: RequestErrorPayloadLike): RequestRouteObservation | undefined =>
+    (payload.signal === undefined ? undefined : signalObservations.get(payload.signal)?.get(payload.agent.id)) ?? requestObservations.get(payload.agent.id)
+  const staleFailure = (payload: RequestErrorPayloadLike): boolean => {
+    const exact = payload.signal === undefined ? undefined : signalObservations.get(payload.signal)?.get(payload.agent.id)
+    const observation = exact ?? requestObservations.get(payload.agent.id)
+    if (observation === undefined) return false
+    if (observation.recovery !== recoveries.get(payload.agent.id) || (exact !== undefined && exact.route.provider !== payload.provider)) return true
+    return observation.position !== undefined && payload.turn !== undefined && payload.step !== undefined
+      && (payload.turn !== observation.position.turn || payload.step !== observation.position.step)
+  }
   /** 兼容旧宿主的改写前路由；必须排除实际自动回退和适配器默认值漂移。 */
   const lastResolved = new Map<string, RouteInfo>()
   const upgrades = new Map<string, RootUpgradeStateInfo>()
@@ -574,9 +597,9 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     })()
   }
 
-  const getRootFallback = (payload: RequestErrorPayloadLike, presetRole: RoleId, failureClass: FailureClass, transient: boolean, config: SwarmConfigInfo): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
+  const getRootFallback = (payload: RequestErrorPayloadLike, presetRole: RoleId, failureClass: FailureClass, transient: boolean, config: SwarmConfigInfo,
+    failed: RouteInfo, observedPreference?: RouteInfo): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
     const agentId = payload.agent.id
-    const failed = lastRoutes.get(agentId) ?? { provider: payload.provider, model: '' }
     const previous = roots.get(agentId)
     const preference = rootPreferences.get(agentId)
     const recovery = recoveries.get(agentId)
@@ -585,7 +608,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     const roleChain = getRoleRoute(config, getRouteKey(presetRole)).chain
     const upgrade = upgrades.get(agentId)
     // 升级期间：先在升级链内回退，再回到常规链
-    const chain = effectiveChain(agentId, upgrade === undefined ? roleChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, roleChain))
+    const declared = effectiveChain(agentId, upgrade === undefined ? roleChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, roleChain))
+    const chain = preference !== undefined && preference !== observedPreference ? selectedChain(declared, preference) : declared
     if (preferredTrials.has(agentId) || isSameRoute(failed, picker)) delayPreferred(agentId)
     const moveTo = (to: RouteInfo, nextTried: ReadonlySet<string>): RequestErrorActionLike => {
       roots.set(agentId, { override: to, at: now(), picker, tried: nextTried })
@@ -593,7 +617,11 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       return { kind: 'retry' }
     }
     const settle = (next: number | undefined): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
-      if (payload.signal?.aborted === true || manualPauses.has(agentId) || recoveries.get(agentId) !== recovery || roots.get(agentId) !== previous || rootPreferences.get(agentId) !== preference || upgrades.get(agentId) !== upgrade) return undefined
+      if (payload.signal?.aborted === true || manualPauses.has(agentId) || recoveries.get(agentId) !== recovery) return undefined
+      // A new selection during metadata I/O is still the same live request.
+      // Re-enter admission instead of ending the turn or installing an old override.
+      if (rootPreferences.get(agentId) !== preference) return { kind: 'retry' }
+      if (roots.get(agentId) !== previous || upgrades.get(agentId) !== upgrade) return undefined
       if (next !== undefined) return moveTo(chain[next] as RouteInfo, tried)
       const held = { ...previous, picker, tried }
       roots.set(agentId, held)
@@ -722,12 +750,16 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     recovery.attemptedRoutes.push(getRouteLabel(route))
     const next = route === undefined ? resolved : getRoutedConfig(resolved, route)
     lastRoutes.set(agent.id, route)
+    requestObservations.set(agent.id, { route: { ...route, ...(route.policy === undefined ? {} : { policy: { ...route.policy,
+      ...(route.policy.capabilities === undefined ? {} : { capabilities: { ...route.policy.capabilities } }) } }) }, recovery,
+      ...(requestPositions.get(agent.id) === undefined ? {} : { position: { ...requestPositions.get(agent.id)! } }),
+      ...(rootPreferences.get(agent.id) === undefined ? {} : { preference: rootPreferences.get(agent.id) }) })
     return next
   }
 
   const api: RouteStateRegistry = {
     BeginLogicalRequest: begin,
-    BeginRequestStep: (id, turn, step) => { begin(id, `${children.get(id)?.logicalRequestId ?? id}:${turn}:${step}`) },
+    BeginRequestStep: (id, turn, step) => { requestPositions.set(id, { turn, step }); begin(id, `${children.get(id)?.logicalRequestId ?? id}:${turn}:${step}`) },
     FinishLogicalRequest: (id) => {
       const group = logical.get(id)
       if (group === undefined || !group.delegation) return
@@ -802,7 +834,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     },
     recover: async (payload, next, role, config, compaction) => {
       if (!managed(payload.agent, role)) return next()
-      if (manualPauses.has(payload.agent.id) || payload.signal?.aborted === true) return undefined
+      if (manualPauses.has(payload.agent.id) || payload.signal?.aborted === true || staleFailure(payload)) return undefined
       if (normalizeRouteFailure(payload.failure as RouteFailureMetadata, { provider: payload.provider, model: '' }).kind === 'context_exceeded') {
         const recovery = recoveryOf(payload.agent.id)
         const before = payload.agent.session?.surface?.replaceGeneration
@@ -1014,6 +1046,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       upgrades.delete(agentId)
       roots.delete(agentId)
       lastRoutes.delete(agentId)
+      requestObservations.delete(agentId)
+      requestPositions.delete(agentId)
       lastResolved.delete(agentId)
     },
     ReleaseAgent: (agentId) => {
@@ -1030,6 +1064,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       upgrades.delete(agentId)
       roots.delete(agentId)
       lastRoutes.delete(agentId)
+      requestObservations.delete(agentId)
+      requestPositions.delete(agentId)
       lastResolved.delete(agentId)
     },
     getRequestOverride: (agent, resolved, presetRole, config, explicitSelectionAvailable = false) => requestOverride(agent, resolved, presetRole, config, explicitSelectionAvailable, false),
@@ -1048,7 +1084,16 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
           if (pendingHealthCommit !== undefined) continue
         }
         let wait: AdmissionWait
-        try { return requestOverride(agent, resolved, presetRole, config, explicitSelectionAvailable, true, checks) } catch (error) {
+        try {
+          const result = requestOverride(agent, resolved, presetRole, config, explicitSelectionAvailable, true, checks)
+          const observation = requestObservations.get(agent.id)
+          if (signal !== undefined && observation !== undefined) {
+            let observed = signalObservations.get(signal)
+            if (observed === undefined) { observed = new Map(); signalObservations.set(signal, observed) }
+            observed.set(agent.id, observation)
+          }
+          return result
+        } catch (error) {
           if (error instanceof AdmissionProbe) {
             const recovery = recoveries.get(agent.id)
             const child = children.get(agent.id)
@@ -1093,11 +1138,12 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     },
     getErrorAction: (payload, action, presetRole, config) => {
       if (!managed(payload.agent, presetRole)) return action
-      if (manualPauses.has(payload.agent.id)) return undefined
+      if (manualPauses.has(payload.agent.id) || payload.signal?.aborted === true || staleFailure(payload)) return undefined
       const recovery = recoveryOf(payload.agent.id)
-      if (payload.signal?.aborted === true || recovery.terminal !== undefined) return undefined
+      if (recovery.terminal !== undefined) return undefined
       const policy = policyOf(config)
-      const failed = lastRoutes.get(payload.agent.id) ?? children.get(payload.agent.id)?.chain[children.get(payload.agent.id)!.index] ?? { provider: payload.provider, model: '' }
+      const observation = observedRequest(payload)
+      const failed = observation?.route ?? lastRoutes.get(payload.agent.id) ?? children.get(payload.agent.id)?.chain[children.get(payload.agent.id)!.index] ?? { provider: payload.provider, model: '' }
       const normalized = normalizeRouteFailure(payload.failure as RouteFailureMetadata, failed)
       recovery.lastFailure = {
         kind: normalized.kind,
@@ -1150,7 +1196,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
         }
         if (!config.rootFallback || presetRole === undefined) return fatal || longWait || failedProbe ? terminal(payload.agent.id, 'route_chain_exhausted', payload.failure) : action
         if (getAgentHeader(payload.agent).parentSession !== undefined) return action
-        const fallback = withQuota(() => getRootFallback(payload, presetRole, failureClass, transient, config))
+        const fallback = withQuota(() => getRootFallback(payload, presetRole, failureClass, transient, config, failed, observation?.preference))
         return fatal || longWait || failedProbe ? fallback() : getNetworkAwareAction(payload, 'root', config, fallback)
       }
       if ((fatal || longWait || failedProbe) && options.onHealthChange !== undefined) {

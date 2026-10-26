@@ -504,7 +504,7 @@ describe('连续会话与自动重试', () => {
     expect(failed).toMatchObject({ status: 'failed', childId: target, error: 'host did not admit message' })
     expect(h.startContinuable).toHaveBeenCalledTimes(2)
     expect(h.sendMessage).toHaveBeenCalledTimes(1)
-    expect(ended).toHaveBeenCalledWith(target, 'not-admitted')
+    expect(ended).toHaveBeenCalledWith(target, 'not-admitted', { attemptId: failed.attemptId ?? failed.delegationId, delegationId: failed.delegationId })
   })
   it('Jev 未配置时按规则：铸剑开连续会话，同一任务的后续委派追加到该会话并保留路由状态', async () => {
     const h = track(makeThreadHarness([{ text: `完成。\n${json('zhu_jian')}` }, { text: json('zhu_jian') }]))

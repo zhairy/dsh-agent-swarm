@@ -56,6 +56,8 @@ export interface DurableStateOptions<T> {
    * 自动补一条当前布局的全量行，之后的写入才是增量行。
    */
   legacySegments?: SegmentSpecs
+  /** 明确的旧版本规格，逐版本复核旧指纹与根哈希，不能把不同旧布局混作同一规格。 */
+  legacyLayouts?: Readonly<Record<number, SegmentSpecs>>
   /** 当前布局版本；日志行的 `layout` 必须等于它才能直接续写增量行。默认 1。 */
   layoutVersion?: number
   enabled?: boolean
@@ -167,12 +169,14 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
   const currentLayout = options.layoutVersion ?? 1
   if (!Number.isSafeInteger(currentLayout) || currentLayout < 1) throw new StateStoreError('STATE_INVALID', 'Invalid state layout version')
   const currentFingerprint = layoutFingerprintOf(segmentSpecs)
-  const legacyFingerprint = layoutFingerprintOf(legacySpecs)
   const legacyLayoutHash = legacyLayoutHashOf(legacySpecs)
+  const specsForLayout = (layout: number | undefined): SegmentSpecs => layout === currentLayout ? segmentSpecs : options.legacyLayouts?.[layout ?? LEGACY_LAYOUT] ?? legacySpecs
+  const fingerprintForLayout = (layout: number): string => layoutFingerprintOf(specsForLayout(layout))
   /** 行声明的布局是否与期望规格一致：新行比对指纹，2.6.0 行比对它自带的布局哈希。 */
   const layoutMatches = (entryLayout: number | undefined, fingerprint: unknown, rawLayout: unknown): boolean => {
     if (entryLayout === currentLayout) return fingerprint === currentFingerprint
-    if (fingerprint !== undefined) return fingerprint === legacyFingerprint
+    if (options.legacyLayouts !== undefined && options.legacyLayouts[entryLayout ?? LEGACY_LAYOUT] === undefined) return false
+    if (fingerprint !== undefined) return fingerprint === layoutFingerprintOf(specsForLayout(entryLayout))
     return rawLayout === legacyLayoutHash
   }
   // 用旧布局打开的目录在下一次写入时补一条当前布局的全量行；之后的写入才是增量行。
@@ -272,7 +276,7 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
     }
     await atomicStateFile(snapshotDirectory, 'meta.json', canonicalStateJson({
       schemaVersion: 1, sequence: atSequence, layout: chunkedLayout,
-      layoutFingerprint: chunkedLayout === currentLayout ? currentFingerprint : legacyFingerprint,
+      layoutFingerprint: fingerprintForLayout(chunkedLayout),
       checksum: chunked.rootChecksum(), segments
     }))
     for (const entry of await readdir(snapshotDirectory)) {
@@ -334,13 +338,13 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
           }
           const validated = validateFull(loadedState)
           const useCurrent = loadedLayout === currentLayout
-          chunked = ChunkedState.fromState(validated.value, useCurrent ? segmentSpecs : legacySpecs, { verified: true })
+          chunked = ChunkedState.fromState(validated.value, specsForLayout(loadedLayout), { verified: true })
           const rebuiltChecksum = chunked.rootChecksum()
           // 按段快照的校验和是分片根哈希；旧整份快照的是整份编码的 sha256，两者都在此逐字节重建后复核。
           if (loadedChecksum !== undefined && loadedChecksum !== rebuiltChecksum && loadedChecksum !== checksumText(validated.encoded)) {
             throw new StateStoreError('RECOVERY_REQUIRED', 'Snapshot checksum/schema mismatch')
           }
-          chunkedLayout = useCurrent ? currentLayout : LEGACY_LAYOUT
+          chunkedLayout = loadedLayout ?? LEGACY_LAYOUT
           needsLayoutCommit = !useCurrent
           state = deepFreeze(chunked.materialize()) as T
           stateBytes = chunked.getStateBytes()
@@ -388,21 +392,21 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
           }
           const isCurrentLayout = entryLayout === currentLayout
           // 当前布局的增量行只能出现在迁移行之后；否则说明日志被人为拼接。
-          if (isCurrentLayout && chunkedLayout !== currentLayout && entry.changes !== undefined) {
+          if ((entryLayout ?? LEGACY_LAYOUT) !== chunkedLayout && entry.changes !== undefined) {
             throw new StateStoreError('RECOVERY_REQUIRED', 'Journal continues incremental entries before the layout migration record')
           }
           if (!isCurrentLayout) needsLayoutCommit = true
           if (entry.previousChecksum !== stateChecksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal sequence or ancestry mismatch')
           let next: ChunkedState
           if (entry.state !== undefined) {
-            next = ChunkedState.fromState(entry.state, isCurrentLayout ? segmentSpecs : legacySpecs, { verified: true })
+            next = ChunkedState.fromState(entry.state, specsForLayout(entryLayout), { verified: true })
           } else if (entry.changes !== null && typeof entry.changes === 'object' && !Array.isArray(entry.changes)) {
             next = chunked.applyEncoded(entry.changes as Parameters<typeof chunked.applyEncoded>[0])
           } else throw new StateStoreError('RECOVERY_REQUIRED', 'Journal entry carries neither state nor changes')
           if (next.rootChecksum() !== entry.checksum) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal checksum mismatch')
           if (next.getStateBytes() > maxStateBytes) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal state exceeds byte limit')
           chunked = next
-          chunkedLayout = isCurrentLayout ? currentLayout : LEGACY_LAYOUT
+          chunkedLayout = entryLayout ?? LEGACY_LAYOUT
           state = deepFreeze(chunked.materialize()) as T
           stateBytes = chunked.getStateBytes()
           stateChecksum = entry.checksum

@@ -1,0 +1,13 @@
+{
+  "sourceSha256": {
+    "client/settings-page.js": "fefcdd9a0b30ca1a5c2975059dfb1b1fd4b5bd249133ed612a2135a89d7ebf24",
+    "client/settings-navigation.js": "02af812d3d5fe3641345977a62fc134e18466588a87d5c63a4deccf03bbe9659",
+    "scripts/build-client.mjs": "903ccdec67e5118fe36eb27e0a7f8a4d2e6df956d9e137cddc2d0740596e0723",
+    "tests/unit/client-settings.test.ts": "70ecdfbafa723e975d9456feac541b703d82eb2920a4a668c9e4bfdcc6a31b15"
+  },
+  "host": "0.2.1-rc.3",
+  "packageVersionAtQARun": "3.1.2",
+  "isolatedPort": 4187,
+  "productionTouched": false,
+  "externalModelGenerations": 0
+}

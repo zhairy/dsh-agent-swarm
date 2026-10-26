@@ -42,8 +42,15 @@ describe('生产只读 taskView RPC 与本地静态 Mermaid', () => {
     expect(result).toMatchObject({ status: 'candidate', toolCandidate, source: { taskId, authorId: agent.id } })
     expect(await service.Experience({ task_id: taskId }, { agent, signal: new AbortController().signal })).toEqual([])
     expect(await service.Experience({ task_id: taskId, includeCandidates: true }, { agent, signal: new AbortController().signal })).toHaveLength(1)
-    const { capacity: _oldCapacity, ...oldTaskView } = before as Record<string, unknown>
-    const { capacity: _newCapacity, ...newTaskView } = service.getTaskViewForRpc(sessionId, taskId) as Record<string, unknown>
+    type RuntimeView = Record<string, unknown> & { runtimeGuard: Record<string, unknown> & { commitSequence: number } }
+    const { capacity: _oldCapacity, runtimeGuard: oldRuntime, ...oldTaskView } = before as RuntimeView
+    const { capacity: _newCapacity, runtimeGuard: newRuntime, ...newTaskView } = service.getTaskViewForRpc(sessionId, taskId) as RuntimeView
+    // Candidate metadata advances the real commit cursor, but grants no task
+    // permission, receipt or progress transition.
+    const { commitSequence: oldSequence, ...oldGuard } = oldRuntime
+    const { commitSequence: newSequence, ...newGuard } = newRuntime
+    expect(newSequence).toBeGreaterThan(oldSequence!)
+    expect(newGuard).toEqual(oldGuard)
     expect(newTaskView).toEqual(oldTaskView)
     await expect(service.Experience({ ...input, toolCandidate: { ...toolCandidate, executionEnabled: true } }, { agent, signal: new AbortController().signal })).rejects.toMatchObject({ code: 'INVALID_ARGS' })
     const controller = new AbortController(); controller.abort()

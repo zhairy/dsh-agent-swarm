@@ -36,6 +36,8 @@ import { getHostApprovalPolicy, getToolApprovalDecision } from './approval-polic
 import { inspectChildRecovery, inspectRootPreference } from './host-recovery.js'
 import { getToolRecoveryResult } from './tool-recovery.js'
 import type { RouteInfo } from './routes.js'
+import type { GoalsLike, UserQuestionsLike } from './host-contract.js'
+import { getValueDigest } from './workflow.js'
 
 /** 宿主行：提供 agentSwarm 服务、注册写操作守卫与设置页 RPC，本身不向模型注册工具 */
 export const name = 'dsh-agent-swarm'
@@ -132,6 +134,13 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     getAttachments: () => ctx.get('attachments') as AttachmentsLike | undefined,
     getCredentials: () => ctx.get('credentials') as CredentialsLike | undefined,
     getApproval: () => ctx.get('approval') as ApprovalServiceLike | undefined,
+    getGoals: () => ctx.get('goals') as GoalsLike | undefined,
+    getUserQuestions: () => ctx.get('userQuestions') as UserQuestionsLike | undefined,
+    getGoalBinding: (agent) => {
+      const goal = (ctx.get('goals') as GoalsLike | undefined)?.get(agent)
+      if (goal === undefined) return undefined
+      return getValueDigest({ rootSessionId: agent.id, id: goal.id, revision: goal.phase === 'complete' ? Math.max(1, goal.revision - 1) : goal.revision })
+    },
     getSessionProjections: () => ctx.get('sessionProjections') as SessionProjectionsLike | undefined,
     getAgent: (sessionId) => (ctx.get('agents') as { get: (id: string) => AgentLike | undefined } | undefined)?.get(sessionId),
     getJobs: () => ctx.get('jobs') as JobsLike | undefined,
@@ -166,22 +175,24 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   ctx.on('agent/disposed', (payload: { agent?: AgentLike } | undefined) => {
     if (payload?.agent !== undefined) service.OnAgentDisposed(payload.agent.id)
   })
-  ctx.on('session/event', (session: { id: string }, event: JobLifecycleEventLike) => service.OnJobEvent(session.id, event))
+  ctx.on('session/event', (session: { id: string }, event: JobLifecycleEventLike) => { service.OnJobEvent(session.id, event); service.ObserveManagedMessage(session.id, event) })
   // 0.2.1-alpha：子智能体入队工作释放前限制其作用域工具面（旧宿主无该方法，行为不变）。
   ctx.on('agent/created', (payload: { agent?: AgentLike } | undefined) => {
     if (payload?.agent !== undefined) service.OnAgentCreated(payload.agent)
   })
   // 宿主还会把「子智能体已结束」通知投给天枢；结果已由 swarm_delegate 返回，重复的通知在进入上下文前滤掉
-  ctx.on('agent/pre-step', async (_payload: unknown, next: () => Promise<PreStepDecisionLike>) => service.FilterPreStep(await next()))
+  ctx.on('agent/pre-step', async (payload: { agent?: AgentLike } | undefined, next: () => Promise<PreStepDecisionLike>) => service.BeforeManagedStep(payload?.agent, service.FilterPreStep(await next())))
   const tools = ctx.get('tools') as ToolsLike | undefined
   if (tools !== undefined) ctx.effect(() => tools.guard((execution) => service.getGuardReason(execution)))
   // This stage follows admission and the monotonic guards. A rejected tool is
   // never evidence that a writer actually entered the execution pipeline.
   ctx.on('tools/execute', async (execution: ToolExecutionLike, next: () => Promise<unknown>) => {
+    await service.BeforeManagedTool(execution)
     service.ObserveToolDispatch(execution)
     const result = await next()
     return service.isManagedAgent(execution.agent) ? getToolRecoveryResult(execution.name, result) : result
   })
+  ctx.on('tools/result', (execution: ToolExecutionLike, result: unknown) => service.ObserveManagedToolResult(execution, result))
   // Wrap the complete downstream policy, retaining its deny/cancel/ask. Host approval and
   // monotonic role/revision/workspace guards remain authoritative after this seam.
   ctx.on('tools/pre-execute', async (execution: ToolExecutionLike, next: () => Promise<PreToolDecisionLike>) => {

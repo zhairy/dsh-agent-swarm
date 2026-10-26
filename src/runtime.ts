@@ -88,6 +88,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   })
   ctx.on('agent/request', async (payload: { agent: AgentLike; turn?: number; step?: number; signal?: AbortSignal }, next: () => Promise<CallConfigLike>) => {
     await service.WaitAgentReady(payload.agent)
+    await service.BeforeManagedRequest(payload.agent)
     // 0.2.1-alpha 起宿主不再接受启动期 toolFilter：子智能体的第一次请求在这里按角色限制继承工具面，
     // 发生在工具清单装配之前；旧宿主该方法为空实现，启动期 toolFilter 仍然生效。
     if (presetRole !== undefined && presetRole !== 'tian_shu' && getAgentHeader(payload.agent).parentSession !== undefined) {

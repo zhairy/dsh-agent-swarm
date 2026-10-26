@@ -1,0 +1,258 @@
+{
+  "host": "0.2.1-rc.3",
+  "pluginBuildVersion": "3.1.3",
+  "isolatedPort": 4187,
+  "productionTouched": false,
+  "externalModelGenerations": 0,
+  "checks": [
+    {
+      "name": "final build five desktop tabs",
+      "passed": true,
+      "detail": [
+        {
+          "tab": "overview",
+          "visiblePanels": 1
+        },
+        {
+          "tab": "models",
+          "visiblePanels": 1
+        },
+        {
+          "tab": "execution",
+          "visiblePanels": 1
+        },
+        {
+          "tab": "guards",
+          "visiblePanels": 1
+        },
+        {
+          "tab": "math",
+          "visiblePanels": 1
+        }
+      ]
+    },
+    {
+      "name": "final build trusted native drag changes backup order",
+      "passed": true,
+      "detail": {
+        "before": [
+          {
+            "effort": "high",
+            "id": "007b06a0-beee-40de-a980-16157f4a0626:1",
+            "index": 0,
+            "model": "primary"
+          },
+          {
+            "effort": "max",
+            "id": "007b06a0-beee-40de-a980-16157f4a0626:2",
+            "index": 1,
+            "model": "backupB"
+          },
+          {
+            "effort": "max",
+            "id": "007b06a0-beee-40de-a980-16157f4a0626:3",
+            "index": 2,
+            "model": "backupC"
+          },
+          {
+            "effort": "high",
+            "id": "007b06a0-beee-40de-a980-16157f4a0626:4",
+            "index": 3,
+            "model": "backupA"
+          }
+        ],
+        "after": [
+          {
+            "effort": "high",
+            "id": "007b06a0-beee-40de-a980-16157f4a0626:1",
+            "index": 0,
+            "model": "primary"
+          },
+          {
+            "effort": "high",
+            "id": "007b06a0-beee-40de-a980-16157f4a0626:4",
+            "index": 1,
+            "model": "backupA"
+          },
+          {
+            "effort": "max",
+            "id": "007b06a0-beee-40de-a980-16157f4a0626:2",
+            "index": 2,
+            "model": "backupB"
+          },
+          {
+            "effort": "max",
+            "id": "007b06a0-beee-40de-a980-16157f4a0626:3",
+            "index": 3,
+            "model": "backupC"
+          }
+        ]
+      }
+    },
+    {
+      "name": "final build native drop is trusted",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "final build real ConfigForm save acknowledged",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "final build pre-reload errors empty",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "final build full reload retains order and reasoning",
+      "passed": true,
+      "detail": [
+        {
+          "effort": "high",
+          "id": "d33481aa-9774-4831-814b-dd573f4e8f93:1",
+          "index": 0,
+          "model": "primary"
+        },
+        {
+          "effort": "high",
+          "id": "d33481aa-9774-4831-814b-dd573f4e8f93:2",
+          "index": 1,
+          "model": "backupA"
+        },
+        {
+          "effort": "max",
+          "id": "d33481aa-9774-4831-814b-dd573f4e8f93:3",
+          "index": 2,
+          "model": "backupB"
+        },
+        {
+          "effort": "max",
+          "id": "d33481aa-9774-4831-814b-dd573f4e8f93:4",
+          "index": 3,
+          "model": "backupC"
+        }
+      ]
+    },
+    {
+      "name": "final build 390px five tabs no overflow",
+      "passed": true,
+      "detail": [
+        {
+          "documentWidth": 390,
+          "sectionScrollWidth": 106,
+          "sectionWidth": 106,
+          "tab": "overview",
+          "visiblePanels": 1,
+          "width": 390
+        },
+        {
+          "documentWidth": 390,
+          "sectionScrollWidth": 106,
+          "sectionWidth": 106,
+          "tab": "models",
+          "visiblePanels": 1,
+          "width": 390
+        },
+        {
+          "documentWidth": 390,
+          "sectionScrollWidth": 106,
+          "sectionWidth": 106,
+          "tab": "execution",
+          "visiblePanels": 1,
+          "width": 390
+        },
+        {
+          "documentWidth": 390,
+          "sectionScrollWidth": 106,
+          "sectionWidth": 106,
+          "tab": "guards",
+          "visiblePanels": 1,
+          "width": 390
+        },
+        {
+          "documentWidth": 390,
+          "sectionScrollWidth": 106,
+          "sectionWidth": 106,
+          "tab": "math",
+          "visiblePanels": 1,
+          "width": 390
+        }
+      ]
+    },
+    {
+      "name": "final build browser page errors empty",
+      "passed": true,
+      "detail": []
+    }
+  ],
+  "desktopTabs": [
+    {
+      "tab": "overview",
+      "visiblePanels": 1
+    },
+    {
+      "tab": "models",
+      "visiblePanels": 1
+    },
+    {
+      "tab": "execution",
+      "visiblePanels": 1
+    },
+    {
+      "tab": "guards",
+      "visiblePanels": 1
+    },
+    {
+      "tab": "math",
+      "visiblePanels": 1
+    }
+  ],
+  "beforeReloadErrors": [],
+  "narrowTabs": [
+    {
+      "documentWidth": 390,
+      "sectionScrollWidth": 106,
+      "sectionWidth": 106,
+      "tab": "overview",
+      "visiblePanels": 1,
+      "width": 390
+    },
+    {
+      "documentWidth": 390,
+      "sectionScrollWidth": 106,
+      "sectionWidth": 106,
+      "tab": "models",
+      "visiblePanels": 1,
+      "width": 390
+    },
+    {
+      "documentWidth": 390,
+      "sectionScrollWidth": 106,
+      "sectionWidth": 106,
+      "tab": "execution",
+      "visiblePanels": 1,
+      "width": 390
+    },
+    {
+      "documentWidth": 390,
+      "sectionScrollWidth": 106,
+      "sectionWidth": 106,
+      "tab": "guards",
+      "visiblePanels": 1,
+      "width": 390
+    },
+    {
+      "documentWidth": 390,
+      "sectionScrollWidth": 106,
+      "sectionWidth": 106,
+      "tab": "math",
+      "visiblePanels": 1,
+      "width": 390
+    }
+  ],
+  "pageErrors": [],
+  "runtimeGuardUi": {
+    "notCovered": "Settings-only fixture has no actual task/root session; runtime status DOM is not asserted or fabricated."
+  }
+}

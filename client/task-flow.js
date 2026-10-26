@@ -251,6 +251,18 @@ function TaskProgressSummary ({ bundle, t }) {
     h('small', null, t('progressBoundary')))
 }
 
+Object.assign(zh, { runtimeGuard: '运行守卫', runtimeActive: '可继续核对', runtimeStalled: '检测到重复轨迹', runtimeExhausted: '当前轨迹已耗尽', pendingDecision: '待用户答复', legacyAcceptance: '旧政策历史验收；不代表当前目标完成凭证' })
+Object.assign(en, { runtimeGuard: 'Runtime guard', runtimeActive: 'Active', runtimeStalled: 'Repeated trajectory detected', runtimeExhausted: 'Trajectory exhausted', pendingDecision: 'Awaiting user decision', legacyAcceptance: 'Historical acceptance under an earlier policy; not a current goal receipt' })
+function RuntimeGuardStatus ({ view, t }) {
+  const runtime = view?.runtimeGuard
+  if (runtime === undefined) return null
+  const control = runtime.control, pending = runtime.authorization?.pending ?? 0
+  return h('div', { role: 'status', 'data-swarm-runtime-guard': control?.status ?? 'unobserved', style: styles.status },
+    control === null || control === undefined ? null : h('p', null, `${t('runtimeGuard')} · ${t({ active: 'runtimeActive', stalled: 'runtimeStalled', exhausted: 'runtimeExhausted' }[control.status] ?? 'runtimeGuard')}${control.reason ? ` · ${control.reason}` : ''}`),
+    pending > 0 ? h('p', null, `${t('pendingDecision')} · ${pending}`) : null,
+    view.acceptancePolicy === 'legacy-historical' ? h('p', null, t('legacyAcceptance')) : null)
+}
+
 function Freshness ({ snapshot, t }) {
   const settled = snapshot.value?.acceptance?.status === 'accepted' || snapshot.value?.acceptance?.decision === 'incomplete'
   const label = snapshot.status === 'stale' ? 'staleSnapshot' : snapshot.status === 'unavailable' ? 'unavailableSnapshot' : snapshot.status === 'live' && settled ? 'settledSnapshot' : snapshot.status
@@ -328,7 +340,7 @@ function TaskFlowContent ({ taskId, fallback = '', historicalSource, snapshot = 
   return h('section', { style: styles.card, 'data-swarm-task-flow': taskId, 'aria-label': translate('title') },
     h('div', { style: styles.header }, h('strong', null, `${translate('title')} · ${taskId}`), h('span', { style: styles.status, 'data-planning-status': compact ? 'historical' : view === null ? 'pending' : planningStatus }, translate(compact ? 'historical' : view === null ? 'pending' : planningStatus)), typeof onRefresh !== 'function' ? null : h('button', { type: 'button', style: styles.button, onClick: onRefresh }, translate('refresh'))),
     h(Freshness, { snapshot, t: translate }),
-    ...(progressPage ? [progress, blocker, pending, canvas, h('details', { 'data-swarm-contract-details': '' }, h('summary', null, translate('contractDetails')), ...contract)] : [...contract, progress, blocker, pending, canvas]))
+    ...(progressPage ? [progress, h(RuntimeGuardStatus, { view, t: translate }), blocker, pending, canvas, h('details', { 'data-swarm-contract-details': '' }, h('summary', null, translate('contractDetails')), ...contract)] : [...contract, progress, blocker, pending, canvas]))
 }
 
 function TaskFlowRow (props) {

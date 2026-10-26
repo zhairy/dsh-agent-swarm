@@ -35,6 +35,11 @@ const page = () => {
   const module = { exports: {} as any }
   new Function('require', 'module', 'exports', source)((id: string) => {
     if (id === 'react') return { createElement: () => null, useSyncExternalStore: () => undefined, useEffect: () => undefined }
+    if (id === '@swarm/settings-navigation') {
+      const nested = { exports: {} }
+      new Function('module','exports',readFileSync(join(__dirname,'../../client/settings-navigation.js'),'utf8'))(nested,nested.exports)
+      return nested.exports
+    }
     throw new Error(`Unexpected module: ${id}`)
   }, module, module.exports)
   return module.exports.__test__

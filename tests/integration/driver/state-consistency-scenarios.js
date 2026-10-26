@@ -63,6 +63,15 @@ export const apply = ctx => {
     }
     return { sequence, state: chunked.materialize() }
   }
+  // Observe the read tool itself. A subsequent model step legitimately commits
+  // its independent progress admission and is outside this read-only seam.
+  ctx.on('tools/execute', async (execution, next) => {
+    if (execution.name !== 'swarm_status' || stateDirectory === undefined) return next()
+    state.observations.beforeStatus = committed()
+    const result = await next()
+    state.observations.afterStatus = committed()
+    return result
+  }, { prepend: true })
   const finish = (status, extra = {}) => {
     if (finished) return
     finished = true
@@ -115,9 +124,8 @@ export const apply = ctx => {
           else yield* tool('swarm_delegate', { task_id: state.taskId, node_id: 'implementation', role: 'ji_feng', backend: 'api', session: 'oneshot', prompt: '真实写入一次 source.ts 并提交修改清单' })
           return
         }
-        if (step === 4) { state.observations.beforeStatus = committed(); yield* tool('swarm_status', { task_id: state.taskId, verbose: true }); return }
+        if (step === 4) { yield* tool('swarm_status', { task_id: state.taskId, verbose: true }); return }
         if (step === 5) {
-          state.observations.afterStatus = committed()
           state.projection = ctx.agentSwarm.getStatus({ task_id: state.taskId, verbose: true }, { agent: ctx.agents.get(state.sessionId), signal: new AbortController().signal })
           yield* tool('swarm_delegate', { task_id: state.taskId, node_id: 'verification', role: 'fu_he', backend: 'api', session: 'oneshot', prompt: '读取当前文件，不重复任何修改；未运行测试需如实标明' })
           return

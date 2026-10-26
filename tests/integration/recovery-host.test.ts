@@ -6,13 +6,16 @@ import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import YAML from 'yaml'
 import { getRoutesOverlay, type ScenarioRunInfo } from './helpers.js'
-import { REPO_ROOT, DRIVER_DIR, SANDBOX_ROOT, PROFILE, ensureProfile, getTestedVersion, runDshAsync } from '../../scripts/sandbox.mjs'
+import { REPO_ROOT, DRIVER_DIR, SANDBOX_ROOT, PROFILE, ensureProfile, getTestedVersion, getSandboxDshModules, runDshAsync } from '../../scripts/sandbox.mjs'
 
 interface RecoveryRun extends ScenarioRunInfo {
+  runtimeStatus?: { tasks: Array<{ runtimeGuard: { control: { status: string; reason: string } } }> }
+  committedToolResults?: Array<{ isError: boolean; text: string }>
   recoveryRequests: Array<{ provider?: string; model: string; sessionId: string; at: number }>
   recoveryEvents: Array<{ type: string; data?: unknown }>
   recoveryTerminal?: string
   agentErrors?: Array<{ message?: string; code?: string }>
+  adapterThrows?: number
   planningReviewers?: Array<{ sessionId: string; model: string; tools: string[]; outputSchemaProperties: string[]; snapshotDigest: string; requestText: string; requestRevision: number; requestRefs?: Array<{ source: string; text?: string; textRef?: string }>; mermaid: string; workflow: unknown; planningScope?: { kind: string; deferred: string[] }; seesAgentResult: boolean; seesJevResult: boolean; readResult?: string; mutationResult?: string; mutationIsError?: boolean; missingContextResult?: string; missingContextIsError?: boolean }>
   planningStatus?: { tasks: Array<{ planningReview?: unknown; acceptance?: { status: string } }> }
   hostApis?: { start: boolean; startActivation: boolean }
@@ -49,7 +52,7 @@ const runRecovery = async (scenario: string, routes: Record<string, unknown>, mo
   ]))
   const out = `${workspace}.out.json`
   const result = await runDshAsync({ args: ['--profile', PROFILE, '--patch', overlay], cwd: workspace, timeout: 35000,
-    env: { SWARM_SCENARIO: '', SWARM_RECOVERY_SCENARIO: scenario, SWARM_DRIVER_OUT: out, SWARM_RECOVERY_RETRY_MODE: mode, SWARM_ROOT_MODEL: rootModel ?? 'root', ...options.env }
+    env: { SWARM_SCENARIO: '', SWARM_RECOVERY_SCENARIO: scenario, SWARM_DRIVER_OUT: out, SWARM_RECOVERY_RETRY_MODE: mode, SWARM_ROOT_MODEL: rootModel ?? 'root', SWARM_RECOVERY_SDK_MODULES: getSandboxDshModules(), ...options.env }
   })
   if (!existsSync(out)) throw new Error(`恢复场景 ${scenario} 没有输出。\n${result.stdout}\n${result.stderr}`)
   const data = JSON.parse(readFileSync(out, 'utf8'))
@@ -66,6 +69,13 @@ beforeAll(() => {
 })
 
 describe('真实 AgentLoop：pool exhausted 9060669ms 与终态恢复', () => {
+  it.each(['normal', 'always'])('真实 adapter 抛出14h24m pool/429错误时立即备用而非宿主长退避：%s', async (mode) => {
+    const run = await runRecovery('recovery-pool-thrown', getRoutesOverlay({ tian_shu: ['fail-pool-thrown', 'root'] }), mode, 'fail-pool-thrown')
+    expect(run.status, run.error ?? run.stderr).toBe('done')
+    expect(run.adapterThrows).toBe(1)
+    expect(run.recoveryRequests.map(request => request.model)).toEqual(['fail-pool-thrown', 'root'])
+    expect(retryEvents(run)).toEqual([])
+  })
   for (const mode of ['normal', 'always']) {
     it(`${mode}：根模型池不可用立即选择备用，不生成长退避事件`, async () => {
       const run = await runRecovery('recovery-pool-backup', getRoutesOverlay({ tian_shu: ['fail-pool', 'root'] }), mode, 'fail-pool')
@@ -220,16 +230,19 @@ describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () =>
       }
       if (scenario === 'planning-phase-low') {
         expect(run.children).toEqual([])
-        for (const result of run.results.slice(1, 4)) {
+        const committed = run.committedToolResults!
+        for (const result of committed.slice(1, 4)) {
           expect(JSON.parse(result.text)).toMatchObject({ cached: true, status: 'review_required', diagnostics: [
             { dimension: 'requirement_coverage', probability: 0.35, threshold: 0.8 },
             { dimension: 'execution_boundaries', probability: 0.79, threshold: 0.8 }
           ] })
         }
-        expect(run.results[4]?.isError).toBe(true)
-        expect(run.results[5]?.text).toContain('blocked')
+        // The actual Host now stops the repeated-review trajectory before the
+        // fixture can attempt delegation or ask a model to accept the task.
+        expect(committed).toHaveLength(4)
+        expect(run.runtimeStatus?.tasks[0]?.runtimeGuard.control).toMatchObject({ status: 'stalled', reason: expect.stringContaining('LOOP_DETECTED') })
         expect(run.planningStatus?.tasks[0]?.planningReview).toMatchObject({ status: 'review_required' })
-        expect(run.planningStatus?.tasks[0]?.acceptance?.status).toBe('blocked')
+        expect(run.planningStatus?.tasks[0]?.acceptance).toBeNull()
       } else {
         expect(run.results[0]?.text).toContain('pass')
         const expert = run.children.find((child) => child.role === 'mou_ding')

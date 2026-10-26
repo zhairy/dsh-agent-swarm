@@ -1,0 +1,342 @@
+{
+  "state": {
+    "version": "3.1.3",
+    "scope": [
+      "stable request ownership during quota fallback and manual switch",
+      "fresh attempt authorization for same-child safe continuation",
+      "five settings tabs and accessible fallback sorting",
+      "server-issued evidence-bound acceptance receipt",
+      "real ask-user pending, late answer, cancel and goal identity",
+      "bounded full-history structural progress guard"
+    ],
+    "verified": {
+      "unit": "1433 passed before final targeted refinements; final rerun pending",
+      "progressPure": "15 passed",
+      "routing": "272 targeted units and 10 real rc.3 deterministic supplier scenarios plus actual browser safe-continue",
+      "settings": "34 browser assertions, 14 stored configuration checks and final version 3.1.3 quick rerun; real isolated rc.3",
+      "wait": {
+        "observedMs": 300002.97,
+        "modelRequestsBefore": 1,
+        "modelRequestsAfter": 1,
+        "goalRoundsBefore": 1,
+        "goalRoundsAfter": 1,
+        "lateAnswerRequestRevision": 2,
+        "sameGoalResumeCount": 1,
+        "errors": 0
+      }
+    },
+    "adversarialFindingsFixed": [
+      "every accepted task receipt required rather than any one",
+      "goal completion task revision serialized",
+      "domain id is preserved in evidence",
+      "diagnostic stays available during persistence failure",
+      "ready parallel node cannot exempt root activation accounting",
+      "different control operations and producer roles distinguish legitimate multi-step progress",
+      "per-task graph fingerprints prevent switching tasks counting as replan",
+      "work and authorization holds must retain distinct resume ownership"
+    ],
+    "invariants": [
+      "only real matching answer becomes decision; no answer is no permission",
+      "actual native tool approvals still apply",
+      "receipt plus accepted written atomically after current evidence checks",
+      "old attempts cannot revoke new attempts",
+      "no completion on stalled/exhausted",
+      "mandatory verification and blind review edges never automatically pruned",
+      "persisted history not silently discarded on capacity"
+    ],
+    "bounds": {
+      "historyPerLineage": 1024,
+      "historyPage": 32,
+      "automaticActivations": 4096,
+      "recoveries": 4,
+      "replans": 4
+    },
+    "complexity": "history index average O(1), graph/signature and content hashing input-dependent, history O(H), existing commit validation retains cross-reference scans; no end-to-end O(1) claim",
+    "limits": [
+      "structural repetition is not a semantic correctness theorem",
+      "no live Claude quota-exhaustion account simulation or arbitrary many-hour business completion claim",
+      "native direct SDK/Remote GoalService.complete has no public before hook and is unsupported; only managed tool and Swarm accept guarded",
+      "without verifiable handoff memory-only state has no cross-restart history",
+      "direct SDK tasks without host provenance get per-task lineage",
+      "pending is not host tool permission",
+      "same original goal and current limits required before rearm",
+      "original public task view polling retained; no new push control plane"
+    ],
+    "deployment": {
+      "authorized": true,
+      "productionChanged": false,
+      "latestRunningSessions": 2,
+      "waitForIdleBeforeCutover": true
+    },
+    "releaseRule": "Do not label published or full release validated until latest tests, source parity, real installed Host loading and remote assets are verified. Jev is advisory, not an authorization mechanism."
+  },
+  "stage": "candidate-before-final-host-and-cutover",
+  "results": [
+    {
+      "status": "fulfilled",
+      "value": {
+        "name": "ask",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"bounded_claim\": {\n      \"type\": \"noul\",\n      \"noul\": 0.84\n    },\n    \"release_pending\": {\n      \"type\": \"noul\",\n      \"noul\": 0.95\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 1176,\n    \"output_tokens\": 38,\n    \"est_cost_usd\": 0.000049392000000000004\n  },\n  \"latency_ms\": 243.474\n}"
+            }
+          ],
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "bounded_claim": {
+                "type": "noul",
+                "noul": 0.84
+              },
+              "release_pending": {
+                "type": "noul",
+                "noul": 0.95
+              }
+            },
+            "usage": {
+              "input_tokens": 1176,
+              "output_tokens": 38,
+              "est_cost_usd": 0.000049392000000000004
+            },
+            "latency_ms": 243.474
+          },
+          "isError": false
+        }
+      }
+    },
+    {
+      "status": "fulfilled",
+      "value": {
+        "name": "check",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"probabilities\": {\n      \"source_not_runtime\": 0.78,\n      \"no_permission_from_pending\": 0.95,\n      \"all_paths_guarded\": 0.06\n    },\n    \"flags\": [\n      \"source_not_runtime\",\n      \"no_permission_from_pending\"\n    ],\n    \"uncertain\": []\n  },\n  \"usage\": {\n    \"input_tokens\": 1176,\n    \"output_tokens\": 61,\n    \"est_cost_usd\": 0.000049392000000000004\n  },\n  \"latency_ms\": 592.797\n}"
+            }
+          ],
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "probabilities": {
+                "source_not_runtime": 0.78,
+                "no_permission_from_pending": 0.95,
+                "all_paths_guarded": 0.06
+              },
+              "flags": [
+                "source_not_runtime",
+                "no_permission_from_pending"
+              ],
+              "uncertain": []
+            },
+            "usage": {
+              "input_tokens": 1176,
+              "output_tokens": 61,
+              "est_cost_usd": 0.000049392000000000004
+            },
+            "latency_ms": 592.797
+          },
+          "isError": false
+        }
+      }
+    },
+    {
+      "status": "fulfilled",
+      "value": {
+        "name": "classify",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"choice\": \"candidate\",\n    \"confidence\": 1.0,\n    \"probabilities\": {\n      \"candidate\": 1.0,\n      \"released\": 0.0,\n      \"reject\": 0.0,\n      \"other\": 0.0\n    },\n    \"band\": \"act\",\n    \"agreement\": true,\n    \"alternate_choice\": \"candidate\"\n  },\n  \"usage\": {\n    \"input_tokens\": 2440,\n    \"output_tokens\": 90,\n    \"est_cost_usd\": 0.00010248000000000001\n  },\n  \"latency_ms\": 538.166\n}"
+            }
+          ],
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "choice": "candidate",
+              "confidence": 1,
+              "probabilities": {
+                "candidate": 1,
+                "released": 0,
+                "reject": 0,
+                "other": 0
+              },
+              "band": "act",
+              "agreement": true,
+              "alternate_choice": "candidate"
+            },
+            "usage": {
+              "input_tokens": 2440,
+              "output_tokens": 90,
+              "est_cost_usd": 0.00010248000000000001
+            },
+            "latency_ms": 538.166
+          },
+          "isError": false
+        }
+      }
+    },
+    {
+      "status": "fulfilled",
+      "value": {
+        "name": "match",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"ok\": false,\n  \"status\": 400,\n  \"error\": \"invalid tool input\",\n  \"details\": [\n    {\n      \"loc\": [\n        \"window\"\n      ],\n      \"msg\": \"Value error, window must be between 20 and 254\"\n    }\n  ]\n}"
+            }
+          ],
+          "structuredContent": {
+            "ok": false,
+            "status": 400,
+            "error": "invalid tool input",
+            "details": [
+              {
+                "loc": [
+                  "window"
+                ],
+                "msg": "Value error, window must be between 20 and 254"
+              }
+            ]
+          },
+          "isError": false
+        }
+      }
+    },
+    {
+      "status": "fulfilled",
+      "value": {
+        "name": "score",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"score\": 2.0,\n    \"confidence\": 1.0,\n    \"probabilities\": {\n      \"0\": 0.0,\n      \"1\": 0.0,\n      \"2\": 1.0,\n      \"3\": 0.0,\n      \"4\": 0.0\n    },\n    \"legend\": {\n      \"0\": \"缺少可执行设计\",\n      \"1\": \"只有源码未测\",\n      \"2\": \"多层隔离验证且最后回归/部署待完成\",\n      \"3\": \"最终测试与本机实际加载已验证\",\n      \"4\": \"已发布并复核远端资产\"\n    },\n    \"normalized\": 0.5\n  },\n  \"usage\": {\n    \"input_tokens\": 1207,\n    \"output_tokens\": 17,\n    \"est_cost_usd\": 0.000050694\n  },\n  \"latency_ms\": 240.807\n}"
+            }
+          ],
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "score": 2,
+              "confidence": 1,
+              "probabilities": {
+                "0": 0,
+                "1": 0,
+                "2": 1,
+                "3": 0,
+                "4": 0
+              },
+              "legend": {
+                "0": "缺少可执行设计",
+                "1": "只有源码未测",
+                "2": "多层隔离验证且最后回归/部署待完成",
+                "3": "最终测试与本机实际加载已验证",
+                "4": "已发布并复核远端资产"
+              },
+              "normalized": 0.5
+            },
+            "usage": {
+              "input_tokens": 1207,
+              "output_tokens": 17,
+              "est_cost_usd": 0.000050694
+            },
+            "latency_ms": 240.807
+          },
+          "isError": false
+        }
+      }
+    },
+    {
+      "status": "fulfilled",
+      "value": {
+        "name": "screen",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"verdict\": \"review\",\n    \"risk\": 1.05,\n    \"risk_confidence\": 0.39,\n    \"reasons\": {\n      \"addresses_agent\": 0.45,\n      \"issues_instructions\": 0.67\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 1562,\n    \"output_tokens\": 129,\n    \"est_cost_usd\": 0.000065604\n  },\n  \"latency_ms\": 250.867\n}"
+            }
+          ],
+          "structuredContent": {
+            "ok": true,
+            "model": "jev-1.14.0",
+            "answers": {
+              "verdict": "review",
+              "risk": 1.05,
+              "risk_confidence": 0.39,
+              "reasons": {
+                "addresses_agent": 0.45,
+                "issues_instructions": 0.67
+              }
+            },
+            "usage": {
+              "input_tokens": 1562,
+              "output_tokens": 129,
+              "est_cost_usd": 0.000065604
+            },
+            "latency_ms": 250.867
+          },
+          "isError": false
+        }
+      }
+    }
+  ],
+  "matchInputCorrection": {
+    "previousWindow": 3,
+    "serverContract": "20..254",
+    "corrected": "omit optional window; default",
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"best_id\": \"bounded\",\n    \"best_text\": \"保留当前验收和问答守卫；等待最终回归，空闲后正式部署并验证；明确未覆盖原生SDK直接完成。\",\n    \"confidence\": 1.0,\n    \"abstain_probability\": 0.0,\n    \"exists\": 0.96,\n    \"windows\": 1,\n    \"exists_by_window\": [\n      0.96\n    ],\n    \"top3\": [\n      {\n        \"id\": \"bounded\",\n        \"probability\": 1.0\n      },\n      {\n        \"id\": \"overclaim\",\n        \"probability\": 0.0\n      },\n      {\n        \"id\": \"prompt\",\n        \"probability\": 0.0\n      }\n    ],\n    \"band\": \"match\"\n  },\n  \"usage\": {\n    \"input_tokens\": 1332,\n    \"output_tokens\": 64,\n    \"est_cost_usd\": 0.000055944000000000005\n  },\n  \"latency_ms\": 578.029\n}"
+        }
+      ],
+      "structuredContent": {
+        "ok": true,
+        "model": "jev-1.14.0",
+        "answers": {
+          "best_id": "bounded",
+          "best_text": "保留当前验收和问答守卫；等待最终回归，空闲后正式部署并验证；明确未覆盖原生SDK直接完成。",
+          "confidence": 1,
+          "abstain_probability": 0,
+          "exists": 0.96,
+          "windows": 1,
+          "exists_by_window": [
+            0.96
+          ],
+          "top3": [
+            {
+              "id": "bounded",
+              "probability": 1
+            },
+            {
+              "id": "overclaim",
+              "probability": 0
+            },
+            {
+              "id": "prompt",
+              "probability": 0
+            }
+          ],
+          "band": "match"
+        },
+        "usage": {
+          "input_tokens": 1332,
+          "output_tokens": 64,
+          "est_cost_usd": 0.000055944000000000005
+        },
+        "latency_ms": 578.029
+      },
+      "isError": false
+    }
+  }
+}
