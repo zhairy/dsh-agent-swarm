@@ -1,0 +1,32 @@
+{
+  "at": "2026-10-26T07:23:14.558816+00:00",
+  "oldPid": 1291619,
+  "newPid": 1300135,
+  "backup": "/home/zhairy/.dsh/backups/swarm-3.1.3-CGdpEI",
+  "source": "3.1.2",
+  "target": "3.1.3",
+  "core": "0.2.1-rc.3",
+  "stateRoots": 0,
+  "memoryRoots": 0,
+  "changedDependencies": [
+    "dsh-agent-swarm"
+  ],
+  "bundleOrderUnchanged": true,
+  "profileConfigUnchanged": true,
+  "workspacePolicyUnchanged": true,
+  "frozenLockPassed": true,
+  "offlineMetadataFailureResolvedWithOriginalOnlinePolicy": true,
+  "runtimeValidationComplete": true,
+  "sourceRestartBeforeMaintenance": true,
+  "oldPidMemoryRestorationClaimed": false,
+  "liveModulesVerified": 84,
+  "requiredModulesVerified": 12,
+  "formalUiAssertions": 10,
+  "formalBrowserErrors": 0,
+  "bundleCountBefore": 40,
+  "bundleCountAfter": 40,
+  "swarmConfigSemanticUnchanged": true,
+  "postStartupOtherPluginConfigurationChanged": true,
+  "published": true,
+  "releaseUrl": "https://github.com/zhairy/dsh-agent-swarm/releases/tag/v3.1.3"
+}

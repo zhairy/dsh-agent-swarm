@@ -1,0 +1,347 @@
+{
+  "pid": 1300135,
+  "version": "3.1.3",
+  "installed": "/home/zhairy/.dsh/local-bundles/dsh-agent-swarm-v3.1.3-ea5860c85dfc",
+  "liveModuleCount": 84,
+  "requiredModules": 12,
+  "allLiveBytesMatch": true,
+  "matches": [
+    {
+      "file": "index.js",
+      "sha256": "cd5d3a916f128be40ea967689602921a0eb0374d812bb1d2087dcceb2d6d7c2f"
+    },
+    {
+      "file": "config.js",
+      "sha256": "f71c7dbf759d0c17f5f1aa55b2d9344b4514f1bad25bdde42a3fdd26aecdc54f"
+    },
+    {
+      "file": "jev.js",
+      "sha256": "b34cbc913addaf1bc2e639ac00aabd0778c7e2e6b02bc05d467dab7441139be8"
+    },
+    {
+      "file": "provider-policy.js",
+      "sha256": "2ac204cfc72be94caa94ed8d420bfb6e3ea43bbe97a413312321fea347aedd1c"
+    },
+    {
+      "file": "model-family.js",
+      "sha256": "6d18ebf1e5e9e8fbf8d8d0b4eb4e99c0309246ee4e25609a2ce8e44594260769"
+    },
+    {
+      "file": "policy.js",
+      "sha256": "4e12d3efdb95a42b48e25544f3fdd2801b24d24419e0b5578924e7ae8bf26397"
+    },
+    {
+      "file": "role-registry.js",
+      "sha256": "93a4225b87491a6b3e2e891695a0b44f07a53e0f2102edc1ae3a7af1c6681dc0"
+    },
+    {
+      "file": "host-contract.js",
+      "sha256": "67b8d218e62ae88745c1f58551bf372adc5031a87e3d81c5497311acc42ae8d7"
+    },
+    {
+      "file": "language.js",
+      "sha256": "efdc562e5b2292d14c9c917c07c4ca6ec541cc06858f8d81c7318b46cb1f98b8"
+    },
+    {
+      "file": "routes.js",
+      "sha256": "ec2e1a47b8d80142a62a98cfe85806393fd561296791bb0421a50f4030ef9801"
+    },
+    {
+      "file": "util/errors.js",
+      "sha256": "d19637d1c581931056d0ca9fc495c30522df58dde5b40d3c0feaf42839ba652d"
+    },
+    {
+      "file": "upgrade.js",
+      "sha256": "7c952c8f235e52a88b9abf33ce94cba7ef019c59a266c3e504a91ac9be80e4e5"
+    },
+    {
+      "file": "review.js",
+      "sha256": "d36ce6361a5dbc32774b9fb0dd8de090f286c9b8575a19232475b8823f4069cc"
+    },
+    {
+      "file": "util/live.js",
+      "sha256": "d12e9d816151fc62f8e0582240a8d1d5e6d0f7ef2b4ba7f3c39bb41271da172e"
+    },
+    {
+      "file": "math/config.js",
+      "sha256": "c8df5fe0cf8a6b86d367f066ecc4c49c22c002bed49eb5aa317a508463293203"
+    },
+    {
+      "file": "math/limits.js",
+      "sha256": "8596eef5e1a69b8f82aa8c6c542c47f50329e7e9e9d68b680b2a8e610b661bc7"
+    },
+    {
+      "file": "math/schema.js",
+      "sha256": "8b5d8dbc82e98909bc22ec41cf16ee0251e77eedf858989e05431a809cc28ccf"
+    },
+    {
+      "file": "network.js",
+      "sha256": "e589e71e08af0a03be421875a91e7795ff94211a4ccb027f222680c4d8468147"
+    },
+    {
+      "file": "quota-routing.js",
+      "sha256": "6ebea653e84c210cbee98cb996c5ad43ba029649c1e4060e966eb5403e70576f"
+    },
+    {
+      "file": "quota.js",
+      "sha256": "7a87cbe236a0655e0ea471b6f1de62f940176fe7e21f497b69b257064f412c43"
+    },
+    {
+      "file": "quota-routing-source.js",
+      "sha256": "7dfd451cb0a20aa74ff0bdb5b8fa3cb537de0f13394faf0c0f56479cd5da73ab"
+    },
+    {
+      "file": "workflow.js",
+      "sha256": "9a25e5c5eb56f3b4f4f65ac6b491c3ac758594bc96bf53ec1651b1c1879b06a1"
+    },
+    {
+      "file": "rpc.js",
+      "sha256": "fb6cf188268771d6406854b6ad53385acba7a9918ad4fbd551f5b7068993f6b4"
+    },
+    {
+      "file": "preset-registration.js",
+      "sha256": "bca93a64d89a403d8c7c8a35a80d3b35a022e1b85a4e61ecceaf448169e56026"
+    },
+    {
+      "file": "service.js",
+      "sha256": "dd3da91ff9584af9b55dee421a609433b2301e919299259d4bcab17df333d77f"
+    },
+    {
+      "file": "task-diagrams.js",
+      "sha256": "68e8dc97909698f97a3c4e729d7dc734328ccc0e0666cfd326d4c2bff42766c6"
+    },
+    {
+      "file": "task-model.js",
+      "sha256": "fa464222eeb1e39cac3b984c52d846d2861ef04a85caa459ceede3d2c6d1a448"
+    },
+    {
+      "file": "orchestration.js",
+      "sha256": "08d583211360875d8a9c1f3fd188b1cf144c57b92502b24c39862fc4f51b3547"
+    },
+    {
+      "file": "scheduler.js",
+      "sha256": "86af06a94b2eeef91c8f0255f4ac4649fe728107f213ec74d3d6392a346c9dd5"
+    },
+    {
+      "file": "memory.js",
+      "sha256": "c2225a416ded31138b9ab2f81604ffde6d894d621d9c195cbfcec89fcc09f172"
+    },
+    {
+      "file": "tool-candidate.js",
+      "sha256": "6c9dce5c11b3a3f5d2af4625bc5a7a1097c950c8de728b7a5372924ae9084335"
+    },
+    {
+      "file": "delegate.js",
+      "sha256": "64c1eb5be1f21f1d6b38f6db986ae866710bf98fb5509a06b8e70479693a17de"
+    },
+    {
+      "file": "contracts.js",
+      "sha256": "ce8b8e6b3a5f2b1ba008a386ecb0dc5b5c49c4439883d1bb6166e8ddd758d74e"
+    },
+    {
+      "file": "util/json-schema.js",
+      "sha256": "5eb7bde0796c4eeb6382bf973feaef8ae0976fb88327d490525c51ab74c21eb1"
+    },
+    {
+      "file": "route-state.js",
+      "sha256": "07ea2b4be864fbae0a3bb381672dd9284c8e83431fc59271c65b741aa00c667c"
+    },
+    {
+      "file": "route-health.js",
+      "sha256": "9d46769e59c50ed9fea5201f5b0672f956f8b926a70161ee5e7444512b35297a"
+    },
+    {
+      "file": "subagent-compat.js",
+      "sha256": "197241ba7adeab16553f21248e752be27608bf7283a5dae585c3000d36788161"
+    },
+    {
+      "file": "threads.js",
+      "sha256": "d0aabaa7e74fa1502195e94ec78723d1972dcd25992911d91f4b9d5bb48f767d"
+    },
+    {
+      "file": "util/failure-hint.js",
+      "sha256": "489faa8b68e1c75f3df1e2cbc62f83e496018d8e46b29e5aa311b75c9b78bfd6"
+    },
+    {
+      "file": "util/git.js",
+      "sha256": "7561338650dd8d8d10f5ecaa79a6561ed4174d5341f1caae84b28b0279eb25a0"
+    },
+    {
+      "file": "vision.js",
+      "sha256": "333134462db4a976612a60c43a46873d24061329f8caec9ff13b5f3fbb2bae90"
+    },
+    {
+      "file": "evidence.js",
+      "sha256": "a6ed927c6cff143377c2ae4e11f35450b77c66c88cf6c9ef2f89120903d48351"
+    },
+    {
+      "file": "jev-hub.js",
+      "sha256": "fb09ac750bb338f8867fc073bc5914713fdceeef353732104dd10dcb6af60740"
+    },
+    {
+      "file": "jev-tools.js",
+      "sha256": "b614183a0553f550624e6b17bd751ccd611f5ee03c84189af5ac86d39adfe5d4"
+    },
+    {
+      "file": "jev-questions.js",
+      "sha256": "cb9ff6550bad258b8e770b2b885941675bfff22129323979085bec4438f015a8"
+    },
+    {
+      "file": "tool-shape.js",
+      "sha256": "31e04c9a2d9e0410c82c8c7c37efa9fdc3d0b01316766de118b7a1d2ea355931"
+    },
+    {
+      "file": "util/mutex.js",
+      "sha256": "c64025a72c97e506a6fa8e6d18e347c7252af7a3d38e3cae11ff705f510e5b53"
+    },
+    {
+      "file": "planning-review.js",
+      "sha256": "b619c27a53523a5b03c180bd777c7c24f5efca7d665c562d3296bf716d9aed93"
+    },
+    {
+      "file": "planning-wait.js",
+      "sha256": "af7e11112680f89006104c3f054fca28925880865a9ba088ddab1bb36c906c5f"
+    },
+    {
+      "file": "artifacts.js",
+      "sha256": "b71c361c59ded6fd562a087a1ce5fe2a88acce1e07f35bdb48e04408aa4d0e83"
+    },
+    {
+      "file": "approval-policy.js",
+      "sha256": "982a4632f8b36d1ecd71b253a865f281f6be3d4a82d950a6372e6a220330fe93"
+    },
+    {
+      "file": "checkpoint.js",
+      "sha256": "d108b125b5e8ef3ca72c4b22fa5dd3913fea86fc2fa30a39475a33ee03cd9e2d"
+    },
+    {
+      "file": "blocked-recovery.js",
+      "sha256": "7f2838a4df42fa4485771e0282af947eb9790401c08a9005d28e57c6b4b8651d"
+    },
+    {
+      "file": "feature-session.js",
+      "sha256": "ed2a98d11968f30c0bf3a39618b7fdb1c2525281b09a9ec7b46b9955ef90893a"
+    },
+    {
+      "file": "state-store.js",
+      "sha256": "d7b9561d2ded9db9453bcdd6a53fa8957348f08eb96620955f59802ac5240c2b"
+    },
+    {
+      "file": "state-core.js",
+      "sha256": "c577de92f5cccb98329b6b151b7642e5bdaf69a7384ddc55f90377ccfbe792c7"
+    },
+    {
+      "file": "state-chunks.js",
+      "sha256": "eecfab8b9d1c2e2ea7cfe38418f8494f884745b3f4387a086ac3f960c413edd7"
+    },
+    {
+      "file": "agent-binding.js",
+      "sha256": "5ec5afd61c8dd529af843cecc210738610c16653b7f04b04f458d034d2f22a34"
+    },
+    {
+      "file": "message-bus.js",
+      "sha256": "8311ea4f83b3a07a4a55564bd6e619d57eb5fa1706eac9a23f9ed69b4421e3b6"
+    },
+    {
+      "file": "experience.js",
+      "sha256": "af774bcdb90db0da61ddc9f88180706d5c4a7abd8a36b176db94f2dad920c893"
+    },
+    {
+      "file": "execution-budget.js",
+      "sha256": "6605ff213690d9d032ec13a37fb3778c12c5075db8393df6877f93d914655f51"
+    },
+    {
+      "file": "context-store.js",
+      "sha256": "ba71bdb026454176c87a132e64ac90dcb8e9f2924ceab3a55176fea732baf8b3"
+    },
+    {
+      "file": "util/workspace-lease.js",
+      "sha256": "61686f07878ed573454489270b5a73de26e8304f23ef2a34e20671e5ed9fa1a1"
+    },
+    {
+      "file": "planning-recovery.js",
+      "sha256": "2d62ff36f3a882f69c4bff71ab02099ed25053497cca8fe67319f23d53ca438e"
+    },
+    {
+      "file": "agent-control.js",
+      "sha256": "481c0725bbe143de8aca0bf4ab4d568e0f3c4de6ee06aef5866c93f8c4914c5d"
+    },
+    {
+      "file": "evidence-assessment.js",
+      "sha256": "60f2e2c6b18eef48ceea87a5a95960cb9329071586ccfad2afda9f5052a31983"
+    },
+    {
+      "file": "memory-handoff.js",
+      "sha256": "b6f3f65a279418df0b6a024265535950615ea6514ca7c9d510dd1697d3fd2b3d"
+    },
+    {
+      "file": "authorization-wait.js",
+      "sha256": "4fc40eb823538240501b42be817f161bb2b7439f50620c8a033e9b645554b971"
+    },
+    {
+      "file": "progress-guard.js",
+      "sha256": "346311314de0c39027de7734c997cf1c3f49ec36bcaa2a62d9254d6ab2648724"
+    },
+    {
+      "file": "verification-receipt.js",
+      "sha256": "4bbaf21a7400917ef4848d0f0fd8bc7374d47afaa0edb6fd0e02799662636912"
+    },
+    {
+      "file": "math/operators.js",
+      "sha256": "0bf6f19a91cf697adfdb0cbc98c9ce62a7b0c793ad7964187e5df7fc902b35de"
+    },
+    {
+      "file": "project-discovery.js",
+      "sha256": "e84a3aaaf677586110498e502cca38abb336fd5b2c65425a00610e121589c95c"
+    },
+    {
+      "file": "evidence-source.js",
+      "sha256": "a6efbe3e0567b46cbf331da6cd378d1157e585f5ce98712f4d1d3c83ad226756"
+    },
+    {
+      "file": "authorization-runtime.js",
+      "sha256": "b2ab6e5374d9d7fa4b1314e3f0bdab72647bda5aad5611c77929c9f8e3c84eb2"
+    },
+    {
+      "file": "authorization-host.js",
+      "sha256": "2d68c8e84af31113000f2b03947dfcde6cadc9a47010328f731f751e66500d88"
+    },
+    {
+      "file": "host-recovery.js",
+      "sha256": "7f9f842a13adb7a245a33eee685b3d15d40c16e000c8e8fe1398643f57dd3731"
+    },
+    {
+      "file": "tool-recovery.js",
+      "sha256": "a2564452e2063c8044666aa27be04336e4f06eb645d057dd207322ebd98742d6"
+    },
+    {
+      "file": "tools.js",
+      "sha256": "741b1492735d709ba7e9691cc05f8e9f1af57b5a56825b43b17e18f0f43df4a0"
+    },
+    {
+      "file": "task-tools.js",
+      "sha256": "808028b353149dfae1fc03712e83026aaa219d4304b2fe60c0bf694c8eb536c2"
+    },
+    {
+      "file": "collaboration-tools.js",
+      "sha256": "b02979da6cadc0dc7be3f8a2662ecf3705bc7c17af8bd0b47be0afde82f12b9a"
+    },
+    {
+      "file": "math-tools.js",
+      "sha256": "449c339c3641702a3fab06f0c62235970c32662e91eaf289b8f6ce3b05edf98b"
+    },
+    {
+      "file": "skills.js",
+      "sha256": "64f8f2182966d7fb9e43b4da8ad59e4d56d9403ce4d0522c344fe4161c7712d2"
+    },
+    {
+      "file": "runtime.js",
+      "sha256": "edc95d114aaac99f364693be1d2f6422d09bb40e48caa4654ab662f5a9cf8469"
+    },
+    {
+      "file": "expert-tools.js",
+      "sha256": "13bb2a44204558f159d3404303ff8f00118d88f876550e282c1515f673c94da3"
+    }
+  ],
+  "modelRequestsInitiated": 0
+}

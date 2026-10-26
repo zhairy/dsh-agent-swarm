@@ -1,0 +1,19 @@
+{
+  "bundlesBefore": 40,
+  "bundlesAfter": 40,
+  "orderUnchanged": true,
+  "packageChangedDependencies": [
+    "dsh-agent-swarm"
+  ],
+  "configByteEqualAfterStartup": false,
+  "safeDiff": [
+    "--- \n",
+    "+++ \n",
+    "@@ -90,33 +90,4 @@\n",
+    "-      opencode-go:",
+    "@@ -807,2 +778,24 @@\n",
+    "+- id: opencode-go",
+    "+  name: dsh-opencode-go",
+    "+    modelVisibility:"
+  ]
+}

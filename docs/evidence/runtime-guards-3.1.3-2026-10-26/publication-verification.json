@@ -1,0 +1,53 @@
+{
+  "version": "3.1.3",
+  "url": "https://github.com/zhairy/dsh-agent-swarm/releases/tag/v3.1.3",
+  "tag": "v3.1.3",
+  "target": "046b0065f8bfce3923ddf244313050a61226bf07",
+  "publishedAt": "2026-10-26T07:39:11Z",
+  "draft": false,
+  "prerelease": false,
+  "assetCount": 5,
+  "downloadedCompiledModulesVerified": 86,
+  "assets": [
+    {
+      "name": "dsh-agent-swarm.tgz",
+      "bytes": 1403424,
+      "sha256": "ea5860c85dfc6d9c2f1f660de2c2c3296da801c9c71703a651c66a2d8681cf84",
+      "downloadMatches": true,
+      "githubDigestMatches": true
+    },
+    {
+      "name": "RELEASE-NOTES.zh-CN.md",
+      "bytes": 1330,
+      "sha256": "58ebee4bb5d68e1d3b7a2ab59e765cb7029019b08bfe86dd49f6c4d4b0460b58",
+      "downloadMatches": true,
+      "githubDigestMatches": true
+    },
+    {
+      "name": "RELEASE-NOTES.en.md",
+      "bytes": 1235,
+      "sha256": "6e4563949b7d922eda4bd03974ce9c5c7485d4a04cb0e4e44847b2d62090db8d",
+      "downloadMatches": true,
+      "githubDigestMatches": true
+    },
+    {
+      "name": "release-manifest.json",
+      "bytes": 11339,
+      "sha256": "f4ee2a41361e123687e2de3b6b2f2ee35ac807f9029f5b821a234b952eb7289f",
+      "downloadMatches": true,
+      "githubDigestMatches": true
+    },
+    {
+      "name": "SHA256SUMS",
+      "bytes": 349,
+      "sha256": "999a7fe01b27a5c64dd9022d9fbc6c91e610336251df05b0d42ee6e46f1835a3",
+      "downloadMatches": true,
+      "githubDigestMatches": true
+    }
+  ],
+  "sourceCommit": "decbe923136f077a5a78a90ab8b3fc726682d839",
+  "publicCommit": "046b0065f8bfce3923ddf244313050a61226bf07",
+  "formalVersion": "3.1.3",
+  "formalPid": 1300135,
+  "allPassed": true
+}

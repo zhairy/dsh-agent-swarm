@@ -1,0 +1,8 @@
+{
+  "swarmRowsBefore": 1,
+  "swarmRowsAfter": 1,
+  "swarmConfigSemanticUnchanged": true,
+  "beforeDigest": "793eac912c7b934363f85568a98246736650971bc0f5b5960ae681893d3ea8fa",
+  "afterDigest": "793eac912c7b934363f85568a98246736650971bc0f5b5960ae681893d3ea8fa",
+  "otherPluginPostStartupChangesRetained": true
+}

@@ -1,0 +1,123 @@
+{
+  "state": {
+    "version": "3.1.3",
+    "sourceCommit": "decbe923136f077a5a78a90ab8b3fc726682d839",
+    "publicCommit": "046b0065f8bfce3923ddf244313050a61226bf07",
+    "previousEvidence": {
+      "unit": 1455,
+      "independent": 54,
+      "artifactSdkRc3": 49,
+      "artifactSdkRc2": 49,
+      "uiFixture": 34,
+      "waitMs": 300002.97
+    },
+    "formal": {
+      "core": "0.2.1-rc.3",
+      "pid": 1300135,
+      "plugin": "3.1.3",
+      "unique3080": true,
+      "debuggerClosed": true,
+      "liveModulesMatched": 84,
+      "requiredCoreModulesMatched": 12,
+      "clientBundleMatched": true,
+      "uiAssertions": 10,
+      "browserErrors": 0,
+      "journalStartupErrors": 0,
+      "generatedModelCalls": 0
+    },
+    "changeControl": {
+      "onlyDependencyChanged": "dsh-agent-swarm",
+      "lockPackageKeysAdded": 0,
+      "lockPackageKeysRemoved": 0,
+      "bundlesBefore": 40,
+      "bundlesAfter": 40,
+      "bundleOrderUnchanged": true,
+      "swarmConfigSemanticUnchanged": true,
+      "postBootOtherPluginConfig": "OpenCode Go config was reordered/updated with modelVisibility; retained, no claim entire profile stayed byte-identical forever"
+    },
+    "statePreservation": {
+      "freshExportLoadedFeatureSessions": 0,
+      "sourcePIDHadAlreadyChangedBeforeThisMaintenance": true,
+      "oldPIDMemoryRestored": false,
+      "oldStateFabrication": false
+    },
+    "installation": {
+      "offlineMetadataFailure": "missing dsh-opencode-go@0.1.24 metadata",
+      "resolution": "online install under unchanged existing policy, then offline frozen passed",
+      "noReleaseAgeRelaxation": true
+    },
+    "limitations": [
+      "No new real Claude quota exhaustion or arbitrary long-running business completion claimed",
+      "direct native SDK/Remote GoalService.complete still outside guard coverage",
+      "empty task directory verified honestly, no historical memory reconstruction claimed",
+      "Jev evidence is advisory; probabilities are not correctness certificates"
+    ],
+    "phase": "formal local deployment verified; remote publication next, not yet published"
+  },
+  "health": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"ok\": true,\n  \"model\": \"jev-latest\",\n  \"answers\": {\n    \"models\": [\n      {\n        \"name\": \"jev-latest\",\n        \"description\": \"The latest iteration of TypeSafe's System One Model: Jev\",\n        \"release_date\": \"2026-09-10T18:38:01.391457+00:00\"\n      },\n      {\n        \"name\": \"jev-preview\",\n        \"description\": \"A preview version of `jev-latest`: should be better in most ways\",\n        \"release_date\": \"2026-09-10T18:39:06.057655+00:00\"\n      }\n    ],\n    \"round_trip_latency_ms\": 579.603\n  },\n  \"usage\": {\n    \"input_tokens\": 0,\n    \"output_tokens\": 0,\n    \"est_cost_usd\": 0.0\n  },\n  \"latency_ms\": 579.611\n}"
+      }
+    ],
+    "structuredContent": {
+      "ok": true,
+      "model": "jev-latest",
+      "answers": {
+        "models": [
+          {
+            "name": "jev-latest",
+            "description": "The latest iteration of TypeSafe's System One Model: Jev",
+            "release_date": "2026-09-10T18:38:01.391457+00:00"
+          },
+          {
+            "name": "jev-preview",
+            "description": "A preview version of `jev-latest`: should be better in most ways",
+            "release_date": "2026-09-10T18:39:06.057655+00:00"
+          }
+        ],
+        "round_trip_latency_ms": 579.603
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "est_cost_usd": 0
+      },
+      "latency_ms": 579.611
+    },
+    "isError": false
+  },
+  "review": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"probabilities\": {\n      \"local_deployment_evidence\": 0.9,\n      \"remote_release_already_published\": 0.06,\n      \"old_memory_recovered\": 0.03,\n      \"claims_are_bounded\": 0.92\n    },\n    \"flags\": [\n      \"local_deployment_evidence\",\n      \"claims_are_bounded\"\n    ],\n    \"uncertain\": []\n  },\n  \"usage\": {\n    \"input_tokens\": 1127,\n    \"output_tokens\": 90,\n    \"est_cost_usd\": 0.000047334000000000005\n  },\n  \"latency_ms\": 264.636\n}"
+      }
+    ],
+    "structuredContent": {
+      "ok": true,
+      "model": "jev-1.14.0",
+      "answers": {
+        "probabilities": {
+          "local_deployment_evidence": 0.9,
+          "remote_release_already_published": 0.06,
+          "old_memory_recovered": 0.03,
+          "claims_are_bounded": 0.92
+        },
+        "flags": [
+          "local_deployment_evidence",
+          "claims_are_bounded"
+        ],
+        "uncertain": []
+      },
+      "usage": {
+        "input_tokens": 1127,
+        "output_tokens": 90,
+        "est_cost_usd": 0.000047334000000000005
+      },
+      "latency_ms": 264.636
+    },
+    "isError": false
+  }
+}

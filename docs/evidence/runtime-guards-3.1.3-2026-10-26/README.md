@@ -29,4 +29,19 @@
 
 已将该包安装到摘要命名的本机待用bundle，并在正式profile副本上运行pnpm安装和frozen-lock校验；仅swarm依赖发生变化，其他38个bundle顺序与插件选择保留，四个服务端导出可加载。副本最初漏复制既有patches目录导致ENOENT，补齐相同补丁后通过；未改正式profile，也未放宽release-age政策。
 
-**正式3080尚未切换，GitHub尚未发布。** 最近检查仍有2个真实会话运行，正在等待安全切换时机，未中断它们。部署与发布完成后须追加实际PID、加载字节、状态交接与远端资产核验结果；本段不能作为已上线结论。
+**正式3080已部署3.1.3，GitHub v3.1.3已发布。** 用户确认任务暂停后，权威API运行数与待答数均为0，再执行切换。原候选等待记录保留于检查点；实际结果见下文。
+
+## 正式切换与发布结果
+
+- 切换前实际PID为1291619，已经不同于候选阶段的1041904；core rc.3、插件3.1.2。只导出当前权威FeatureSession，实测已加载数量为0，不把旧PID的内存猜成可恢复状态，不生成空的伪业务交接。没有宣称恢复用户更早重启前的内存任务。
+- 当前正式PID **1300135**，3080唯一监听，core继续使用 `/usr/lib/node_modules/@deepseek-ai/dsh` 的rc.3，插件为摘要bundle中的3.1.3；临时9229诊断端口已关闭。
+- [真实加载校验](live-loaded-bytes.json)：84个实际已加载服务端模块，含12个指定核心模块，源码字节均与预审候选一致；客户端由独立Web验收验证一致。
+- [正式Web独立验收](formal-web/README.md)：10项设置检查、390px/桌面、真实拖拽取消与Alt排序后放弃，保存次数0，页面error为0；任务进度按实际空目录显示，没有生成历史任务、模型请求或新业务许可。
+- [本次切换](cutover.json)：实际前后均为40个bundle，顺序一致；直接依赖只改swarm，锁文件packages键新增/移除均为0。原先候选profile副本的39条目记录不是本次切换现场数字。百工配置语义摘要不变。
+- 停服后的首次离线安装因dsh-opencode-go@0.1.24的npmjs metadata未缓存失败，保留原失败日志。随后按原有策略在线补齐元数据，4.2秒安装通过，再离线frozen-lock通过；没有降低release-age或修改其他依赖版本。维护脚本已补“新版启动前失败恢复旧依赖与服务、新版启动尝试后禁止盲目降级”的兜底，6项内存桩场景通过。
+- 安装结束时配置字节与备份一致。重启后OpenCode Go配置发生重排并出现modelVisibility字段，[观察记录](post-start-config-observation.json)单列保留，不归因于百工，不回滚该后续设置；[百工配置语义比对](swarm-config-observation.json)仍一致，不能说整个profile永远字节不变。
+- [Jev部署后边界核对](jev-post-deploy-review.json)支持本机加载证据；审查时尚未发布的事实与后来的发布证据分开记录，模型分数不替代SHA校验。
+- 发布地址：https://github.com/zhairy/dsh-agent-swarm/releases/tag/v3.1.3 。公开main/tag指向`046b0065f8bfce3923ddf244313050a61226bf07`；发布时间`2026-10-26T07:39:11Z`（北京时间15:39:11）。
+- [远端资产核验](publication-verification.json)：5项资产实际重新下载，大小、SHA256及GitHub digest全部匹配；下载tarball版本为3.1.3，86个编译JS逐一匹配已验证候选。正式profile保持摘要link安装，没有改成会触发注册表查询的file tarball。
+
+发布包含本轮变化的中英文说明、安装tarball、release-manifest及SHA256SUMS。正式观察未发起外部生成模型或真实Claude配额耗尽请求；49+49项SDK集成供应商仍为明确夹具，不扩张为所有长业务必然完成。
