@@ -43,3 +43,4 @@
 - 真实宿主当前 profile 的 persistence 默认关闭；重启后的任务目录空态是配置事实，不是把历史任务伪装成已恢复。
 - Canary/撤回路径已在仓储和集成状态机测试中覆盖；生产默认不启用，必须有明确选择的单 root/task 和真实授权。
 - 三组回放夹具不证明真实误停率为零；释放资产、匿名下载、Canary 和回滚检查完成前不能称为发布完成。
+- 发布：GitHub `v3.1.4` 已非 draft、非 prerelease；五类资产已匿名下载并通过 `SHA256SUMS`，远端 tarball 与本地最终包逐字节一致。详见 `publication-verification.json`。
