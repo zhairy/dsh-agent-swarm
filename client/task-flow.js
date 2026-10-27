@@ -146,7 +146,7 @@ const styles = {
   card: { padding: 14, margin: '10px 0', border: '1px solid var(--dsw-alias-border-l2, #dbe0e6)', borderRadius: 10, color: 'var(--dsw-alias-label-primary, #1b2733)', overflowWrap: 'anywhere' },
   header: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
   status: { color: 'var(--dsw-alias-label-secondary, #596579)', fontSize: 13 },
-  button: { marginLeft: 'auto', padding: '4px 10px', border: '1px solid var(--dsw-alias-border-l2, #dbe0e6)', borderRadius: 6, cursor: 'pointer', color: 'inherit', background: 'transparent' },
+  button: { marginLeft: 'auto', minHeight: 44, padding: '4px 10px', border: '1px solid var(--dsw-alias-border-l2, #dbe0e6)', borderRadius: 6, cursor: 'pointer', color: 'inherit', background: 'transparent' },
   diagram: { overflowX: 'auto', padding: '12px 0', maxWidth: '100%' },
   source: { overflowX: 'auto', padding: 10, whiteSpace: 'pre-wrap', fontSize: 12 },
   steps: { paddingLeft: 22, lineHeight: 1.8 }
@@ -386,7 +386,7 @@ function TaskDiagramPanel ({ view, source, t, preference, setPreference }) {
     bundle?.diagnostics.length > 0 ? h('details', { 'data-swarm-diagram-diagnostics': '' }, h('summary', null, `${t('deviations')} (${bundle.diagnostics.length})`), h('ul', null, ...bundle.diagnostics.map((item, index) => h('li', { key: index }, `${item.code}${item.nodeId === undefined ? '' : ` · ${item.nodeId}`}：${item.message}`)))) : null,
     svg === null || svg.source !== mermaidSource || !visible ? null : h('div', null,
       h('div', { style: styles.header }, h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, disabled: zoom >= 3, onClick: () => changePreference(kind, Math.min(3, zoom + 0.5)) }, t('zoomIn')), h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, disabled: zoom <= 1, onClick: () => changePreference(kind, Math.max(1, zoom - 0.5)) }, t('zoomOut')), h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, onClick: () => changePreference(kind, 1) }, t('fit'))),
-      h('div', { ref: scroll, style: { ...styles.diagram, maxHeight: '65vh', overflow: 'auto' }, tabIndex: 0, 'aria-label': t('title'), 'data-swarm-diagram-zoom': String(zoom), onScroll: (event) => setPreference?.({ kind, zoom, scrollTop: event.currentTarget.scrollTop, scrollLeft: event.currentTarget.scrollLeft }) }, h('div', { style: { width: `${zoom * 100}%` }, role: 'img', 'aria-label': t(kind), dangerouslySetInnerHTML: { __html: svg.value } }))),
+      h('div', { ref: scroll, style: { ...styles.diagram, maxHeight: '65vh', overflow: 'auto' }, role: 'group', tabIndex: 0, 'aria-label': t('title'), 'data-swarm-diagram-zoom': String(zoom), onScroll: (event) => setPreference?.({ kind, zoom, scrollTop: event.currentTarget.scrollTop, scrollLeft: event.currentTarget.scrollLeft }) }, h('div', { style: { width: `${zoom * 100}%` }, role: 'img', 'aria-label': t(kind), dangerouslySetInnerHTML: { __html: svg.value } }))),
     renderError === null ? null : h('p', { role: 'status' }, `${t('renderError')}：${renderError}`),
     Array.isArray(definition?.nodes) ? h('div', { style: { marginTop: 14 } },
       h('p', { style: styles.status }, t('selectNode')),

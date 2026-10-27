@@ -13,7 +13,7 @@ const fallbackTranslate = (key) => dictionaries.zh[key] ?? key
 const canReadProgress = (preset, subagent, hasSessionHook = true) => hasSessionHook && preset === 'tian-shu' && (subagent === undefined || subagent === null)
 // 独立工作区在自身正文交互层承接点击，避免会话输入宽度把手截获图表/节点；不改宿主控件。
 const pageStyle = { position: 'relative', zIndex: 1, height: '100%', minHeight: 0, minWidth: 0, overflow: 'auto', padding: 'clamp(12px, 3vw, 28px)', boxSizing: 'border-box', color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-layer-1)' }
-const inputStyle = { minHeight: 36, maxWidth: '100%', padding: '4px 8px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-2)', color: 'inherit' }
+const inputStyle = { minHeight: 44, maxWidth: '100%', padding: '4px 8px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-2)', color: 'inherit' }
 
 function TaskProgressRoot (props) {
   const { sessionId, store } = props
