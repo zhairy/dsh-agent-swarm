@@ -22,6 +22,7 @@
 - 桌面与 390×844 截图均从同一次真实任务状态取得。
 - axe WCAG 2A/2AA：0 violations；`color-contrast` 因宿主叠层无法确定背景而保持 incomplete。
 - Jev 七项原始结果已保存：`jev_ask` 对“真实任务从 0/2 到 1/2 并切换运行节点”的判断为 0.97；`jev_check` 的 `diagram_refresh` 仍为 uncertain，`jev_classify` 为 `review_needed`，因此不把 Jev 当发布证明。
+- 发布：GitHub `v3.1.5` 已非 draft、非 prerelease；五类资产已匿名下载并逐项通过 `SHA256SUMS`，tarball 与本地最终包逐字节一致。详见 `publication-verification.json`。
 
 截图：
 

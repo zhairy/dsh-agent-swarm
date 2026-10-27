@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "releaseUrl": "https://github.com/zhairy/dsh-agent-swarm/releases/tag/v3.1.5",
+  "tagName": "v3.1.5",
+  "tagCommit": "413246a635ec8f6fdfb5836ed88f7a8f8f505088",
+  "isDraft": false,
+  "isPrerelease": false,
+  "publishedAt": "2026-10-27T04:20:41Z",
+  "assets": [
+    {
+      "name": "dsh-agent-swarm-3.1.5.tgz",
+      "bytes": 3856487,
+      "sha256": "c7db10fcf1e925249caf256d841cd02e7b94cccfc0e7e8c4508f368494787886"
+    },
+    {
+      "name": "release-manifest.json",
+      "bytes": 691,
+      "sha256": "00e5da97cb2cb3663972e87a1a061fdf05c63bb8773bcb576c571dc5e83659e3"
+    },
+    {
+      "name": "RELEASE-NOTES.en.md",
+      "bytes": 1070,
+      "sha256": "dcb09023e39cbb39d94a5e56a344cd298f08de01689e6d6c8c2a7a6d339d84ec"
+    },
+    {
+      "name": "RELEASE-NOTES.zh-CN.md",
+      "bytes": 998,
+      "sha256": "9f8a99f48460bb4da88df26c05478a46b69eb7e901d89df549732c16aca9fa70"
+    },
+    {
+      "name": "SHA256SUMS",
+      "bytes": 355,
+      "sha256": "a343cb093a577a8fc051b67194f90081bb75c695639040d660655d990bd1815a"
+    }
+  ],
+  "tarballCmp": true,
+  "manifestSame": true,
+  "sha256sums": "passed"
+}
