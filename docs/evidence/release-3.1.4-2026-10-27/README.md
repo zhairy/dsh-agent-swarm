@@ -36,7 +36,7 @@
 - `jev_score.json`
 - `jev_screen.json`
 
-结果摘要：`jev_health` 返回 `jev-1.14.0`；`jev_check` 五个命题均进入 flags；`jev_classify` 为 `review_needed`；`jev_score` 为 `2/3`（真实宿主集成已过，浏览器/Canary/发布资产仍在本次记录其余步骤中）；`jev_screen` 为 `review`，这是过滤器的保守结果，不是安全证明。Jev 不能替代测试或签发验收。
+结果摘要：`jev_health` 返回 `jev-1.14.0`；`jev_check` 的根因、硬门禁、候选隔离和“不宣称零风险”进入 flags，`release_gate` 保持 uncertain；`jev_classify` 为 `review_needed`；`jev_score` 为约 `2.04/3`（真实宿主和浏览器已过，Canary 显式授权与发布资产核验仍需完成）；`jev_screen` 为 `review`，这是过滤器的保守结果，不是安全证明。Jev 不能替代测试或签发验收。
 
 ## 边界
 

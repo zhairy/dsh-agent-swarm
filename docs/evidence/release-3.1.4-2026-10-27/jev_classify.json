@@ -2,7 +2,7 @@
   "content": [
     {
       "type": "text",
-      "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"choice\": \"review_needed\",\n    \"confidence\": 0.99,\n    \"probabilities\": {\n      \"release_ready\": 0.0,\n      \"review_needed\": 0.99,\n      \"not_ready\": 0.01,\n      \"other\": 0.0\n    },\n    \"band\": \"act\"\n  },\n  \"usage\": {\n    \"input_tokens\": 802,\n    \"output_tokens\": 49,\n    \"est_cost_usd\": 0.000033684000000000005\n  },\n  \"latency_ms\": 241.34\n}"
+      "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"choice\": \"review_needed\",\n    \"confidence\": 0.97,\n    \"probabilities\": {\n      \"release_ready\": 0.0,\n      \"review_needed\": 0.98,\n      \"not_ready\": 0.02,\n      \"other\": 0.0\n    },\n    \"band\": \"act\"\n  },\n  \"usage\": {\n    \"input_tokens\": 823,\n    \"output_tokens\": 49,\n    \"est_cost_usd\": 0.000034566\n  },\n  \"latency_ms\": 244.87\n}"
     }
   ],
   "structuredContent": {
@@ -10,21 +10,21 @@
     "model": "jev-1.14.0",
     "answers": {
       "choice": "review_needed",
-      "confidence": 0.99,
+      "confidence": 0.97,
       "probabilities": {
         "release_ready": 0,
-        "review_needed": 0.99,
-        "not_ready": 0.01,
+        "review_needed": 0.98,
+        "not_ready": 0.02,
         "other": 0
       },
       "band": "act"
     },
     "usage": {
-      "input_tokens": 802,
+      "input_tokens": 823,
       "output_tokens": 49,
-      "est_cost_usd": 0.000033684000000000005
+      "est_cost_usd": 0.000034566
     },
-    "latency_ms": 241.34
+    "latency_ms": 244.87
   },
   "isError": false
 }

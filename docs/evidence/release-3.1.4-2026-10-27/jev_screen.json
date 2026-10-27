@@ -2,7 +2,7 @@
   "content": [
     {
       "type": "text",
-      "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"verdict\": \"review\",\n    \"risk\": 0.92,\n    \"risk_confidence\": 0.08,\n    \"reasons\": {\n      \"issues_instructions\": 0.66\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 875,\n    \"output_tokens\": 129,\n    \"est_cost_usd\": 0.00003675\n  },\n  \"latency_ms\": 245.831\n}"
+      "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"verdict\": \"review\",\n    \"risk\": 0.93,\n    \"risk_confidence\": 0.37,\n    \"reasons\": {\n      \"issues_instructions\": 0.64\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 875,\n    \"output_tokens\": 129,\n    \"est_cost_usd\": 0.00003675\n  },\n  \"latency_ms\": 239.53\n}"
     }
   ],
   "structuredContent": {
@@ -10,10 +10,10 @@
     "model": "jev-1.14.0",
     "answers": {
       "verdict": "review",
-      "risk": 0.92,
-      "risk_confidence": 0.08,
+      "risk": 0.93,
+      "risk_confidence": 0.37,
       "reasons": {
-        "issues_instructions": 0.66
+        "issues_instructions": 0.64
       }
     },
     "usage": {
@@ -21,7 +21,7 @@
       "output_tokens": 129,
       "est_cost_usd": 0.00003675
     },
-    "latency_ms": 245.831
+    "latency_ms": 239.53
   },
   "isError": false
 }
