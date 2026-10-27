@@ -10,22 +10,33 @@
 
 DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文专家（谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔），用任务卡、门禁和真实证据决定是否验收；模型路由按你的订阅配置多层回退，故障时立即切到可用备用，最后一个可用模型短时故障时在预算内等待恢复。
 
-- 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.3）
+- 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.3）与 Node.js 22.12 及以上
 - 新建会话选「百工模式」即可使用；Jev API key 可选
+
+### 3.1.6 的变化
+
+- 发布包只保留插件运行文件、用户文档和维护脚本，明确排除 PRD、实施计划、内部证据、源码与测试；打包检查会拒绝这些内容。
+- Mermaid 升级到 12.2.0；Node 侧解析器解析到 DOMPurify 3.4.17 与 KaTeX 0.18.10，浏览器侧预打包资源仍内嵌 DOMPurify 3.4.12，运行时以 `strict`、关闭 HTML 标签和 SVG 白名单复核降低风险。解析器审核版本直接来自实际安装依赖，生产依赖审计为零漏洞。
+- 一次性专家结束后会释放工具作用域、提示和就绪状态等进程内资源；普通完成记录与副作用复核记录分别受硬上限保护，迟到工具继续被拒绝。
+- 任务终结时只清理所属根会话的控制记录，并为删除最后一条记录显式持久化空快照；状态查询改用不生成六图的紧凑投影。
+- 任务进度读取在传输结算后释放容量，连接重建遗留的不合作请求也受有界保护；关闭模型面板、隐藏页面和模型目录无响应不会留下永久忙状态。
+- 连接重建后的迟到保存结果不会清空新草稿、覆盖 Jev 密钥输入或让保存状态卡住。
+- 修复 ESM 宿主中的 Mermaid Worker 入口与初始化失败重试；增量状态的段字节数按段缓存，重复容量检查避免反复遍历未变分片。
+- 发布同时产出版本化 tarball 与稳定 `dsh-agent-swarm.tgz` 别名，安装说明只引用实际存在的资产和源码仓库专用命令。
 
 ### 3.1.3 的变化
 
 - 百工设置按五类选项卡组织，备用模型链支持拖拽、按钮和键盘排序。
 - 修复订阅耗尽与人工换模竞态，恢复委派会重新取得当前任务的执行身份。
 - 真实用户问答进入可恢复等待；服务端验收凭证与全历史结构守卫阻止无证据完成和重复空转。
-- 适用范围、存储兼容与后续路线见 [3.1.3 运行守卫与路由恢复](docs/3.1.3-运行守卫与路由恢复.md)。
+- 适用范围与存储兼容保持向后兼容；内部实施记录只在源码仓库的 GitHub 历史中维护。
 
 ### 3.1.2 的变化
 
 - 原生“任务进度”Tab集中六个图表视角，按需查看任务、版本、节点状态和证据流；rc.3窄屏可从“更多视图”进入。
 - 聊天与Tab共享只读读取，支持取消、过期提示、连接隔离和失败恢复；关闭视图不停止长期任务。
 - 技能/工具候选保留来源与隔离元数据，不能通过文本复核激活或自动执行。
-- 吸收Ruflo的工作区、只读投影与来源化候选设计，详见[本版变化与后续路线](docs/3.1.2-任务进度与后续路线.md)。
+- 吸收 Ruflo 的工作区、只读投影与来源化候选设计；内部迭代记录不进入发布包。
 
 ### 3.1.1 的变化
 
@@ -33,7 +44,7 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 一次性审核可选择下一请求模型，当前请求不中断；连续专家保留取消、沉寂确认和安全继续流程。
 - 失效上下文引用返回当前任务授权索引，重新选择 ref/digest 即可继续读取；不恢复旧版本权限。
 - 文件发现支持相对子目录、有界索引与输出；宿主搜索容量溢出和 Fetch 404 保留原错误并说明恢复方式。
-- 已复核经验的适用条件参与有界检索；自我进化按 [3.1.1–3.1.4 路线](docs/plans/2026-10-23-self-evolution-3.1.1-through-3.1.4.md) 逐步交付。
+- 已复核经验的适用条件参与有界检索；自我进化按发布说明分阶段提供。
 - 真正需要人工决定时，天枢调用 `ask_user_question`，不以重复思考代替授权交互；未答复不表示同意。
 
 ### 3.1.0 的变化
@@ -144,22 +155,33 @@ MIT，见 [LICENSE](LICENSE)。内嵌的 Jev 工具改编自 jev-mcp 0.2.1（MIT
 
 A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" leads 12 Chinese-named experts (requirements, architecture, math, code exploration, research, vision, complex implementation, command execution, small edits, independent review, verification, copywriting) and accepts work only on evidence: task cards, hard gates and real command results. Each role has a multi-layer model chain built from your subscriptions; failures switch to a usable backup immediately, and a short outage of the last usable model is waited out within a budget.
 
-- Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.3 recommended)
+- Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.3 recommended) on Node.js 22.12 or newer
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
+
+### What's new in 3.1.6
+
+- Release tarballs now contain runtime files, user documentation and maintenance scripts only; the pack guard rejects PRDs, plans, internal evidence, source and tests.
+- Mermaid is updated to 12.2.0. The Node-side parser resolves DOMPurify 3.4.17 and KaTeX 0.18.10; Mermaid's browser prebundle still embeds DOMPurify 3.4.12, so rendering uses `strict`, disabled HTML labels and SVG allowlist checks. Review records read the installed parser version, and the production dependency audit is clean.
+- Completed one-shot experts release tool scopes, prompts and readiness state; ordinary settled controls and side-effect-review records each have hard bounds, and late tool calls remain denied.
+- Terminal tasks release only controls owned by the matching root session and explicitly persist an empty snapshot when the final record is removed. Status queries use a compact projection without generating diagrams.
+- Task-view reads release capacity after transport settlement, and uncancellable requests from replaced connections stay inside a bounded set. Model-panel close, hidden-page polling and stalled catalog reads no longer leave permanent busy or loading states.
+- Late saves from a replaced connection cannot clear new drafts, overwrite a new Jev key input or leave saving stuck.
+- The Mermaid Worker parser entry now works under an ESM host and initialization failures can retry. Segment byte sizes are cached for incremental state checks.
+- Releases include both the versioned tarball and stable `dsh-agent-swarm.tgz` alias; installation docs reference assets that actually exist and mark source-repository-only commands.
 
 ### What's new in 3.1.3
 
 - Categorized settings and accessible drag, button and keyboard ordering for fallback routes.
 - Safer fallback during quota exhaustion and model changes; resumed delegates acquire a fresh execution binding.
 - Recoverable user-decision waits, server-issued acceptance receipts and bounded structural loop detection.
-- See [runtime guard scope and compatibility](docs/3.1.3-运行守卫与路由恢复.md).
+- Runtime-guard scope and compatibility remain backward compatible; internal implementation records stay in the source repository's GitHub history.
 
 ### What's new in 3.1.2
 
 - A native Task progress view brings six diagram perspectives together, with task selection and version-bound evidence. On narrow rc.3 layouts it can appear under More views.
 - Shared read-only loading adds cancellation, stale snapshots and connection isolation without stopping long-running work.
 - Tool and skill proposals remain quarantined metadata; text reviews cannot activate or execute them.
-- Adopts Ruflo-inspired workspace, read-projection and provenance principles without adding another runtime.
+- Adopts Ruflo-inspired workspace, read-projection and provenance principles without adding another runtime; internal iteration records are excluded from the release package.
 
 ### What's new in 3.1.1
 
@@ -167,7 +189,7 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 - One-shot reviewers can select the next request model without interrupting the in-flight request. Persistent experts retain cancellation, settlement and safe continuation.
 - Obsolete context references return the current authorized index without reviving old permissions.
 - File discovery supports bounded relative-directory scans; search overflow and Fetch endpoint failures retain their error status and offer recovery guidance.
-- Reviewed experiences can match bounded applicability text. Self-evolution follows the staged [3.1.1–3.1.4 roadmap](docs/plans/2026-10-23-self-evolution-3.1.1-through-3.1.4.md).
+- Reviewed experiences can match bounded applicability text. Self-evolution is delivered in stages described by the release notes.
 - Tian Shu uses `ask_user_question` for necessary human decisions; silence never grants permission.
 
 ### What's new in 3.1.0

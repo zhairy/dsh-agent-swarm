@@ -55,6 +55,62 @@ describe('chunked encoding invariants', () => {
     expect(chunked.encode()).toBe(encoded)
   })
 
+  it('keeps cached byte counts exact across set, remove, order and whole updates', () => {
+    let chunked = ChunkedState.fromState(trickyState(), specs, { verified: true })
+    expect(chunked.getStateBytes()).toBe(Buffer.byteLength(chunked.encode(), 'utf8'))
+    expect(chunked.getStateBytes()).toBe(Buffer.byteLength(chunked.encode(), 'utf8'))
+    chunked = chunked.preview({
+      set: { contexts: { 'ctx-new': { ref: 'ctx-new', text: '新增材料' } } },
+      order: { contexts: ['ctx-new'] },
+      whole: { runtime: { counters: { native: 1, jev: 0, review: 0, session: 0 }, rootEditAt: 2, taskSequence: 3, rootUpgradeExplicit: [] } }
+    }).next
+    expect(chunked.getStateBytes()).toBe(Buffer.byteLength(chunked.encode(), 'utf8'))
+    chunked = chunked.preview({ remove: { tasks: ['T-2'] }, order: { tasks: ['T-1', '3'] } }).next
+    expect(chunked.getStateBytes()).toBe(Buffer.byteLength(chunked.encode(), 'utf8'))
+    expect(chunked.getStateBytes()).toBe(Buffer.byteLength(canonicalStateJson(chunked.materialize()), 'utf8'))
+  })
+
+  it('keeps cached byte counts exact across a deterministic mixed mutation sequence', () => {
+    let current = ChunkedState.fromState(trickyState(), specs, { verified: true })
+    let seed = 0x316
+    const random = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0
+      return seed
+    }
+    for (let index = 0; index < 80; index++) {
+      if (index % 5 === 0) {
+        const ref = `ctx-random-${index - 1}`
+        current = current.preview({ remove: { contexts: [ref] } }).next
+      } else if (index % 4 === 0) {
+        current = current.preview({ whole: { runtime: { counter: random(), rootEditAt: index, rootUpgradeExplicit: [] } } }).next
+      } else {
+        const taskId = `T-random-${index}`
+        const ref = `ctx-random-${index}`
+        current = current.preview({
+          set: {
+            tasks: { [taskId]: { taskId, title: `任务 ${index}`, nested: { value: random(), text: '中文' } } },
+            contexts: { [ref]: { ref, text: `材料 ${index}` } }
+          },
+          order: {
+            tasks: [...(current.order('tasks') ?? []), taskId],
+            contexts: [...(current.order('contexts') ?? []), ref]
+          }
+        }).next
+      }
+      expect(current.getStateBytes()).toBe(Buffer.byteLength(current.encode(), 'utf8'))
+      expect(current.getStateBytes()).toBe(current.getStateBytes())
+    }
+  })
+
+  it('replays a large append batch with stable order and no duplicate keys', () => {
+    const initial = ChunkedState.fromState({ contexts: [{ ref: 'ctx-existing' }] }, specs, { verified: true })
+    const set = Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`ctx-${index}`, canonicalStateJson({ ref: `ctx-${index}` })]))
+    const replayed = initial.applyEncoded({ contexts: { set } })
+    expect(replayed.order('contexts')).toEqual(['ctx-existing', ...Array.from({ length: 200 }, (_, index) => `ctx-${index}`)])
+    expect(new Set(replayed.order('contexts')).size).toBe(201)
+    expect(replayed.materialize().contexts).toHaveLength(201)
+  })
+
   it('classifies unserialisable values as STATE_INVALID instead of leaking TypeError', () => {
     const cyclic: Record<string, unknown> = { schemaVersion: 1 }
     cyclic.self = cyclic

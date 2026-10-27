@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-27T07:17:24.060632+00:00",
+  "candidate": {
+    "package": "dsh-agent-swarm",
+    "version": "3.1.6",
+    "previousVersion": "3.1.5",
+    "dshCompatibility": ">=0.2.0-rc.2 <0.3.0",
+    "node": ">=22.12.0"
+  },
+  "verification": {
+    "unit": {
+      "files": 111,
+      "passed": 1511,
+      "skipped": 4
+    },
+    "integration": {
+      "files": 9,
+      "passed": 49
+    },
+    "typecheck": "passed",
+    "build": "passed",
+    "npmAuditVulnerabilities": 0,
+    "coverage": {
+      "statements": 88.93,
+      "branches": 83.97,
+      "functions": 92.32,
+      "lines": 94.71
+    },
+    "packaging": {
+      "closureFiles": 86,
+      "packagedFiles": 298,
+      "missing": 0,
+      "missingRuntime": 0,
+      "forbidden": 0,
+      "tarballBytes": 1427937,
+      "unpackedBytes": 4285674,
+      "tarballSha256": "f1d3969e027b7fed67660f43155b27da041c31cbe6b905628b73fbfa21675c7d",
+      "stableAlias": "dsh-agent-swarm.tgz"
+    },
+    "isolatedInstall": {
+      "npm": true,
+      "npmVersion": "12.0.2",
+      "pnpm": true,
+      "pnpmVersion": "11.3.0",
+      "mermaidWorker": {
+        "version": "12.2.0",
+        "ok": true
+      }
+    }
+  },
+  "independentReview": {
+    "positive": "Authorization, bounded state/cache handling, release closure and real-host behavior remained coherent after fixes.",
+    "negativeFindingsFixed": [
+      "Cross-root T-1 cleanup and empty-root persistence",
+      "Task-view detached request cap and diagnostics",
+      "Model panel busy latch and uncancellable load settlement",
+      "Mermaid initialize hang and model catalog loading timeout",
+      "Stable release alias and package documentation links"
+    ],
+    "remainingBlockingFindings": 0
+  },
+  "jev": {
+    "model": "jev-1.14.0",
+    "health": {
+      "ok": true,
+      "roundTripMs": 210.327
+    },
+    "ask": {
+      "releaseReady": 0.92,
+      "highRegressionRisk": 0.07,
+      "crossRootCleanupFixed": 0.52,
+      "staleCallsBlocked": 0.93,
+      "assetsContainInternalFiles": 0.04
+    },
+    "check": {
+      "unitAndIntegrationGreen": 0.97,
+      "typecheckAndAuditGreen": 0.98,
+      "runtimeHardeningSupported": 0.84,
+      "packageBoundarySupported": 0.98,
+      "realHostSupported": 0.95,
+      "strictO1ClaimFalse": 0.94
+    },
+    "classify": {
+      "choice": "validated_patch",
+      "confidence": 0.93
+    },
+    "score": {
+      "score": 2.11,
+      "of": 3,
+      "confidence": 0.87
+    },
+    "match": {
+      "best": "validated_patch",
+      "confidence": 0.97
+    },
+    "screen": {
+      "verdict": "pass",
+      "risk": 0.01
+    }
+  },
+  "host": {
+    "unit": "dsh-web.service",
+    "pid": 2388576,
+    "activeState": "active",
+    "subState": "running",
+    "restartCount": 0,
+    "listen": "127.0.0.1:3080",
+    "dshVersion": "0.2.1-rc.3",
+    "pluginVersion": "3.1.6",
+    "tarballSha256": "f1d3969e027b7fed67660f43155b27da041c31cbe6b905628b73fbfa21675c7d",
+    "settingsTabs": 5,
+    "dragOrderControls": 74,
+    "taskProgressViewsRendered": 6,
+    "browserPageErrors": 0,
+    "browserConsoleErrors": 0,
+    "smokeSessionArchived": true
+  },
+  "residualRisks": [
+    "FeatureSession still materializes and validates the full state for production commits; commit cost remains O(n), so strict O(1) is not claimed.",
+    "Loaded root session objects may remain until service-level dispose; unified root-session lifecycle remains a structural follow-up.",
+    "The dsh-at-file settings registration warning is from an unrelated third-party plugin."
+  ],
+  "conclusion": "Release gates passed for a patch release. Jev is supporting evidence only; real tests, exact package checks and the managed host remain authoritative."
+}

@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "model": "jev-1.14.0",
+  "answers": {
+    "release_ready": {
+      "type": "noul",
+      "noul": 0.92
+    },
+    "high_regression_risk": {
+      "type": "noul",
+      "noul": 0.07
+    },
+    "cross_root_cleanup_fixed": {
+      "type": "noul",
+      "noul": 0.52
+    },
+    "stale_or_unauthorized_calls_blocked": {
+      "type": "noul",
+      "noul": 0.93
+    },
+    "assets_include_internal_files": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "residual_boundaries_disclosed": {
+      "type": "noul",
+      "noul": 0.96
+    }
+  },
+  "usage": {
+    "input_tokens": 1112,
+    "output_tokens": 130,
+    "est_cost_usd": 4.6704e-05
+  },
+  "latency_ms": 571.025
+}

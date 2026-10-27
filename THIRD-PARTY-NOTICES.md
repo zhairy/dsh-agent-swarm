@@ -34,6 +34,6 @@ SOFTWARE.
 
 `skills/typesafe-ai/SKILL.md` 原样收录自 TypeSafe AI 的官方技能，许可证见 [skills/typesafe-ai/LICENSE](skills/typesafe-ai/LICENSE)（MIT，Copyright (c) 2026 TypeSafe AI）。
 
-## Mermaid 11.12.0 与 jsdom 26.1.0
+## Mermaid 12.2.0、DOMPurify 3.4.17、KaTeX 0.18.10 与 jsdom 26.1.0
 
-Mermaid 用于官方语法检查和本地浏览器图形渲染，jsdom 用于隔离的 parser Worker DOM 适配。两者均为锁定版本的 npm 依赖，不从运行时 CDN 加载。Mermaid 为 MIT（Copyright (c) 2014–2022 Knut Sveidqvist），其许可位于依赖包的 `LICENSE`；jsdom 的 MIT 许可位于依赖包的 `LICENSE.txt`（Copyright (c) 2010 Elijah Insua）。依赖通过 npm 原样安装并保留随包许可；本插件不将它们改名为自身代码。
+Mermaid 用于官方语法检查和本地浏览器图形渲染，jsdom 用于隔离的 parser Worker DOM 适配。Node 侧解析器解析到 DOMPurify 3.4.17 与 KaTeX 0.18.10；Mermaid 的浏览器预打包资源内嵌 DOMPurify 3.4.12，前端使用 `strict`、关闭 HTML 标签并对输出 SVG 再做白名单复核。所有依赖均从 npm 安装并锁定，不从运行时 CDN 加载。Mermaid 为 MIT（Copyright (c) 2014–2022 Knut Sveidqvist）；DOMPurify 为 MPL-2.0 或 Apache-2.0；KaTeX 为 MIT；jsdom 的 MIT 许可位于依赖包的 `LICENSE.txt`（Copyright (c) 2010 Elijah Insua）。依赖通过 npm 原样安装并保留随包许可；本插件不将它们改名为自身代码。

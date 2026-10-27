@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getRpcRoutes, RunRpcMethod } from '../../src/rpc.js'
+import { getMermaidAssetRoute, getRpcRoutes, RunRpcMethod } from '../../src/rpc.js'
 import type { JevHub } from '../../src/jev-hub.js'
 
 const jev = {} as JevHub
@@ -28,5 +28,16 @@ describe('agent-control RPC boundary', () => {
     expect(handler).not.toHaveBeenCalled()
     // Pure read continuation does not require a blanket side-effect checkbox; service checks its trusted binding.
     expect(await RunRpcMethod(jev, 'agentControl', signal, { parentSessionId: 'root', childId: 'child', expectedRevision: 1, action: 'continue' }, { agentControl: async () => ({ accepted: true }) })).toMatchObject({ ok: true })
+  })
+  it('revalidates the local Mermaid asset by content ETag after upgrades', async () => {
+    const route = getMermaidAssetRoute()
+    const first = await route.fetch(new Request(`http://localhost${route.path}`))
+    const etag = first.headers.get('etag')
+    expect(first.status).toBe(200)
+    expect(etag).toMatch(/^"sha256-/)
+    expect(first.headers.get('cache-control')).toBe('private, no-cache')
+    const second = await route.fetch(new Request(`http://localhost${route.path}`, { headers: { 'if-none-match': etag! } }))
+    expect(second.status).toBe(304)
+    expect(await second.text()).toBe('')
   })
 })

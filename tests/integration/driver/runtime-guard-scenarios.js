@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto'
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { writeFileSync, mkdirSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 
 export const name = 'swarm-auth-313-host'

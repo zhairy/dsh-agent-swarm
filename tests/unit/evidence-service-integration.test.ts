@@ -170,6 +170,35 @@ describe('exploration evidence through actual service delegation and consumption
     expect(restored.fetch).not.toHaveBeenCalled()
   })
 
+  it('does not resurrect legacy continuable controls for an incomplete task', async () => {
+    const runtime = await makeRuntime({ jev: 'disabled' })
+    const task = await createTask(runtime)
+    const record = await runtime.service.delegate({ task_id: task.task_id, role: 'mou_ding', prompt: '可继续但随后明确停止', backend: 'api', session: 'continue' }, runtime.exec())
+    await runtime.service.AcceptTask({ task_id: task.task_id, decision: 'incomplete', summary: '明确停止', stopReason: '用户停止' }, runtime.exec())
+    await runtime.service.dispose()
+    const directory = join(runtime.home, 'share', 'dsh-agent-swarm', 'state', await getWorkspaceId(runtime.home), digest(runtime.root.id))
+    const store = await createDurableStateStore<Record<string, unknown>>({ directory, initialState: {}, ...SWARM_LAYOUT_OPTIONS })
+    const childId = 'fixture-terminal-legacy-child'
+    try {
+      await store.commit('fixture/terminal-legacy-control', (draft) => {
+        const saved = (draft.delegations as Array<Record<string, unknown>>).find((entry) => entry.delegationId === record.delegationId)!
+        saved.childId = childId
+        saved.session = { kind: 'continuable', threadId: childId, round: 1, appended: false, source: 'explicit', reason: 'legacy terminal fixture' }
+        saved.continuationInput = { ...(saved.continuationInput as object), session: 'continue' }
+        draft.threads = [{ threadId: childId, key: 'mou_ding', role: 'mou_ding', rounds: 1, busy: false, closed: false, allowWeb: false,
+          taskIds: [task.task_id], history: [], createdAt: fixtureTime, lastUsedAt: fixtureTime }]
+        draft.agentControls = []
+      })
+    } finally { await store.dispose() }
+    const restored = await makeRuntime({ home: runtime.home, jev: 'disabled' })
+    await restored.service.ReadContext({ task_id: task.task_id }, restored.exec())
+    await restored.service.dispose()
+    const verify = await createDurableStateStore<Record<string, unknown>>({ directory, initialState: {}, ...SWARM_LAYOUT_OPTIONS })
+    try {
+      expect(verify.read().agentControls ?? []).toEqual([])
+    } finally { await verify.dispose() }
+  })
+
   it('assesses real code automatically, preserves original output and restores a usable authorized context', async () => {
     const runtime = await makeRuntime()
     const task = await createTask(runtime)

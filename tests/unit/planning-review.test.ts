@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
 import { RunPlanningReview, ValidateReviewSnapshot, ValidatePlanningReviewResult, getPlanningReviewQuestions, getPlanningReviewRecord, getReviewSnapshot, isPlanningReviewCurrent, type PlanningReviewResult, type ReviewSnapshot } from '../../src/planning-review.js'
-import { getDefaultWorkflow } from '../../src/workflow.js'
+import { MERMAID_PARSER_VERSION, getDefaultWorkflow } from '../../src/workflow.js'
 
 const makeSnapshot = (revision = 1) => {
   const card = ValidateTaskCard({ title: '小改', goal: revision === 1 ? '修复局部边界' : '新用户要求', acceptance: ['边界行为通过实测'], scope: ['src/a.ts'], flags: { changesCode: true } }).card!
@@ -15,7 +15,7 @@ const result = (snapshot: ReviewSnapshot): PlanningReviewResult => ({
   mermaidReview: { verdict: 'pass', summary: '标签与箭头忠实表达步骤', evidenceRefs: ['verification', 'accept'] },
   requirementCoverage: [{ requirementId: 'R1', covered: true, evidence: 'implementation 产生修复，verification 以实际命令检查 A1' }], findings: [], assumptions: [], unresolved: []
 })
-const structure = (snapshot: ReviewSnapshot) => ({ parserVersion: '11.12.0', parseVerdict: 'pass' as const, projectionVerdict: 'pass' as const, sourceDigest: snapshot.mermaidDigest, generatorVersion: '1', errors: [] })
+const structure = (snapshot: ReviewSnapshot) => ({ parserVersion: MERMAID_PARSER_VERSION, parseVerdict: 'pass' as const, projectionVerdict: 'pass' as const, sourceDigest: snapshot.mermaidDigest, generatorVersion: '1', errors: [] })
 const reviewer = { agentId: 'fresh-expert', role: 'yu_shi' as const, fresh: true, readOnly: true, authorAgentIds: ['author'] }
 const jev = () => ({ status: 'ok' as const, model: 'jev', answers: Object.fromEntries(Object.keys(getPlanningReviewQuestions()).map((id) => [id, { noul: 0.95 }])) })
 
@@ -105,7 +105,7 @@ describe('独立规划审核与 CAS', () => {
     const snapshot = makeSnapshot()
     const agent = vi.fn(async () => ({ result: result(snapshot), reviewer }))
     const judge = vi.fn(async () => jev())
-    const record = await RunPlanningReview(snapshot, { parser: async () => ({ version: '11.12.0', ok: false, error: '非法源码' }), reviewAgent: agent, reviewJev: judge })
+    const record = await RunPlanningReview(snapshot, { parser: async () => ({ version: MERMAID_PARSER_VERSION, ok: false, error: '非法源码' }), reviewAgent: agent, reviewJev: judge })
     expect(record.status).toBe('changes_requested')
     expect(agent).not.toHaveBeenCalled()
     expect(judge).not.toHaveBeenCalled()
@@ -128,7 +128,7 @@ describe('独立规划审核与 CAS', () => {
     const barrier = new Promise<void>((resolve) => { release = resolve })
     let agentStarted = false
     const record = await RunPlanningReview(snapshot, {
-      parser: async () => ({ version: '11.12.0', ok: true }),
+      parser: async () => ({ version: MERMAID_PARSER_VERSION, ok: true }),
       reviewAgent: async (seen) => { expect(seen).toBe(snapshot); agentStarted = true; await barrier; return { result: result(seen), reviewer } },
       reviewJev: async (seen) => { expect(seen).toBe(snapshot); expect(agentStarted).toBe(true); expect(JSON.stringify(seen)).not.toContain('fresh-expert'); release(); return jev() }
     })

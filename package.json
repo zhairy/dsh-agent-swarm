@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "3.1.5",
+  "version": "3.1.6",
   "description": "DSH 多智能体插件：天枢统御 12 位专家，任务卡 + Mermaid 流程 + 证据门禁验收；多层模型链即时回退与链尾等待恢复、按配置语言输出、内嵌 Jev 判断 / DSH multi-agent swarm plugin with evidence-gated delegation, resilient model routing, language control and embedded Jev judgments",
   "keywords": [
     "dsh",
@@ -21,7 +21,8 @@
     "url": "https://github.com/zhairy/dsh-agent-swarm/issues"
   },
   "engines": {
-    "dsh": ">=0.2.0-rc.2 <0.3.0"
+    "dsh": ">=0.2.0-rc.2 <0.3.0",
+    "node": ">=22.12.0"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -38,8 +39,14 @@
     "assets/screenshots",
     "config",
     "cordis.patch.yml",
-    "docs",
+    "docs/任务流程与验证.md",
+    "docs/安装.md",
+    "docs/角色.md",
+    "docs/使用.md",
+    "docs/升级与回退.md",
+    "docs/路线图.md",
     "lib",
+    "!lib/preset-builder.*",
     "locale",
     "presets",
     "scripts/doctor.mjs",
@@ -65,9 +72,10 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@deepseek-ai/cosmokit": "~1.8.5",
     "@deepseek-ai/schemastery": "~3.18.4",
-    "mermaid": "11.12.0",
-    "jsdom": "26.1.0"
+    "jsdom": "26.1.0",
+    "mermaid": "12.2.0"
   },
   "dsh": {
     "minVersion": "0.2.0-rc.2",
@@ -110,9 +118,9 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
-    "@vitest/coverage-v8": "^5.0.1",
+    "@vitest/coverage-v8": "5.0.5",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1",
+    "vitest": "5.0.5",
     "yaml": "^2.9.1"
   }
 }

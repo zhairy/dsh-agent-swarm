@@ -1,0 +1,9 @@
+{
+  "checkedAt": "2026-10-27T07:10:42.979784+00:00",
+  "status": 200,
+  "bytes": 5494801,
+  "etag": "\"sha256-qKam-AWwdKgmGiglyG-ZyA\"",
+  "cacheControl": "private, no-cache",
+  "containsVersion": "12.2.0",
+  "browserRender": "pass"
+}

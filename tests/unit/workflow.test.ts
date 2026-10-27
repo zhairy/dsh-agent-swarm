@@ -1,6 +1,8 @@
+import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
-import { ParseWorkflowMermaid, ReconcileWorkflow, ReconcileWorkflowState, getLenientWorkflow, UpdateWorkflowNode, ValidateMermaidProjection, ValidateWorkflow, WORKFLOW_LIMITS, getDefaultWorkflow, getMatchingNode, getReadyNodes, getTaskCardMarkdown, getWorkflowDigest, getWorkflowMermaid, intOfficialMermaidParser, intWorkflowState } from '../../src/workflow.js'
+import { MERMAID_PARSER_VERSION, ParseWorkflowMermaid, ReconcileWorkflow, ReconcileWorkflowState, getLenientWorkflow, UpdateWorkflowNode, ValidateMermaidProjection, ValidateWorkflow, WORKFLOW_LIMITS, getDefaultWorkflow, getMatchingNode, getReadyNodes, getTaskCardMarkdown, getWorkflowDigest, getWorkflowMermaid, intOfficialMermaidParser, intWorkflowState } from '../../src/workflow.js'
 
 const card = (flags = {}, scope = ['src/a.ts']) => ValidateTaskCard({ title: '改任务', goal: '满足真实合同', acceptance: ['边界行为一致'], scope, flags }).card!
 
@@ -268,6 +270,12 @@ describe('有界任务 DAG', () => {
 })
 
 describe('Mermaid 唯一派生视图', () => {
+  it('解析器版本直接来自实际安装的 Mermaid 依赖', () => {
+    const require = createRequire(import.meta.url)
+    const installed = (JSON.parse(readFileSync(require.resolve('mermaid/package.json'), 'utf8')) as { version: string }).version
+    expect(MERMAID_PARSER_VERSION).toBe(installed)
+  })
+
   it('来自任务目标与验收的特殊字符仍按现有规范转义并可被官方 parser 解析', async () => {
     const task = { ...card({ changesCode: true }), goal: '读取 "marker" <script>\nclick bad', acceptance: ['保留 "值" & 不执行 <tag>'] }
     const graph = getDefaultWorkflow(task, getRuleGates(task))
@@ -317,7 +325,7 @@ describe('Mermaid 唯一派生视图', () => {
     const parser = intOfficialMermaidParser()
     const good = await ParseWorkflowMermaid(graph, undefined, parser)
     expect(good.parseVerdict).toBe('pass')
-    expect(good.parserVersion).toBe('11.12.0')
+    expect(good.parserVersion).toBe(MERMAID_PARSER_VERSION)
     const bad = await parser('flowchart TD\n A["未闭合')
     expect(bad.ok).toBe(false)
   }, 20000)

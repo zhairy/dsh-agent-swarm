@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { afterEach, expect, it, vi } from 'vitest'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -9,13 +9,6 @@ import { intSwarmService, type SwarmService } from '../../src/service.js'
 import type { AgentLike, SubagentResultLike, SubagentStartRequestLike } from '../../src/host-contract.js'
 import { ROLE_TAG_PATTERN, type DelegableRoleId } from '../../src/role-registry.js'
 import { VALID_OUTPUTS } from '../../tests/fixtures/valid-outputs.js'
-import { createDurableStateStore } from '../../src/state-store.js'
-import { getWorkspaceId } from '../../src/artifacts.js'
-import { digest } from '../../src/task-model.js'
-import type { EvidenceConsumptionNotice } from '../../src/evidence-assessment.js'
-import type { ExpertMessage } from '../../src/message-bus.js'
-import { getValueDigest } from '../../src/workflow.js'
-import type { AgentControlRecord } from '../../src/agent-control.js'
 
 const git = promisify(execFile)
 const directories: string[] = []
@@ -134,9 +127,13 @@ it('blocks premature acceptance and avoids the taskLock/workspace-lease cycle wi
   expect(early.status).toBe('blocked')
   expect(early.missing.join('')).toContain('未结束')
   gate.release()
-  expect((await work).finalization).toBe('ready')
+  const completed = await work
+  expect(completed.finalization).toBe('ready')
+  runtime.service.agentControl?.Register({ childId: 'settled-persistent-control', parentSessionId: runtime.root.id, taskId: task.task_id,
+    delegationId: completed.delegationId, persistent: true, cardRevision: task.cardRevision, workflowRevision: task.workflowRevision, requestRevision: task.requestRevision })
   const final = await runtime.service.AcceptTask(acceptArgs, runtime.exec())
   expect(final.status).toBe('accepted')
+  expect(runtime.service.agentControl?.get('settled-persistent-control')).toBeUndefined()
 }, 5000)
 it('cancellation after model completion never publishes current completion evidence or L2 material', async () => {
   const runtime = await makeRuntime({ jev: 'disabled' })
@@ -153,6 +150,7 @@ it('cancellation after model completion never publishes current completion evide
   expect(record.finalization).toBe('cancelled')
   expect(record.evidenceAssessment).toBeNull()
   expect(status.tasks[0]!.contextRefs).toHaveLength(2)
+  expect(runtime.service.agentControl?.get(runtime.runs[0]!.agent.id)?.reason).toBe('one-shot-cancelled')
   await expect(runtime.service.WaitAgentReady(runtime.runs[0]!.agent)).rejects.toThrow('已取消')
 })
 
@@ -167,6 +165,25 @@ it('an explicit incomplete decision fences an admitted child still awaiting fing
   await expect(work).rejects.toThrow('任务已停止')
   expect(runtime.subagents.start).not.toHaveBeenCalled()
 })
+
+it('releases completed one-shot runtime scope while retaining its bounded control record', async () => {
+  const runtime = await makeRuntime({ jev: 'disabled' })
+  const task = await createTask(runtime)
+  const completed = await runtime.service.delegate({ task_id: task.task_id, role: 'tan_wei', prompt: 'read only', backend: 'api', session: 'oneshot' }, runtime.exec())
+  expect(completed.childId).toBeTypeOf('string')
+  expect(runtime.service.getChildPrompt(completed.childId!)).toBeUndefined()
+  expect(await runtime.service.getAgentViewForRpc(runtime.root.id, completed.childId!)).toMatchObject({ persistent: false, oneShotSettled: true })
+})
+
+it('rejects a late managed child request without relying on a bounded history id set', async () => {
+  const runtime = await makeRuntime({ jev: 'disabled' })
+  const late = { id: 'late-managed-child', session: { header: { parentSession: runtime.root.id, agentPreset: 'tan-wei' } } }
+  const external = { id: 'external-child', session: { header: { parentSession: runtime.root.id, agentPreset: 'standard' } } }
+  await expect(runtime.service.WaitAgentReady(late)).rejects.toThrow('执行授权已结束')
+  expect(runtime.service.getGuardReason({ name: 'read', arguments: {}, agent: late })).toContain('执行授权已结束')
+  await expect(runtime.service.WaitAgentReady(external)).resolves.toBeUndefined()
+})
+
 it('math cancelled while another operation holds taskLock never enters the kernel or publishes evidence', async () => {
   const runtime = await makeRuntime({ jev: 'disabled' })
   const task = await createTask(runtime)

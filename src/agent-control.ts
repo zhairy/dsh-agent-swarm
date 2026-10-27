@@ -46,7 +46,7 @@ export interface AgentControlDeps {
   resume: (binding: AgentControlBinding, input?: { steering?: string }) => Promise<{ accepted: true; delegationId?: string }>
   /** 原委派仍在执行（例如模型出错后正在退避等待自动重试）：此时人工继续会打断自动恢复 */
   isDelegationActive?: (binding: AgentControlBinding) => boolean
-  persist?: (records: AgentControlRecord[]) => void | Promise<void>
+  persist?: (records: AgentControlRecord[], parentSessionIds?: readonly string[]) => void | Promise<void>
   /** A user-authorized, scoped one-time probe; never a provider-wide cache clear. */
   retryRoute?: (route: RouteInfo, childId: string, force: boolean) => void | Promise<void>
   cancelRetryRoute?: (childId: string) => void
@@ -62,6 +62,9 @@ const clone = <T>(value: T): T => structuredClone(value)
 const phase = new Set<AgentControlPhase>(['idle', 'running', 'waiting', 'stopping', 'paused', 'recovery-required'])
 /** 宿主 subagent/end 的结束原因只有 completed、aborted（取消或打断）、error、max-tokens、refusal（回合被拦下） */
 const PAUSING_STOP_REASONS = new Set(['aborted', 'refusal'])
+const MAX_SETTLED_ONE_SHOT_RECORDS = 256
+const MAX_SIDE_EFFECT_REVIEW_RECORDS = 256
+const MAX_PERSISTENT_CONTROL_RECORDS = 4096
 /** 可人工继续：宿主确认沉寂（暂停或空闲）。已完成的委派由恢复管线识别并直接返回，不会重跑 */
 const isResumable = (record: Pick<AgentControlRecord, 'phase'>): boolean => record.phase === 'paused' || record.phase === 'idle'
 
@@ -102,6 +105,21 @@ export const createAgentControl = (deps: AgentControlDeps) => {
     if (!revision(input.expectedRevision) || record.revision !== input.expectedRevision) throw new SwarmError('STALE_EVIDENCE', '子会话状态已改变，请刷新后重试')
     return record
   }
+  const pruneOneShotGroup = (needsSideEffectReview: boolean, limit: number): void => {
+    const prunable = (record: AgentControlRecord): boolean => record.persistent === false
+      && record.oneShotSettled === true && (record.needsSideEffectReview === true) === needsSideEffectReview
+    let excess = [...records.values()].filter(prunable).length - limit
+    if (excess <= 0) return
+    for (const [childId, record] of records) {
+      if (!prunable(record)) continue
+      records.delete(childId)
+      if (--excess === 0) return
+    }
+  }
+  const pruneSettledOneShots = (): void => {
+    pruneOneShotGroup(false, MAX_SETTLED_ONE_SHOT_RECORDS)
+    pruneOneShotGroup(true, MAX_SIDE_EFFECT_REVIEW_RECORDS)
+  }
   const patch = (record: AgentControlRecord, value: Partial<AgentControlRecord>) => {
     const next = { ...record, ...value, revision: record.revision + 1, updatedAt: now() }
     records.set(next.childId, next)
@@ -113,8 +131,8 @@ export const createAgentControl = (deps: AgentControlDeps) => {
     locks.set(childId, result)
     try { return await result } finally { if (locks.get(childId) === result) locks.delete(childId) }
   }
-  const persist = (): Promise<void> => {
-    const next = persistTail.catch(() => undefined).then(async () => { await deps.persist?.(Export()) })
+  const persist = (parentSessionIds: readonly string[] = []): Promise<void> => {
+    const next = persistTail.catch(() => undefined).then(async () => { await deps.persist?.(Export(), parentSessionIds) })
     persistTail = next
     return next
   }
@@ -199,13 +217,38 @@ export const createAgentControl = (deps: AgentControlDeps) => {
       if (![binding.childId, binding.parentSessionId, binding.taskId, binding.delegationId].every(id)) throw new SwarmError('INVALID_ARGS', '子会话控制绑定缺少真实身份')
       const current = records.get(binding.childId)
       if (current !== undefined && (current.parentSessionId !== binding.parentSessionId || current.persistent !== binding.persistent)) throw new SwarmError('PERMISSION_DENIED', '不能把子会话重新绑定到其他父会话或模式')
+      if (current === undefined && binding.persistent
+        && [...records.values()].filter((record) => record.persistent).length >= MAX_PERSISTENT_CONTROL_RECORDS)
+        throw new SwarmError('RECOVERY_REQUIRED', '持久子会话控制记录达到安全上限；请先结束并验收不再需要恢复的任务')
       const next = current === undefined ? { ...clone(binding), revision: 1, phase: 'idle' as const, paused: false, updatedAt: now() } : patch(current, clone(binding))
       records.set(binding.childId, next)
       if (next.selectedNext !== undefined) deps.applyOverride(binding.childId, clone(next.selectedNext))
       deps.setPaused(binding.childId, next.paused)
       return clone(next)
     },
+    /** Drop settled controls only after the owning task reaches a terminal decision. */
+    ForgetTask: async (parentSessionId: string, taskId: string): Promise<string[]> => {
+      if (!id(parentSessionId)) throw new SwarmError('INVALID_ARGS', '父会话 ID 不合法')
+      if (!id(taskId)) throw new SwarmError('INVALID_ARGS', '任务 ID 不合法')
+      const removable = [...records.entries()].filter(([, record]) => record.parentSessionId === parentSessionId && record.taskId === taskId
+        && ['idle', 'paused'].includes(record.phase) && record.actual?.state !== 'running' && record.needsSideEffectReview !== true)
+      if (removable.length === 0) return []
+      const previous = new Map(removable)
+      for (const [childId] of removable) records.delete(childId)
+      try { await persist([parentSessionId]) } catch (error) {
+        for (const [childId, record] of previous) records.set(childId, record)
+        throw error
+      }
+      for (const [childId, record] of removable) {
+        deps.cancelRetryRoute?.(childId)
+        if (record.selectedNext !== undefined) deps.applyOverride(childId, undefined)
+        deps.setPaused(childId, false)
+      }
+      return removable.map(([childId]) => childId)
+    },
     Restore: (raw: unknown, parentSessionId: string) => {
+      // One-shot controls are process-only. Rejecting them here keeps durable
+      // restoration from reintroducing an unbounded historical one-shot set.
       if (!ValidateAgentControlRecords(raw) || raw.some((value) => value.parentSessionId !== parentSessionId || !value.persistent)) throw new SwarmError('RECOVERY_REQUIRED', '子会话控制快照无效或越过根会话边界')
       for (const value of raw) {
         if (records.has(value.childId)) throw new SwarmError('RECOVERY_REQUIRED', '子会话控制状态已经登记，不能覆盖')
@@ -217,6 +260,7 @@ export const createAgentControl = (deps: AgentControlDeps) => {
         if (restored.selectedNext !== undefined) deps.applyOverride(value.childId, clone(restored.selectedNext))
         deps.setPaused(value.childId, restored.paused)
       }
+      pruneSettledOneShots()
     },
     ObserveRequest: (childId: string, requestedRoute: RouteInfo) => {
       const current = records.get(childId)
@@ -253,7 +297,15 @@ export const createAgentControl = (deps: AgentControlDeps) => {
     },
     MarkRunSettled: (childId: string, stopReason?: string) => {
       let current = records.get(childId)
-      if (current?.persistent === false && current.oneShotSettled !== true) current = patch(current, { oneShotSettled: true, reason: 'one-shot-settled' })
+      const cancelled = ['aborted', 'cancelled'].includes(stopReason ?? '')
+      if (current?.persistent === false && current.oneShotSettled === true) {
+        if (cancelled && current.reason !== 'one-shot-cancelled') patch(current, { reason: 'one-shot-cancelled' })
+        return
+      }
+      if (current?.persistent === false && current.oneShotSettled !== true) current = patch(current, {
+        oneShotSettled: true,
+        reason: cancelled ? 'one-shot-cancelled' : 'one-shot-settled'
+      })
       if (current !== undefined && stopReason === 'completed' && current.needsSideEffectReview === true) current = patch(current, { needsSideEffectReview: false })
       // 只有取消、打断或回合被拦下才暂停等待人工核对；模型错误不暂停：委派在同一会话里续跑，人工也可直接继续
       if (current?.persistent === true && stopReason !== undefined && stopReason !== 'completed' && !current.paused) {
@@ -261,6 +313,12 @@ export const createAgentControl = (deps: AgentControlDeps) => {
         current = patch(current, { ...(PAUSING_STOP_REASONS.has(stopReason) ? { paused: true } : {}), reason: `host-run-failed:${stopReason}`.slice(0, 256) })
       } else if (current !== undefined && stopReason === 'completed' && current.reason?.startsWith('host-run-failed:') === true) current = patch(current, { reason: 'host-run-completed' })
       if (current !== undefined && (current.phase !== (current.paused ? 'paused' : 'idle') || (current.actual !== undefined && current.actual.state !== 'settled'))) patch(current, { phase: current.paused ? 'paused' : 'idle', ...(current.actual === undefined ? {} : { actual: { ...current.actual, state: 'settled' } }) })
+      pruneSettledOneShots()
+    },
+    MarkOneShotCancelled: (childId: string) => {
+      const current = records.get(childId)
+      if (current?.persistent === false && current.oneShotSettled === true && current.reason !== 'one-shot-cancelled')
+        patch(current, { reason: 'one-shot-cancelled' })
     },
     /** Trusted host reconciliation only, never a browser's claim that cancellation finished. */
     ReconcileIdle: (childId: string) => {

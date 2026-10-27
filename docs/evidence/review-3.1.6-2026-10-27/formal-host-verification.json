@@ -1,0 +1,51 @@
+{
+  "checkedAt": "2026-10-27T07:10:42.979835+00:00",
+  "service": {
+    "unit": "dsh-web.service",
+    "mainPid": 2388576,
+    "activeState": "active",
+    "subState": "running",
+    "restartCount": 0,
+    "listen": "127.0.0.1:3080",
+    "dshVersion": "0.2.1-rc.3",
+    "pluginVersion": "3.1.6",
+    "tarballSha256": "f1d3969e027b7fed67660f43155b27da041c31cbe6b905628b73fbfa21675c7d"
+  },
+  "settings": {
+    "tabs": [
+      "概览与 Jev",
+      "模型路由",
+      "专家执行",
+      "规划与审批",
+      "数学工具"
+    ],
+    "dragOrderControls": 74,
+    "reorderActivatedSave": true,
+    "discardRestoredDisabledSaveControls": true
+  },
+  "taskProgress": {
+    "taskId": "T-1",
+    "views": [
+      "执行前编排",
+      "工作流",
+      "委派架构",
+      "委派记录时序",
+      "合同与证据流",
+      "生命周期快照"
+    ],
+    "allViewsRenderedSvg": true
+  },
+  "browser": {
+    "pageErrors": 0,
+    "consoleErrors": 0
+  },
+  "mermaid": {
+    "version": "12.2.0",
+    "assetStatus": 200,
+    "browserRender": "pass"
+  },
+  "cleanup": {
+    "smokeSessionArchived": true
+  },
+  "unrelatedHostWarning": "dsh-at-file: ctx.settings.register is not a function; not emitted by dsh-agent-swarm and outside this repository scope"
+}

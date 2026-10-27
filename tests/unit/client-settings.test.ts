@@ -298,6 +298,58 @@ describe('SwarmAgentsController', () => {
     await controller.loadCatalog()
     expect(controller.getSnapshot().catalog.status).toBe('error')
   })
+
+  it('目录响应的 ok 包装损坏时收敛为错误并允许重试', async () => {
+    const form = createForm({ routes: {} })
+    const ctx = createCtx(form)
+    ctx.remote.session.modelCatalog.mockResolvedValueOnce({ ok: true, value: null } as never)
+    const controller = new SwarmAgentsController(ctx)
+    await controller.loadCatalog()
+    expect(controller.getSnapshot().catalog.status).toBe('error')
+    await controller.loadCatalog()
+    expect(controller.getSnapshot().catalog.status).toBe('ready')
+  })
+
+  it('目录加载中的多次刷新合并为一次尾随读取', async () => {
+    const form = createForm({ routes: {} })
+    const ctx = createCtx(form)
+    let finish!: () => void
+    const gate = new Promise<unknown>((resolve) => { finish = () => resolve(CATALOG) })
+    ctx.remote.session.modelCatalog
+      .mockReturnValueOnce(gate as never)
+      .mockResolvedValueOnce(CATALOG)
+    const controller = new SwarmAgentsController(ctx)
+    const first = controller.loadCatalog()
+    controller.refreshCatalog()
+    controller.refreshCatalog()
+    await Promise.resolve()
+    expect(ctx.remote.session.modelCatalog).toHaveBeenCalledTimes(1)
+    finish()
+    await first
+    await vi.waitFor(() => expect(ctx.remote.session.modelCatalog).toHaveBeenCalledTimes(2))
+    expect(controller.getSnapshot()).toMatchObject({ catalog: { status: 'ready' } })
+  })
+
+  it('目录读取不结算时超时进入可重试错误态', async () => {
+    vi.useFakeTimers()
+    try {
+      const form = createForm({ routes: {} })
+      const ctx = createCtx(form)
+      ctx.remote.session.modelCatalog
+        .mockReturnValueOnce(new Promise(() => undefined) as never)
+        .mockResolvedValueOnce(CATALOG)
+      const controller = new SwarmAgentsController(ctx)
+      const pending = controller.loadCatalog()
+      await vi.advanceTimersByTimeAsync(15000)
+      await pending
+      expect(controller.getSnapshot()).toMatchObject({ catalog: { status: 'error' } })
+      await controller.loadCatalog()
+      expect(controller.getSnapshot()).toMatchObject({ catalog: { status: 'ready' } })
+      controller.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('专家会话与重试策略', () => {
@@ -309,11 +361,19 @@ describe('专家会话与重试策略', () => {
     expect(draft).toMatchObject({ retryBackoffSec: 5, networkWaitMin: 10, rootRecoverMin: 10, promptStyle: 'auto' })
     expect(getPolicyErrors({ ...draft, repeatAbove: '1.2', sameCategoryAbove: '', maxRetries: 2.5, retryBackoffSec: 700, networkWaitMin: 121, rootRecoverMin: -1 }))
       .toEqual({ repeatAbove: 'errRatio', sameCategoryAbove: 'errRatio', maxRetries: 'errRetries', retryBackoffSec: 'errBackoff', networkWaitMin: 'errNetworkWait', rootRecoverMin: 'errRootRecover' })
+    expect(getPolicyErrors({ ...draft, session: 'oneshot', repeatAbove: 'stale', sameCategoryAbove: 'stale' }))
+      .toEqual({ language: undefined, repeatAbove: undefined, sameCategoryAbove: undefined, maxRetries: undefined, retryBackoffSec: undefined, networkWaitMin: undefined, rootRecoverMin: undefined })
     expect(buildPolicy({ ...draft, repeatAbove: '0.5', maxRetries: '3', retryBackoffSec: '5' })).toEqual({})
     expect(buildPolicy({ ...draft, session: 'continuable', sameCategoryAbove: '0.6', maxRetries: '5', retryBackoffSec: '2.5', promptStyle: 'gpt', networkWaitMin: '0', rootRecoverMin: '30', modelCallDisplay: 'turn' }))
       .toEqual({ session: 'continuable', sameCategoryAbove: 0.6, maxRetries: 5, retryBackoffMs: 2500, promptStyle: 'gpt', networkWaitMs: 0, rootRecoverMs: 1800000, modelCallDisplay: 'turn' })
     expect(getPolicy({ modelCallDisplay: 'odd' }).modelCallDisplay).toBe('every')
     expect(buildPolicy({ ...draft, repeatAbove: 'x' })).toBeUndefined()
+    expect(buildPolicy({ ...draft, session: 'oneshot', repeatAbove: 'x', sameCategoryAbove: 'x' },
+      { repeatAbove: 0.7, sameCategoryAbove: 0.8 }))
+      .toEqual({ session: 'oneshot', repeatAbove: 0.7, sameCategoryAbove: 0.8 })
+    expect(buildPolicy({ ...draft, session: 'continuable', repeatAbove: 'x', sameCategoryAbove: '0.6' },
+      { repeatAbove: 0.7 }))
+      .toEqual({ session: 'continuable', repeatAbove: 0.7, sameCategoryAbove: 0.6 })
     // 页面不管理的已保存字段原样保留
     expect(buildPolicy({ ...draft, maxRetries: 4 }, { networkProbeUrls: ['https://example.com'], maxRetries: 1 }))
       .toEqual({ networkProbeUrls: ['https://example.com'], maxRetries: 4 })
@@ -345,7 +405,7 @@ describe('专家会话与重试策略', () => {
     expect(ops.map((op: { path: string[] }) => op.path[0])).toEqual(['routes', 'agents'])
     expect(ops[1].value).toEqual({ session: 'oneshot', maxRetries: 4, retryBackoffMs: 10000 })
     expect(controller.getSnapshot()).toMatchObject({ dirty: false, notice: 'saved', policy: { custom: true, value: { session: 'oneshot' } } })
-    controller.setPolicy({ repeatAbove: '2' })
+    controller.setPolicy({ session: 'auto', repeatAbove: '2' })
     expect(controller.getSnapshot()).toMatchObject({ invalid: true, policy: { errors: { repeatAbove: 'errRatio' } } })
     await controller.save()
     expect(form.mutate).toHaveBeenCalledTimes(1)
@@ -363,6 +423,58 @@ describe('专家会话与重试策略', () => {
     controller.setPolicy({ maxRetries: '5' })
     controller.discard()
     expect(controller.getSnapshot()).toMatchObject({ dirty: false, policy: { dirty: false, value: { maxRetries: 3 } } })
+  })
+
+  it('连接重建后旧保存结果不会清空新连接下刚编辑的草稿', async () => {
+    const form = createForm({ routes: {}, agents: { maxRetries: 1 } })
+    let finish!: (accepted: boolean) => void
+    form.mutate.mockImplementationOnce(async () => await new Promise<boolean>((resolve) => { finish = resolve }))
+    const controller = new SwarmAgentsController(createCtx(form))
+    controller.setPolicy({ maxRetries: '4' })
+    const pending = controller.save()
+    expect(controller.getSnapshot().saving).toBe(true)
+    controller.resetConnection()
+    controller.setPolicy({ maxRetries: '5' })
+    finish(true)
+    await pending
+    expect(controller.getSnapshot()).toMatchObject({
+      saving: false,
+      dirty: true,
+      conflicted: false,
+      notice: undefined,
+      policy: { dirty: true, value: { maxRetries: '5' } }
+    })
+  })
+
+  it('旧连接与新连接的保存同时存在时，旧结果不能解除新连接的保存锁', async () => {
+    const form = createForm({ routes: {}, agents: { maxRetries: 1 } })
+    const pending: Array<(accepted: boolean) => void> = []
+    form.mutate.mockImplementation(async () => await new Promise<boolean>((resolve) => { pending.push(resolve) }))
+    const controller = new SwarmAgentsController(createCtx(form))
+    controller.setPolicy({ maxRetries: '4' })
+    const oldSave = controller.save()
+    controller.resetConnection()
+    controller.setPolicy({ maxRetries: '5' })
+    const currentSave = controller.save()
+    expect(pending).toHaveLength(2)
+
+    pending[0]!(true)
+    await oldSave
+    expect(controller.getSnapshot()).toMatchObject({
+      saving: true,
+      dirty: true,
+      notice: undefined,
+      policy: { dirty: true, value: { maxRetries: '5' } }
+    })
+
+    pending[1]!(true)
+    await currentSave
+    expect(controller.getSnapshot()).toMatchObject({
+      saving: false,
+      dirty: false,
+      notice: 'saved',
+      policy: { dirty: false }
+    })
   })
 })
 
@@ -727,5 +839,65 @@ describe('Jev API key 卡片', () => {
     finish({ ok: true, value: { model: 'new-key-model' } })
     await changedOnly
     expect(controller.getSnapshot()).toMatchObject({ testing: false, test: undefined })
+  })
+
+  it('连接重建后旧凭据写入不会覆盖新草稿或卡住保存状态', async () => {
+    let finish!: (value: { ok: boolean; value?: unknown }) => void
+    const h = makeJevCtx()
+    h.credentials.set.mockImplementationOnce(async () => await new Promise<{ ok: boolean; value?: unknown }>((resolve) => { finish = resolve }))
+    const controller = new JevKeyController(h.ctx, () => 'TYPESAFE_API_KEY')
+    controller.setDraft('old-secret')
+    const pending = controller.save()
+    expect(controller.getSnapshot().saving).toBe(true)
+    controller.resetConnection()
+    controller.setDraft('new-secret')
+    finish({ ok: true, value: undefined })
+    await pending
+    expect(controller.getSnapshot()).toMatchObject({ saving: false, draft: 'new-secret', notice: undefined })
+  })
+
+  it('凭据引用刷新不会让正在进行的写入永久停在保存中', async () => {
+    let finish!: (value: { ok: boolean; value?: unknown }) => void
+    const h = makeJevCtx({ rpc: () => ({ ref: 'TYPESAFE_API_KEY', configured: false, writable: true }) })
+    h.credentials.set.mockImplementationOnce(async () => await new Promise<{ ok: boolean; value?: unknown }>((resolve) => { finish = resolve }))
+    const controller = new JevKeyController(h.ctx, () => 'TYPESAFE_API_KEY')
+    await controller.load()
+    controller.setDraft('tsk_secret')
+    const pending = controller.save()
+    await controller.load()
+    finish({ ok: true, value: undefined })
+    await pending
+    expect(controller.getSnapshot()).toMatchObject({ saving: false, draft: '', notice: 'jevSaved' })
+  })
+
+  it('保存期间凭据引用改变时保留草稿并提示重新保存', async () => {
+    let finish!: (value: { ok: boolean; value?: unknown }) => void
+    let ref = 'OLD_KEY'
+    const calls: string[] = []
+    const ctx = {
+      get: () => ({ rpc: { call: async (_channel: string, method: string) => {
+        calls.push(method)
+        return { ok: true, value: { ref, configured: false, writable: true } }
+      } } }),
+      remote: { credentials: {
+        set: vi.fn(async () => await new Promise<{ ok: boolean; value?: unknown }>((resolve) => { finish = resolve })),
+        unset: vi.fn(), describe: vi.fn()
+      } }
+    }
+    const controller = new JevKeyController(ctx, () => ref)
+    await controller.load()
+    controller.setDraft('tsk_secret')
+    const pending = controller.save()
+    ref = 'NEW_KEY'
+    await controller.load()
+    finish({ ok: true, value: undefined })
+    await pending
+    expect(calls.filter((method) => method === 'swarm.jevStatus').length).toBeGreaterThanOrEqual(3)
+    expect(controller.getSnapshot()).toMatchObject({
+      saving: false,
+      draft: 'tsk_secret',
+      notice: undefined,
+      error: expect.stringContaining('凭据引用')
+    })
   })
 })

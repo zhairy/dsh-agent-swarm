@@ -5,6 +5,8 @@
     "moduleResolution": "NodeNext",
     "strict": true,
     "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowJs": true,

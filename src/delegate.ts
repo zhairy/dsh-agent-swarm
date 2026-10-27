@@ -480,7 +480,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       } finally {
         try { hooks.beforeDispose?.(run) } finally {
           await run.dispose().catch(() => undefined)
-          await deps.onChildEnd?.(run.id)
+          await deps.onChildEnd?.(run.id, exec.signal.aborted ? 'cancelled' : undefined)
         }
       }
     } finally {

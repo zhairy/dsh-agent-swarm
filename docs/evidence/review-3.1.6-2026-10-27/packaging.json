@@ -1,0 +1,22 @@
+{
+  "version": "3.1.6",
+  "filename": "dsh-agent-swarm-3.1.6.tgz",
+  "stableAlias": "dsh-agent-swarm.tgz",
+  "tarballBytes": 1427937,
+  "unpackedBytes": 4285674,
+  "entryCount": 298,
+  "closureFiles": 86,
+  "missing": 0,
+  "missingRuntime": 0,
+  "forbidden": 0,
+  "docs": [
+    "docs/任务流程与验证.md",
+    "docs/使用.md",
+    "docs/升级与回退.md",
+    "docs/安装.md",
+    "docs/角色.md",
+    "docs/路线图.md"
+  ],
+  "stableAliasIdentical": true,
+  "tarballSha256": "f1d3969e027b7fed67660f43155b27da041c31cbe6b905628b73fbfa21675c7d"
+}

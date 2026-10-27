@@ -24,6 +24,94 @@ const fixture = (options: { persist?: () => Promise<void>; resume?: () => Promis
 }
 
 describe('persistent subagent control uses actual routing and host settlement', () => {
+  it('bounds settled one-shot controls without evicting persistent controls', () => {
+    const routes = intRouteStateRegistry()
+    const control = createAgentControl({ validateRoute: async (route) => route, interrupt: vi.fn(), resume: vi.fn(), applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause })
+    control.Register(binding)
+    for (let index = 0; index < 300; index++) {
+      const childId = `one-shot-${index}`
+      control.Register({ ...binding, childId, delegationId: `D-${index}`, persistent: false })
+      control.MarkRunSettled(childId, 'completed')
+    }
+    const exported = control.Export()
+    expect(exported.filter((record) => record.persistent === false && record.oneShotSettled === true)).toHaveLength(256)
+    expect(exported.find((record) => record.childId === 'one-shot-0')).toBeUndefined()
+    expect(exported.find((record) => record.childId === 'one-shot-299')).toBeDefined()
+    expect(control.get('child')).toMatchObject({ persistent: true })
+  })
+
+  it('rejects a persistent control beyond the durable schema cap', () => {
+    const routes = intRouteStateRegistry()
+    const control = createAgentControl({ validateRoute: async (route) => route, interrupt: vi.fn(), resume: vi.fn(), applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause })
+    for (let index = 0; index < 4096; index++) {
+      control.Register({ ...binding, childId: `persistent-${index}`, delegationId: `D-${index}` })
+    }
+    expect(() => control.Register({ ...binding, childId: 'overflow', delegationId: 'D-overflow' }))
+      .toThrow('安全上限')
+  })
+
+  it('keeps settled one-shots that still require side-effect review outside the ordinary cap', () => {
+    const routes = intRouteStateRegistry()
+    const control = createAgentControl({ validateRoute: async (route) => route, interrupt: vi.fn(), resume: vi.fn(), applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause })
+    for (let index = 0; index < 301; index++) {
+      const childId = `one-shot-${index}`
+      control.Register({ ...binding, childId, delegationId: `D-${index}`, persistent: false, needsSideEffectReview: index === 0 })
+      control.MarkRunSettled(childId, 'aborted')
+    }
+    expect(control.get('one-shot-0')).toMatchObject({ oneShotSettled: true, needsSideEffectReview: true })
+    expect(control.get('one-shot-1')).toBeUndefined()
+    expect(control.Export().filter((record) => record.persistent === false)).toHaveLength(257)
+  })
+
+  it('hard-bounds side-effect review records separately', () => {
+    const routes = intRouteStateRegistry()
+    const control = createAgentControl({ validateRoute: async (route) => route, interrupt: vi.fn(), resume: vi.fn(), applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause })
+    for (let index = 0; index < 301; index++) {
+      const childId = `review-${index}`
+      control.Register({ ...binding, childId, delegationId: `D-${index}`, persistent: false })
+      control.MarkSideEffectRisk(childId)
+      control.MarkRunSettled(childId, 'aborted')
+    }
+    expect(control.get('review-0')).toBeUndefined()
+    expect(control.get('review-299')).toMatchObject({ needsSideEffectReview: true, oneShotSettled: true })
+    expect(control.Export().filter((record) => record.persistent === false)).toHaveLength(256)
+  })
+
+  it('forgets settled controls for a terminal task but retains running or uncertain records', async () => {
+    const f = fixture()
+    const cancelRetryRoute = vi.fn()
+    const setPaused = vi.fn(f.routes.SetManualPause)
+    const control = createAgentControl({ validateRoute: async (route) => route, interrupt: f.interrupt, resume: f.resume,
+      applyOverride: f.routes.SetChildOverride, setPaused, cancelRetryRoute })
+    control.Register({ ...binding, childId: 'idle-a', taskId: 'terminal', delegationId: 'D-a' })
+    control.Register({ ...binding, childId: 'review-a', taskId: 'terminal', delegationId: 'D-review', needsSideEffectReview: true })
+    control.Register({ ...binding, childId: 'running-a', taskId: 'terminal', delegationId: 'D-b' })
+    control.ObserveRequest('running-a', original)
+    control.MarkAttemptStarted('running-a', 'attempt-running', original)
+    control.Register({ ...binding, childId: 'other-task', taskId: 'active', delegationId: 'D-c' })
+    await expect(control.ForgetTask('root', 'terminal')).resolves.toEqual(['idle-a'])
+    expect(control.get('idle-a')).toBeUndefined()
+    expect(control.get('review-a')).toMatchObject({ needsSideEffectReview: true })
+    expect(control.get('running-a')).toMatchObject({ phase: 'running' })
+    expect(control.get('other-task')).toBeDefined()
+    expect(cancelRetryRoute).toHaveBeenCalledWith('idle-a')
+    expect(setPaused).toHaveBeenCalledWith('idle-a', false)
+    expect(f.routes.isManualPaused('idle-a')).toBe(false)
+  })
+
+  it('forgets only the owning root and persists an empty control snapshot for that root', async () => {
+    const persist = vi.fn(async () => undefined)
+    const routes = intRouteStateRegistry()
+    const control = createAgentControl({ validateRoute: async (route) => route, interrupt: vi.fn(), resume: vi.fn(),
+      applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause, persist })
+    control.Register({ ...binding, childId: 'root-a-child', taskId: 'T-1', delegationId: 'D-a' })
+    control.Register({ ...binding, childId: 'root-b-child', parentSessionId: 'root-b', taskId: 'T-1', delegationId: 'D-b' })
+    await expect(control.ForgetTask('root', 'T-1')).resolves.toEqual(['root-a-child'])
+    expect(control.get('root-a-child')).toBeUndefined()
+    expect(control.get('root-b-child')).toBeDefined()
+    expect(persist).toHaveBeenLastCalledWith([expect.objectContaining({ childId: 'root-b-child' })], ['root'])
+  })
+
   it('一次性规划审核可以切换下一请求，当前 attempt 不被取消或伪改模型，结束后禁止重放', async () => {
     const routes = intRouteStateRegistry()
     routes.AddChild('reviewer', { chain: [original], role: 'yu_shi', logicalRequestId: 'plan-1' })
@@ -50,6 +138,19 @@ describe('persistent subagent control uses actual routing and host settlement', 
     await expect(control.Select({ ...address(), route: original })).rejects.toThrow('已结束')
     await expect(control.Continue(address())).rejects.toThrow('一次性')
     expect(resume).not.toHaveBeenCalled()
+  })
+
+  it('late cancellation can relabel a settled one-shot once without reopening execution', () => {
+    const f = fixture()
+    f.control.Register({ ...binding, childId: 'late-cancel', persistent: false })
+    f.control.MarkRunSettled('late-cancel', 'completed')
+    const settled = f.control.get('late-cancel')!
+    f.control.MarkRunSettled('late-cancel', 'cancelled')
+    const cancelled = f.control.get('late-cancel')!
+    expect(cancelled).toMatchObject({ oneShotSettled: true, reason: 'one-shot-cancelled' })
+    expect(cancelled.revision).toBe(settled.revision + 1)
+    f.control.MarkRunSettled('late-cancel', 'cancelled')
+    expect(f.control.get('late-cancel')).toEqual(cancelled)
   })
 
   it('一次性下一请求选择在异步模型校验中结算时拒绝陈旧CAS', async () => {
@@ -241,6 +342,12 @@ describe('persistent subagent control uses actual routing and host settlement', 
     expect(restored.resume).not.toHaveBeenCalled()
     expect(() => createAgentControl({ validateRoute: async (route) => route, interrupt: restored.interrupt, resume: restored.resume, applyOverride: restored.routes.SetChildOverride, setPaused: restored.routes.SetManualPause }).Restore(raw, 'other')).toThrow('根会话边界')
     expect(ValidateAgentControlRecords([{ ...raw[0], revision: -1 }])).toBe(false)
+  })
+
+  it('durable restore rejects one-shot controls instead of rehydrating an unbounded backlog', () => {
+    const f = fixture()
+    const record = f.control.Export()[0]!
+    expect(() => f.control.Restore([{ ...record, persistent: false, oneShotSettled: true }], 'root')).toThrow('快照无效')
   })
   it('unknown recovery permits saving a new selection or requesting stop without claiming quiescence', async () => {
     const original = fixture()

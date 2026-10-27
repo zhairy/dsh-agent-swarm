@@ -114,11 +114,19 @@ const NO_SUBSCRIBE = () => () => undefined
 const canContinue = (view) => view?.phase === 'paused' || (view?.phase === 'idle' && String(view?.reason ?? '').startsWith('host-run-failed:'))
 
 class AgentModelController {
-  constructor (address, transport) {
+  constructor (address, transport, requestTimeoutMs = 15000) {
     this.address = address
     this.transport = transport
     this.listeners = new Set()
     this.generation = 0
+    this.catalogGeneration = 0
+    this.pendingLoad = undefined
+    this.pendingCatalog = undefined
+    this.commandController = undefined
+    this.requestTimeoutMs = requestTimeoutMs
+    this.draftTouched = false
+    this.active = false
+    this.unsubscribeConnection = undefined
     this.disposed = false
     this.state = { status: 'idle', view: undefined, groups: [], catalogStatus: 'idle', busy: false, error: undefined, notice: undefined, draft: { provider: '', model: '', reasoningEffort: '' }, retryRoute: false, forceRetry: false, confirmSafeToContinue: false, steering: '' }
     this.subscribe = (listener) => { this.listeners.add(listener); return () => this.listeners.delete(listener) }
@@ -129,7 +137,75 @@ class AgentModelController {
     this.state = { ...this.state, ...patch }
     this.listeners.forEach((listener) => listener())
   }
-  dispose () { this.disposed = true; this.generation += 1; this.listeners.clear() }
+  dispose () {
+    this.disposed = true
+    this.generation += 1
+    this.catalogGeneration += 1
+    this.pendingLoad?.expire?.(true)
+    this.pendingCatalog?.expire?.(true)
+    this.pendingLoad?.controller?.abort()
+    this.pendingCatalog?.controller?.abort()
+    this.commandController?.abort()
+    this.pendingLoad = undefined
+    this.pendingCatalog = undefined
+    this.commandController = undefined
+    this.unsubscribeConnection?.()
+    this.unsubscribeConnection = undefined
+    this.listeners.clear()
+  }
+  activate () {
+    if (this.disposed || this.active) return
+    this.active = true
+    this.unsubscribeConnection = this.transport.subscribeGeneration?.(() => this.resetConnection())
+    void this.load()
+    void this.loadCatalog()
+  }
+  deactivate () {
+    if (!this.active) return
+    this.active = false
+    this.generation += 1
+    this.catalogGeneration += 1
+    this.pendingLoad?.expire?.(true)
+    this.pendingCatalog?.expire?.(true)
+    this.pendingLoad?.controller?.abort()
+    this.pendingCatalog?.controller?.abort()
+    this.commandController?.abort()
+    this.pendingLoad = undefined
+    this.pendingCatalog = undefined
+    this.commandController = undefined
+    this.unsubscribeConnection?.()
+    this.unsubscribeConnection = undefined
+    // Closing the panel advances the view generation, so the command's own
+    // finally block can no longer release this latch. The host command remains
+    // revision-checked and the next activation reloads authoritative state.
+    this.update({ busy: false, error: undefined })
+  }
+  resetConnection () {
+    if (this.disposed) return
+    this.generation += 1
+    this.catalogGeneration += 1
+    this.pendingLoad?.expire?.(true)
+    this.pendingCatalog?.expire?.(true)
+    this.pendingLoad?.controller?.abort()
+    this.pendingCatalog?.controller?.abort()
+    this.commandController?.abort()
+    this.pendingLoad = undefined
+    this.pendingCatalog = undefined
+    this.commandController = undefined
+    this.update({
+      status: 'idle',
+      view: undefined,
+      groups: [],
+      catalogStatus: 'idle',
+      busy: false,
+      error: undefined,
+      notice: undefined
+    })
+    if (this.active) {
+      void this.load()
+      void this.loadCatalog()
+    }
+  }
   getView (raw) {
     const value = raw?.control ?? raw
     if (value?.childId !== this.address.childId || value?.parentSessionId !== this.address.parentSessionId || !Number.isSafeInteger(value.revision) || value.revision < 1 || typeof value.phase !== 'string' || typeof value.persistent !== 'boolean') throw new Error('invalid host agent-control view')
@@ -137,30 +213,86 @@ class AgentModelController {
   }
   async load () {
     if (this.disposed) return
-    const generation = ++this.generation
+    if (this.pendingLoad?.generation === this.generation) return this.pendingLoad.promise
+    const generation = this.generation
+    const token = { generation, controller: new AbortController(), timedOut: false, expire: undefined, promise: undefined }
     this.update({ status: this.state.view === undefined ? 'loading' : this.state.status, error: undefined })
-    try {
-      const view = this.getView(await this.transport.view(this.address))
-      if (generation !== this.generation) return
-      const selected = view.selectedNext ?? view.requestedRoute ?? view.actual?.route
-      const draft = this.state.view === undefined && selected !== undefined ? { provider: selected.provider, model: selected.model, reasoningEffort: selected.reasoningEffort ?? '' } : this.state.draft
-      this.update({ status: 'ready', view, draft, ...(view.phase === 'paused' && this.state.notice === 'stopping' ? { notice: 'stopped' } : {}) })
-    } catch (error) { if (generation === this.generation) this.update({ status: 'error', error: error instanceof Error ? error.message : String(error) }) }
+    const promise = (async () => {
+      let timer
+      const timeout = new Promise((_, reject) => {
+        token.expire = (silent = false) => {
+          if (token.timedOut) return
+          token.timedOut = true
+          token.controller.abort()
+          if (this.pendingLoad === token) {
+            this.pendingLoad = undefined
+            if (!silent) this.update({ status: 'error', error: '模型与恢复状态读取超时；已取消本次读取，可刷新重试。' })
+          }
+          reject(new Error('agent view timeout'))
+        }
+        timer = setTimeout(() => token.expire(), this.requestTimeoutMs)
+      })
+      try {
+        const view = this.getView(await Promise.race([this.transport.view(this.address, token.controller.signal), timeout]))
+        if (token.timedOut || generation !== this.generation) return
+        const selected = view.selectedNext ?? view.requestedRoute ?? view.actual?.route
+        const draft = !this.draftTouched && this.state.view === undefined && selected !== undefined
+          ? { provider: selected.provider, model: selected.model, reasoningEffort: selected.reasoningEffort ?? '' }
+          : this.state.draft
+        this.update({ status: 'ready', view, draft, ...(view.phase === 'paused' && this.state.notice === 'stopping' ? { notice: 'stopped' } : {}) })
+      } catch (error) {
+        if (!token.timedOut && generation === this.generation) this.update({ status: 'error', error: error instanceof Error ? error.message : String(error) })
+      } finally {
+        clearTimeout(timer)
+        if (this.pendingLoad === token) this.pendingLoad = undefined
+      }
+    })()
+    token.promise = promise
+    this.pendingLoad = token
+    try { await promise } finally { if (this.pendingLoad?.promise === promise) this.pendingLoad = undefined }
   }
   async loadCatalog () {
-    if (this.disposed || this.state.catalogStatus === 'loading') return
+    if (this.disposed) return
+    if (this.pendingCatalog?.generation === this.catalogGeneration) return this.pendingCatalog.promise
+    const generation = this.catalogGeneration
+    const token = { generation, controller: new AbortController(), timedOut: false, expire: undefined, promise: undefined }
     this.update({ catalogStatus: 'loading' })
-    try {
-      const raw = await this.transport.catalog()
-      const value = raw?.ok === true ? raw.value : raw
-      if (!Array.isArray(value?.groups)) throw new Error('model catalog unavailable')
-      this.update({ groups: value.groups, catalogStatus: 'ready' })
-    } catch (error) { this.update({ catalogStatus: 'error', error: error instanceof Error ? error.message : String(error) }) }
+    const promise = (async () => {
+      let timer
+      const timeout = new Promise((_, reject) => {
+        token.expire = (silent = false) => {
+          if (token.timedOut) return
+          token.timedOut = true
+          token.controller.abort()
+          if (this.pendingCatalog === token) {
+            this.pendingCatalog = undefined
+            if (!silent) this.update({ catalogStatus: 'error', error: '模型目录读取超时；已取消本次读取，可重试。' })
+          }
+          reject(new Error('model catalog timeout'))
+        }
+        timer = setTimeout(() => token.expire(), this.requestTimeoutMs)
+      })
+      try {
+        const raw = await Promise.race([this.transport.catalog(token.controller.signal), timeout])
+        const value = raw?.ok === true ? raw.value : raw
+        if (!Array.isArray(value?.groups)) throw new Error('model catalog unavailable')
+        if (!token.timedOut && generation === this.catalogGeneration) this.update({ groups: value.groups, catalogStatus: 'ready' })
+      } catch (error) {
+        if (!token.timedOut && generation === this.catalogGeneration) this.update({ catalogStatus: 'error', error: error instanceof Error ? error.message : String(error) })
+      } finally {
+        clearTimeout(timer)
+        if (this.pendingCatalog === token) this.pendingCatalog = undefined
+      }
+    })()
+    token.promise = promise
+    this.pendingCatalog = token
+    try { await promise } finally { if (this.pendingCatalog?.promise === promise) this.pendingCatalog = undefined }
   }
   setDraft (patch) {
     const draft = { ...this.state.draft, ...patch }
     if (patch.provider !== undefined) { draft.model = ''; draft.reasoningEffort = '' }
     else if (patch.model !== undefined) draft.reasoningEffort = ''
+    this.draftTouched = true
     this.update({ draft, notice: undefined })
   }
   setOptions (patch) { this.update(patch) }
@@ -180,16 +312,36 @@ class AgentModelController {
       if (this.state.confirmSafeToContinue) input.confirmSafeToContinue = true
       if (this.state.steering.trim() !== '') input.steering = this.state.steering.trim()
     }
+    const generation = ++this.generation
+    const controller = new AbortController()
+    this.commandController = controller
     this.update({ busy: true, error: undefined, notice: undefined })
-    this.generation += 1
+    let timer
     try {
-      const result = await this.transport.command(input)
+      const result = await Promise.race([
+        this.transport.command(input, controller.signal),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort()
+            reject(new Error('模型控制请求超时；已取消本次请求，请刷新状态后重试。'))
+          }, this.requestTimeoutMs)
+        })
+      ])
+      if (generation !== this.generation) return
       const returned = result?.control ?? (result?.childId === this.address.childId ? result : undefined)
       if (returned !== undefined) this.update({ view: this.getView(returned) })
       await this.load()
+      if (generation !== this.generation) return
       if (this.state.status === 'ready') this.update({ notice: action === 'continue' ? 'resumed' : action === 'stop' || this.state.view?.phase === 'stopping' ? 'stopping' : 'savedNext', confirmSafeToContinue: false })
-    } catch (error) { await this.load().then(() => undefined); this.update({ error: error instanceof Error ? error.message : String(error) }) }
-    finally { this.update({ busy: false }) }
+    } catch (error) {
+      if (generation !== this.generation) return
+      await this.load()
+      if (generation === this.generation) this.update({ error: error instanceof Error ? error.message : String(error) })
+    } finally {
+      clearTimeout(timer)
+      if (this.commandController === controller) this.commandController = undefined
+      if (generation === this.generation) this.update({ busy: false })
+    }
   }
 }
 
@@ -205,10 +357,15 @@ const controlStyle = {
 function AgentControlPanel ({ controller, t }) {
   const state = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   const view = state.view
-  React.useEffect(() => { controller.load(); controller.loadCatalog() }, [controller])
+  React.useEffect(() => {
+    controller.activate()
+    return () => controller.deactivate()
+  }, [controller])
   React.useEffect(() => {
     if (view === undefined) return undefined
-    const timer = setInterval(() => { if (!controller.getSnapshot().busy) controller.load() }, 2000)
+    const timer = setInterval(() => {
+      if (globalThis.document?.visibilityState !== 'hidden' && !controller.getSnapshot().busy) controller.load()
+    }, 2000)
     return () => clearInterval(timer)
   }, [controller, view !== undefined])
   const provider = state.groups.find((item) => item.id === state.draft.provider)
@@ -262,14 +419,28 @@ function AgentModelControls (props) {
 }
 
 const getAgentControlTransport = (ctx) => {
-  const rpc = async (method, payload) => {
+  let generation = 0
+  const resetListeners = new Set()
+  const rpc = async (method, payload, signal) => {
     const connection = ctx.get('connection')
     if (typeof connection?.rpc?.call !== 'function') throw new Error('swarm control RPC unavailable')
-    const result = await connection.rpc.call('/api', `swarm.${method}`, payload)
+    const result = await connection.rpc.call('/api', `swarm.${method}`, payload, signal)
     if (result?.ok !== true) throw Object.assign(new Error(`${result?.error?.message ?? 'agent control RPC failed'}${result?.error?.code === undefined ? '' : ` (${result.error.code})`}`), { code: result?.error?.code })
     return result.value
   }
-  return { view: (address) => rpc('agentView', address), command: (input) => rpc('agentControl', input), catalog: () => ctx.remote.session.modelCatalog() }
+  return {
+    view: (address, signal) => rpc('agentView', address, signal),
+    command: (input, signal) => rpc('agentControl', input, signal),
+    catalog: (signal) => ctx.remote.session.modelCatalog(signal),
+    subscribeGeneration: (listener) => {
+      resetListeners.add(listener)
+      return () => resetListeners.delete(listener)
+    },
+    notifyConnectionReset: () => {
+      generation += 1
+      for (const listener of [...resetListeners]) listener()
+    }
+  }
 }
 
 /**
@@ -298,6 +469,10 @@ const getModelCallModeHook = (ctx) => {
  */
 function apply (ctx) {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'swarm-model-calls: dictionaries')
+  const transport = getAgentControlTransport(ctx)
+  if (typeof ctx.on === 'function') {
+    ctx.effect(() => ctx.on('connection/reset', () => transport.notifyConnectionReset()), 'swarm-model-calls: connection generation')
+  }
   for (const definition of [markerDefinition, headerDefinition, modelCallDefinition]) {
     ctx.effect(() => ctx.uiConversation.events.register(definition), `swarm-model-calls: ${definition.kind}`)
   }
@@ -307,7 +482,6 @@ function apply (ctx) {
   })
   ctx.slots.inject('conversation.session.header.actions', function * () {
     yield ctx.slots.register({ name: 'conversation.session.header.actions', id: 'swarm-model-badge', order: -4, locale: NS }, ModelBadge)
-    const transport = getAgentControlTransport(ctx)
     yield ctx.slots.register({ name: 'conversation.session.header.actions', id: 'swarm-agent-model-controls', order: -3, locale: NS, inject: () => ({ transport }) }, AgentModelControls)
   })
 }

@@ -27,6 +27,8 @@ const mergeBinding = (previous, next) => previous === undefined ? next : next ==
 const createTaskViewStore = ({ request, validateTask = (value) => value, generationSource, document: document_ = globalThis.document, intervalMs = 5000, timeoutMs = 15000, maxEntries = 8, now = Date.now }) => {
   const entries = new Map()
   const observers = new Set()
+  const capacityWaiters = new Map()
+  const detached = new Set()
   let disposed = false
   let access = 0
   let generation = generationSource?.getSnapshot?.()?.id ?? (generationSource === undefined ? 0 : undefined)
@@ -38,21 +40,38 @@ const createTaskViewStore = ({ request, validateTask = (value) => value, generat
   }
   const clear = (entry) => { clearTimeout(entry.timer); clearTimeout(entry.deadline); entry.timer = undefined; entry.deadline = undefined }
   const hasActiveObserver = (root, task) => [...observers].some((observer) => !observer.passive && observer.root === root && observer.task === task)
+  const entryKey = (root, task) => JSON.stringify([generation ?? 'offline', root, task])
   const active = (entry) => !disposed && connected() && entry.generation === generation && visible() && hasActiveObserver(entry.root, entry.task)
-  const invalidate = (entry, status = 'stale') => {
+  const dropEntry = (entry, notify = true) => {
+    let removed = false
+    for (const [key, current] of entries) if (current === entry) { entries.delete(key); removed = true; break }
+    if (!removed) return false
+    if (entry.pending?.promise !== undefined) detached.add(entry.pending.promise)
     clear(entry)
+    if (notify) for (const observer of [...observers]) if (observer.root === entry.root && observer.task === entry.task) observer.listener()
+    return true
+  }
+  const invalidate = (entry, status = 'stale') => {
+    clearTimeout(entry.timer)
+    entry.timer = undefined
     if (entry.pending !== undefined) { entry.pending.obsolete = true; entry.pending.controller.abort() }
+    else { clearTimeout(entry.deadline); entry.deadline = undefined }
     emit(entry, { status: entry.snapshot.value === null ? status : 'stale' })
   }
   const trim = (reserve = 0) => {
-    const removable = [...entries].filter(([, entry]) => entry.pending === undefined && !hasActiveObserver(entry.root, entry.task)).sort((a, b) => a[1].access - b[1].access)
-    for (const [key, entry] of removable) {
+    const removable = [...entries]
+      .filter(([, entry]) => entry.pending === undefined
+        && (entry.generation !== generation || !hasActiveObserver(entry.root, entry.task)))
+      .sort((a, b) => a[1].access - b[1].access)
+    let freed = false
+    for (const [, entry] of removable) {
       if (entries.size + reserve <= maxEntries) break
-      clear(entry); entries.delete(key)
+      freed = dropEntry(entry) || freed
     }
+    if (freed) retryCapacityWaiters()
   }
   const getEntry = (root, task, create = true) => {
-    const key = JSON.stringify([generation ?? 'offline', root, task])
+    const key = entryKey(root, task)
     let entry = entries.get(key)
     if (entry === undefined) {
       if (!create) return undefined
@@ -81,8 +100,18 @@ const createTaskViewStore = ({ request, validateTask = (value) => value, generat
   }
   const terminalCurrent = (entry) => entry.snapshot.status === 'live' && isTerminal(entry.snapshot.value) && !isBehindBinding(entry.snapshot.value, entry.minimumBinding)
   const refreshEntry = (entry, force = false) => {
-    if (entry.capacityBlocked) return Promise.resolve(null)
     if (!active(entry)) return Promise.resolve(entry.snapshot.value)
+    if (entry.capacityBlocked) {
+      capacityWaiters.set(entryKey(entry.root, entry.task), { root: entry.root, task: entry.task, generation: entry.generation })
+      return Promise.resolve(null)
+    }
+    // Keep one current request in addition to the bounded detached set so a
+    // reconnect can recover even when the previous generation never settles.
+    if (detached.size >= maxEntries + 1) {
+      capacityWaiters.set(entryKey(entry.root, entry.task), { root: entry.root, task: entry.task, generation: entry.generation })
+      emit(entry, { status: entry.snapshot.value === null ? 'unavailable' : 'stale', error: '旧连接的请求尚未结算；已暂停新增读取，等待传输结束。' })
+      return Promise.resolve(null)
+    }
     if (entry.pending !== undefined) return entry.pending.promise
     if (!force && entry.task !== null && terminalCurrent(entry)) return Promise.resolve(entry.snapshot.value)
     clearTimeout(entry.timer)
@@ -124,10 +153,21 @@ const createTaskViewStore = ({ request, validateTask = (value) => value, generat
       return entry.snapshot.value
     }).finally(() => {
       clearTimeout(entry.deadline)
+      const wasDetached = pending.promise !== undefined && detached.delete(pending.promise)
+      if (wasDetached) queueMicrotask(retryCapacityWaiters)
       if (entry.pending !== pending) return
       entry.pending = undefined
-      // 只有真实传输已结算才能释放单飞；永久不合作的取消始终保留pending。
-      if (!active(entry) || pending.denied) return
+      // Only a settled transport releases single-flight. If its last observer
+      // has already gone, drop the idle entry now so fixed capacity remains
+      // available to the tasks that are still being viewed.
+      const obsolete = disposed || entry.generation !== generation || !hasActiveObserver(entry.root, entry.task)
+      if (obsolete) {
+        if (dropEntry(entry)) queueMicrotask(retryCapacityWaiters)
+        else trim()
+        return
+      }
+      if (!connected() || !visible()) return
+      if (pending.denied) return
       if (pending.bindingChanged && isBehindBinding(entry.snapshot.value, entry.minimumBinding)) { schedule(entry, 0); return }
       if (pending.obsolete && !pending.timedOut) { schedule(entry, 0); return }
       if (entry.task !== null && terminalCurrent(entry)) return
@@ -136,19 +176,29 @@ const createTaskViewStore = ({ request, validateTask = (value) => value, generat
     return pending.promise
   }
   const handle = (root, task, passive = false) => ({
-    getSnapshot: () => getEntry(root, task, !passive)?.snapshot ?? HISTORICAL,
+    getSnapshot: () => getEntry(root, task, false)?.snapshot ?? (passive ? HISTORICAL : entries.size >= maxEntries ? CAPACITY : EMPTY),
     subscribe: (listener) => {
       const observer = { root, task, listener, passive }; observers.add(observer)
       const entry = getEntry(root, task, !passive)
+      if (!passive && entry?.capacityBlocked) capacityWaiters.set(entryKey(root, task), { root, task, generation })
       if (!passive && entry !== undefined && active(entry)) refreshEntry(entry, true)
       return () => {
         observers.delete(observer)
         const current = getEntry(root, task, false)
         if (!passive && current !== undefined && !hasActiveObserver(root, task)) invalidate(current)
+        if (!passive && !hasActiveObserver(root, task)) capacityWaiters.delete(entryKey(root, task))
         trim()
       }
     },
-    refresh: passive ? undefined : () => refreshEntry(getEntry(root, task), true),
+    refresh: passive ? undefined : () => {
+      const entry = getEntry(root, task)
+      if (entry.capacityBlocked) {
+        capacityWaiters.set(entryKey(root, task), { root, task, generation })
+        return Promise.resolve(null)
+      }
+      capacityWaiters.delete(entryKey(root, task))
+      return refreshEntry(entry, true)
+    },
     readPreference: () => preferences.get(JSON.stringify([root, task])),
     setPreference: (value) => {
       const key = JSON.stringify([root, task]); const previous = preferences.get(key); preferences.delete(key); preferences.set(key, { ...previous, ...value })
@@ -158,14 +208,31 @@ const createTaskViewStore = ({ request, validateTask = (value) => value, generat
   const preferences = new Map()
   const onVisibility = () => {
     for (const entry of entries.values()) if (visible()) { if (active(entry)) refreshEntry(entry, true) } else invalidate(entry)
+    if (visible() && capacityWaiters.size > 0) queueMicrotask(retryCapacityWaiters)
   }
   const onGeneration = () => {
     const next = generationSource.getSnapshot()?.id
     if (next === generation) return
     generation = next
-    for (const entry of entries.values()) invalidate(entry, 'offline')
+    for (const entry of [...entries.values()]) {
+      invalidate(entry, 'offline')
+      if (entry.generation !== generation) dropEntry(entry, false)
+    }
     for (const observer of observers) { observer.listener(); if (!observer.passive && connected()) refreshEntry(getEntry(observer.root, observer.task), true) }
     trim()
+  }
+  const retryCapacityWaiters = () => {
+    if (disposed) return
+    for (const [key, waiter] of [...capacityWaiters]) {
+      if (waiter.generation !== generation || !hasActiveObserver(waiter.root, waiter.task)) {
+        capacityWaiters.delete(key)
+        continue
+      }
+      const entry = getEntry(waiter.root, waiter.task, false) ?? getEntry(waiter.root, waiter.task)
+      if (entry.capacityBlocked) continue
+      capacityWaiters.delete(key)
+      if (active(entry)) refreshEntry(entry, true)
+    }
   }
   document_?.addEventListener?.('visibilitychange', onVisibility)
   const unsubscribe = generationSource?.subscribe?.(onGeneration)
@@ -174,10 +241,13 @@ const createTaskViewStore = ({ request, validateTask = (value) => value, generat
     index: (root) => handle(root, null),
     dispose: () => {
       disposed = true; document_?.removeEventListener?.('visibilitychange', onVisibility); unsubscribe?.()
-      for (const entry of entries.values()) invalidate(entry)
-      observers.clear(); entries.clear(); preferences.clear()
+      for (const entry of entries.values()) { invalidate(entry); clear(entry) }
+      observers.clear(); entries.clear(); preferences.clear(); capacityWaiters.clear()
     },
-    diagnostics: () => ({ cachedEntries: entries.size, observers: observers.size, inFlight: [...entries.values()].filter((entry) => entry.pending !== undefined).length })
+    diagnostics: () => {
+      const entryInFlight = [...entries.values()].filter((entry) => entry.pending !== undefined).length
+      return { cachedEntries: entries.size, observers: observers.size, inFlight: entryInFlight, detached: detached.size, totalInFlight: entryInFlight + detached.size }
+    }
   }
 }
 

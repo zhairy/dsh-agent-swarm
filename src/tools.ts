@@ -362,7 +362,9 @@ export const getSwarmToolDefinitions = (service: SwarmService): ToolDefinitionLi
     name: 'swarm_status',
     description: '只读查询当前会话任务的版本、规划审核、门禁、委派状态/路由/证据、调用用量与宿主降级，并给出版本、源码目录与构建产物目录。需要读插件实现时先看输出的「插件：」行，不要猜宿主 packages/ 或 dist/ 路径——本仓库的源码在 src/、构建产物在 lib/。Web taskView RPC 需要宿主认证，不能用匿名 curl 代替。',
     parameters: STATUS_PARAMETERS,
-    execute: async (args, exec) => service.getStatus(args, getExec(exec)),
+    execute: async (args, exec) => service.getStatus({
+      ...(args !== null && typeof args === 'object' && !Array.isArray(args) ? args : {}), compact: true
+    }, getExec(exec)),
     render: (_args, value) => getStatusText(value) + (value.roleSuggestions.length ? '\n角色能力建议（不授予权限）：' + JSON.stringify(value.roleSuggestions) : '')
   }),
   getToolDefinition<unknown, AcceptResultInfo>({

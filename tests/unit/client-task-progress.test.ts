@@ -138,6 +138,165 @@ describe('任务进度共享读取层', () => {
     expect(store.task('root', 'T-99').getSnapshot()).toMatchObject({ status: 'unavailable', value: null })
   })
 
+  it('最后一个订阅卸载后，合作传输结算时立即释放空闲缓存', async () => {
+    vi.useFakeTimers()
+    const first = deferred()
+    const request = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue({ task_id: 'T-2', rootSessionId: 'root' })
+    const { store } = fixture({ request, maxEntries: 1 })
+    const old = store.task('root', 'T-1')
+    const stop = old.subscribe(vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.diagnostics()).toMatchObject({ cachedEntries: 1, inFlight: 1 })
+    stop()
+    expect(store.diagnostics()).toMatchObject({ cachedEntries: 1, inFlight: 1 })
+    first.resolve({ task_id: 'T-1', rootSessionId: 'root' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.diagnostics()).toMatchObject({ cachedEntries: 0, inFlight: 0 })
+    const current = store.task('root', 'T-2')
+    const release = current.subscribe(vi.fn())
+    await current.refresh()
+    expect(current.getSnapshot()).toMatchObject({ status: 'live', value: { task_id: 'T-2' } })
+    expect(store.diagnostics()).toMatchObject({ cachedEntries: 1, inFlight: 0 })
+    release()
+  })
+
+  it('容量阻塞的第九个订阅会在旧传输结算后自动唤醒', async () => {
+    vi.useFakeTimers()
+    const first = deferred()
+    const request = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue({ task_id: 'T-2', rootSessionId: 'root' })
+    const { store } = fixture({ request, maxEntries: 1 })
+    const old = store.task('root', 'T-1')
+    const stopOld = old.subscribe(vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    const current = store.task('root', 'T-2')
+    const stopCurrent = current.subscribe(vi.fn())
+    expect(current.getSnapshot()).toMatchObject({ status: 'unavailable', value: null })
+    stopOld()
+    first.resolve({ task_id: 'T-1', rootSessionId: 'root' })
+    await first.promise
+    await vi.advanceTimersByTimeAsync(0)
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(current.getSnapshot()).toMatchObject({ status: 'live', value: { task_id: 'T-2' } })
+    stopCurrent()
+  })
+
+  it('连接代际切换遇到缓存上限时，旧传输结算后自动读取新代际', async () => {
+    vi.useFakeTimers()
+    let generation: { id: number } = { id: 1 }
+    let notify!: () => void
+    const generationSource = { getSnapshot: () => generation, subscribe: (run: () => void) => { notify = run; return () => undefined } }
+    const old = deferred()
+    const request = vi.fn()
+      .mockReturnValueOnce(old.promise)
+      .mockResolvedValueOnce({ task_id: 'T-2', rootSessionId: 'root' })
+    const { store } = fixture({ request, generationSource, maxEntries: 1 })
+    const source = store.task('root', 'T-2')
+    const stop = source.subscribe(vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.diagnostics()).toMatchObject({ cachedEntries: 1, inFlight: 1 })
+
+    generation = { id: 2 }
+    notify()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(source.getSnapshot()).toMatchObject({ status: 'live', value: { task_id: 'T-2' } })
+    expect(request).toHaveBeenCalledTimes(2)
+
+    old.resolve({ task_id: 'T-1', rootSessionId: 'root' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(source.getSnapshot()).toMatchObject({ status: 'live', value: { task_id: 'T-2' } })
+    stop()
+  })
+
+  it('连续连接代际不会累积旧缓存并占满固定容量', async () => {
+    vi.useFakeTimers()
+    let generation: { id: number } = { id: 1 }
+    let notify!: () => void
+    const generationSource = { getSnapshot: () => generation, subscribe: (run: () => void) => { notify = run; return () => undefined } }
+    const request = vi.fn(async (_method: string, payload: { sessionId: string; taskId?: string }) => ({
+      task_id: payload.taskId, rootSessionId: payload.sessionId
+    }))
+    const { store } = fixture({ request, generationSource, maxEntries: 1 })
+    const source = store.task('root', 'T-1')
+    const stop = source.subscribe(vi.fn())
+    await source.refresh()
+    for (let id = 2; id <= 12; id += 1) {
+      generation = { id }
+      notify()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(source.getSnapshot()).toMatchObject({ status: 'live', value: { task_id: 'T-1' } })
+      expect(store.diagnostics().cachedEntries).toBe(1)
+    }
+    stop()
+  })
+
+  it('连接反复重建且取消不合作时，孤儿在途请求也有硬上限', async () => {
+    vi.useFakeTimers()
+    let generation: { id: number } = { id: 1 }
+    let notify!: () => void
+    const generationSource = { getSnapshot: () => generation, subscribe: (run: () => void) => { notify = run; return () => undefined } }
+    const pending = Array.from({ length: 6 }, () => deferred())
+    const request = vi.fn().mockImplementation(() => pending[request.mock.calls.length - 1]!.promise)
+    const { store } = fixture({ request, generationSource, maxEntries: 3 })
+    const source = store.task('root', 'T-1')
+    const stop = source.subscribe(vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    for (let id = 2; id <= 9; id += 1) {
+      generation = { id }
+      notify()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(request).toHaveBeenCalledTimes(4)
+    expect(store.diagnostics()).toMatchObject({ detached: 4, totalInFlight: 4 })
+    pending[0]!.resolve({ task_id: 'T-1', rootSessionId: 'root' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(request).toHaveBeenCalledTimes(5)
+    expect(store.diagnostics()).toMatchObject({ detached: 3, totalInFlight: 4 })
+    stop()
+  })
+
+  it('隐藏页面中止不合作请求后仍保留缓存，并由原截止定时器报告超时', async () => {
+    vi.useFakeTimers()
+    const listeners = new Map<string, () => void>()
+    const document = { visibilityState: 'visible', addEventListener: (event: string, run: () => void) => listeners.set(event, run), removeEventListener: (event: string) => listeners.delete(event) }
+    const request = vi.fn(() => new Promise(() => undefined))
+    const { store } = fixture({ request, document })
+    const source = store.task('root', 'T-1')
+    const stop = source.subscribe(vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    document.visibilityState = 'hidden'
+    listeners.get('visibilitychange')!()
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(source.getSnapshot()).toMatchObject({ status: 'unavailable' })
+    expect(store.diagnostics()).toMatchObject({ cachedEntries: 1, inFlight: 1 })
+    expect(request).toHaveBeenCalledTimes(1)
+    stop()
+  })
+
+  it('淘汰仍有被动观察者的缓存时通知快照转为历史态', async () => {
+    vi.useFakeTimers()
+    const { store } = fixture({ maxEntries: 1 })
+    const current = store.task('root', 'T-1')
+    const stopCurrent = current.subscribe(vi.fn())
+    await current.refresh()
+    const history = store.task('root', 'T-1', { passive: true })
+    const onHistory = vi.fn()
+    const stopHistory = history.subscribe(onHistory)
+    expect(history.getSnapshot()).toMatchObject({ status: 'live' })
+    stopCurrent()
+    const next = store.task('root', 'T-2')
+    const stopNext = next.subscribe(vi.fn())
+    await next.refresh()
+    expect(onHistory).toHaveBeenCalled()
+    expect(history.getSnapshot().status).toBe('historical')
+    stopHistory()
+    stopNext()
+  })
+
   it('大量历史卡被动观察不分配缓存、不发RPC、不锁住淘汰；第九当前任务仍可读', async () => {
     vi.useFakeTimers()
     const { store, request } = fixture({ maxEntries: 3 })

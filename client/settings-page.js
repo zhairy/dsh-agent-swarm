@@ -31,6 +31,7 @@ let settingsControllerSequence = 0
 /** 与宿主 DEFAULT_AGENTS_CONFIG 一致；构建时由 DATA.policy 注入，缺失时用这份兜底 */
 const POLICY_DEFAULTS = Object.freeze({ language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every', nativeTeamProjection: false, ...(DATA.policy?.defaults ?? {}) })
 const SESSION_POLICIES = ['auto', 'continuable', 'oneshot']
+const CATALOG_TIMEOUT_MS = 15000
 const PROMPT_STYLES = ['auto', 'claude', 'gpt', 'generic']
 const MODEL_CALL_DISPLAYS = ['every', 'turn']
 const LANGUAGES = ['zh-CN', 'en', 'zh-TW', 'ja', 'ko']
@@ -597,8 +598,8 @@ const getPolicyErrors = (policy) => {
   const retries = toNumber(policy.maxRetries)
   return {
     language: LANGUAGES.includes(policy.language ?? 'zh-CN') ? undefined : 'errLanguage',
-    repeatAbove: ratio(policy.repeatAbove),
-    sameCategoryAbove: ratio(policy.sameCategoryAbove),
+    repeatAbove: policy.session === 'auto' ? ratio(policy.repeatAbove) : undefined,
+    sameCategoryAbove: policy.session === 'oneshot' ? undefined : ratio(policy.sameCategoryAbove),
     maxRetries: Number.isInteger(retries) && retries >= 0 && retries <= 10 ? undefined : 'errRetries',
     retryBackoffSec: range(policy.retryBackoffSec, 600, 'errBackoff'),
     networkWaitMin: range(policy.networkWaitMin, 120, 'errNetworkWait'),
@@ -632,11 +633,14 @@ const toPolicyDraft = (policy) => ({
  */
 const buildPolicy = (draft, saved) => {
   if (Object.values(getPolicyErrors(draft)).some((error) => error !== undefined)) return undefined
+  const savedPolicy = getPolicy(saved)
   const value = {
     language: LANGUAGES.includes(draft.language) ? draft.language : 'zh-CN',
     session: SESSION_POLICIES.includes(draft.session) ? draft.session : 'auto',
-    repeatAbove: toNumber(draft.repeatAbove),
-    sameCategoryAbove: toNumber(draft.sameCategoryAbove),
+    // Hidden controls must not turn an earlier half-edited value into null/NaN
+    // when the selected session policy makes that threshold irrelevant.
+    repeatAbove: draft.session === 'auto' ? toNumber(draft.repeatAbove) : savedPolicy.repeatAbove,
+    sameCategoryAbove: draft.session === 'oneshot' ? savedPolicy.sameCategoryAbove : toNumber(draft.sameCategoryAbove),
     maxRetries: toNumber(draft.maxRetries),
     retryBackoffMs: Math.round(toNumber(draft.retryBackoffSec) * 1000),
     promptStyle: PROMPT_STYLES.includes(draft.promptStyle) ? draft.promptStyle : 'auto',
@@ -675,11 +679,15 @@ class SwarmAgentsController {
     this.planningDraft = undefined
     this.draftRevision = undefined
     this.catalog = { status: 'idle', groups: [], failures: [] }
+    this.pendingCatalog = undefined
+    this.catalogReloadRequested = false
     this.saving = false
     this.notice = undefined
     this.conflicted = false
     this.disposed = false
     this.catalogGeneration = 0
+    this.connectionGeneration = 0
+    this.saveGeneration = 0
     this.listeners = new Set()
     this.snapshot = this.project()
     this.subscribe = this.subscribe.bind(this)
@@ -793,6 +801,8 @@ class SwarmAgentsController {
   dispose () {
     this.disposed = true
     this.catalogGeneration += 1
+    this.pendingCatalog = undefined
+    this.catalogReloadRequested = false
     this.unsubscribe()
     this.listeners.clear()
     this.cancelLayerDrag()
@@ -1072,6 +1082,8 @@ class SwarmAgentsController {
       if (planning === undefined) { this.publish(); return }
       ops.push({ op: 'set', path: ['workflow'], value: planning.workflow }, { op: 'set', path: ['planningReview'], value: planning.planningReview })
     }
+    const connectionGeneration = this.connectionGeneration
+    const saveGeneration = ++this.saveGeneration
     this.saving = true
     this.notice = undefined
     this.publish()
@@ -1082,6 +1094,7 @@ class SwarmAgentsController {
       accepted = false
     }
     if (this.disposed) return
+    if (connectionGeneration !== this.connectionGeneration || saveGeneration !== this.saveGeneration) return
     this.saving = false
     if (accepted) {
       this.drafts.clear()
@@ -1104,32 +1117,61 @@ class SwarmAgentsController {
   }
 
   async loadCatalog () {
-    if (this.disposed || this.catalog.status === 'loading') return
+    if (this.disposed) return
+    if (this.pendingCatalog !== undefined) {
+      this.catalogReloadRequested = true
+      return this.pendingCatalog
+    }
     const generation = ++this.catalogGeneration
     this.catalog = { ...this.catalog, status: 'loading' }
     this.publish()
-    let response
-    try {
-      response = await this.ctx.remote.session.modelCatalog()
-    } catch (error) {
-      response = { ok: false, error }
-    }
-    if (generation !== this.catalogGeneration) return
-    this.catalog = response.ok
-      ? { status: 'ready', groups: response.value.groups, failures: response.value.failures }
-      : { status: 'error', groups: this.catalog.groups, failures: [] }
-    this.publish()
+    let timer
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('模型目录读取超时')), CATALOG_TIMEOUT_MS)
+    })
+    const pending = Promise.resolve().then(async () => {
+      try {
+        const response = await Promise.race([this.ctx.remote.session.modelCatalog(), timeout])
+        if (generation !== this.catalogGeneration) return
+        if (response?.ok === true && Array.isArray(response.value?.groups)) {
+          this.catalog = { status: 'ready', groups: response.value.groups, failures: Array.isArray(response.value.failures) ? response.value.failures : [] }
+        } else this.catalog = { status: 'error', groups: this.catalog.groups, failures: [] }
+      } catch {
+        if (generation === this.catalogGeneration) this.catalog = { status: 'error', groups: this.catalog.groups, failures: [] }
+      }
+    }).finally(() => {
+      clearTimeout(timer)
+      if (generation === this.catalogGeneration) {
+        this.pendingCatalog = undefined
+        this.publish()
+      }
+      if (!this.disposed && this.catalogReloadRequested) {
+        this.catalogReloadRequested = false
+        void this.loadCatalog()
+      }
+    })
+    this.pendingCatalog = pending
+    await pending
   }
 
   refreshCatalog () {
     if (this.disposed) return
+    if (this.pendingCatalog !== undefined) {
+      this.catalogReloadRequested = true
+      return
+    }
     this.catalogGeneration += 1
     this.catalog = { ...this.catalog, status: 'idle' }
-    this.loadCatalog()
+    void this.loadCatalog()
   }
 
   resetConnection () {
     if (this.disposed) return
+    this.connectionGeneration += 1
+    this.saveGeneration += 1
+    this.catalogGeneration += 1
+    this.pendingCatalog = undefined
+    this.catalogReloadRequested = false
     this.cancelLayerDrag()
     this.layerIds.clear()
     this.saving = false
@@ -1221,6 +1263,7 @@ class JevKeyController {
     this.disposed = false
     this.generation = 0
     this.testGeneration = 0
+    this.writeGeneration = 0
     this.subscribe = this.subscribe.bind(this)
     this.getSnapshot = this.getSnapshot.bind(this)
   }
@@ -1236,7 +1279,16 @@ class JevKeyController {
     this.disposed = true
     this.generation += 1
     this.testGeneration += 1
+    this.writeGeneration += 1
     this.listeners.clear()
+  }
+
+  resetConnection () {
+    if (this.disposed) return
+    this.generation += 1
+    this.testGeneration += 1
+    this.writeGeneration += 1
+    this.update({ saving: false, testing: false, test: undefined, notice: undefined, error: undefined })
   }
 
   update (patch) {
@@ -1286,6 +1338,7 @@ class JevKeyController {
     const ref = this.state.info?.ref ?? this.getRef()
     const value = this.state.draft.trim()
     if (this.state.saving || (operation === 'set' && value === '')) return
+    const writeGeneration = this.writeGeneration
     this.testGeneration += 1
     this.update({ saving: true, notice: undefined, error: undefined, testing: false, test: undefined })
     let error
@@ -1294,6 +1347,13 @@ class JevKeyController {
       if (!response.ok) error = response.error?.message ?? 'refused'
     } catch (failure) {
       error = failure instanceof Error ? failure.message : String(failure)
+    }
+    if (this.disposed || writeGeneration !== this.writeGeneration) return
+    const currentRef = this.state.info?.ref ?? this.getRef()
+    if (currentRef !== ref) {
+      this.update({ saving: false, test: undefined, draft: this.state.draft, error: '凭据引用已在保存期间改变；本次写入未应用到当前模型配置，请重新保存。' })
+      await this.load()
+      return
     }
     this.update({ saving: false, test: undefined, ...(error === undefined ? { draft: '', notice: operation === 'set' ? 'jevSaved' : 'jevCleared' } : { error }) })
     await this.load()
@@ -1890,8 +1950,8 @@ function apply (ctx) {
   ctx.effect(() => () => { jev.dispose() }, 'swarm-settings: jev key')
   ctx.effect(() => ctx.remote.$on('credentials/reference-updated', () => { jev.load() }), 'swarm-settings: credential invalidations')
   ctx.effect(() => ctx.remote.$on('llm/adapters-updated', () => { controller.refreshCatalog() }), 'swarm-settings: adapter invalidations')
-  ctx.effect(() => ctx.remote.$on('settings/document-updated', () => { controller.refreshCatalog() }), 'swarm-settings: settings invalidations')
-  ctx.effect(() => ctx.on('connection/reset', () => { controller.resetConnection(); jev.load() }), 'swarm-settings: connection generation')
+  ctx.effect(() => ctx.remote.$on('settings/document-updated', () => { controller.refreshCatalog(); jev.load() }), 'swarm-settings: settings invalidations')
+  ctx.effect(() => ctx.on('connection/reset', () => { controller.resetConnection(); jev.resetConnection(); jev.load() }), 'swarm-settings: connection generation')
   ctx.effect(() => ctx.configForms.whileServed([DATA.namespace], () => ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'swarm-agents',

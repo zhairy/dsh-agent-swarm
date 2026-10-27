@@ -111,15 +111,28 @@ const loadMermaid = (document_ = globalThis.document) => {
   mermaidPromise = new Promise((resolve, reject) => {
     if (document_ === undefined) { reject(new Error('Browser DOM unavailable')); return }
     const script = document_.createElement('script')
+    const timer = setTimeout(() => {
+      script.onload = null
+      script.onerror = null
+      script.remove()
+      reject(new Error('Local Mermaid asset timed out'))
+    }, 10000)
     script.src = ASSET_URL
     script.async = true
     script.onload = () => {
-      const mermaid = globalThis.mermaid
-      if (mermaid?.render === undefined || mermaid?.parse === undefined) { reject(new Error('Local Mermaid module unavailable')); return }
-      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', htmlLabels: false, secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'htmlLabels', 'flowchart'], flowchart: { htmlLabels: false }, maxTextSize: 32768, maxEdges: 64 })
-      resolve(mermaid)
+      clearTimeout(timer)
+      try {
+        const mermaid = globalThis.mermaid
+        if (mermaid?.render === undefined || mermaid?.parse === undefined) throw new Error('Local Mermaid module unavailable')
+        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', htmlLabels: false, secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'htmlLabels', 'flowchart'], flowchart: { htmlLabels: false }, maxTextSize: 32768, maxEdges: 64 })
+        script.remove()
+        resolve(mermaid)
+      } catch (error) {
+        script.remove()
+        reject(error)
+      }
     }
-    script.onerror = () => { script.remove(); reject(new Error('Local Mermaid asset unavailable')) }
+    script.onerror = () => { clearTimeout(timer); script.remove(); reject(new Error('Local Mermaid asset unavailable')) }
     document_.head.appendChild(script)
   }).catch((error) => { mermaidPromise = undefined; throw error })
   return mermaidPromise
@@ -150,12 +163,6 @@ const styles = {
   diagram: { overflowX: 'auto', padding: '12px 0', maxWidth: '100%' },
   source: { overflowX: 'auto', padding: 10, whiteSpace: 'pre-wrap', fontSize: 12 },
   steps: { paddingLeft: 22, lineHeight: 1.8 }
-}
-
-const getTaskFromRpc = (value, taskId) => {
-  const task = Array.isArray(value?.tasks) ? value.tasks.find((candidate) => candidate.task_id === taskId) : value?.task ?? value
-  if (task === null || typeof task !== 'object' || task.task_id !== taskId) throw new Error('Task response identity mismatch')
-  return task
 }
 
 const getTaskMarkdown = (view, fallback) => {
@@ -338,9 +345,9 @@ function EvolutionStatusPanel ({ view, t }) {
 function Freshness ({ snapshot, t }) {
   const settled = snapshot.value?.acceptance?.status === 'accepted' || snapshot.value?.acceptance?.decision === 'incomplete'
   const label = snapshot.status === 'stale' ? 'staleSnapshot' : snapshot.status === 'unavailable' ? 'unavailableSnapshot' : snapshot.status === 'live' && settled ? 'settledSnapshot' : snapshot.status
-  return h('p', { style: styles.status, role: 'status', 'aria-live': 'polite', 'data-swarm-freshness': snapshot.status },
-    t(label), snapshot.updatedAt === null ? null : ` · ${t('lastUpdated')} ${new Date(snapshot.updatedAt).toLocaleTimeString()}`,
-    snapshot.error === null ? null : ` · ${snapshot.error}`)
+  return h('p', { style: styles.status, 'data-swarm-freshness': snapshot.status },
+    h('span', { role: 'status', 'aria-live': 'polite' }, t(label), snapshot.error === null ? null : ` · ${snapshot.error}`),
+    snapshot.updatedAt === null ? null : ` · ${t('lastUpdated')} ${new Date(snapshot.updatedAt).toLocaleTimeString()}`)
 }
 
 /** 只绘制当前可见视角；源码相同不重新布局，隐藏时取消结果发布而不假称抢占同步解析。 */
@@ -356,6 +363,13 @@ function TaskDiagramPanel ({ view, source, t, preference, setPreference }) {
   const diagram = bundle?.views.find((candidate) => candidate.kind === kind)
   const mermaidSource = bundle === null ? source : diagram?.mermaid
   const scroll = React.useRef(null)
+  const attachScroll = (node) => {
+    scroll.current = node
+    if (node !== null) {
+      node.scrollTop = saved.scrollTop ?? 0
+      node.scrollLeft = saved.scrollLeft ?? 0
+    }
+  }
   React.useEffect(() => {
     const update = () => setVisible(document.visibilityState !== 'hidden')
     globalThis.document?.addEventListener?.('visibilitychange', update)
@@ -363,13 +377,10 @@ function TaskDiagramPanel ({ view, source, t, preference, setPreference }) {
   }, [])
   React.useEffect(() => {
     let current = true
-    setSvg(null); setRenderError(null)
+    setRenderError(null)
     if (visible && mermaidSource !== undefined) renderMermaid(mermaidSource).then((value) => { if (current) setSvg({ source: mermaidSource, value }) }).catch((error) => { if (current) setRenderError(String(error.message ?? error)) })
     return () => { current = false }
   }, [mermaidSource, visible])
-  React.useEffect(() => {
-    if (scroll.current !== null) { scroll.current.scrollTop = saved.scrollTop ?? 0; scroll.current.scrollLeft = saved.scrollLeft ?? 0 }
-  }, [])
   const changePreference = (nextKind, nextZoom) => {
     setKind(nextKind); setZoom(nextZoom)
     setPreference?.({ kind: nextKind, zoom: nextZoom })
@@ -386,7 +397,7 @@ function TaskDiagramPanel ({ view, source, t, preference, setPreference }) {
     bundle?.diagnostics.length > 0 ? h('details', { 'data-swarm-diagram-diagnostics': '' }, h('summary', null, `${t('deviations')} (${bundle.diagnostics.length})`), h('ul', null, ...bundle.diagnostics.map((item, index) => h('li', { key: index }, `${item.code}${item.nodeId === undefined ? '' : ` · ${item.nodeId}`}：${item.message}`)))) : null,
     svg === null || svg.source !== mermaidSource || !visible ? null : h('div', null,
       h('div', { style: styles.header }, h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, disabled: zoom >= 3, onClick: () => changePreference(kind, Math.min(3, zoom + 0.5)) }, t('zoomIn')), h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, disabled: zoom <= 1, onClick: () => changePreference(kind, Math.max(1, zoom - 0.5)) }, t('zoomOut')), h('button', { type: 'button', style: { ...styles.button, marginLeft: 0 }, onClick: () => changePreference(kind, 1) }, t('fit'))),
-      h('div', { ref: scroll, style: { ...styles.diagram, maxHeight: '65vh', overflow: 'auto' }, role: 'group', tabIndex: 0, 'aria-label': t('title'), 'data-swarm-diagram-zoom': String(zoom), onScroll: (event) => setPreference?.({ kind, zoom, scrollTop: event.currentTarget.scrollTop, scrollLeft: event.currentTarget.scrollLeft }) }, h('div', { style: { width: `${zoom * 100}%` }, role: 'img', 'aria-label': t(kind), dangerouslySetInnerHTML: { __html: svg.value } }))),
+      h('div', { ref: attachScroll, style: { ...styles.diagram, maxHeight: '65vh', overflow: 'auto' }, role: 'group', tabIndex: 0, 'aria-label': t('title'), 'data-swarm-diagram-zoom': String(zoom), onScroll: (event) => setPreference?.({ kind, zoom, scrollTop: event.currentTarget.scrollTop, scrollLeft: event.currentTarget.scrollLeft }) }, h('div', { style: { width: `${zoom * 100}%` }, role: 'img', 'aria-label': t(kind), dangerouslySetInnerHTML: { __html: svg.value } }))),
     renderError === null ? null : h('p', { role: 'status' }, `${t('renderError')}：${renderError}`),
     Array.isArray(definition?.nodes) ? h('div', { style: { marginTop: 14 } },
       h('p', { style: styles.status }, t('selectNode')),
@@ -442,4 +453,4 @@ exports.validateTaskView = validateTaskView
 exports.TaskFlowContent = TaskFlowContent
 exports.useTaskSnapshot = useTaskSnapshot
 exports.dictionaries = { zh, en }
-exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskFromRpc, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, TaskFlowRow, TaskFlowContent, TaskDiagramPanel, TaskProgressSummary, Freshness, EvolutionStatusPanel, getEvolutionView, validateTaskView, useTaskSnapshot, zh, en, styles, DIAGRAM_KINDS }
+exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, TaskFlowRow, TaskFlowContent, TaskDiagramPanel, TaskProgressSummary, Freshness, EvolutionStatusPanel, getEvolutionView, validateTaskView, useTaskSnapshot, zh, en, styles, DIAGRAM_KINDS }

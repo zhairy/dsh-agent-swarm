@@ -103,6 +103,8 @@ export interface Segment {
   readonly chunks: ReadonlyMap<string, Chunk>
   /** 段哈希缓存：段对象不可变（chunks/order 只读且不再修改），未变段在预览中按引用复用。 */
   hash?: string
+  /** 段 UTF-8 字节数缓存：未变段复用，变更段只在预览时重算一次。 */
+  bytes?: number
 }
 
 /** 调用方提交的增量补丁（值形态；分片编码与冻结由本模块完成）。 */
@@ -177,6 +179,7 @@ const listSegment = (order: readonly string[], chunks: ReadonlyMap<string, Chunk
   bucket === true ? { kind: 'list', bucket: true, order, chunks } : { kind: 'list', order, chunks }
 
 const segmentBytes = (name: string, segment: Segment): number => {
+  if (segment.bytes !== undefined) return segment.bytes
   let inner = 2
   if (segment.kind === 'whole') inner = segment.chunks.get('')?.bytes ?? 0
   else if (segment.kind === 'list') {
@@ -194,7 +197,8 @@ const segmentBytes = (name: string, segment: Segment): number => {
     const keys = [...segment.chunks.keys()].sort()
     for (const [index, key] of keys.entries()) inner += Buffer.byteLength(JSON.stringify(key), 'utf8') + 1 + segment.chunks.get(key)!.bytes + (index === 0 ? 0 : 1)
   }
-  return Buffer.byteLength(JSON.stringify(name), 'utf8') + 1 + inner
+  segment.bytes = Buffer.byteLength(JSON.stringify(name), 'utf8') + 1 + inner
+  return segment.bytes
 }
 
 export class ChunkedState {
@@ -295,7 +299,7 @@ export class ChunkedState {
     return '{' + [...segment.chunks.keys()].sort().map((key) => JSON.stringify(key) + ':' + segment.chunks.get(key)!.encoded).join(',') + '}'
   }
 
-  /** 精确的完整状态 UTF-8 字节数（与 encode() 等长）；O(段数 + 分片数)，不做整份拼接。 */
+  /** 精确的完整状态 UTF-8 字节数（与 encode() 等长）；未变段复用缓存，只做 O(段数) 求和。 */
   getStateBytes (): number {
     let total = 2
     const names = [...this.segments.keys()].sort()
@@ -365,6 +369,7 @@ export class ChunkedState {
       const current = segments.get(name)
       if (current === undefined) continue
       const chunks = new Map(current.chunks)
+      const removeKeys = new Set(keys)
       let removedAny = false
       for (const key of keys) {
         if (!chunks.has(key)) continue
@@ -374,7 +379,7 @@ export class ChunkedState {
       }
       if (!removedAny) continue
       segments.set(name, current.kind === 'list'
-        ? listSegment((current.order ?? []).filter((key) => !keys.includes(key)), chunks, current.bucket)
+        ? listSegment((current.order ?? []).filter((key) => !removeKeys.has(key)), chunks, current.bucket)
         : { kind: 'dict', chunks })
       changed = true
     }
@@ -385,6 +390,7 @@ export class ChunkedState {
       if (kind === 'whole') throw new StateStoreError('STATE_INVALID', `State segment ${name} is a whole segment; declare SegmentSpecs for it or write it via whole`)
       const chunks = new Map(current?.chunks ?? [])
       const order = kind === 'list' ? [...(current?.order ?? [])] : undefined
+      const orderKeys = order === undefined ? undefined : new Set(order)
       let segmentChanged = false
       for (const [key, value] of Object.entries(entries)) {
         if (value === undefined) throw new StateStoreError('STATE_INVALID', `State segment ${name} set.${key} must not be undefined`)
@@ -400,7 +406,10 @@ export class ChunkedState {
           continue
         }
         chunks.set(key, chunk)
-        if (order !== undefined && !order.includes(key)) order.push(key)
+        if (order !== undefined && orderKeys !== undefined && !orderKeys.has(key)) {
+          order.push(key)
+          orderKeys.add(key)
+        }
         recordChunk(name, key, chunk)
         segmentChanged = true
         changed = true
@@ -415,7 +424,8 @@ export class ChunkedState {
       if (current.kind !== 'list') throw new StateStoreError('STATE_INVALID', `State segment ${name} is not a list segment`)
       if (new Set(order).size !== order.length) throw new StateStoreError('STATE_INVALID', `State segment ${name} order contains duplicate keys`)
       for (const key of order) if (!current.chunks.has(key)) throw new StateStoreError('STATE_INVALID', `State segment ${name} order references missing key`)
-      for (const key of current.chunks.keys()) if (!order.includes(key)) throw new StateStoreError('STATE_INVALID', `State segment ${name} has chunk missing from order`)
+      const requested = new Set(order)
+      for (const key of current.chunks.keys()) if (!requested.has(key)) throw new StateStoreError('STATE_INVALID', `State segment ${name} has chunk missing from order`)
       const previous = current.order ?? []
       if (previous.length === order.length && order.every((key, index) => previous[index] === key)) continue
       segments.set(name, listSegment([...order], current.chunks, current.bucket))
@@ -450,17 +460,23 @@ export class ChunkedState {
       if (current === undefined && spec === undefined) throw new StateStoreError('STATE_INVALID', `State journal references unknown segment ${name} without a whole chunk`)
       const kind = current?.kind ?? spec!.kind
       const chunks = new Map(current?.chunks ?? [])
-      for (const key of change.remove ?? []) chunks.delete(key)
-      const order = kind === 'list' ? [...(current?.order ?? [])].filter((key) => !(change.remove ?? []).includes(key)) : undefined
+      const removeKeys = new Set(change.remove ?? [])
+      for (const key of removeKeys) chunks.delete(key)
+      const order = kind === 'list' ? [...(current?.order ?? [])].filter((key) => !removeKeys.has(key)) : undefined
+      const orderKeys = order === undefined ? undefined : new Set(order)
       for (const [key, chunk] of chunkList(change.set)) {
         chunks.set(key, chunk)
-        if (order !== undefined && !order.includes(key)) order.push(key)
+        if (order !== undefined && orderKeys !== undefined && !orderKeys.has(key)) {
+          order.push(key)
+          orderKeys.add(key)
+        }
       }
       if (kind === 'list') {
         const finalOrder = change.order === undefined ? order ?? [] : [...change.order]
         if (new Set(finalOrder).size !== finalOrder.length) throw new StateStoreError('STATE_INVALID', `State journal segment ${name} order contains duplicate keys`)
+        const finalOrderKeys = new Set(finalOrder)
         for (const key of finalOrder) if (!chunks.has(key)) throw new StateStoreError('STATE_INVALID', `State journal segment ${name} order references missing key`)
-        for (const key of chunks.keys()) if (!finalOrder.includes(key)) throw new StateStoreError('STATE_INVALID', `State journal segment ${name} has chunk missing from order`)
+        for (const key of chunks.keys()) if (!finalOrderKeys.has(key)) throw new StateStoreError('STATE_INVALID', `State journal segment ${name} has chunk missing from order`)
         // 按该段自身（或声明）的布局决定是否分桶；回放不得依赖“上一层调用方传了什么”。
         segments.set(name, listSegment(finalOrder, chunks, current?.bucket ?? spec?.bucketOf !== undefined))
       } else {

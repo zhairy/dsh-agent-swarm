@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import YAML from 'yaml'
 import { getRoutesOverlay, type ScenarioRunInfo } from './helpers.js'
 import { REPO_ROOT, DRIVER_DIR, SANDBOX_ROOT, PROFILE, ensureProfile, getTestedVersion, getSandboxDshModules, runDshAsync } from '../../scripts/sandbox.mjs'
+import { MERMAID_PARSER_VERSION } from '../../src/workflow.js'
 
 interface RecoveryRun extends ScenarioRunInfo {
   runtimeStatus?: { tasks: Array<{ runtimeGuard: { control: { status: string; reason: string } } }> }
@@ -277,7 +278,7 @@ describe('真实 AgentLoop：默认规划三维审核与 enforced 执行', () =>
         expect(run.analysisReadResult).toContain('recovery fixture')
         expect(run.ledgerEvents.find((event) => event.type === 'workflow/review')?.data).toMatchObject({ status: 'pass' })
         expect(run.planningStatus?.tasks[0]?.planningReview).toMatchObject({ status: 'pass', goalReview: { verdict: 'pass' }, designReview: { verdict: 'pass' },
-          mermaidReview: { parseVerdict: 'pass', projectionVerdict: 'pass', parserVersion: '11.12.0' } })
+          mermaidReview: { parseVerdict: 'pass', projectionVerdict: 'pass', parserVersion: MERMAID_PARSER_VERSION } })
         if (scenario === 'planning-phase-pass') {
           expect(run.results[1]?.text).toContain('completed')
           expect(run.results[2]?.text).toContain('accepted')

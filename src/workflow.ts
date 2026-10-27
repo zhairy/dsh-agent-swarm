@@ -8,7 +8,16 @@ import { getDelegableRoleIds, getRoleInfo, isDelegableRoleId, type DelegableRole
 import { SwarmError } from './util/errors.js'
 
 export const WORKFLOW_GENERATOR_VERSION = '1'
-export const MERMAID_PARSER_VERSION = '11.12.0'
+const getInstalledMermaidVersion = (): string => {
+  try {
+    const require = createRequire(import.meta.url)
+    const value = JSON.parse(readFileSync(require.resolve('mermaid/package.json'), 'utf8')) as { version?: unknown }
+    return typeof value.version === 'string' ? value.version : 'unavailable'
+  } catch {
+    return 'unavailable'
+  }
+}
+export const MERMAID_PARSER_VERSION = getInstalledMermaidVersion()
 export const WORKFLOW_LIMITS = Object.freeze({ nodes: 32, edges: 64, labelChars: 120, sourceBytes: 32768 })
 export type WorkflowMode = 'quick' | 'standard' | 'algorithm'
 export type WorkflowNodeOperation = 'delegate' | 'checkpoint' | 'accept'
@@ -325,8 +334,7 @@ export const intOfficialMermaidParser = (timeoutMs = 10000): MermaidParserLike =
   const require = createRequire(import.meta.url)
   let mermaidUrl: string
   let jsdomPath: string
-  let version: string
-  try { mermaidUrl = pathToFileURL(require.resolve('mermaid')).href; jsdomPath = require.resolve('jsdom'); version = String(JSON.parse(readFileSync(require.resolve('mermaid/package.json'), 'utf8')).version) }
+  try { mermaidUrl = pathToFileURL(require.resolve('mermaid')).href; jsdomPath = require.resolve('jsdom') }
   catch (error) { return { version: 'unavailable', ok: false, error: `官方 Mermaid parser 不可用：${String(error)}` } }
   return new Promise((resolve) => {
     const worker = new Worker(`
@@ -340,7 +348,7 @@ export const intOfficialMermaidParser = (timeoutMs = 10000): MermaidParserLike =
         try { await mermaid.parse(workerData.source); parentPort.postMessage({ version: workerData.version, ok: true }) }
         catch (error) { parentPort.postMessage({ version: workerData.version, ok: false, error: String(error.message ?? error).slice(0, 2000) }) }
       }).catch((error) => parentPort.postMessage({ version: 'unavailable', ok: false, error: String(error) }))
-    `, { eval: true, workerData: { mermaidUrl, jsdomPath, source, version } })
+    `, { eval: true, execArgv: ['--input-type=commonjs'], workerData: { mermaidUrl, jsdomPath, source, version: MERMAID_PARSER_VERSION } })
     let settled = false
     const finish = (result: { version: string; ok: boolean; error?: string }): void => {
       if (settled) return

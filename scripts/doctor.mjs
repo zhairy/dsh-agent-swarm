@@ -6,14 +6,17 @@
 import { execSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const argv = process.argv.slice(2)
 const getArg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback)
 const profile = getArg('--profile', 'web')
 const dsh = getArg('--dsh', 'dsh')
 const dshHome = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
-const MIN_VERSION = '0.1.7-alpha.2'
+const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
+const MIN_VERSION = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).dsh?.minVersion
+if (typeof MIN_VERSION !== 'string') throw new Error('package.json 缺少 dsh.minVersion')
 const rows = []
 const add = (item, ok, detail, hint = '') => rows.push({ item, ok, detail, hint })
 

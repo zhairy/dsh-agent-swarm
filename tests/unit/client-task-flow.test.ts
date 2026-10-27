@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadTaskViewStoreModule } from './client-module-loader.js'
+import { MERMAID_PARSER_VERSION } from '../../src/workflow.js'
 
 interface ElementInfo { type: unknown; props: Record<string, unknown>; children: unknown[] }
 const loadModule = (view: unknown = null) => {
@@ -34,7 +35,7 @@ describe('真实任务流程客户端投影', () => {
     expect(empty.goal.agent).toBe('unknown')
     expect(empty.mermaid.syntax).toBe('unknown')
     expect(textOf(PlanningReviewPanel({ review: undefined }))).toContain('未审核')
-    const review = { status: 'review_required', goalReview: { verdict: 'pass' }, designReview: { verdict: 'changes_requested' }, mermaidReview: { parserVersion: '11.12.0', parseVerdict: 'pass', projectionVerdict: 'pass', semanticVerdict: 'pass' }, reviewPolicy: { reviewAbove: 0.8 }, jev: { status: 'ok', answers: { goal_alignment: { noul: 0.2 }, requirement_coverage: { noul: 0.95 }, acceptance_testability: { noul: 0.95 }, design_sufficiency: { noul: 0.9 }, execution_boundaries: { noul: 0.9 }, failure_bounds: { noul: 0.9 }, mermaid_expression: { noul: 0.95 } } }, agent: { result: { findings: [{ severity: 'high', requirementId: 'R1', nodeId: 'verification', issue: '缺少验证', evidence: '没有实际测试步骤', suggestion: '增加复核' }] } }, errors: ['目标仍需定向复核'] }
+    const review = { status: 'review_required', goalReview: { verdict: 'pass' }, designReview: { verdict: 'changes_requested' }, mermaidReview: { parserVersion: MERMAID_PARSER_VERSION, parseVerdict: 'pass', projectionVerdict: 'pass', semanticVerdict: 'pass' }, reviewPolicy: { reviewAbove: 0.8 }, jev: { status: 'ok', answers: { goal_alignment: { noul: 0.2 }, requirement_coverage: { noul: 0.95 }, acceptance_testability: { noul: 0.95 }, design_sufficiency: { noul: 0.9 }, execution_boundaries: { noul: 0.9 }, failure_bounds: { noul: 0.9 }, mermaid_expression: { noul: 0.95 } } }, agent: { result: { findings: [{ severity: 'high', requirementId: 'R1', nodeId: 'verification', issue: '缺少验证', evidence: '没有实际测试步骤', suggestion: '增加复核' }] } }, errors: ['目标仍需定向复核'] }
     const view = getPlanningReviewView(review)
     expect(view.goal.agent).toBe('pass')
     expect(view.goal.jev).toBe('review_required')
@@ -96,11 +97,9 @@ describe('真实任务流程客户端投影', () => {
     expect(isSafeSvgMarkup('<svg><a href="https://external"></a></svg>')).toBe(false)
   })
 
-  it('RPC 必须绑定当前任务；失败保留原文，不渲染虚假已审核状态', async () => {
+  it('失败保留原文，不渲染虚假已审核状态', async () => {
     const module = loadModule()
-    const { getTaskFromRpc, TaskFlowContent } = module.__test__
-    expect(getTaskFromRpc({ tasks: [{ task_id: 'T-1', goal: '真实目标' }] }, 'T-1').goal).toBe('真实目标')
-    expect(() => getTaskFromRpc({ task_id: 'other' }, 'T-1')).toThrow('identity')
+    const { TaskFlowContent } = module.__test__
     const node = TaskFlowContent({ taskId: 'T-1', fallback: '真实工具内容' })
     expect(textOf(node)).toContain('等待审核')
     expect(textOf(node)).not.toContain('已审核')
@@ -169,5 +168,22 @@ describe('真实任务流程客户端投影', () => {
     await first
     expect(script.src).toBe('/api/swarm-assets/mermaid.min.js')
     expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ securityLevel: 'strict', flowchart: { htmlLabels: false } }))
+  })
+
+  it('Mermaid 初始化抛错会拒绝本次加载并允许重试', async () => {
+    const { loadMermaid } = loadModule().__test__
+    const firstInitialize = vi.fn(() => { throw new Error('initialize exploded') })
+    vi.stubGlobal('mermaid', { initialize: firstInitialize, render: vi.fn(), parse: vi.fn() })
+    const firstScript: any = { remove: vi.fn() }
+    const firstDocument = { createElement: vi.fn(() => firstScript), head: { appendChild: vi.fn((element: any) => queueMicrotask(() => element.onload())) } }
+    await expect(loadMermaid(firstDocument)).rejects.toThrow('initialize exploded')
+    expect(firstScript.remove).toHaveBeenCalled()
+
+    const nextInitialize = vi.fn()
+    vi.stubGlobal('mermaid', { initialize: nextInitialize, render: vi.fn(), parse: vi.fn() })
+    const nextScript: any = { remove: vi.fn() }
+    const nextDocument = { createElement: vi.fn(() => nextScript), head: { appendChild: vi.fn((element: any) => queueMicrotask(() => element.onload())) } }
+    await expect(loadMermaid(nextDocument)).resolves.toMatchObject({ initialize: nextInitialize })
+    expect(nextInitialize).toHaveBeenCalledTimes(1)
   })
 })

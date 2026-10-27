@@ -1,0 +1,9 @@
+{
+  "contexts": 50000,
+  "iterations": 500,
+  "cachedBytes": 2127892,
+  "cachedTotalMs": 0.491,
+  "cachedAvgMs": 0.000981,
+  "fullEncodeMs": 10.606,
+  "bytesMatch": true
+}

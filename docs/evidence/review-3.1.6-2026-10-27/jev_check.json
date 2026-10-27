@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "model": "jev-1.14.0",
+  "answers": {
+    "probabilities": {
+      "unit_and_integration_green": 0.97,
+      "typecheck_and_audit_green": 0.98,
+      "runtime_hardening_supported": 0.84,
+      "package_boundary_supported": 0.98,
+      "real_host_supported": 0.95,
+      "strict_o1_claim_false": 0.94,
+      "unrelated_host_warning": 0.94
+    },
+    "flags": [
+      "unit_and_integration_green",
+      "typecheck_and_audit_green",
+      "runtime_hardening_supported",
+      "package_boundary_supported",
+      "real_host_supported",
+      "strict_o1_claim_false",
+      "unrelated_host_warning"
+    ],
+    "uncertain": []
+  },
+  "usage": {
+    "input_tokens": 1153,
+    "output_tokens": 143,
+    "est_cost_usd": 4.8426e-05
+  },
+  "latency_ms": 246.058
+}

@@ -1,5 +1,6 @@
 import type { FetchRouteLike } from './host-contract.js'
 import type { JevHub } from './jev-hub.js'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
 import { JevCredentialError } from './jev.js'
@@ -145,15 +146,26 @@ export const getRpcRoutes = (getJev: () => JevHub, deps?: TaskRpcDepsInfo): Fetc
 
 /** 只读取锁定依赖的固定资源；请求参数从不参与文件路径计算。 */
 export const getMermaidAssetRoute = (): FetchRouteLike => {
-  let asset: Promise<Uint8Array> | undefined
+  let asset: Promise<{ bytes: Uint8Array; body: ArrayBuffer; etag: string }> | undefined
   const require = createRequire(import.meta.url)
   return {
     path: MERMAID_ASSET_PATH, methods: ['GET'], requestBody: 'buffered',
     fetch: async (request) => {
       if (request.method !== 'GET') return new Response('method not allowed', { status: 405, headers: { allow: 'GET' } })
       try {
-        asset ??= readFile(require.resolve('mermaid/dist/mermaid.min.js'))
-        return new Response(new Uint8Array(await asset), { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff' } })
+        asset ??= readFile(require.resolve('mermaid/dist/mermaid.min.js')).then((value) => {
+          const bytes = new Uint8Array(value)
+          return { bytes, body: bytes.buffer as ArrayBuffer, etag: `"sha256-${createHash('sha256').update(bytes).digest('base64url').slice(0, 22)}"` }
+        })
+        const current = await asset
+        const headers = {
+          'content-type': 'text/javascript; charset=utf-8',
+          'cache-control': 'private, no-cache',
+          etag: current.etag,
+          'x-content-type-options': 'nosniff'
+        }
+        if (request.headers.get('if-none-match') === current.etag) return new Response(null, { status: 304, headers })
+        return new Response(current.body, { headers })
       } catch {
         asset = undefined
         return new Response('Local Mermaid asset unavailable', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8' } })

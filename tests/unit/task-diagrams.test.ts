@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { DelegationRecord, TaskRecord } from '../../src/evidence.js'
 import { getTaskDiagrams, getArchifyTaskDiagrams, ValidateTaskDiagrams, TASK_DIAGRAM_KINDS, TASK_DIAGRAM_LIMITS } from '../../src/task-diagrams.js'
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
-import { getDefaultWorkflow, getWorkflowDigest, intWorkflowState, intOfficialMermaidParser } from '../../src/workflow.js'
+import { MERMAID_PARSER_VERSION, getDefaultWorkflow, getWorkflowDigest, intWorkflowState, intOfficialMermaidParser } from '../../src/workflow.js'
 import { getRuleOrchestration } from '../../src/orchestration.js'
 import { loadTaskViewStoreModule } from './client-module-loader.js'
 
@@ -140,7 +140,7 @@ describe('单一版本源派生的五图与进度', () => {
     for (const view of result.views) {
       expect(() => client().validateSource(view.mermaid)).not.toThrow()
       const parsed = await parser(view.mermaid)
-      expect(parsed, `${view.kind}: ${parsed.error}`).toMatchObject({ ok: true, version: '11.12.0' })
+      expect(parsed, `${view.kind}: ${parsed.error}`).toMatchObject({ ok: true, version: MERMAID_PARSER_VERSION })
     }
   }, 30000)
   it('客户端拒绝跨版本图表，保留原flow兼容；拒绝多图任意指令', () => {

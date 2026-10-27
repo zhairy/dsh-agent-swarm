@@ -12,13 +12,12 @@ const loadModule = (): any => {
     createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): ElementInfo => ({ type, props: props ?? {}, children }),
     useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot()
   }
-  const load = (path: string, source: string, externalRequire: (id: string) => unknown) => {
+  const load = (source: string, externalRequire: (id: string) => unknown) => {
     const module = { exports: {} as any }
     new Function('require', 'module', 'exports', source)(externalRequire, module, module.exports)
     return module
   }
   const modelEvents = load(
-    '../../client/model-events.js',
     readFileSync(join(__dirname, '../../client/model-events.js'), 'utf8')
       .replace('const DISPLAY = __SWARM_DISPLAY__', `const DISPLAY = ${JSON.stringify(DISPLAY)}`),
     (id) => { throw new Error(`unexpected event require ${id}`) }
@@ -34,6 +33,11 @@ const loadModule = (): any => {
 
 const display = loadModule()
 const { markerDefinition, headerDefinition, modelCallDefinition, ModelCallRow, ModelBadge, AgentModelController, getModelCallModeHook } = display.__test__
+const deferred = () => {
+  let resolve!: (value: unknown) => void
+  const promise = new Promise<unknown>((done) => { resolve = done })
+  return { promise, resolve }
+}
 
 const t = (key: string) => key
 const textOf = (node: unknown): string => {
@@ -215,6 +219,114 @@ describe('client 入口', () => {
 })
 
 describe('persistent child model controls', () => {
+  it('times out a stalled view request and allows a fresh retry', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const view = vi.fn()
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockResolvedValueOnce({ ...address, revision: 1, persistent: true, phase: 'idle' })
+    const controller = new AgentModelController(address, { view, command: vi.fn() }, 20)
+    await controller.load()
+    expect(controller.getSnapshot()).toMatchObject({ status: 'error', error: expect.stringContaining('超时') })
+    await controller.load()
+    expect(view).toHaveBeenCalledTimes(2)
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', view: { revision: 1 } })
+  })
+
+  it('releases busy when a panel closes before an uncancellable command settles', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const command = vi.fn(() => new Promise(() => undefined))
+    const controller = new AgentModelController(address, {
+      view: async () => ({ ...address, revision: 2, persistent: true, phase: 'idle' }),
+      command,
+      catalog: async () => ({ ok: true, value: { groups: [] } })
+    })
+    controller.activate()
+    await vi.waitFor(() => expect(controller.getSnapshot()).toMatchObject({ status: 'ready', catalogStatus: 'ready' }))
+    controller.setDraft({ provider: 'codex' })
+    controller.setDraft({ model: 'next' })
+    void controller.command('select')
+    expect(controller.getSnapshot().busy).toBe(true)
+    controller.deactivate()
+    expect(controller.getSnapshot().busy).toBe(false)
+    controller.activate()
+    expect(controller.getSnapshot().busy).toBe(false)
+    controller.dispose()
+  })
+
+  it('settles uncancellable view and catalog loads when the panel closes', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const controller = new AgentModelController(address, {
+      view: () => new Promise(() => undefined),
+      command: vi.fn(),
+      catalog: () => new Promise(() => undefined)
+    })
+    controller.activate()
+    const load = controller.pendingLoad.promise
+    const catalog = controller.pendingCatalog.promise
+    controller.deactivate()
+    await expect(Promise.all([load, catalog])).resolves.toEqual([undefined, undefined])
+    expect(controller.pendingLoad).toBeUndefined()
+    expect(controller.pendingCatalog).toBeUndefined()
+    controller.dispose()
+  })
+
+  it('does not load an unopened panel during connection reset', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const view = vi.fn()
+    const catalog = vi.fn()
+    const controller = new AgentModelController(address, { view, command: vi.fn(), catalog, getGeneration: () => 0 })
+    controller.resetConnection()
+    expect(view).not.toHaveBeenCalled()
+    expect(catalog).not.toHaveBeenCalled()
+  })
+
+  it('slow view polling is single-flight and reuses the pending request', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const pending = deferred()
+    const view = vi.fn(() => pending.promise)
+    const controller = new AgentModelController(address, { view, command: vi.fn() })
+    const first = controller.load()
+    const second = controller.load()
+    expect(view).toHaveBeenCalledTimes(1)
+    pending.resolve({ ...address, revision: 1, persistent: true, phase: 'idle' })
+    await Promise.all([first, second])
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', view: { revision: 1 } })
+  })
+
+  it('connection reset discards an old view, reloads once and preserves a user draft', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const old = deferred()
+    let generation = 0
+    let notify!: () => void
+    const view = vi.fn()
+      .mockReturnValueOnce(old.promise)
+      .mockResolvedValueOnce({ ...address, revision: 2, persistent: true, phase: 'idle', actual: { route: { provider: 'codex', model: 'new' }, attemptId: 'a-2' } })
+    const transport = {
+      view,
+      command: vi.fn(),
+      catalog: vi.fn(async () => ({ ok: true, value: { groups: [] } })),
+      getGeneration: () => generation,
+      subscribeGeneration: (listener: () => void) => { notify = listener; return () => undefined }
+    }
+    const controller = new AgentModelController(address, transport)
+    controller.activate()
+    const first = controller.load()
+    controller.setDraft({ provider: 'claude' })
+    controller.setDraft({ model: 'draft-model' })
+    generation = 1
+    notify()
+    await vi.waitFor(() => expect(view).toHaveBeenCalledTimes(2))
+    await controller.load()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      view: { revision: 2 },
+      draft: { provider: 'claude', model: 'draft-model' }
+    })
+    old.resolve({ ...address, revision: 1, persistent: true, phase: 'idle', actual: { route: { provider: 'codex', model: 'old' }, attemptId: 'a-1' } })
+    await first
+    expect(controller.getSnapshot().view).toMatchObject({ revision: 2 })
+  })
+
   it('一次性审核只记录下一请求选择，不要求取消或人工续跑', async () => {
     const address = { parentSessionId: 'root', childId: 'reviewer' }
     let view = { ...address, revision: 3, persistent: false, phase: 'running', actual: { route: { provider: 'codex', model: 'old' }, attemptId: 'observed-old' } }
@@ -223,7 +335,7 @@ describe('persistent child model controls', () => {
     await controller.load()
     controller.setDraft({ provider: 'codex' }); controller.setDraft({ model: 'next' })
     await controller.command('select')
-    expect(command).toHaveBeenCalledWith({ ...address, action: 'select', expectedRevision: 3, interruptRunning: false, route: { provider: 'codex', model: 'next' } })
+    expect(command).toHaveBeenCalledWith({ ...address, action: 'select', expectedRevision: 3, interruptRunning: false, route: { provider: 'codex', model: 'next' } }, expect.any(AbortSignal))
     expect(controller.getSnapshot().view).toMatchObject({ persistent: false, phase: 'running', actual: { route: { model: 'old' } }, selectedNext: { model: 'next' } })
   })
   it('CAS commands go to the real control plane; selection receipt never replaces actual attempt evidence', async () => {
@@ -236,7 +348,7 @@ describe('persistent child model controls', () => {
     controller.setDraft({ model: 'deepseek-v4.1-flash' })
     controller.setDraft({ reasoningEffort: 'max' })
     await controller.command('select')
-    expect(command).toHaveBeenCalledWith({ ...address, expectedRevision: 3, action: 'select', interruptRunning: true, route: { provider: 'qwen-token-plan-cn', model: 'deepseek-v4.1-flash', reasoningEffort: 'max' } })
+    expect(command).toHaveBeenCalledWith({ ...address, expectedRevision: 3, action: 'select', interruptRunning: true, route: { provider: 'qwen-token-plan-cn', model: 'deepseek-v4.1-flash', reasoningEffort: 'max' } }, expect.any(AbortSignal))
     expect(controller.getSnapshot().view).toMatchObject({ phase: 'stopping', actual: { route: { model: 'old' } }, selectedNext: { model: 'deepseek-v4.1-flash' } })
     await controller.command('continue')
     expect(command).toHaveBeenCalledTimes(1)

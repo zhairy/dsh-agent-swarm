@@ -56,6 +56,10 @@ describe('tool recovery contracts', () => {
       const card = await service.AddTaskCard({ title: '只读诊断', goal: '报告当前合同版本', acceptance: ['版本真实'], flags: {} }, exec)
       const status = service.getStatus({ task_id: card.task_id }, exec)
       const task = status.tasks[0]!
+      const compact = service.getStatus({ task_id: card.task_id, compact: true }, exec).tasks[0]!
+      expect(task.diagrams).not.toBeNull()
+      expect(compact.diagrams).toBeNull()
+      expect(compact.title).toBe(task.title)
       const text = getStatusText(status)
       expect(text).toContain(`需求版本：${task.requestRevision}；合同版本：${task.cardRevision}；流程版本：${task.workflowRevision}`)
       expect(task.planningReview).toBeNull()

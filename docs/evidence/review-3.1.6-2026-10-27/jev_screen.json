@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "model": "jev-1.14.0",
+  "answers": {
+    "verdict": "pass",
+    "risk": 0.01,
+    "risk_confidence": 1.0,
+    "reasons": {}
+  },
+  "usage": {
+    "input_tokens": 1042,
+    "output_tokens": 129,
+    "est_cost_usd": 4.3764e-05
+  },
+  "latency_ms": 610.385
+}

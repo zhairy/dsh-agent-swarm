@@ -58,12 +58,12 @@ import { FindRoleByPresetId, getPermissionLabel, getRoleInfo, isWriteAllowed, RO
 import { getRouteKey, getRouteLabel, createRouteMetadataCache, createRouteFailureObserver, intRouteProbe, type RouteInfo, type RouteProbe } from './routes.js'
 import { ParseSessionPlan, getRuleSessionPlan, getSessionQuestions, getSessionState, intChildEndHub, intThreadRegistry, type SessionPlan, type ThreadInfo } from './threads.js'
 import { getUpgradeReasons, getUpgradedChain } from './upgrade.js'
-import { ACCEPTANCE_QUESTIONS, ParseAssessment, VERDICT_LABELS, getAcceptanceState, getReviewQuestions, getReviewState } from './review.js'
+import { ACCEPTANCE_QUESTIONS, ParseAssessment, getAcceptanceState, getReviewQuestions, getReviewState } from './review.js'
 import { getErrorText, SwarmError } from './util/errors.js'
 import { getGitStatus, type GitStatusInfo } from './util/git.js'
 import { intMutex } from './util/mutex.js'
 import { getTaskIntent, getTaskIntentRefs, mergeTaskIntentRefs, getTaskIntentText, getSemanticCardDigest, getCurrentDelegations, digest, getTaskBinding, getTaskContextBinding, isTaskVersionCurrent } from './task-model.js'
-import { getDefaultWorkflow, getLenientWorkflow, getWorkflowDigest, getWorkflowMermaid, getTaskCardMarkdown, intWorkflowState, ReconcileWorkflow, ReconcileWorkflowState, getReadyNodes, getMatchingNode, UpdateWorkflowNode, getValueDigest, getPlanningStatusText, type WorkflowDefinition } from './workflow.js'
+import { MERMAID_PARSER_VERSION, getDefaultWorkflow, getLenientWorkflow, getWorkflowDigest, getWorkflowMermaid, getTaskCardMarkdown, intWorkflowState, ReconcileWorkflow, ReconcileWorkflowState, getReadyNodes, getMatchingNode, UpdateWorkflowNode, getValueDigest, getPlanningStatusText, type WorkflowDefinition } from './workflow.js'
 import { RunPlanningReview, getReviewSnapshot, getPlanningReviewState, getPlanningReviewQuestions, isPlanningReviewCurrent, isPlanningReviewReusable, getPlanningReviewDiagnostics, type PlanningAgentAssessmentInfo, type ReviewSnapshot } from './planning-review.js'
 import { waitForPlanning } from './planning-wait.js'
 import { getArtifactSnapshot } from './artifacts.js'
@@ -389,7 +389,7 @@ const getDelegationView = (d: DelegationRecord, verbose: boolean) => ({
   ...(verbose ? { structured: d.structured, evidence: d.evidence, attempts: d.attempts, evidenceAssessmentDetails: d.evidenceAssessment } : {})
 })
 
-  const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean, externalEditAt: number, recovery?: RequestRecoveryState | null, delegationBindingTask: TaskRecord = task) => {
+  const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean, externalEditAt: number, recovery?: RequestRecoveryState | null, delegationBindingTask: TaskRecord = task, includeDiagrams = true) => {
   const current = getCurrentDelegations(task, delegations, task.artifactSnapshot?.digest)
   const gates = getEffectiveGates(task.gates, current, externalEditAt)
   const check = getAcceptanceCheck(gates, current, task.acceptance?.resolutions ?? [], externalEditAt, task.card.perf)
@@ -412,7 +412,7 @@ const getDelegationView = (d: DelegationRecord, verbose: boolean) => ({
     recovered: task.recovered ?? false,
     contextRefs: (task.contextRefs ?? []).map((material) => material.ref),
     contextArtifacts: task.contextRefs ?? [],
-    diagrams: getTaskDiagrams(task, delegations, delegationBindingTask),
+    diagrams: includeDiagrams ? getTaskDiagrams(task, delegations, delegationBindingTask) : null,
     // 编排方案随任务视图一起下发：状态文本与图表都从这里取，避免各自推算。
     orchestration: task.orchestration ?? null,
     flow: task.workflowDefinition === undefined ? null : {
@@ -518,6 +518,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const childOwners = new Map<string, string>()
   const childSignals = new Map<string, AbortSignal>()
   const childReady = new Map<string, Promise<void>>()
+  const startingChildIds = new Set<string>()
   const admissions = new Map<string, { resolve: () => void; reject: (error: unknown) => void }>()
   const manualRuns = new Map<string, { controller: AbortController; run: Promise<DelegationRecord> }>()
   let delegateEntry: SwarmService['delegate']
@@ -572,6 +573,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         if (previous === undefined) continue
         const task = session.store.getTask(previous.taskId)
         if (task === undefined) continue
+        if (task.acceptance?.status === 'accepted' || task.acceptance?.decision === 'incomplete') continue
         const original = thread.history.findLast((round) => round.delegationId === previous.delegationId && round.taskId === previous.taskId)
         if (previous.continuationInput === undefined && original !== undefined) session.store.UpdateDelegation(previous.delegationId, {
           continuationInput: { task_id: task.taskId, role: previous.role, ...(previous.mode === undefined ? {} : { mode: previous.mode }),
@@ -649,7 +651,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     ...(task.intentHistoryIncomplete ? { requestHistoryNote: task.intentHistoryNote } : {}),
     requestRefs: getTaskIntentRefs(task),
     card: task.card, workflow: task.workflowDefinition ?? getDefaultWorkflow(task.card, task.gates), gates: task.gates,
-    parserVersion: '11.12.0',
+    parserVersion: MERMAID_PARSER_VERSION,
     reviewPolicy: { requireJev: deps.getConfig().planningReview.requireJev, reviewAbove: deps.getConfig().planningReview.reviewAbove }
     ,executionPolicy: { maxAutoFixRounds: deps.getConfig().budgets.maxAutoFixRounds,
       maxPlanningReviewFixRounds: deps.getConfig().planningReview.maxFixRounds,
@@ -807,6 +809,25 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     } catch (error) { deps.logger?.warn(`子智能体工具范围限制失败：${getErrorText(error)}`) }
   }
   const ChildAllowWebFor = (agentId: string): boolean | undefined => childAllowWeb.get(agentId)
+  const hasManagedChildPreset = (agent: AgentLike): boolean =>
+    getAgentHeader(agent).parentSession !== undefined && FindRoleByPresetId(getPresetId(agent)) !== undefined
+  const ReleaseChildRuntime = (agentId: string): void => {
+    routeState.DelAgent(agentId)
+    const cancelled = childSignals.get(agentId)?.aborted === true
+    if (cancelled && agentControl.get(agentId)?.persistent === false) agentControl.MarkOneShotCancelled(agentId)
+    childToolScopes.get(agentId)?.dispose()
+    childToolScopes.delete(agentId)
+    childPrompts.delete(agentId)
+    childAllowWeb.delete(agentId)
+    childSignals.delete(agentId)
+    childReady.delete(agentId)
+    childOwners.delete(agentId)
+    startingChildIds.delete(agentId)
+  }
+  /** One-shot children are host-disposed before this runs; retain only the bounded UI control record. */
+  const ReleaseOneShotChild = (agentId: string): void => {
+    if (agentControl.get(agentId)?.persistent !== true) ReleaseChildRuntime(agentId)
+  }
   /**
    * agent/created 在排队工作释放前触发：在这里限制子智能体作用域，首次工具装配就已受限。
    * 角色由子会话头的 agentPreset 映射；未登记意图时按角色 web 策略保守取值。
@@ -821,6 +842,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const index = pendingChildScopes.findIndex((entry) => entry.role === role)
     const pending = index < 0 ? undefined : pendingChildScopes.splice(index, 1)[0]
     const allowWeb = pending?.allowWeb ?? getRoleInfo(role).web === 'always'
+    if (pending !== undefined) startingChildIds.add(agent.id)
     childAllowWeb.set(agent.id, allowWeb)
     if (pending !== undefined && !childPrompts.has(agent.id)) childPrompts.set(agent.id, getChildPromptInfo(pending))
     ApplyChildToolScope(agent, role, allowWeb)
@@ -855,8 +877,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const result = routeState.RequestRouteRetry(route, childId, { force })
       if (!result.ok) throw new SwarmError('RECOVERY_REQUIRED', `路由暂不能恢复探针：${result.reason}${result.retryAt === undefined ? '' : `；最早 ${new Date(result.retryAt).toISOString()}`}`)
     },
-    persist: async (records) => {
-      for (const parentId of new Set(records.map((record) => record.parentSessionId))) {
+    persist: async (records, parentSessionIds = []) => {
+      for (const parentId of new Set([...records.map((record) => record.parentSessionId), ...parentSessionIds])) {
         const session = sessions.get(parentId)
         // 内存态没有跨重启恢复，控制记录只留在进程内；持久化态保持故障域语义。
         if (session?.features !== undefined && session.features.store.durable) await session.features.persist('agent/control', session.store, session.threads)
@@ -1084,6 +1106,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       if (pending !== undefined && !pending.children.has(agentId)) pending.children.set(agentId, new Map())
       const session = getSession(task.sessionId)
       childOwners.set(agentId, task.sessionId)
+      startingChildIds.delete(agentId)
       childSignals.set(agentId, signal)
       childPrompts.set(agentId, getChildPromptInfo({ role, allowWeb: input?.allow_web === true, ...(record.mode === undefined ? {} : { mode: record.mode }),
         ...(input?.language === undefined ? {} : { language: input.language }), explicitLanguage: input?.languageExplicit === true }))
@@ -1112,13 +1135,20 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     onChildEnd: async (agentId, stopReason, completed) => {
       const current = agentControl.get(agentId)
       if (completed !== undefined && current !== undefined && current.delegationId !== completed.delegationId) return
-      agentControl.MarkRunSettled(agentId, stopReason)
-      if (agentControl.get(agentId)?.persistent !== true) childPrompts.delete(agentId)
+      const effectiveStopReason = childSignals.get(agentId)?.aborted ? 'cancelled' : stopReason
+      agentControl.MarkRunSettled(agentId, effectiveStopReason)
       const owner = childOwners.get(agentId)
-      if (owner === undefined) return
+      if (owner === undefined) {
+        ReleaseOneShotChild(agentId)
+        return
+      }
       const session = getSession(owner)
       const features = session.features
-      if (features !== undefined) await features.bindings.revoke(agentId, childSignals.get(agentId)?.aborted ? 'cancelled' : 'completed', completed?.attemptId)
+      try {
+        if (features !== undefined) await features.bindings.revoke(agentId, childSignals.get(agentId)?.aborted ? 'cancelled' : 'completed', completed?.attemptId)
+      } finally {
+        ReleaseOneShotChild(agentId)
+      }
     },
     ...(deps.network === undefined ? {} : { network: deps.network })
   })
@@ -1602,7 +1632,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
                 childOwners.set(late.id, session.sessionId)
                 childSignals.set(late.id, reviewSignal)
                 void late.result.catch(() => undefined)
-                void late.dispose().catch((error: unknown) => deps.logger?.warn(`迟到规划审核清理失败 ${task.taskId}: ${getErrorText(error)}`))
+                void Promise.resolve().then(() => late.dispose()).catch((error: unknown) =>
+                  deps.logger?.warn(`迟到规划审核清理失败 ${task.taskId}: ${getErrorText(error)}`)).finally(() => ReleaseOneShotChild(late.id))
               }
             }, () => undefined)
             run = await waitForPlanning(started, reviewSignal)
@@ -1639,12 +1670,15 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
               // 能把实际 attempt 标为沉寂，撤销期间保持停止态并拒绝新选择。
               if (agentControl.get(run.id)?.reason !== 'one-shot-settled') agentControl.MarkBlocked(run.id, 'planning-review-cleanup-required')
               // 先撤销能力，再有界清理；清理卡死不能阻塞本轮结果与后续审核。
-              await features.bindings.revoke(run.id, reviewSignal.aborted ? 'cancelled' : 'completed')
+              try {
+                await features.bindings.revoke(run.id, reviewSignal.aborted ? 'cancelled' : 'completed')
+              } catch (error) {
+                deps.logger?.warn(`规划审核撤权未确认 ${task.taskId}/${run.id}: ${getErrorText(error)}`)
+              }
               routeState.DelAgent(run.id)
-              childPrompts.delete(run.id)
-              childReady.delete(run.id)
               try { await waitForPlanning(run.dispose(), AbortSignal.timeout(1000)) }
               catch (error) { deps.logger?.warn(`规划审核清理未确认 ${task.taskId}/${run.id}: ${getErrorText(error)}`) }
+              finally { ReleaseOneShotChild(run.id) }
             }
             routeState.FinishLogicalRequest(reservationId)
           }
@@ -1880,7 +1914,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   }
 
   const getStatus: SwarmService['getStatus'] = (raw, exec) => {
-    const input = (raw ?? {}) as { task_id?: unknown; verbose?: unknown }
+    const input = (raw ?? {}) as { task_id?: unknown; verbose?: unknown; compact?: unknown }
     const session = getSession(exec.agent.id)
     if (isRootTianShu(exec.agent)) PruneRootUpgrade(exec.agent, session)
     const config = deps.getConfig()
@@ -1890,7 +1924,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const views = tasks.map((task) => {
       const evolution = getTaskEvolution(session, task)
       return {
-        ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null, getTaskOrThrow(session, task.taskId)),
+        ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null, getTaskOrThrow(session, task.taskId), input.compact !== true),
         runtimeGuard: getRuntimeView(session, task.taskId),
         evolutionRevision: evolution.revision, evolution: evolution.evolution,
         acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
@@ -1960,7 +1994,14 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       ...(task.acceptance?.verificationReceipt === undefined ? {} : { verification_token: task.acceptance.verificationReceipt.id }),
       ...(task.acceptance?.assessment === undefined ? {} : { assessment: task.acceptance.assessment })
     })
-    if (prepared.reusable) return resultFor(prepared.task, prepared.check)
+    const forgetTerminalControls = async (taskId: string): Promise<void> => {
+      try { for (const childId of await agentControl.ForgetTask(session.sessionId, taskId)) ReleaseChildRuntime(childId) }
+      catch (error) { deps.logger?.warn(`任务 ${taskId} 已终结，但子会话控制记录清理未完成：${getErrorText(error)}`) }
+    }
+    if (prepared.reusable) {
+      await forgetTerminalControls(prepared.task.taskId)
+      return resultFor(prepared.task, prepared.check)
+    }
     const key = getValueDigest({ root: exec.agent.id, binding: prepared.binding, acceptance: prepared.acceptanceDigest,
       decision: input.decision, unresolved: input.unresolved })
     const pending = acceptanceRuns.get(key)
@@ -2045,6 +2086,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           await features.promoteCandidateWithEvidence(candidate.id)
         } catch (error) { deps.logger?.info(`经验保留为候选或未入库：${String(error)}`) }
       }
+      if (committedTask.acceptance!.status === 'accepted' || input.decision === 'incomplete') await forgetTerminalControls(committedTask.taskId)
       return resultFor(committedTask, prepared.check)
     })()
     acceptanceRuns.set(key, run)
@@ -2076,6 +2118,16 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const getGuardReason = (execution: ToolExecutionLike): string | undefined => {
     if (execution.agent !== undefined && isRootTianShu(execution.agent) && execution.name === 'update_goal'
       && (execution.arguments as { action?: unknown } | undefined)?.action === 'complete') return goalCompletionReason(execution.agent)
+    if (execution.signal?.aborted === true) return '专家请求已经取消，迟到工具调用被拒绝'
+    const oneShot = execution.agent === undefined ? undefined : agentControl.get(execution.agent.id)
+    if (execution.agent !== undefined && hasManagedChildPreset(execution.agent)
+      && !childOwners.has(execution.agent.id) && !startingChildIds.has(execution.agent.id))
+      return '专家执行授权已结束；迟到工具调用已被拒绝'
+    if (oneShot?.persistent === false && oneShot.oneShotSettled === true) {
+      return oneShot.reason === 'one-shot-cancelled'
+        ? '专家已经取消，延迟工具调用被拒绝'
+        : '一次性专家已经结束，延迟工具调用被拒绝'
+    }
     if (closing && execution.agent !== undefined && isManagedAgent(execution.agent) && (WRITE_TOOL_NAMES.includes(execution.name) || ['bash', 'pwsh'].includes(execution.name))) return '百工正在停止，拒绝新增写入或命令执行'
     const writer = WRITE_TOOL_NAMES.includes(execution.name) || ['bash', 'pwsh'].includes(execution.name)
     const role = getRoleForAgent(execution.agent)
@@ -2365,6 +2417,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           if (provisional !== undefined) session.store.UpdateDelegation(provisional.delegationId, {
             finalization: exec.signal.aborted ? 'cancelled' : 'failed', staleReason: exec.signal.aborted ? '取消后未提交完成证据' : `证据整理或执行准入失败：${String(error)}`
           })
+          if (exec.signal.aborted && provisional?.childId !== undefined) agentControl.MarkOneShotCancelled(provisional.childId)
           let state = task.workflowState
           if (nodeId && state?.nodes[nodeId]?.attemptId === attemptId && state.nodes[nodeId]?.status === 'running') {
             state = started ? UpdateWorkflowNode(state, nodeId, 'failed', { attemptId, reason: String(error) })
@@ -2507,10 +2560,15 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const diagnostic = info.diagnostic ?? (info.stopReason === 'error' ? childTurnErrors.get(info.id) : undefined)
       childTurnErrors.delete(info.id)
       agentControl.MarkRunSettled(info.id, info.stopReason); routeState.ReleaseAgent(info.id)
+      if (childSignals.get(info.id)?.aborted === true || info.stopReason === 'aborted') agentControl.MarkOneShotCancelled(info.id)
       hub.Emit(diagnostic === undefined ? info : { ...info, diagnostic })
       retryChildLeases(info.id)
     },
-    OnAgentDisposed: (childId) => { childTurnErrors.delete(childId); retryChildLeases(childId) },
+    OnAgentDisposed: (childId) => {
+      childTurnErrors.delete(childId)
+      startingChildIds.delete(childId)
+      retryChildLeases(childId)
+    },
     OnJobEvent: (sessionId, event) => {
       if (event.type === 'turn/end') {
         if (event.data?.reason?.kind !== 'error') { rememberChildTurnError(sessionId, undefined); return }
@@ -2597,7 +2655,11 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         : '该一次性专家的执行授权已结束；请返回父天枢会话重新审核或委派，不能在此对话沿用旧权限继续。本次未启动模型或重放工具。'
       if (closing) throw new SwarmError('RECOVERY_REQUIRED', '宿主正在停止，延迟模型请求被拒绝')
       if (childSignals.get(agent.id)?.aborted) throw new SwarmError('RECOVERY_REQUIRED', `专家已取消；${resumeHint()}`)
-      if (agentControl.get(agent.id)?.oneShotSettled === true) throw new SwarmError('RECOVERY_REQUIRED', resumeHint())
+      const oneShot = agentControl.get(agent.id)
+      if (oneShot?.oneShotSettled === true) throw new SwarmError('RECOVERY_REQUIRED',
+        oneShot.reason === 'one-shot-cancelled' ? `专家已取消；${resumeHint()}` : resumeHint())
+      if (hasManagedChildPreset(agent) && !childOwners.has(agent.id) && !startingChildIds.has(agent.id))
+        throw new SwarmError('RECOVERY_REQUIRED', resumeHint())
       const pending = childReady.get(agent.id)
       if (pending !== undefined) await pending
       else if (isRootTianShu(agent)) {
