@@ -2,29 +2,29 @@
   "content": [
     {
       "type": "text",
-      "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"choice\": \"review_needed\",\n    \"confidence\": 0.96,\n    \"probabilities\": {\n      \"release_ready\": 0.0,\n      \"review_needed\": 0.97,\n      \"not_ready\": 0.03,\n      \"other\": 0.0\n    },\n    \"band\": \"act\"\n  },\n  \"usage\": {\n    \"input_tokens\": 893,\n    \"output_tokens\": 49,\n    \"est_cost_usd\": 0.000037506\n  },\n  \"latency_ms\": 335.481\n}"
+      "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"choice\": \"release_ready\",\n    \"confidence\": 0.56,\n    \"probabilities\": {\n      \"release_ready\": 0.67,\n      \"review_needed\": 0.18,\n      \"not_ready\": 0.14,\n      \"other\": 0.01\n    },\n    \"band\": \"verify\"\n  },\n  \"usage\": {\n    \"input_tokens\": 960,\n    \"output_tokens\": 49,\n    \"est_cost_usd\": 0.00004032\n  },\n  \"latency_ms\": 241.935\n}"
     }
   ],
   "structuredContent": {
     "ok": true,
     "model": "jev-1.14.0",
     "answers": {
-      "choice": "review_needed",
-      "confidence": 0.96,
+      "choice": "release_ready",
+      "confidence": 0.56,
       "probabilities": {
-        "release_ready": 0,
-        "review_needed": 0.97,
-        "not_ready": 0.03,
-        "other": 0
+        "release_ready": 0.67,
+        "review_needed": 0.18,
+        "not_ready": 0.14,
+        "other": 0.01
       },
-      "band": "act"
+      "band": "verify"
     },
     "usage": {
-      "input_tokens": 893,
+      "input_tokens": 960,
       "output_tokens": 49,
-      "est_cost_usd": 0.000037506
+      "est_cost_usd": 0.00004032
     },
-    "latency_ms": 335.481
+    "latency_ms": 241.935
   },
   "isError": false
 }
