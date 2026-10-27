@@ -1,0 +1,45 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"best_id\": \"durable_wait_handle\",\n    \"best_text\": \"Represent an actual open delegation, authorization, or goal handle and exclude it from repeated-progress hits.\",\n    \"confidence\": 0.91,\n    \"abstain_probability\": 0.0,\n    \"exists\": 0.88,\n    \"windows\": 1,\n    \"exists_by_window\": [\n      0.88\n    ],\n    \"top3\": [\n      {\n        \"id\": \"durable_wait_handle\",\n        \"probability\": 0.92\n      },\n      {\n        \"id\": \"polling_liveness\",\n        \"probability\": 0.07\n      },\n      {\n        \"id\": \"repeat_fingerprint\",\n        \"probability\": 0.01\n      }\n    ],\n    \"band\": \"match\"\n  },\n  \"usage\": {\n    \"input_tokens\": 734,\n    \"output_tokens\": 102,\n    \"est_cost_usd\": 0.000030828000000000004\n  },\n  \"latency_ms\": 345.039\n}"
+    }
+  ],
+  "structuredContent": {
+    "ok": true,
+    "model": "jev-1.14.0",
+    "answers": {
+      "best_id": "durable_wait_handle",
+      "best_text": "Represent an actual open delegation, authorization, or goal handle and exclude it from repeated-progress hits.",
+      "confidence": 0.91,
+      "abstain_probability": 0,
+      "exists": 0.88,
+      "windows": 1,
+      "exists_by_window": [
+        0.88
+      ],
+      "top3": [
+        {
+          "id": "durable_wait_handle",
+          "probability": 0.92
+        },
+        {
+          "id": "polling_liveness",
+          "probability": 0.07
+        },
+        {
+          "id": "repeat_fingerprint",
+          "probability": 0.01
+        }
+      ],
+      "band": "match"
+    },
+    "usage": {
+      "input_tokens": 734,
+      "output_tokens": 102,
+      "est_cost_usd": 0.000030828000000000004
+    },
+    "latency_ms": 345.039
+  },
+  "isError": false
+}

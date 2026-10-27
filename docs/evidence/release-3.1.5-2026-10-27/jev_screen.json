@@ -1,0 +1,28 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"verdict\": \"review\",\n    \"risk\": 1.12,\n    \"risk_confidence\": 0.12,\n    \"reasons\": {\n      \"addresses_agent\": 0.43,\n      \"issues_instructions\": 0.64\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 893,\n    \"output_tokens\": 129,\n    \"est_cost_usd\": 0.000037506\n  },\n  \"latency_ms\": 344.115\n}"
+    }
+  ],
+  "structuredContent": {
+    "ok": true,
+    "model": "jev-1.14.0",
+    "answers": {
+      "verdict": "review",
+      "risk": 1.12,
+      "risk_confidence": 0.12,
+      "reasons": {
+        "addresses_agent": 0.43,
+        "issues_instructions": 0.64
+      }
+    },
+    "usage": {
+      "input_tokens": 893,
+      "output_tokens": 129,
+      "est_cost_usd": 0.000037506
+    },
+    "latency_ms": 344.115
+  },
+  "isError": false
+}

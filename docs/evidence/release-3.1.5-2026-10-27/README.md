@@ -21,6 +21,7 @@
 - 真实 DSH Web 任务：`T-1`，只读多节点冒烟；任务进度从 `0/2` 更新为 `1/2`，第一节点完成后显示“已完成”，第二节点显示“执行中”。
 - 桌面与 390×844 截图均从同一次真实任务状态取得。
 - axe WCAG 2A/2AA：0 violations；`color-contrast` 因宿主叠层无法确定背景而保持 incomplete。
+- Jev 七项原始结果已保存：`jev_ask` 对“真实任务从 0/2 到 1/2 并切换运行节点”的判断为 0.97；`jev_check` 的 `diagram_refresh` 仍为 uncertain，`jev_classify` 为 `review_needed`，因此不把 Jev 当发布证明。
 
 截图：
 

@@ -1,0 +1,36 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"score\": 2.03,\n    \"confidence\": 0.96,\n    \"probabilities\": {\n      \"0\": 0.0,\n      \"1\": 0.0,\n      \"2\": 0.96,\n      \"3\": 0.04\n    },\n    \"legend\": {\n      \"0\": \"No credible root-cause evidence or tests.\",\n      \"1\": \"Local unit evidence exists but critical behavior is not integrated.\",\n      \"2\": \"Local and real-host integration pass, with live release evidence still pending.\",\n      \"3\": \"All local, real-host, browser, Canary, rollback, and release-asset evidence pass.\"\n    },\n    \"normalized\": 0.6766666666666666\n  },\n  \"usage\": {\n    \"input_tokens\": 858,\n    \"output_tokens\": 17,\n    \"est_cost_usd\": 0.000036036\n  },\n  \"latency_ms\": 335.561\n}"
+    }
+  ],
+  "structuredContent": {
+    "ok": true,
+    "model": "jev-1.14.0",
+    "answers": {
+      "score": 2.03,
+      "confidence": 0.96,
+      "probabilities": {
+        "0": 0,
+        "1": 0,
+        "2": 0.96,
+        "3": 0.04
+      },
+      "legend": {
+        "0": "No credible root-cause evidence or tests.",
+        "1": "Local unit evidence exists but critical behavior is not integrated.",
+        "2": "Local and real-host integration pass, with live release evidence still pending.",
+        "3": "All local, real-host, browser, Canary, rollback, and release-asset evidence pass."
+      },
+      "normalized": 0.6766666666666666
+    },
+    "usage": {
+      "input_tokens": 858,
+      "output_tokens": 17,
+      "est_cost_usd": 0.000036036
+    },
+    "latency_ms": 335.561
+  },
+  "isError": false
+}

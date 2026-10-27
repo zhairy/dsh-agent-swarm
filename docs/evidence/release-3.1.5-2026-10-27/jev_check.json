@@ -1,0 +1,39 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\n  \"ok\": true,\n  \"model\": \"jev-1.14.0\",\n  \"answers\": {\n    \"probabilities\": {\n      \"root_causes\": 0.88,\n      \"hard_gates\": 0.94,\n      \"quarantine\": 0.91,\n      \"no_zero_risk_claim\": 0.91,\n      \"release_gate\": 0.41,\n      \"diagram_refresh\": 0.61\n    },\n    \"flags\": [\n      \"root_causes\",\n      \"hard_gates\",\n      \"quarantine\",\n      \"no_zero_risk_claim\"\n    ],\n    \"uncertain\": [\n      \"release_gate\",\n      \"diagram_refresh\"\n    ]\n  },\n  \"usage\": {\n    \"input_tokens\": 893,\n    \"output_tokens\": 113,\n    \"est_cost_usd\": 0.000037506\n  },\n  \"latency_ms\": 358.476\n}"
+    }
+  ],
+  "structuredContent": {
+    "ok": true,
+    "model": "jev-1.14.0",
+    "answers": {
+      "probabilities": {
+        "root_causes": 0.88,
+        "hard_gates": 0.94,
+        "quarantine": 0.91,
+        "no_zero_risk_claim": 0.91,
+        "release_gate": 0.41,
+        "diagram_refresh": 0.61
+      },
+      "flags": [
+        "root_causes",
+        "hard_gates",
+        "quarantine",
+        "no_zero_risk_claim"
+      ],
+      "uncertain": [
+        "release_gate",
+        "diagram_refresh"
+      ]
+    },
+    "usage": {
+      "input_tokens": 893,
+      "output_tokens": 113,
+      "est_cost_usd": 0.000037506
+    },
+    "latency_ms": 358.476
+  },
+  "isError": false
+}
