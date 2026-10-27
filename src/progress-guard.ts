@@ -5,6 +5,13 @@ import { intMutex } from './util/mutex.js'
 import { RUNTIME_POLICY_VERSION } from './verification-receipt.js'
 
 export type ProgressAction = 'plan-review' | 'delegate' | 'checkpoint' | 'root-round'
+export interface ProgressWaitHandle {
+  id: string
+  kind: 'tool' | 'user' | 'authorization' | 'goal'
+  state: 'open' | 'settled' | 'unknown'
+  openedAt: number
+  deadlineAt?: number
+}
 export interface ProgressControl {
   lineageId: string
   rootSessionId: string
@@ -22,17 +29,27 @@ export interface ProgressControl {
   reason?: string
   legacyBaseline: boolean
   observedFacts?: Record<string, string>
+  waitHandles?: Record<string, ProgressWaitHandle>
 }
 export interface ProgressSignature { fingerprint: string; canonical: string; action: ProgressAction; hits: number; at: number }
 export interface ProgressPage { lineageId: string; page: number; items: ProgressSignature[] }
 export interface ProgressGuardState { runtimeControls?: Record<string, ProgressControl>; progressHistory?: Record<string, ProgressPage> }
-export interface ProgressObservation { lineageId: string; taskId?: string; action: ProgressAction; projection: unknown; graphDigest?: string; waiting?: boolean; recoveryEvent?: string; replan?: boolean; legacyBaseline?: boolean }
+export interface ProgressObservation { lineageId: string; taskId?: string; action: ProgressAction; projection: unknown; graphDigest?: string; waitHandle?: ProgressWaitHandle; waiting?: boolean; recoveryEvent?: string; replan?: boolean; legacyBaseline?: boolean }
 const PAGE_SIZE = 32
 const HISTORY_LIMIT = 1024
 const ACTIVATION_LIMIT = 4096
 const RECOVERY_LIMIT = 4
 const REPLAN_LIMIT = 4
 const hash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+const validateWaitHandle = (value: unknown): value is ProgressWaitHandle => {
+  if (!value || typeof value !== 'object') return false
+  const handle = value as ProgressWaitHandle
+  return typeof handle.id === 'string' && handle.id.trim().length > 0 && handle.id.length <= 512
+    && ['tool', 'user', 'authorization', 'goal'].includes(handle.kind)
+    && ['open', 'settled', 'unknown'].includes(handle.state)
+    && Number.isFinite(handle.openedAt) && handle.openedAt >= 0
+    && (handle.deadlineAt === undefined || Number.isFinite(handle.deadlineAt) && handle.deadlineAt >= handle.openedAt)
+}
 
 export const ValidateProgressControl = (value: unknown): value is ProgressControl => {
   if (!value || typeof value !== 'object') return false
@@ -45,6 +62,9 @@ export const ValidateProgressControl = (value: unknown): value is ProgressContro
     && (c.taskGraphs === undefined || c.taskGraphs !== null && typeof c.taskGraphs === 'object' && !Array.isArray(c.taskGraphs) && Object.keys(c.taskGraphs).length <= 128 && Object.entries(c.taskGraphs).every(([taskId,value]) => c.taskIds.includes(taskId) && hash(value)))
     && (c.reason === undefined || typeof c.reason === 'string' && c.reason.length <= 1024)
     && (c.observedFacts === undefined || c.observedFacts !== null && typeof c.observedFacts === 'object' && !Array.isArray(c.observedFacts) && Object.keys(c.observedFacts).length <= 64 && Object.entries(c.observedFacts).every(([key,value]) => hash(key) && hash(value)))
+    && (c.waitHandles === undefined || c.waitHandles !== null && typeof c.waitHandles === 'object' && !Array.isArray(c.waitHandles)
+      && Object.keys(c.waitHandles).length <= 16
+      && Object.entries(c.waitHandles).every(([key, value]) => hash(key) && validateWaitHandle(value) && key === getValueDigest(value.id)))
 }
 export const ValidateProgressPage = (value: unknown): value is ProgressPage => {
   if (!value || typeof value !== 'object') return false
@@ -135,8 +155,35 @@ export const createProgressGuard = <T extends ProgressGuardState>(store: Durable
           if (control.taskIds.length >= 128) { control.status = 'exhausted'; control.reason = '同一谱系任务目录容量已用尽' }
           else control.taskIds.push(taskId)
         }
-        // 同一真实在途句柄等待不创建新工作、不消耗新意；新句柄仍须正常准入。
-        if (input.waiting) { result = control; return {} }
+        if (input.waiting === true && input.waitHandle === undefined) throw new Error('Progress wait requires a verified wait handle')
+        if (input.waitHandle !== undefined) {
+          if (!validateWaitHandle(input.waitHandle) || control.waitHandles !== undefined && Object.keys(control.waitHandles).length > 16) throw new Error('Invalid progress wait handle')
+          const key = getValueDigest(input.waitHandle.id), handles = { ...control.waitHandles }
+          const existing = handles[key]
+          if (existing !== undefined && existing.id !== input.waitHandle.id) { control.status = 'stalled'; control.reason = '等待句柄摘要碰撞，需要独立核对' }
+          else if (input.waitHandle.state === 'open') {
+            if (existing === undefined && Object.keys(handles).length >= 16) {
+              control.status = 'exhausted'; control.reason = '等待句柄容量已用尽；停止新派发并保留诊断空间'
+            } else {
+              handles[key] = { ...input.waitHandle }
+              control.waitHandles = handles
+              // 先前的结构停滞若随后出现真实在途句柄，应由事实解除而不是消耗恢复预算。
+              if (control.status === 'stalled' && control.reason?.startsWith('LOOP_DETECTED')) { control.status = 'active'; delete control.reason }
+            }
+          } else if (input.waitHandle.state === 'unknown') {
+            handles[key] = { ...input.waitHandle }
+            control.waitHandles = handles
+            control.status = 'stalled'
+            control.reason = 'WAIT_HANDLE_UNKNOWN：等待句柄状态无法确认，禁止自动重派发'
+          } else if (existing !== undefined) {
+            delete handles[key]
+            control.waitHandles = handles
+          }
+          const changed = JSON.stringify(control) !== JSON.stringify(old ?? {})
+          result = control
+          if (!changed) return {}
+          if (input.waitHandle.state !== 'settled') return { set: { runtimeControls: { [input.lineageId]: control } } }
+        }
         const recovery = input.recoveryEvent !== undefined && input.recoveryEvent !== control.lastUserEvent
         if (recovery && control.status !== 'exhausted') {
           if (control.recoveries >= RECOVERY_LIMIT) { control.status = 'exhausted'; control.reason = '恢复窗口已用尽；保留证据并显式升级处理' }

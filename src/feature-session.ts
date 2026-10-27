@@ -25,6 +25,10 @@ import { ValidateDelegateInput } from './delegate.js'
 import { loadMemoryHandoff } from './memory-handoff.js'
 import { SwarmError } from './util/errors.js'
 import { ValidateToolCandidate } from './tool-candidate.js'
+import {
+  getEvolutionCanaryOperationDigest, getEvolutionCanaryScopeDigest,
+  recoverEvolutionGovernance, ValidateEvolutionGovernance
+} from './evolution-governance.js'
 import { createAuthorizationRepository, ValidateAuthorizationDecision, type AuthorizationState } from './authorization-wait.js'
 import { createProgressGuard, ValidateProgressControl, ValidateProgressPage, type ProgressGuardState, type ProgressPage } from './progress-guard.js'
 import { ValidateVerificationReceipt } from './verification-receipt.js'
@@ -386,8 +390,11 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
     }
     for (const [index, [id, entry]] of Object.entries(state.experiences).entries()) {
       at(`$.experiences[${index}]`, 'EXPERIENCE_FORMAT')
-      if (object(entry) && entry.toolCandidate !== undefined && (!ValidateToolCandidate(entry.toolCandidate) || entry.status === 'validated')) return invalid()
+      if (object(entry) && (entry.toolCandidate !== undefined || entry.governance !== undefined)
+        && (entry.toolCandidate !== undefined && (!ValidateToolCandidate(entry.toolCandidate) || entry.status === 'validated' || entry.governance !== undefined)
+          || entry.governance !== undefined && !ValidateEvolutionGovernance(entry.governance))) return invalid()
       if (!object(entry) || entry.id !== id || !uuidPattern.test(id) || !['candidate', 'validated', 'deprecated'].includes(entry.status) || !object(entry.source) || !tasks.has(entry.source.taskId) || !positive(entry.source.cardRevision) || !positive(entry.source.workflowRevision) || !hashPattern.test(entry.source.artifactDigest) || typeof entry.problemClass !== 'string' || typeof entry.conclusion !== 'string' || !['appliesWhen', 'doesNotApplyWhen', 'verification', 'counterexamples', 'operatorVersions'].every((key) => strings(entry[key as keyof ExperienceEntry])) || !Number.isFinite(entry.createdAt) || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= entry.createdAt || (entry.status === 'validated' && (!identifier(entry.reviewer) || !hashPattern.test(entry.reviewArtifactDigest ?? ''))) || (entry.status === 'deprecated' && typeof entry.deprecationReason !== 'string')) return invalid()
+      if (entry.governance?.phase === 'active' && entry.status !== 'validated' || entry.governance?.phase === 'revoked' && entry.status !== 'deprecated') return invalid()
     }
     return { ok: true }
   } catch { return invalid() }
@@ -409,6 +416,17 @@ const recover = (state: FeatureState): FeatureState => {
     decision.reason = 'restart-requires-host-reconciliation'
     decision.decisionRevision++
   }
+  for (const control of Object.values(copy.runtimeControls ?? {})) {
+    let recovered = false
+    for (const handle of Object.values(control.waitHandles ?? {})) if (handle.state === 'open') {
+      handle.state = 'unknown'
+      recovered = true
+    }
+    if (recovered) {
+      control.status = 'stalled'
+      control.reason = 'restart-requires-wait-handle-reconciliation'
+    }
+  }
   const recordsById = new Map(copy.delegations.map((record) => [record.delegationId, record]))
   const uncertain = new Set(copy.delegations.filter((record) => (['queued', 'running'].includes(record.status) || record.finalization === 'processing')).map((record) => record.delegationId))
   for (const control of copy.agentControls ?? []) if (uncertain.has(control.delegationId)) {
@@ -429,6 +447,11 @@ const recover = (state: FeatureState): FeatureState => {
   }
   for (const thread of copy.threads) { thread.busy = false; thread.closed = true }
   for (const binding of Object.values(copy.bindings)) if (binding.state === 'active') binding.state = 'suspended'
+  for (const entry of Object.values(copy.experiences)) if (entry.governance !== undefined) {
+    const recovered = recoverEvolutionGovernance(entry.governance, Date.now())
+    if (recovered !== entry.governance) entry.governance = recovered
+    if (recovered.phase === 'revoked') entry.status = 'deprecated'
+  }
   for (const entry of (Array.isArray(copy.routeHealth) ? copy.routeHealth : copy.routeHealth?.entries) ?? []) delete entry.halfOpenAgent
   return copy
 }
@@ -454,6 +477,8 @@ export const createFeatureSession = async (input: {
   getConfig?: () => SwarmConfigInfo;
   getAgentControls?: () => AgentControlRecord[];
   getRuntime?: () => FeatureRuntimeSnapshot;
+  verifyEvolutionEvaluation?: (entry: ExperienceEntry, result: import('./evolution-governance.js').EvolutionEvaluationResult) => boolean | Promise<boolean>;
+  verifyEvolutionRelease?: (entry: ExperienceEntry, release: import('./evolution-governance.js').EvolutionReleaseRef) => boolean | Promise<boolean>;
   tasks: TaskStore; threads: ThreadRegistry; now: () => number
 }): Promise<FeatureSession> => {
   const workspaceId = await getWorkspaceId(input.cwd)
@@ -466,7 +491,7 @@ export const createFeatureSession = async (input: {
     validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }) })
   // A current-version export cannot legitimately omit its security history.
   // Only real legacy producers may enter the schema-1 migration path.
-  if (handoff?.sourceVersion === '3.1.3' && handoff.state.schemaVersion !== 2) throw new StateStoreError('RECOVERY_REQUIRED', 'Memory handoff rejected: current producer omitted runtime guard schema; pending record retained')
+  if ((handoff?.sourceVersion === '3.1.3' || handoff?.sourceVersion === '3.1.4') && handoff.state.schemaVersion !== 2) throw new StateStoreError('RECOVERY_REQUIRED', 'Memory handoff rejected: current producer omitted runtime guard schema; pending record retained')
   const configuredLimit = input.config.persistence.maxStateBytes
   const store = await createDurableStateStore({ directory, initialState: handoff === undefined ? initialState : recover(handoff.state), enabled: input.config.persistence.enabled,
     ...(configuredLimit > 0 ? { maxStateBytes: configuredLimit } : input.config.persistence.enabled ? {} : { maxStateBytes: MEMORY_MODE_MAX_STATE_BYTES }),
@@ -629,15 +654,31 @@ export const createFeatureSession = async (input: {
   }
   const promotionLeases = createWorkspaceLeaseManager()
   const activePromotions = new Set<string>()
+  const authorizations = createAuthorizationRepository(store, { now: input.now })
   const experiences = createExperienceRepository(store, {
     now: input.now,
     verifyReview: async (entry, supplied) => {
       if (!activePromotions.has(entry.id)) return false
       const actual = await deriveExperienceReview(entry)
       return actual !== undefined && getCanonicalJson(actual) === getCanonicalJson(supplied)
+    },
+    verifyEvaluation: input.verifyEvolutionEvaluation,
+    verifyRelease: input.verifyEvolutionRelease,
+    verifyCanary: (entry, scope, authorizationRef, stopPolicyDigest) => {
+      const decision = authorizations.get(authorizationRef)
+      const evaluation = entry.governance?.evaluation, release = entry.governance?.release
+      if (decision?.phase !== 'approved' || evaluation?.state !== 'passed' || evaluation.resultDigest === undefined
+        || release === undefined || decision.questionBinding.rootSessionId !== scope.rootSessionId
+        || decision.questionBinding.workspaceId !== scope.workspaceId || decision.questionBinding.taskId !== scope.taskId
+        || decision.questionBinding.lineageId !== scope.lineageId || decision.appliesToBinding === undefined
+        || decision.appliesToBinding.rootSessionId !== scope.rootSessionId || decision.appliesToBinding.workspaceId !== scope.workspaceId
+        || decision.appliesToBinding.taskId !== scope.taskId || decision.appliesToBinding.lineageId !== scope.lineageId) return false
+      return decision.operationDigest === getEvolutionCanaryOperationDigest({
+        experienceId: entry.id, evaluationResultDigest: evaluation.resultDigest,
+        releaseManifestDigest: release.manifestDigest, stopPolicyDigest
+      }) && decision.scopeDigest === getEvolutionCanaryScopeDigest(scope, release.artifactSha256)
     }
   })
-  const authorizations = createAuthorizationRepository(store, { now: input.now })
   const progress = createProgressGuard(store, input.now, { rootSessionId: input.rootSessionId, workspaceId })
   // 增量提交装配器：各存储的写入口记录脏键，persist 只把这些脏键翻译成"变更分片"补丁。
   // 未触碰分片沿用已提交缓存；提交失败时脏键保留，重试会再次携带同一批键。

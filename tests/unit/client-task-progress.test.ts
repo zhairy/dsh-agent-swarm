@@ -6,7 +6,7 @@ import { loadTaskViewStoreModule } from './client-module-loader.js'
 const deferred = () => { let resolve!: (value: unknown) => void; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 const stores: any[] = []
 const fixture = (options: Record<string, unknown> = {}) => {
-  const request = vi.fn().mockImplementation((_method, { taskId, sessionId }) => Promise.resolve(taskId === undefined ? { rootSessionId: sessionId, tasks: [] } : { task_id: taskId }))
+  const request = vi.fn().mockImplementation((_method, { taskId, sessionId }) => Promise.resolve(taskId === undefined ? { rootSessionId: sessionId, tasks: [] } : { task_id: taskId, rootSessionId: sessionId }))
   const store = loadTaskViewStoreModule().createTaskViewStore({ request, ...options })
   stores.push(store)
   return { store, request: options.request as ReturnType<typeof vi.fn> ?? request }
@@ -64,9 +64,9 @@ describe('任务进度共享读取层', () => {
     void source.refresh()
     await vi.advanceTimersByTimeAsync(60000)
     expect(request).toHaveBeenCalledTimes(1)
-    pending.resolve({ task_id: 'T-1' }); await vi.advanceTimersByTimeAsync(0)
+    pending.resolve({ task_id: 'T-1', rootSessionId: 'root' }); await vi.advanceTimersByTimeAsync(0)
     expect(source.getSnapshot().value).toBeNull()
-    request.mockResolvedValue({ task_id: 'T-1' })
+    request.mockResolvedValue({ task_id: 'T-1', rootSessionId: 'root' })
     await vi.advanceTimersByTimeAsync(2000)
     expect(source.getSnapshot().status).toBe('live')
   })
@@ -172,12 +172,12 @@ describe('任务进度共享读取层', () => {
     source.subscribe(() => published.push(source.getSnapshot()))
     const directory = store.index('root'); directory.subscribe(vi.fn()); await directory.refresh()
     expect(taskReads).toBe(1)
-    old.resolve({ task_id: 'T-1', cardRevision: 3, workflowRevision: 3, requestRevision: 3, acceptance: { status: 'accepted' } })
+    old.resolve({ task_id: 'T-1', rootSessionId: 'root', cardRevision: 3, workflowRevision: 3, requestRevision: 3, acceptance: { status: 'accepted' } })
     await vi.advanceTimersByTimeAsync(0)
     expect(taskReads).toBe(2)
     expect(source.getSnapshot().value).toBeNull()
     expect(published.some(snapshot => snapshot.status === 'live' && snapshot.value?.cardRevision === 3)).toBe(false)
-    current.resolve({ task_id: 'T-1', ...binding, acceptance: null })
+    current.resolve({ task_id: 'T-1', rootSessionId: 'root', ...binding, acceptance: null })
     await vi.advanceTimersByTimeAsync(0)
     expect(source.getSnapshot()).toMatchObject({ status: 'live', value: { cardRevision: 4 } })
     await vi.advanceTimersByTimeAsync(5000)
@@ -187,7 +187,7 @@ describe('任务进度共享读取层', () => {
   it('目录版本不倒退；较新的正文v5有效，任何单项旧版本不覆盖已有正确快照', async () => {
     vi.useFakeTimers()
     let directoryRevision = 4, bodyRevision = 5
-    const request = vi.fn((method) => Promise.resolve(method === 'taskIndex' ? { rootSessionId: 'root', tasks: [{ taskId: 'T-1', title: 'directory', cardRevision: directoryRevision, workflowRevision: directoryRevision, requestRevision: directoryRevision }] } : { task_id: 'T-1', title: 'body', cardRevision: bodyRevision, workflowRevision: bodyRevision, requestRevision: bodyRevision, acceptance: { status: 'accepted' } }))
+    const request = vi.fn((method) => Promise.resolve(method === 'taskIndex' ? { rootSessionId: 'root', tasks: [{ taskId: 'T-1', title: 'directory', cardRevision: directoryRevision, workflowRevision: directoryRevision, requestRevision: directoryRevision }] } : { task_id: 'T-1', rootSessionId: 'root', title: 'body', cardRevision: bodyRevision, workflowRevision: bodyRevision, requestRevision: bodyRevision, acceptance: { status: 'accepted' } }))
     const { store } = fixture({ request })
     const directory = store.index('root'); directory.subscribe(vi.fn()); await directory.refresh()
     const source = store.task('root', 'T-1'); source.subscribe(vi.fn()); await source.refresh()
@@ -199,6 +199,18 @@ describe('任务进度共享读取层', () => {
     expect(source.getSnapshot().error).toContain('迟到正文')
   })
 
+  it('治理修订也受目录下界约束，旧Canary快照不能覆盖新撤回状态', async () => {
+    vi.useFakeTimers()
+    const request = vi.fn((method: string) => Promise.resolve(method === 'taskIndex'
+      ? { rootSessionId: 'root', tasks: [{ taskId: 'T-1', title: 'current', status: 'pending', cardRevision: 1, workflowRevision: 1, requestRevision: 1, evolutionRevision: 3 }] }
+      : { task_id: 'T-1', rootSessionId: 'root', cardRevision: 1, workflowRevision: 1, requestRevision: 1, evolutionRevision: 2, evolution: { phase: 'canary' } }))
+    const { store } = fixture({ request })
+    const directory = store.index('root'); directory.subscribe(vi.fn()); await directory.refresh()
+    const source = store.task('root', 'T-1'); source.subscribe(vi.fn()); await source.refresh()
+    expect(source.getSnapshot()).toMatchObject({ status: 'stale', value: null })
+    expect(source.getSnapshot().error).toContain('迟到正文')
+  })
+
   it('普通目录持续打开时可发现新任务；终态正文停止轮询但手动刷新仍有效', async () => {
     vi.useFakeTimers()
     const { store, request } = fixture()
@@ -207,18 +219,31 @@ describe('任务进度共享读取层', () => {
     await vi.advanceTimersByTimeAsync(5000)
     expect(directory.getSnapshot().value.tasks).toHaveLength(1)
     store.dispose()
-    const terminal = fixture({ request: vi.fn().mockResolvedValue({ task_id: 'T-1', acceptance: { status: 'accepted' } }) })
+    const terminal = fixture({ request: vi.fn().mockResolvedValue({ task_id: 'T-1', rootSessionId: 'root', acceptance: { status: 'accepted' } }) })
     const source = terminal.store.task('root', 'T-1'); source.subscribe(vi.fn()); await source.refresh()
     await vi.advanceTimersByTimeAsync(60000)
     expect(terminal.request).toHaveBeenCalledTimes(1)
     await source.refresh(); expect(terminal.request).toHaveBeenCalledTimes(2)
   })
 
+  it('已验收但影子或Canary仍在观察时不能因终态停止轮询', async () => {
+    vi.useFakeTimers()
+    const terminal = fixture({ request: vi.fn().mockResolvedValue({
+      task_id: 'T-1', rootSessionId: 'root', acceptance: { status: 'accepted' },
+      evolution: { phase: 'shadow' }
+    }) })
+    const source = terminal.store.task('root', 'T-1'); const stop = source.subscribe(vi.fn())
+    await source.refresh()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(terminal.request.mock.calls.length).toBeGreaterThan(1)
+    stop()
+  })
+
   it('错误任务或目录根身份不能替换缓存，偏好有界且不包含正文', async () => {
     vi.useFakeTimers()
     const { store, request } = fixture()
     const source = store.task('root', 'T-1'); source.subscribe(vi.fn()); await source.refresh()
-    request.mockResolvedValueOnce({ task_id: 'T-other' }); await source.refresh()
+    request.mockResolvedValueOnce({ task_id: 'T-other', rootSessionId: 'root' }); await source.refresh()
     expect(source.getSnapshot()).toMatchObject({ status: 'stale', value: { task_id: 'T-1' } })
     source.setPreference({ kind: 'architecture', scrollTop: 21 }); source.setPreference({ zoom: 2 })
     expect(source.readPreference()).toEqual({ kind: 'architecture', scrollTop: 21, zoom: 2 })

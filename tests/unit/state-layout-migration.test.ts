@@ -109,4 +109,20 @@ describe('layout migration from the flat delegation layout', () => {
     await expect(createDurableStateStore({ directory: path, ...currentOptions, initialState: initialState() }))
       .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED', message: expect.stringContaining('newer layout') })
   })
+
+  it('fences a 3.1.3 layout-3 reader from layout-4 governance state', async () => {
+    const path = await directory()
+    const current = track(await createDurableStateStore({ directory: path, ...SWARM_LAYOUT_OPTIONS, initialState: initialState(), validate: () => true }))
+    await current.commit('v314/governance', draft => { draft.schemaVersion = 2 })
+    await current.dispose()
+    const oldV3 = {
+      segments: SWARM_SEGMENT_SPECS,
+      legacySegments: LEGACY_SEGMENT_SPECS,
+      legacyLayouts: { 1: LEGACY_SEGMENT_SPECS, 2: SWARM_SEGMENT_SPECS },
+      layoutVersion: 3,
+      validate: () => true
+    }
+    await expect(createDurableStateStore({ directory: path, ...oldV3, initialState: initialState() }))
+      .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED', message: expect.stringContaining('newer layout') })
+  })
 })

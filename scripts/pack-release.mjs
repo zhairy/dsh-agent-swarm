@@ -7,13 +7,19 @@
 // 用法: node scripts/pack-release.mjs [--out <dir>] [--skip-build] [--check-only]
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative, resolve } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 
 const args = process.argv.slice(2)
 const option = (name) => { const index = args.indexOf(name); return index < 0 ? undefined : args[index + 1] }
 const checkOnly = args.includes('--check-only')
 const outputDirectory = resolve(option('--out') ?? 'release-artifacts')
+const evidencePath = option('--evidence') === undefined ? undefined : resolve(option('--evidence'))
+const explicitCommit = option('--git-commit') ?? process.env.GITHUB_SHA
+const previousVersion = option('--previous-version')
+
+if (evidencePath !== undefined && !existsSync(evidencePath)) throw new Error(`证据文件不存在：${evidencePath}`)
+if (previousVersion !== undefined && !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(previousVersion)) throw new Error('previous-version 格式不合法')
 
 if (!args.includes('--skip-build')) {
   execFileSync('npm', ['run', 'build'], { stdio: 'inherit' })
@@ -57,16 +63,43 @@ const missing = [...closure].map((path) => relative(root, path)).filter((path) =
 if (missing.length > 0) {
   throw new Error(`tarball 将缺少 ${missing.length} 个入口依赖文件，例如：\n  ${missing.slice(0, 10).join('\n  ')}`)
 }
-process.stdout.write(JSON.stringify({
+const closureReport = {
   entry: relative(root, entry), entries: entries.map((path) => relative(root, path)), closureFiles: closure.size, packagedFiles: packed.size, missing: 0
-}, null, 2) + '\n')
+}
 
-if (checkOnly) process.exit(0)
+if (checkOnly) {
+  process.stdout.write(JSON.stringify(closureReport, null, 2) + '\n')
+  process.exit(0)
+}
 
 mkdirSync(outputDirectory, { recursive: true })
 const packedInfo = firstPackResult(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', outputDirectory], { encoding: 'utf8' }))
 const tarball = join(outputDirectory, packedInfo.filename)
 const sha256 = createHash('sha256').update(readFileSync(tarball)).digest('hex')
+const gitCommit = explicitCommit ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+if (!/^[a-f0-9]{40}$/.test(gitCommit)) throw new Error('发布必须绑定 40 位 Git commit')
+const evidence = evidencePath === undefined ? undefined : {
+  name: basename(evidencePath),
+  bytes: statSync(evidencePath).size,
+  sha256: createHash('sha256').update(readFileSync(evidencePath)).digest('hex')
+}
+const manifest = {
+  schemaVersion: 1,
+  package: packageInfo.name,
+  version: packageInfo.version,
+  gitCommit,
+  tarball: packedInfo.filename,
+  tarballBytes: packedInfo.size,
+  tarballSha256: sha256,
+  compatibility: {
+    minVersion: packageInfo.dsh?.minVersion ?? packageInfo.engines?.dsh ?? null,
+    testedVersions: packageInfo.dsh?.testedVersions ?? []
+  },
+  ...(previousVersion === undefined ? {} : { previousVersion }),
+  ...(evidence === undefined ? {} : { evidence }),
+  policyVersion: 'swarm-evolution/3.1.4-v1'
+}
+writeFileSync(join(outputDirectory, 'release-manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
 
 // 发布物一起给校验和：说明文件、清单与 tarball 同批生成，避免手工比对。
 const companion = ['RELEASE-NOTES.zh-CN.md', 'release-manifest.json'].map((name) => join(outputDirectory, name)).filter((path) => existsSync(path))
@@ -75,4 +108,6 @@ const sums = [
   ...companion.map((path) => `${createHash('sha256').update(readFileSync(path)).digest('hex')}  ${path.split('/').at(-1)}`)
 ].join('\n') + '\n'
 writeFileSync(join(outputDirectory, 'SHA256SUMS'), sums)
-process.stdout.write(JSON.stringify({ tarball: packedInfo.filename, bytes: packedInfo.size, sha256, sums: sums.trim().split('\n').length }, null, 2) + '\n')
+process.stdout.write(JSON.stringify({ ...closureReport, tarball: packedInfo.filename, bytes: packedInfo.size, sha256, gitCommit,
+  manifest: 'release-manifest.json', ...(evidence === undefined ? {} : { evidenceSha256: evidence.sha256 }),
+  sums: sums.trim().split('\n').length }, null, 2) + '\n')

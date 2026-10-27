@@ -165,15 +165,15 @@ describe('2.5.0 independent adversarial association regressions', () => {
 
   it('a slow task-view response remains current and never overlaps automatic polling', async () => {
     vi.useFakeTimers()
-    const response = deferred<{ task_id: string }>()
+    const response = deferred<{ task_id: string; rootSessionId: string }>()
     const request = vi.fn((_method: string, _payload: unknown, _signal: AbortSignal) => response.promise)
     const store = loadTaskViewStoreModule().createTaskViewStore({ request })
     releases.push(() => store.dispose())
     const source = store.task('root', 'T-1'); const stop = source.subscribe(vi.fn())
     await vi.advanceTimersByTimeAsync(10000)
     expect(request).toHaveBeenCalledTimes(1); expect(source.getSnapshot().value).toBeNull()
-    response.resolve({ task_id: 'T-1' }); await vi.advanceTimersByTimeAsync(0)
-    expect(source.getSnapshot()).toMatchObject({ value: { task_id: 'T-1' }, error: null })
+    response.resolve({ task_id: 'T-1', rootSessionId: 'root' }); await vi.advanceTimersByTimeAsync(0)
+    expect(source.getSnapshot()).toMatchObject({ value: { task_id: 'T-1', rootSessionId: 'root' }, error: null })
     await vi.advanceTimersByTimeAsync(4999); expect(request).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1); expect(request).toHaveBeenCalledTimes(2)
     stop(); await vi.advanceTimersByTimeAsync(60000)
@@ -182,7 +182,7 @@ describe('2.5.0 independent adversarial association regressions', () => {
 
   it('a timed-out task view really aborts and rejects late publication until transport settlement', async () => {
     vi.useFakeTimers()
-    const response = deferred<{ task_id: string }>()
+    const response = deferred<{ task_id: string; rootSessionId: string }>()
     const request = vi.fn((_method: string, _payload: unknown, _signal: AbortSignal) => response.promise)
     const store = loadTaskViewStoreModule().createTaskViewStore({ request })
     releases.push(() => store.dispose())
@@ -191,7 +191,7 @@ describe('2.5.0 independent adversarial association regressions', () => {
     expect(source.getSnapshot()).toMatchObject({ value: null, status: 'unavailable' })
     expect(request.mock.calls[0]![2].aborted).toBe(true)
     await vi.advanceTimersByTimeAsync(60000); expect(request).toHaveBeenCalledTimes(1)
-    stop(); response.resolve({ task_id: 'T-1' }); await vi.advanceTimersByTimeAsync(60000)
+    stop(); response.resolve({ task_id: 'T-1', rootSessionId: 'root' }); await vi.advanceTimersByTimeAsync(60000)
     expect(source.getSnapshot().value).toBeNull(); expect(request).toHaveBeenCalledTimes(1)
   })
 

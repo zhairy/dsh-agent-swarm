@@ -178,15 +178,31 @@ describe('分页、重启与提交失败', () => {
 })
 
 describe('等待、有限容量与真实证据恢复', () => {
+  it('真实 open wait handle解除先前的结构停滞，unknown句柄保守暂停，settled后才重新计新意', async () => {
+    const f = await fixture()
+    await f.observe({ evidence: 'same' })
+    await f.observe({ evidence: 'same' })
+    expect((await f.observe({ evidence: 'same' })).status).toBe('stalled')
+    const open = { id: 'tool-job-1', kind: 'tool' as const, state: 'open' as const, openedAt: 1000 }
+    expect(await f.observe({ evidence: 'waited' }, { waitHandle: open })).toMatchObject({ status: 'active', historyCount: 1, activations: 3, recoveries: 0 })
+    const sequence = f.store.getSequence()
+    expect(await f.observe({ evidence: 'waited-again' }, { waitHandle: open })).toMatchObject({ status: 'active', historyCount: 1, activations: 3 })
+    expect(f.store.getSequence()).toBe(sequence)
+    expect(await f.observe({ evidence: 'unknown' }, { waitHandle: { ...open, state: 'unknown' } })).toMatchObject({ status: 'stalled', reason: expect.stringContaining('WAIT_HANDLE_UNKNOWN') })
+    expect(await f.observe({ evidence: 'new', waitHandle: { ...open, state: 'settled' } })).toMatchObject({ status: 'stalled' })
+  })
+
   it('同一在途工作等待不新增 sequence、activation、历史或恢复预算', async () => {
     const f = await fixture()
     await f.observe({ evidence: 'A' })
+    const handle = { id: 'delegation:T-1:attempt-1', kind: 'tool' as const, state: 'open' as const, openedAt: 1000 }
+    await f.observe({ evidence: 'ignored while waiting' }, { waitHandle: handle })
     const state = f.store.read(), sequence = f.store.getSequence()
-    for (let index = 0; index < 5; index++) await f.observe({ evidence: 'ignored while waiting' }, { waiting: true, replan: true, recoveryEvent: `not-a-new-dispatch-${index}` })
+    for (let index = 0; index < 5; index++) await f.observe({ evidence: 'ignored while waiting' }, { waitHandle: handle, replan: true, recoveryEvent: `not-a-new-dispatch-${index}` })
     expect(f.store.read()).toEqual(state)
     expect(f.store.getSequence()).toBe(sequence)
     const unknown = 'f'.repeat(64)
-    await f.guard.observe({ lineageId: unknown, action: 'root-round', projection: {}, waiting: true })
+    await expect(f.guard.observe({ lineageId: unknown, action: 'root-round', projection: {}, waiting: true })).rejects.toThrow('wait handle')
     expect(f.guard.get(unknown)).toBeUndefined()
     expect(f.store.getSequence()).toBe(sequence)
   })

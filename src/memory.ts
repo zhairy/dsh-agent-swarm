@@ -1,4 +1,5 @@
 import type { ExperienceEntry } from './experience.js'
+import { isEvolutionActiveForRecall } from './evolution-governance.js'
 
 export interface MemoryQuery {
   text?: string
@@ -61,7 +62,8 @@ export const queryReviewedExperiences = (entries: readonly ExperienceEntry[], qu
   const ranked: Array<{ entry: ExperienceEntry; score: number; index: number }> = []
   for (let index = 0; index < Math.min(entries.length, 1024); index++) {
     const entry = entries[index]!
-    if (entry.toolCandidate !== undefined || entry.status !== 'validated' || entry.expiresAt <= now || entry.createdAt > now || now - entry.createdAt > maxAgeMs
+    if (entry.toolCandidate !== undefined || entry.status !== 'validated' || !isEvolutionActiveForRecall(entry.governance)
+      || entry.expiresAt <= now || entry.createdAt > now || now - entry.createdAt > maxAgeMs
       || !entry.reviewer || !entry.reviewArtifactDigest || entry.source.taskId === query.excludeTaskId
       || (query.problemClass !== undefined && entry.problemClass !== query.problemClass)) continue
     // Score only bounded text; full conditions are preserved separately in the returned reference.

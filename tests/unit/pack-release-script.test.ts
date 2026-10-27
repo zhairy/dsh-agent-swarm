@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -31,4 +31,23 @@ describe('release packing guard', () => {
       await expect(execFileAsync(process.execPath, [join(process.cwd(), 'scripts/pack-release.mjs'), '--check-only', '--skip-build'], { cwd: root })).rejects.toThrow(/缺少文件.*expert-tools/)
     } finally { await rm(root, { recursive: true, force: true }) }
   })
+
+  it.skipIf(!hasBuild)('binds tarball, git commit, evidence digest and manifest into SHA256SUMS', async () => {
+    const out = await mkdtemp(join(tmpdir(), 'swarm-release-manifest-'))
+    const evidence = join(out, 'evidence.json')
+    await writeFile(evidence, '{"result":"candidate-green"}\n')
+    try {
+      const commit = 'a'.repeat(40)
+      const { stdout } = await execFileAsync(process.execPath, [join(process.cwd(), 'scripts', 'pack-release.mjs'),
+        '--skip-build', '--out', out, '--evidence', evidence, '--git-commit', commit, '--previous-version', '3.1.3'], { cwd: process.cwd() })
+      const report = JSON.parse(stdout) as { sha256: string; gitCommit: string; manifest: string }
+      expect(report).toMatchObject({ gitCommit: commit, manifest: 'release-manifest.json' })
+      const files = await readdir(out)
+      expect(files).toEqual(expect.arrayContaining(['release-manifest.json', 'SHA256SUMS']))
+      const manifest = JSON.parse(await readFile(join(out, 'release-manifest.json'), 'utf8'))
+      expect(manifest).toMatchObject({ package: 'dsh-agent-swarm', version: '3.1.4', gitCommit: commit, previousVersion: '3.1.3',
+        tarballSha256: report.sha256, evidence: expect.objectContaining({ sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }) })
+      expect(await readFile(join(out, 'SHA256SUMS'), 'utf8')).toContain('release-manifest.json')
+    } finally { await rm(out, { recursive: true, force: true }) }
+  }, 60_000)
 })

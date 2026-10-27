@@ -83,10 +83,39 @@ const fixture = async () => {
     return reply
   }
   return { root, service, task, exec, goals, features: () => features, goal: () => goal, changeGoal: (patch: Partial<GoalViewLike>) => { goal = { ...goal, ...patch } },
+    makeHistoryUnavailable: () => { root.session!.deriveMessages = () => { throw new Error('host transcript unavailable') } },
     start, childDone, pendingChild, pendingAsk, answer, decision, messages }
 }
 
 describe('真实SwarmService的工作等待与授权等待交错', () => {
+  it('连续进入等待不会把真实在途子委派记成重复进展或触发LOOP_DETECTED', async () => {
+    const f = await fixture()
+    const before = f.features().progress.forTask(f.task.task_id)
+    for (let index = 0; index < 6; index++) expect(await f.service.BeforeManagedStep(f.root, { kind: 'enter', messages: [] })).toEqual({ kind: 'reject' })
+    const control = f.features().progress.forTask(f.task.task_id)
+    expect(control).toMatchObject({ status: 'active' })
+    expect(control?.activations).toBe(before?.activations)
+    expect(control?.historyCount).toBe(before?.historyCount)
+    expect(control?.reason).toBeUndefined()
+    f.childDone.release()
+    await f.pendingChild
+  })
+
+  it('宿主历史暂时不可读时，已冻结且版本一致的专家合同仍可运行', async () => {
+    const f = await fixture()
+    f.makeHistoryUnavailable()
+    const cwd = await mkdtemp(join(tmpdir(), 'swarm-history-child-'))
+    const child: AgentLike = { id: 'delayed-work-child', session: { header: { parentSession: f.root.id, agentPreset: 'mou-ding', cwd } } }
+    try {
+      await expect(f.service.WaitAgentReady(child)).resolves.toBeUndefined()
+      expect(f.service.getGuardReason({ name: 'read', agent: child, arguments: { file_path: 'README.md' } })).toBeUndefined()
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+      f.childDone.release()
+      await f.pendingChild
+    }
+  })
+
   it.each([{ answer: '仍只读README' }, { answer: '拒绝后续动作' }])('工作先拥有hold、ask pending、工作先结算、答复$answer后恰好恢复一次', async ({ answer }) => {
     const f = await fixture()
     expect(await f.service.BeforeManagedStep(f.root, { kind: 'enter', messages: [] })).toEqual({ kind: 'reject' })

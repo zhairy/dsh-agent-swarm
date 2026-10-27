@@ -85,11 +85,12 @@ import { assessExplorationEvidence, revalidateEvidenceAssessment, type EvidenceA
 import { createPublicEvidenceSourceResolver } from './evidence-source.js'
 import type { ChildRecoveryEvidence } from './host-recovery.js'
 import { IssueVerificationReceipt, IsVerificationReceiptCurrent, getTaskVerificationBinding, getVerificationDecisionDigest, getVerificationProducers } from './verification-receipt.js'
-import { getProgressProjection, getWorkflowStructure, type ProgressAction } from './progress-guard.js'
+import { getProgressProjection, getWorkflowStructure, type ProgressAction, type ProgressWaitHandle } from './progress-guard.js'
 import type { GoalsLike, UserQuestionsLike } from './host-contract.js'
 import { createAuthorizationRuntime, type AuthorizationRuntimeContext } from './authorization-runtime.js'
 import { getTaskRuntimeLineage } from './feature-session.js'
 import { isAuthorizationWaiting } from './authorization-wait.js'
+import { buildTaskEvolutionView, type TaskEvolutionView } from './evolution-governance.js'
 
 export interface LoggerLike {
   info: (message: string) => void
@@ -431,6 +432,14 @@ const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: 
     budget: { used: delegations.filter((d) => d.status !== 'blocked').length, max: config.budgets.maxDelegationsPerTask }
   }
 }
+
+  const getTaskEvolution = (session: SessionStateInfo, task: TaskRecord): { revision: number; evolution: TaskEvolutionView | null } => {
+    try {
+      const entry = session.features?.experiences.listForTask(task.taskId).find(candidate => candidate.governance !== undefined)
+      if (entry?.governance === undefined) return { revision: 0, evolution: null }
+      return { revision: entry.governance.revision, evolution: buildTaskEvolutionView({ ...entry, governance: entry.governance }, task) }
+    } catch { return { revision: 0, evolution: null } }
+  }
 
 const getStatusResult = (tasks: ReturnType<typeof getTaskView>[], session: SessionStateInfo, diagnostics: string[]) => ({
   tasks,
@@ -1437,7 +1446,19 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       }).map(task => task.taskId))
     } catch { return new Set() } // Unknown/nonexistent paths cannot prove independence.
   }
-  const observeTaskProgress = async (session: SessionStateInfo, features: FeatureSession, task: TaskRecord, action: ProgressAction, extra: Record<string, unknown> = {}, recoveryEvent?: string): Promise<void> => {
+  const getRuntimeWaitHandle = (session: SessionStateInfo, task: TaskRecord, features: FeatureSession): ProgressWaitHandle | undefined => {
+    const decisions = Object.values(features.store.readFields?.(['authorizationDecisions']).authorizationDecisions ?? {})
+    const authorization = decisions.find(decision => isAuthorizationWaiting(decision) && [task.taskId, '@root'].includes(decision.questionBinding.taskId))
+    if (authorization !== undefined) return { id: `authorization:${authorization.id}`, kind: 'authorization', state: 'open', openedAt: authorization.createdAt }
+    const delegation = session.store.getTaskDelegations(task.taskId).find(record => ['queued', 'running'].includes(record.status) || record.finalization === 'processing')
+    if (delegation !== undefined) return { id: `delegation:${delegation.delegationId}:${delegation.attemptId ?? delegation.delegationId}`, kind: 'tool', state: 'open', openedAt: delegation.startedAt ?? task.updatedAt }
+    const planning = [...reviewProgress.values()].find(run => run.rootSessionId === session.sessionId && run.view.task_id === task.taskId && run.view.agentStage !== 'settled')
+    if (planning !== undefined) return { id: `planning:${planning.view.snapshotDigest}`, kind: 'tool', state: 'open', openedAt: planning.view.startedAt }
+    const hold = runtimeWorkHolds.get(session.sessionId)
+    if (hold !== undefined && runtimeWorkInFlight(session)) return { id: `goal:${hold.id}:${hold.revision}`, kind: 'goal', state: 'open', openedAt: task.updatedAt }
+    return undefined
+  }
+  const observeTaskProgress = async (session: SessionStateInfo, features: FeatureSession, task: TaskRecord, action: ProgressAction, extra: Record<string, unknown> = {}, recoveryEvent?: string, waitHandle?: ProgressWaitHandle): Promise<void> => {
     const lineageId = features.progress.lineageFor(task, features.workspaceId)
     const prior = features.progress.get(lineageId)
     const trustedRecovery = recoveryEvent !== undefined && (prior?.status === 'stalled' || recoveryEvent.startsWith('manual-child:')) ? recoveryEvent : undefined
@@ -1449,6 +1470,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           .filter(decision => [task.taskId, '@root'].includes(decision.questionBinding.taskId))
           .map(decision => ({ operation: decision.operationDigest, scope: decision.scopeDigest, phase: decision.phase, answer: decision.answerDigest ?? null })).sort((a,b) => a.operation.localeCompare(b.operation))),
         observedFacts: features.progress.forTask(task.taskId)?.observedFacts ?? {}, ...extra }),
+      ...(waitHandle === undefined ? {} : { waitHandle }),
       ...(trustedRecovery === undefined ? {} : { recoveryEvent: trustedRecovery }), legacyBaseline: task.recovered === true })
     if (result.status !== 'active') {
       const root = session.rootAgent
@@ -1879,12 +1901,16 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     SyncRootUpgrade(exec.agent, session)
     const tasks = (typeof input.task_id === 'string' ? [getTaskOrThrow(session, input.task_id)] : session.store.getTasks())
       .map((task) => deriveReconciledTask(session, deriveIntentRefresh(task, exec.agent)))
-    const views = tasks.map((task) => ({
-      ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null),
-      runtimeGuard: getRuntimeView(session, task.taskId),
-      acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
-      stateRefreshRequired: !isTaskVersionCurrent(task, getTaskOrThrow(session, task.taskId)), publishedRevisions: getTaskBinding(getTaskOrThrow(session, task.taskId))
-    }))
+    const views = tasks.map((task) => {
+      const evolution = getTaskEvolution(session, task)
+      return {
+        ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null),
+        runtimeGuard: getRuntimeView(session, task.taskId),
+        evolutionRevision: evolution.revision, evolution: evolution.evolution,
+        acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
+        stateRefreshRequired: !isTaskVersionCurrent(task, getTaskOrThrow(session, task.taskId)), publishedRevisions: getTaskBinding(getTaskOrThrow(session, task.taskId))
+      }
+    })
     const capabilityRequest = raw as { capability_tags?: string[]; allow_write_roles?: boolean }
     return { ...getStatusResult(views, session, getDiagnostics(exec.agent)),
       planningRuns: [...reviewProgress.values()].filter(({ rootSessionId, view }) => rootSessionId === session.sessionId && tasks.some((task) => task.taskId === view.task_id))
@@ -2082,7 +2108,6 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         const currentTask = session.store.getTask(binding.taskId)
         const task = currentTask === undefined ? undefined : deriveReconciledTask(session, deriveIntentRefresh(currentTask, session.rootAgent ?? execution.agent))
         if (task === undefined || !isTaskVersionCurrent(task, binding)) return '专家绑定的是旧任务版本，不能继续执行工具'
-        if (task.intentHistoryUnavailable) return '宿主需求历史不可读取，无法确认最新授权，暂停专家工具调用'
       }
       if (['read', 'read_image', 'glob', 'grep', 'write', 'edit'].includes(execution.name)) {
         const canonical = (path: string): string => {
@@ -2436,15 +2461,17 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       if (next.kind !== 'enter') return next
       const human = next.messages.find(message => ['user', 'user-question-reply'].includes(message.source?.kind ?? ''))
       if (human !== undefined) { runtimeHumanInput.set(agent.id, typeof human.id === 'string' ? human.id : getValueDigest(human)); return next }
-      runtimeHumanInput.delete(agent.id)
       const session = getSession(agent.id), features = await ensureFeatures(session, agent)
       let task = focusedRuntimeTask(session)
       if (task === undefined && deps.getGoals?.()?.get(agent)?.phase !== 'active') return next
       if (task === undefined) { await authorizationContext(agent); task = rootPlanningTask(agent) }
-      if (runtimeWorkInFlight(session)) {
-        if (!hasRuntimeReadyWork(session) && parkRuntimeWork(agent)) return { kind: 'reject' }
+      const inFlight = runtimeWorkInFlight(session), ready = hasRuntimeReadyWork(session)
+      const parked = inFlight && !ready && parkRuntimeWork(agent)
+      const waitHandle = inFlight && !ready ? getRuntimeWaitHandle(session, task, features) : undefined
+      try {
+        await observeTaskProgress(session, features, task, 'root-round', { afterTool: runtimeLastTool.get(agent.id) ?? null }, runtimeHumanInput.get(agent.id), waitHandle)
+        return parked ? { kind: 'reject' } : next
       }
-      try { await observeTaskProgress(session, features, task, 'root-round', { afterTool: runtimeLastTool.get(agent.id) ?? null }); return next }
       catch (error) {
         deps.getGoals?.()?.disarm(agent)
         deps.logger?.warn(`自动轨迹停止：root=${agent.id} task=${task.taskId} reason=${getErrorText(error).slice(0,400)}`)
@@ -2468,7 +2495,13 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       if (agent === undefined || !isRootTianShu(agent)) return
       if (event.type === 'user/message') authorizationRuntime.onUserMessage(agent, event.data)
       if (event.type === 'tool/result') authorizationRuntime.onToolResult(agent, (event.data as { message?: unknown } | undefined)?.message ?? event.data)
-      if (event.type === 'turn/end') authorizationRuntime.onTurnEnd(agent, (event.data as { reason?: { kind?: string } } | undefined)?.reason)
+      if (event.type === 'goal/change' && (event.data as { operation?: unknown } | undefined)?.operation === 'resume')
+        runtimeHumanInput.set(agent.id, `goal-resume:${getValueDigest(event.data)}`)
+      if (event.type === 'turn/end') {
+        authorizationRuntime.onTurnEnd(agent, (event.data as { reason?: { kind?: string } } | undefined)?.reason)
+        runtimeHumanInput.delete(agent.id)
+        runtimeLastTool.delete(agent.id)
+      }
       if (event.type === 'turn/end' && (event.data as { reason?: { kind?: string } } | undefined)?.reason?.kind === 'aborted') runtimeWorkHolds.delete(sessionId)
     },
     getGuardReason,
@@ -2476,7 +2509,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       if (execution.agent !== undefined && isRootTianShu(execution.agent)) {
         const role = (execution.arguments as { role?: unknown } | undefined)?.role
         const producer = execution.name === 'swarm_delegate' && typeof role === 'string' && ROLE_INFO_LIST.some(info => info.id === role) ? ':' + role : ''
-        runtimeLastTool.set(execution.agent.id, execution.name + producer)
+        runtimeLastTool.set(execution.agent.id, `${execution.name}${producer}:${getValueDigest(normalizeRuntimeObservation(execution.arguments))}`)
       }
       if (WRITE_TOOL_NAMES.includes(execution.name)) AddRootEdit(execution.agent, getRoleForAgent(execution.agent))
       if (execution.agent !== undefined && childOwners.has(execution.agent.id)
@@ -2529,7 +2562,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       await ensureFeatures(session, root)
       // 浏览器owner通过宿主认证；此处仅返回该已登记根的目录，不遍历其他根或正文。
       return { rootSessionId: sessionId, tasks: session.store.getTasks().map(task => ({
-        title: task.card.title, ...getTaskBinding(task), status: task.acceptance?.status ?? 'pending'
+        title: task.card.title, ...getTaskBinding(task), status: task.acceptance?.status ?? 'pending',
+        evolutionRevision: getTaskEvolution(session, task).revision
       })) }
     }
     ,getTaskViewForRpc: (sessionId, taskId) => {
@@ -2538,7 +2572,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const stored = getTaskOrThrow(session, taskId)
       const task = deriveReconciledTask(session, deriveIntentRefresh(stored, session.rootAgent))
       const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session), routeState.getRecovery(sessionId) ?? null)
+      const evolution = getTaskEvolution(session, task)
       return { ...view,
+        rootSessionId: sessionId, evolutionRevision: evolution.revision, evolution: evolution.evolution,
         runtimeGuard: getRuntimeView(session, taskId),
         acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
         diagrams: { ...view.diagrams, stateRefreshRequired: task !== stored },
@@ -2598,7 +2634,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         if (binding === undefined || binding.state !== 'active') throw new SwarmError('RECOVERY_REQUIRED', resumeHint())
         const stored = session?.store.getTask(binding.taskId)
         const task = stored === undefined ? undefined : deriveReconciledTask(session!, deriveIntentRefresh(stored, session!.rootAgent ?? agent))
-        if (task === undefined || !isTaskVersionCurrent(task, binding) || task.intentHistoryUnavailable) throw new SwarmError('STALE_EVIDENCE', '专家绑定的需求或合同已失效；请在父任务核对当前版本，再通过该子会话的“安全继续任务”控件恢复。')
+        // 历史可读性只是来源告警；子会话已持有自包含 prompt 和冻结任务版本。
+        // 将其当成版本失效会在压缩后杀死所有既有专家，而合同版本本身仍可严格校验。
+        if (task === undefined || !isTaskVersionCurrent(task, binding)) throw new SwarmError('STALE_EVIDENCE', '专家绑定的需求或合同已失效；请在父任务核对当前版本，再通过该子会话的“安全继续任务”控件恢复。')
         const control = agentControl.get(agent.id)
         const record = control === undefined ? undefined : session?.store.getDelegation(control.delegationId)
         if (record !== undefined && binding.attemptId !== (record.attemptId ?? record.delegationId)) throw new SwarmError('RECOVERY_REQUIRED', resumeHint())

@@ -8,7 +8,7 @@ import { digest } from './task-model.js'
 const MAX_BYTES = 4 * 1024 * 1024
 // Only checked maintenance origins are admitted. FeatureState validates the
 // schema-2 guard fence separately; arbitrary future versions are never inferred compatible.
-const SOURCE_VERSIONS = ['2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.9.0', '2.9.2', '3.1.0', '3.1.1', '3.1.2', '3.1.3'] as const
+const SOURCE_VERSIONS = ['2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.9.0', '2.9.2', '3.1.0', '3.1.1', '3.1.2', '3.1.3', '3.1.4'] as const
 export type MemoryHandoffSourceVersion = typeof SOURCE_VERSIONS[number]
 const sourceVersionValid = (raw: unknown): raw is MemoryHandoffSourceVersion => SOURCE_VERSIONS.some(version => version === raw)
 export interface MemoryHandoffEnvelope<T> {

@@ -43,8 +43,8 @@ export const LEGACY_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
   planningBudgets: { kind: 'dict' }
 })
 
-/** 3加入独立安全段；1为扁平委派，2为按任务分桶，旧指纹不可随新字段改变。 */
-export const LAYOUT_VERSION = 3
+/** 3加入独立安全段；4加入经验治理语义围栏。旧指纹不可随新字段改变。 */
+export const LAYOUT_VERSION = 4
 
 /**
  * dsh-agent-swarm 的状态分片规格；通用 state-store 不假定任何段名，
@@ -79,7 +79,7 @@ export const SWARM_SEGMENT_SPECS: SegmentSpecs = Object.freeze({
 export const SWARM_LAYOUT_OPTIONS = Object.freeze({
   segments: SWARM_SEGMENT_SPECS,
   legacySegments: LEGACY_SEGMENT_SPECS,
-  legacyLayouts: { 1: LEGACY_SEGMENT_SPECS, 2: PRE_GUARD_SEGMENT_SPECS },
+  legacyLayouts: { 1: LEGACY_SEGMENT_SPECS, 2: PRE_GUARD_SEGMENT_SPECS, 3: SWARM_SEGMENT_SPECS },
   layoutVersion: LAYOUT_VERSION
 })
 

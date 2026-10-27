@@ -111,7 +111,7 @@ describe('真实任务流程客户端投影', () => {
     const module = loadModule()
     let registration: any
     let effect: any
-    const connection = { rpc: { call: vi.fn().mockResolvedValue({ ok: true, value: { task_id: 'T-1' } }) } }
+    const connection = { rpc: { call: vi.fn().mockResolvedValue({ ok: true, value: { task_id: 'T-1', rootSessionId: 'session' } }) } }
     const context = {
       effect: (run: () => unknown) => run(),
       locale: { register: vi.fn() }, uiConversation: { events: { register: vi.fn() } },
@@ -126,9 +126,35 @@ describe('真实任务流程客户端投影', () => {
     const source = store.task('session', 'T-1')
     const release = source.subscribe(vi.fn())
     await source.refresh()
-    expect(source.getSnapshot().value).toEqual({ task_id: 'T-1' })
+    expect(source.getSnapshot().value).toEqual({ task_id: 'T-1', rootSessionId: 'session' })
     expect(connection.rpc.call).toHaveBeenCalledWith('/api', 'swarm.taskView', { sessionId: 'session', taskId: 'T-1' }, expect.any(AbortSignal))
     release(); store.dispose()
+  })
+
+  it('只读显示候选、评测、影子、Canary和撤回，绑定错根时显示不可用', () => {
+    const { getEvolutionView, EvolutionStatusPanel } = loadModule().__test__
+    const binding = { rootSessionId: 'root', taskId: 'T-1', cardRevision: 1, workflowRevision: 1, requestRevision: 1 }
+    const base = { schemaVersion: 1, revision: 2, phase: 'shadow', binding,
+      candidate: { id: '123e4567-e89b-42d3-a456-426614174000', lifecycle: 'validated', digest: 'a'.repeat(64) },
+      evaluation: { state: 'passed', resultDigest: 'b'.repeat(64), traceDigest: 'c'.repeat(64), baselineDigest: 'd'.repeat(64), candidateDigest: 'a'.repeat(64),
+        split: 'acceptance', groupCount: 3, stepCount: 9, falseStops: 0, legitimateWaitFalseStops: 0, falsePasses: 0, severeFalsePasses: 0,
+        unknown: 0, falseStopUpper95: 0.1, falsePassUpper95: 0.1, operationalTokens: { actual: 0, estimated: 0, unknown: 0 },
+        evaluationTokens: { actual: 0, estimated: 0, unknown: 0 }, observedAt: 1 },
+      shadow: { state: 'observing', samples: 1, recommendation: 'continue', changedExecution: false },
+      canary: { state: 'awaiting_user', safetyViolations: 0, authorizationRef: 'auth-1', scope: { rootSessionId: 'root', workspaceId: 'e'.repeat(64), taskId: 'T-1', lineageId: 'f'.repeat(64) } },
+      revoke: { state: 'none', unresolvedHandles: 0 }, updatedAt: 1 }
+    const view = { task_id: 'T-1', rootSessionId: 'root', cardRevision: 1, workflowRevision: 1, requestRevision: 1, evolution: base }
+    expect(getEvolutionView(view)).toMatchObject({ present: true, valid: true })
+    expect(textOf(EvolutionStatusPanel({ view }))).toContain('影子观察')
+    expect(getEvolutionView({ ...view, rootSessionId: 'other' })).toMatchObject({ present: true, valid: false })
+    expect(textOf(EvolutionStatusPanel({ view: { ...view, evolution: { ...base, canary: { ...base.canary, state: 'active', authorizationRef: undefined } } } }))).toContain('授权引用缺失')
+  })
+
+  it('拒绝 SVG 动态链接与注释混淆的 CSS，而不依赖 Mermaid 语法限制', () => {
+    const { isSafeSvgMarkup } = loadModule().__test__
+    expect(isSafeSvgMarkup('<svg><g></g></svg>')).toBe(true)
+    expect(isSafeSvgMarkup('<svg><a><animate attributeName="href" values="javascript:alert(1)"/></a></svg>')).toBe(false)
+    expect(isSafeSvgMarkup('<svg><style>@im/**/port "https://evil.example/x.css"</style></svg>')).toBe(false)
   })
 
   it('Mermaid 本地懒加载并用 strict；两个请求复用同一加载', async () => {

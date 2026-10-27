@@ -212,6 +212,31 @@ describe('independent public runtime guard adversaries', () => {
     } finally { childDone.resolve(); await pending }
   })
 
+  it('different calls to the same tool remain distinct root progress', async () => {
+    const f = await makeFixture()
+    const task = await f.create([])
+    await f.service.BeforeManagedTool({ name: 'swarm_status', arguments: { task_id: task.task_id }, agent: f.root })
+    for (const filePath of ['a.ts', 'b.ts', 'c.ts']) {
+      f.service.ObserveToolDispatch({ name: 'edit', arguments: { file_path: filePath }, agent: f.root })
+      expect((await f.service.BeforeManagedStep(f.root, { kind: 'enter', messages: [] })).kind).toBe('enter')
+    }
+    expect(f.features().progress.forTask(task.task_id)?.status).toBe('active')
+  })
+
+  it('a direct goal resume reopens one bounded recovery window', async () => {
+    const f = await makeFixture()
+    const task = await f.create([])
+    await f.service.BeforeManagedTool({ name: 'swarm_status', arguments: { task_id: task.task_id }, agent: f.root })
+    expect((await f.service.BeforeManagedStep(f.root, { kind: 'enter', messages: [] })).kind).toBe('enter')
+    expect((await f.service.BeforeManagedStep(f.root, { kind: 'enter', messages: [] })).kind).toBe('enter')
+    expect((await f.service.BeforeManagedStep(f.root, { kind: 'enter', messages: [] })).kind).toBe('reject')
+    f.service.ObserveManagedMessage(f.root.id, {
+      type: 'goal/change',
+      data: { kind: 'goal/change', operation: 'resume', goal: { id: f.goal.id, revision: 2, phase: 'active' } }
+    })
+    expect((await f.service.BeforeManagedStep(f.root, { kind: 'enter', messages: [] })).kind).toBe('enter')
+  })
+
   it('the actual registered runtime request hook stops before downstream model preparation after a structural loop', async () => {
     const f = await makeFixture()
     const task = await f.create([])

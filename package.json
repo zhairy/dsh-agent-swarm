@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "3.1.3",
+  "version": "3.1.4",
   "description": "DSH 多智能体插件：天枢统御 12 位专家，任务卡 + Mermaid 流程 + 证据门禁验收；多层模型链即时回退与链尾等待恢复、按配置语言输出、内嵌 Jev 判断 / DSH multi-agent swarm plugin with evidence-gated delegation, resilient model routing, language control and embedded Jev judgments",
   "keywords": [
     "dsh",
@@ -43,6 +43,7 @@
     "locale",
     "presets",
     "scripts/doctor.mjs",
+    "scripts/evolution-evaluate.mjs",
     "scripts/export-task-diagrams.mjs",
     "scripts/install-profile.mjs",
     "scripts/repair-state.mjs",

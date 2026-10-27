@@ -49,7 +49,8 @@ describe('trusted one-time memory handoff', () => {
     const scope = { rootSessionId: 'handoff-root', workspaceId: 'a'.repeat(64), state: {} }
     expect(() => createMemoryHandoffEnvelope({ ...scope, sourceVersion: '2.5.0' as '2.3.1' })).toThrow('ENVELOPE_VERSION')
     expect(() => createMemoryHandoffEnvelope(scope as Parameters<typeof createMemoryHandoffEnvelope>[0])).toThrow('ENVELOPE_VERSION')
-    for (const sourceVersion of ['3.1.4', '3.2.0', '99.0.0']) {
+    expect(createMemoryHandoffEnvelope({ ...scope, sourceVersion: '3.1.4' }).sourceVersion).toBe('3.1.4')
+    for (const sourceVersion of ['3.2.0', '99.0.0']) {
       expect(() => createMemoryHandoffEnvelope({ ...scope, sourceVersion: sourceVersion as MemoryHandoffSourceVersion })).toThrow('ENVELOPE_VERSION')
     }
   })
