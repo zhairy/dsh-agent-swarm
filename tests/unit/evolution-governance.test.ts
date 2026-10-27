@@ -6,7 +6,7 @@ import { createExperienceRepository, type ExperienceReview, type ExperienceState
 import {
   EVOLUTION_POLICY_VERSION, getEvolutionUpper95, runEvolutionEvaluation, ValidateEvolutionGovernance,
   ValidateEvolutionReplayTrace, type EvolutionCanaryScope, type EvolutionDecisionPolicy,
-  type EvolutionReplayTrace
+  type EvolutionReplayTrace, recoverEvolutionGovernance
 } from '../../src/evolution-governance.js'
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex')
@@ -94,8 +94,16 @@ describe('governance state machine and bounded persistence', () => {
     expect((await repository.startShadow(candidate.id, request(4, 'shadow'))).governance?.phase).toBe('shadow')
     expect((await repository.recordShadow(candidate.id, 'continue', request(5, 'shadow-sample'))).governance?.shadow.samples).toBe(1)
     const canaryScope: EvolutionCanaryScope = scope
+    await expect(repository.requestCanary(candidate.id, { ...canaryScope, taskId: 'T-other' }, hash('stop-policy'), request(6, 'wrong-scope')))
+      .rejects.toMatchObject({ code: 'EXPERIENCE_INVALID' })
     expect((await repository.requestCanary(candidate.id, canaryScope, hash('stop-policy'), request(6, 'canary-request'))).governance?.canary.state).toBe('awaiting_user')
+    const noCanaryVerifier = createExperienceRepository(store, { now: () => now, verifyReview: () => true,
+      verifyEvaluation: () => true, verifyRelease: () => true })
+    await expect(noCanaryVerifier.authorizeCanary(candidate.id, canaryScope, 'untrusted-auth', hash('stop-policy'), request(7, 'canary-auth-rejected')))
+      .rejects.toMatchObject({ code: 'EXPERIENCE_REVIEW_REQUIRED' })
     expect((await repository.authorizeCanary(candidate.id, canaryScope, 'auth-live-1', hash('stop-policy'), request(7, 'canary-auth'))).governance?.canary.state).toBe('authorized')
+    const beforeRestart = repository.get(candidate.id)!.governance!
+    expect(recoverEvolutionGovernance(beforeRestart, 1100)).toMatchObject({ phase: 'reconcile-required', canary: { state: 'stopped' } })
     expect((await repository.activateCanary(candidate.id, request(8, 'canary-active'))).governance?.canary.state).toBe('active')
     expect((await repository.promoteCanary(candidate.id, 'bounded promotion', request(9, 'promote'))).governance?.phase).toBe('active')
     expect(repository.query({ text: 'wait-aware' }).matches.map(item => item.id)).toEqual([candidate.id])
@@ -107,6 +115,8 @@ describe('governance state machine and bounded persistence', () => {
     expect(repository.query({ text: 'wait-aware' }).matches).toEqual([])
     await expect(repository.promoteCanary(candidate.id, 'late', request(11, 'late'))).rejects.toMatchObject({ code: 'EXPERIENCE_CONFLICT' })
     expect(ValidateEvolutionGovernance(store.read().experiences[candidate.id]!.governance)).toBe(true)
+    const recovered = recoverEvolutionGovernance(store.read().experiences[candidate.id]!.governance!, 2000)
+    expect(recovered).toMatchObject({ phase: 'revoked', revoke: { state: 'complete', reason: 'safety violation' } })
     await store.dispose()
   })
 })
