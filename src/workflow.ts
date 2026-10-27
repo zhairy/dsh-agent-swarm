@@ -366,14 +366,48 @@ export const ParseWorkflowMermaid = async (definition: WorkflowDefinition, sourc
 }
 
 export const intWorkflowState = (definition: WorkflowDefinition, round = 0): WorkflowStateInfo => ({ round, nodes: Object.fromEntries(definition.nodes.map((node) => [node.id, { status: node.dependsOn.length === 0 ? 'ready' : 'pending' }])) })
+/**
+ * Reconcile a new graph version without discarding unchanged node evidence.
+ * A changed node keeps only a historical skip/blocked marker; it is never
+ * silently replayed as a fresh completion.
+ */
+export const ReconcileWorkflowState = (
+  previousDefinition: WorkflowDefinition | undefined,
+  previousState: WorkflowStateInfo | undefined,
+  definition: WorkflowDefinition,
+  round = 0
+): WorkflowStateInfo => {
+  const state = intWorkflowState(definition, round)
+  if (previousDefinition === undefined || previousState === undefined) return state
+  const previousNodes = new Map(previousDefinition.nodes.map((node) => [node.id, node]))
+  const graphChanged = getWorkflowDigest(previousDefinition) !== getWorkflowDigest(definition)
+  for (const node of definition.nodes) {
+    const previousNode = previousNodes.get(node.id)
+    const previous = previousState.nodes[node.id]
+    if (previous === undefined) continue
+    if (!graphChanged && previousNode !== undefined) {
+      state.nodes[node.id] = structuredClone(previous)
+      continue
+    }
+    if (previous.status === 'succeeded' || previous.status === 'skipped') state.nodes[node.id] = {
+      status: 'skipped', reason: '旧流程节点已执行或跳过；新流程版本不自动重放，原结果保留为历史证据'
+    }
+    else if (previous.status === 'running' || previous.status === 'failed' || previous.status === 'blocked') state.nodes[node.id] = {
+      status: 'blocked', reason: '节点合同已改变，旧执行副作用需人工核对，禁止自动重放', ...(previous.attemptId === undefined ? {} : { attemptId: previous.attemptId })
+    }
+  }
+  return state
+}
 export const getReadyNodes = (definition: WorkflowDefinition, state: WorkflowStateInfo): WorkflowNodeInfo[] => definition.nodes.filter((node) => {
   const status = state.nodes[node.id]?.status
   return (status === 'ready' || status === 'pending') && node.dependsOn.every((dep) => state.nodes[dep]?.status === 'succeeded' || state.nodes[dep]?.status === 'skipped')
 })
-export const getMatchingNode = (definition: WorkflowDefinition, state: WorkflowStateInfo, input: { role: DelegableRoleId; mode?: SuanHengMode; gate?: GateId; nodeId?: string }): { node?: WorkflowNodeInfo; reason?: string } => {
+export const getMatchingNode = (definition: WorkflowDefinition, state: WorkflowStateInfo, input: { role: DelegableRoleId; mode?: SuanHengMode; gate?: GateId; nodeId?: string }, options: { deterministicFallback?: boolean } = {}): { node?: WorkflowNodeInfo; reason?: string } => {
   const ready = getReadyNodes(definition, state).filter((node) => node.operation === 'delegate' && node.role === input.role && node.mathMode === (input.role === 'suan_heng' ? input.mode ?? 'research' : undefined) && (input.gate === undefined || node.gates.includes(input.gate)))
   const matches = input.nodeId === undefined ? ready : ready.filter((node) => node.id === input.nodeId)
-  return matches.length === 1 ? { node: matches[0] } : { reason: matches.length === 0 ? '没有匹配且依赖已满足的节点' : '存在多个匹配节点，请指定 node_id' }
+  return matches.length === 1 || options.deterministicFallback === true && matches.length > 1
+    ? { node: matches[0] }
+    : { reason: matches.length === 0 ? '没有匹配且依赖已满足的节点' : '存在多个匹配节点，请指定 node_id' }
 }
 
 /** 更新显式节点状态。attempt 旧结果不能覆盖新结果；终态只能由新修复轮重建。 */

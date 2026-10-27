@@ -53,6 +53,31 @@ describe('单一版本源派生的五图与进度', () => {
     }
     expect(getTaskDiagrams(task, [record, { ...record, delegationId: 'D-2' }]).progress.completed).toBe(0)
   })
+
+  it('连续节点完成后 Mermaid class 随任务状态更新，不把前一节点颜色冻结', () => {
+    const { task, record } = fixture()
+    task.workflowState!.nodes.implementation = { status: 'succeeded', attemptId: 'attempt-1' }
+    task.workflowState!.nodes.verification = { status: 'running', attemptId: 'attempt-2' }
+    const verification: DelegationRecord = { ...record, delegationId: 'D-2', role: 'fu_he', roleName: '复核', nodeId: 'verification', attemptId: 'attempt-2', status: 'running', finalization: 'processing' }
+    const running = getTaskDiagrams(task, [record, verification])
+    expect(running.progress).toMatchObject({ completed: 1, statuses: { succeeded: 1, running: 1 } })
+    expect(running.views.find((view) => view.kind === 'workflow')!.mermaid).toContain('class n_implementation succeeded')
+    expect(running.views.find((view) => view.kind === 'workflow')!.mermaid).toContain('class n_verification running')
+    task.workflowState!.nodes.verification = { status: 'succeeded', attemptId: 'attempt-2' }
+    const completed = getTaskDiagrams(task, [record, { ...verification, status: 'completed', finalization: 'ready', finishedAt: 2000 }])
+    expect(completed.progress).toMatchObject({ completed: 2, percent: 66 })
+    expect(completed.views.find((view) => view.kind === 'workflow')!.mermaid).toContain('class n_verification succeeded')
+  })
+
+  it('派生新流程视图仍用已提交任务版本核对当前委派，避免看到的节点全部变 unknown', () => {
+    const { task, record } = fixture()
+    const stored = { ...task, workflowRevision: 2 }
+    const derived = { ...task, workflowRevision: 3, workflowState: structuredClone(task.workflowState) }
+    derived.workflowState!.nodes.implementation = { status: 'succeeded', attemptId: 'attempt-1' }
+    const view = getTaskDiagrams(derived, [{ ...record, workflowRevision: 2 }], stored)
+    expect(view.progress).toMatchObject({ completed: 1, statuses: { succeeded: 1 } })
+    expect(view.source.delegations[0]).toMatchObject({ id: 'D-1', current: true })
+  })
   it('跳过、失败和阻塞不计完成；控制节点不进委派分母', () => {
     const { task } = fixture()
     task.workflowState!.nodes.implementation = { status: 'skipped' }

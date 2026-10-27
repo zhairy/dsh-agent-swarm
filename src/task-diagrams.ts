@@ -55,13 +55,13 @@ const labelledFlow = (nodes: Array<{ id: string; label: string }>, edges: Array<
 ].join('\n')
 
 /** Five readonly views, one version-bound snapshot. Rendering never publishes state or passes a gate. */
-export const getTaskDiagrams = (task: TaskRecord, records: DelegationRecord[]): TaskDiagrams => {
+export const getTaskDiagrams = (task: TaskRecord, records: DelegationRecord[], delegationBindingTask: TaskRecord = task): TaskDiagrams => {
   records = records.filter((record) => record.taskId === task.taskId)
   const diagnostics: TaskDiagrams['diagnostics'] = []
   const definition = task.workflowDefinition === undefined ? undefined : getCanonicalWorkflow(task.workflowDefinition)
   const workflowDigest = definition === undefined ? null : getWorkflowDigest(definition)
   if (task.workflowDigest !== undefined && workflowDigest !== task.workflowDigest) diagnostics.push({ code: 'WORKFLOW_DIGEST_MISMATCH', message: '流程摘要与定义不一致，视图不修复或批准该状态' })
-  const valid = new Map(getCurrentDelegations(task, records, task.artifactSnapshot?.digest).map((record) => [record.delegationId, record]))
+  const valid = new Map(getCurrentDelegations(delegationBindingTask, records, delegationBindingTask.artifactSnapshot?.digest).map((record) => [record.delegationId, record]))
   const byAttempt = new Map<string, DelegationRecord[]>()
   for (const record of valid.values()) if (record.nodeId !== undefined && record.attemptId !== undefined) {
     const key = `${record.nodeId}:${record.attemptId}`
@@ -91,7 +91,7 @@ export const getTaskDiagrams = (task: TaskRecord, records: DelegationRecord[]): 
   const total = Object.values(statuses).reduce((sum, count) => sum + count, 0)
   const sorted = records.map((record): TaskDiagramDelegation => ({
     id: record.delegationId, nodeId: record.nodeId ?? null, attemptId: record.attemptId ?? null, role: record.role, status: record.status,
-    current: isTaskVersionCurrent(task, record) && !record.staleReason, startedAt: time(record.startedAt) ? record.startedAt : null, endedAt: getEnd(record), evidenceCount: record.evidence.length
+    current: isTaskVersionCurrent(delegationBindingTask, record) && !record.staleReason, startedAt: time(record.startedAt) ? record.startedAt : null, endedAt: getEnd(record), evidenceCount: record.evidence.length
   })).sort((a, b) => (a.startedAt ?? -1) - (b.startedAt ?? -1) || a.id.localeCompare(b.id))
   const delegations = sorted.slice(-TASK_DIAGRAM_LIMITS.history)
   const truncated = sorted.length - delegations.length

@@ -45,7 +45,7 @@ describe('release packing guard', () => {
       const files = await readdir(out)
       expect(files).toEqual(expect.arrayContaining(['release-manifest.json', 'SHA256SUMS']))
       const manifest = JSON.parse(await readFile(join(out, 'release-manifest.json'), 'utf8'))
-      expect(manifest).toMatchObject({ package: 'dsh-agent-swarm', version: '3.1.4', gitCommit: commit, previousVersion: '3.1.3',
+      expect(manifest).toMatchObject({ package: 'dsh-agent-swarm', version: '3.1.5', gitCommit: commit, previousVersion: '3.1.3',
         tarballSha256: report.sha256, evidence: expect.objectContaining({ sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }) })
       expect(await readFile(join(out, 'SHA256SUMS'), 'utf8')).toContain('release-manifest.json')
     } finally { await rm(out, { recursive: true, force: true }) }

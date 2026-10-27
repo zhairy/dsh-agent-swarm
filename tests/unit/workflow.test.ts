@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import { ValidateTaskCard, getRuleGates } from '../../src/policy.js'
-import { ParseWorkflowMermaid, ReconcileWorkflow, getLenientWorkflow, UpdateWorkflowNode, ValidateMermaidProjection, ValidateWorkflow, WORKFLOW_LIMITS, getDefaultWorkflow, getMatchingNode, getReadyNodes, getTaskCardMarkdown, getWorkflowDigest, getWorkflowMermaid, intOfficialMermaidParser, intWorkflowState } from '../../src/workflow.js'
+import { ParseWorkflowMermaid, ReconcileWorkflow, ReconcileWorkflowState, getLenientWorkflow, UpdateWorkflowNode, ValidateMermaidProjection, ValidateWorkflow, WORKFLOW_LIMITS, getDefaultWorkflow, getMatchingNode, getReadyNodes, getTaskCardMarkdown, getWorkflowDigest, getWorkflowMermaid, intOfficialMermaidParser, intWorkflowState } from '../../src/workflow.js'
 
 const card = (flags = {}, scope = ['src/a.ts']) => ValidateTaskCard({ title: '改任务', goal: '满足真实合同', acceptance: ['边界行为一致'], scope, flags }).card!
 
 describe('有界任务 DAG', () => {
+  it('流程重协不重置未变节点的真实颜色，只把变更节点保留为历史/阻塞标记', () => {
+    const graph = getDefaultWorkflow(card({ changesCode: true }), getRuleGates(card({ changesCode: true })))
+    const old = intWorkflowState(graph)
+    old.nodes.implementation = { status: 'succeeded', attemptId: 'attempt-1', evidenceRefs: ['evidence-1'] }
+    old.nodes.verification = { status: 'running', attemptId: 'attempt-2' }
+    old.nodes.checkpoint = { status: 'succeeded', evidenceRefs: ['checkpoint-1'] }
+    const unchanged = ReconcileWorkflowState(graph, old, graph, 0)
+    expect(unchanged.nodes.implementation).toEqual(old.nodes.implementation)
+    expect(unchanged.nodes.verification).toEqual(old.nodes.verification)
+    const changed = structuredClone(graph)
+    changed.nodes.find((node) => node.id === 'verification')!.outputContractVersion = '2'
+    const reconciled = ReconcileWorkflowState(graph, old, changed, 0)
+    expect(reconciled.nodes.implementation).toMatchObject({ status: 'skipped', reason: expect.stringContaining('不自动重放') })
+    expect(reconciled.nodes.verification).toMatchObject({ status: 'blocked', attemptId: 'attempt-2' })
+    expect(reconciled.nodes.checkpoint).toMatchObject({ status: 'skipped', reason: expect.stringContaining('不自动重放') })
+  })
+
   it('低风险代码只有局部修改、真实复核、检查点与验收；只读任务不空跑命令', () => {
     const code = card({ changesCode: true })
     const graph = getDefaultWorkflow(code, getRuleGates(code))
@@ -239,6 +256,14 @@ describe('有界任务 DAG', () => {
     state = UpdateWorkflowNode(state, 'implementation', 'succeeded', { attemptId: 'attempt-1' })
     expect(getMatchingNode(graph, state, { role: 'fu_he', gate: 'G_VERIFY' }).node?.id).toBe('verification')
     expect(() => UpdateWorkflowNode(state, 'implementation', 'running')).toThrow('不允许')
+  })
+
+  it('同角色多个 ready 节点时要显式选择；受控调度可确定性选择首个 ready 节点绑定进度', () => {
+    const graph = getDefaultWorkflow(card(), [])
+    graph.nodes.push({ id: 'second_analysis', label: '第二个同角色分析', operation: 'delegate', role: 'mou_ding', dependsOn: [], gates: [], outputContractVersion: '1' })
+    const state = intWorkflowState(graph)
+    expect(getMatchingNode(graph, state, { role: 'mou_ding' }).reason).toContain('多个')
+    expect(getMatchingNode(graph, state, { role: 'mou_ding' }, { deterministicFallback: true }).node?.id).toBe('analysis')
   })
 })
 

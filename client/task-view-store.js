@@ -4,8 +4,16 @@ const HISTORICAL = Object.freeze({ value: null, status: 'historical', error: nul
 const CAPACITY = Object.freeze({ value: null, status: 'unavailable', error: '任务视图缓存已满；旧读取尚未结束。请等待传输结算后刷新，必要时重新加载页面。', updatedAt: null })
 const sharedStores = new WeakMap()
 const ACTIVE_EVOLUTION_PHASES = new Set(['shadow', 'canary', 'reconcile-required'])
-const isTerminal = (value) => (value?.acceptance?.status === 'accepted' || value?.acceptance?.decision === 'incomplete')
-  && !ACTIVE_EVOLUTION_PHASES.has(value?.evolution?.phase)
+const ACTIVE_NODE_STATUSES = new Set(['ready', 'running'])
+const isTerminal = (value) => {
+  const settledAcceptance = value?.acceptance?.status === 'accepted' || value?.acceptance?.decision === 'incomplete'
+  const nodes = value?.flow?.state?.nodes ?? value?.workflowState?.nodes ?? {}
+  const activeNodes = Object.values(nodes).some((node) => ACTIVE_NODE_STATUSES.has(node?.status))
+  const activeDelegations = Array.isArray(value?.delegations) && value.delegations.some((record) =>
+    ['queued', 'running'].includes(record?.status) || record?.finalization === 'processing')
+  return settledAcceptance && !activeNodes && !activeDelegations
+    && value?.blockedRecovery?.active !== true && !ACTIVE_EVOLUTION_PHASES.has(value?.evolution?.phase)
+}
 const errorOf = (error) => error instanceof Error ? error : new Error(String(error))
 const isDenied = (error) => /(?:unauthorized|forbidden|permission.denied|access.denied|\b40[13]\b)/i.test(`${error?.code ?? ''} ${error?.message ?? ''}`)
 const REVISION_KEYS = ['cardRevision', 'workflowRevision', 'requestRevision']

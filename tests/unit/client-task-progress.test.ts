@@ -239,6 +239,27 @@ describe('任务进度共享读取层', () => {
     stop()
   })
 
+  it('任务验收摘要已完成但仍有ready节点或在途委派时继续轮询，避免图表停在旧颜色', async () => {
+    vi.useFakeTimers()
+    let revision = 1
+    const request = vi.fn().mockImplementation(() => Promise.resolve({
+      task_id: 'T-1', rootSessionId: 'root', cardRevision: revision, workflowRevision: revision, requestRevision: revision,
+      acceptance: { status: 'accepted' },
+      flow: { state: { nodes: { implementation: { status: revision < 3 ? 'ready' : 'succeeded' } } } },
+      delegations: revision < 3 ? [{ delegationId: 'D-1', status: 'running' }] : []
+    }))
+    const { store } = fixture({ request })
+    const source = store.task('root', 'T-1'); const stop = source.subscribe(vi.fn())
+    await source.refresh()
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(request.mock.calls.length).toBeGreaterThan(1)
+    revision = 2
+    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(request.mock.calls.length).toBeGreaterThan(2)
+    stop()
+  })
+
   it('错误任务或目录根身份不能替换缓存，偏好有界且不包含正文', async () => {
     vi.useFakeTimers()
     const { store, request } = fixture()

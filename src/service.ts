@@ -63,7 +63,7 @@ import { getErrorText, SwarmError } from './util/errors.js'
 import { getGitStatus, type GitStatusInfo } from './util/git.js'
 import { intMutex } from './util/mutex.js'
 import { getTaskIntent, getTaskIntentRefs, mergeTaskIntentRefs, getTaskIntentText, getSemanticCardDigest, getCurrentDelegations, digest, getTaskBinding, getTaskContextBinding, isTaskVersionCurrent } from './task-model.js'
-import { getDefaultWorkflow, getLenientWorkflow, getWorkflowDigest, getWorkflowMermaid, getTaskCardMarkdown, intWorkflowState, ReconcileWorkflow, getReadyNodes, getMatchingNode, UpdateWorkflowNode, getValueDigest, getPlanningStatusText, type WorkflowDefinition } from './workflow.js'
+import { getDefaultWorkflow, getLenientWorkflow, getWorkflowDigest, getWorkflowMermaid, getTaskCardMarkdown, intWorkflowState, ReconcileWorkflow, ReconcileWorkflowState, getReadyNodes, getMatchingNode, UpdateWorkflowNode, getValueDigest, getPlanningStatusText, type WorkflowDefinition } from './workflow.js'
 import { RunPlanningReview, getReviewSnapshot, getPlanningReviewState, getPlanningReviewQuestions, isPlanningReviewCurrent, isPlanningReviewReusable, getPlanningReviewDiagnostics, type PlanningAgentAssessmentInfo, type ReviewSnapshot } from './planning-review.js'
 import { waitForPlanning } from './planning-wait.js'
 import { getArtifactSnapshot } from './artifacts.js'
@@ -389,7 +389,7 @@ const getDelegationView = (d: DelegationRecord, verbose: boolean) => ({
   ...(verbose ? { structured: d.structured, evidence: d.evidence, attempts: d.attempts, evidenceAssessmentDetails: d.evidenceAssessment } : {})
 })
 
-const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean, externalEditAt: number, recovery?: RequestRecoveryState | null) => {
+  const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean, externalEditAt: number, recovery?: RequestRecoveryState | null, delegationBindingTask: TaskRecord = task) => {
   const current = getCurrentDelegations(task, delegations, task.artifactSnapshot?.digest)
   const gates = getEffectiveGates(task.gates, current, externalEditAt)
   const check = getAcceptanceCheck(gates, current, task.acceptance?.resolutions ?? [], externalEditAt, task.card.perf)
@@ -412,7 +412,7 @@ const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: 
     recovered: task.recovered ?? false,
     contextRefs: (task.contextRefs ?? []).map((material) => material.ref),
     contextArtifacts: task.contextRefs ?? [],
-    diagrams: getTaskDiagrams(task, delegations),
+    diagrams: getTaskDiagrams(task, delegations, delegationBindingTask),
     // 编排方案随任务视图一起下发：状态文本与图表都从这里取，避免各自推算。
     orchestration: task.orchestration ?? null,
     flow: task.workflowDefinition === undefined ? null : {
@@ -690,21 +690,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const reconciled = ReconcileWorkflow(current, task.card, gates)
     if (reconciled.errors.length > 0) throw new SwarmError('INVALID_ARGS', reconciled.errors.join('；'))
     if (!reconciled.changed && gates.length === task.gates.length) return task
-    const old = task.workflowState ?? intWorkflowState(current, task.rounds)
-    const state = intWorkflowState(reconciled.definition, task.rounds)
-    for (const node of reconciled.definition.nodes) {
-      const prior = old.nodes[node.id]
-      // New workflow versions never relabel historical evidence. Read-only
-      // nodes and gates can run afresh. Completed mutations are explicitly
-      // skipped, not replayed or represented as fresh successful evidence.
-      if (node.operation === 'delegate' && node.role !== undefined && MUTATING_ROLES.includes(node.role) && prior !== undefined) {
-        if (prior.status === 'succeeded' || prior.status === 'skipped') state.nodes[node.id] = {
-          status: 'skipped', reason: `旧流程 ${task.workflowRevision ?? 1} 已执行；本轮不自动重放，原结果仍是历史证据` }
-        else if (['running', 'failed', 'blocked'].includes(prior.status)) state.nodes[node.id] = {
-          status: 'blocked', reason: '流程已更新，原执行副作用需人工核对，禁止自动重放', ...(prior.attemptId === undefined ? {} : { attemptId: prior.attemptId }) }
-      } else if (prior?.status === 'running') state.nodes[node.id] = {
-        status: 'blocked', reason: '流程已更新，旧请求仍需确认结束', ...(prior.attemptId === undefined ? {} : { attemptId: prior.attemptId }) }
-    }
+    const state = ReconcileWorkflowState(current, task.workflowState ?? intWorkflowState(current, task.rounds), reconciled.definition, task.rounds)
     return { ...task, gates, workflowDefinition: reconciled.definition, workflowDigest: getWorkflowDigest(reconciled.definition),
       workflowState: state, workflowRevision: (task.workflowRevision ?? 1) + 1, planningReview: undefined, acceptance: undefined,
       contextRefs: [], contextDelegations: {} }
@@ -1904,7 +1890,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const views = tasks.map((task) => {
       const evolution = getTaskEvolution(session, task)
       return {
-        ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null),
+        ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null, getTaskOrThrow(session, task.taskId)),
         runtimeGuard: getRuntimeView(session, task.taskId),
         evolutionRevision: evolution.revision, evolution: evolution.evolution,
         acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
@@ -2224,7 +2210,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           } else if (prepared.workflowDefinition && prepared.workflowState) {
             const match = getMatchingNode(prepared.workflowDefinition, prepared.workflowState, {
               role: args.role, mode: args.mode, gate: args.gate, nodeId: args.node_id
-            })
+            }, { deterministicFallback: true })
             if (match.node === undefined && deps.getConfig().workflow.mode === 'enforced') throw new SwarmError('INVALID_ARGS', match.reason ?? '节点不允许执行')
             nodeId = match.node?.id
           }
@@ -2571,7 +2557,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       if (session === undefined || session.rootAgent === undefined || !isRootTianShu(session.rootAgent)) throw new SwarmError('PERMISSION_DENIED', '该会话不是已登记的百工根会话')
       const stored = getTaskOrThrow(session, taskId)
       const task = deriveReconciledTask(session, deriveIntentRefresh(stored, session.rootAgent))
-      const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session), routeState.getRecovery(sessionId) ?? null)
+      const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session), routeState.getRecovery(sessionId) ?? null, stored)
       const evolution = getTaskEvolution(session, task)
       return { ...view,
         rootSessionId: sessionId, evolutionRevision: evolution.revision, evolution: evolution.evolution,
