@@ -23,6 +23,7 @@ export const getRouteResourcePolicy = (route: RouteInfo): RouteResourcePolicy =>
   const inferred: RouteResourcePolicy = route.provider === 'qwen-token-plan-cn'
     ? { accessMode: 'subscription', quotaScope: 'plan', quotaDomainId: 'provider-instance:qwen-token-plan-cn' }
     : route.provider === 'opencode-go' ? { accessMode: 'subscription', quotaScope: 'model' }
+      : route.provider === 'antigravity' ? { accessMode: 'subscription', quotaScope: 'model' }
       : ['codex', 'claude'].includes(route.provider) ? { accessMode: 'subscription', quotaScope: 'unknown' }
         : route.provider === 'deepseek-official' ? { accessMode: 'metered_api', quotaScope: 'unknown' }
           : route.provider === 'jev' ? { accessMode: 'judgment_api', quotaScope: 'unknown' } : { accessMode: 'unknown', quotaScope: 'unknown' }
@@ -135,9 +136,9 @@ export const normalizeRouteFailure = (failure: RouteFailureMetadata, route: Rout
     else if (pool !== undefined || code === 'POOL_EXHAUSTED') kind = 'pool_exhausted'
     else if (BALANCE.test(message) || ['INSUFFICIENT_BALANCE', 'INSUFFICIENT_FUNDS'].includes(code)
       || (failure.status === 402 && (route.provider === 'deepseek-official' || policy.accessMode === 'metered_api'))) kind = 'insufficient_balance'
-    else if (['QUOTA', 'INSUFFICIENT_QUOTA', 'USAGE_LIMIT', 'BILLING_HARD_LIMIT_REACHED'].includes(code)) kind = 'quota_exhausted'
+    else if (['QUOTA', 'QUOTA_EXHAUSTED', 'INSUFFICIENT_QUOTA', 'USAGE_LIMIT', 'BILLING_HARD_LIMIT_REACHED'].includes(code)) kind = 'quota_exhausted'
     else if (RATE_WINDOW.test(message) && (failure.status === 429 || code === 'RATE_LIMIT')) kind = 'rate_limited'
-    else if (QUOTA.test(message)) kind = 'quota_exhausted'
+    else if (QUOTA.test(message) || (route.provider === 'antigravity' && /\bIndividual quota reached\b/i.test(message))) kind = 'quota_exhausted'
     // pi-ai 的 AUTH failure 可能仅有 code/message；只补明确认证文本，不把模型拒绝或刷新失败扩大为认证失效。
     else if (['MISSING_CREDENTIAL', 'INVALID_CREDENTIAL', 'UNAUTHORIZED'].includes(code) || failure.status === 401 || (failure.status === 403 && !MODEL.test(message))
       || (code === 'AUTH' && !MODEL.test(message) && AUTH.test(message))) kind = 'auth_invalid'
@@ -149,7 +150,14 @@ export const normalizeRouteFailure = (failure: RouteFailureMetadata, route: Rout
     else if (code === 'RATE_LIMIT' || failure.status === 429 || /rate.?limit|too many requests/i.test(message)) kind = 'rate_limited'
     else if (['OVERLOADED', 'SERVER_ERROR', 'SERVER', 'EMPTY_RESPONSE'].includes(code) || (failure.status ?? 0) >= 500) kind = 'service_transient'
   }
-  const resetAt = failure.resetAt ?? (route.provider === 'qwen-token-plan-cn' && kind === 'quota_exhausted' ? getQwenQuotaReset(message, at) : undefined)
+  // Google 的模型硬额度会返回独立重置时间；不能把 Argon 的限制扩大为整个订阅，
+  // 也不能将分钟限流的 retry-after 当作订阅重置。
+  const retryAfterMs = failure.providerRetryAfterMs
+  const resetTime = typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? at + retryAfterMs : undefined
+  const googleReset = route.provider === 'antigravity' && kind === 'quota_exhausted'
+    && resetTime !== undefined && Number.isFinite(resetTime) && Math.abs(resetTime) <= 8.64e15
+    ? new Date(resetTime).toISOString() : undefined
+  const resetAt = failure.resetAt ?? googleReset ?? (route.provider === 'qwen-token-plan-cn' && kind === 'quota_exhausted' ? getQwenQuotaReset(message, at) : undefined)
   return {
     ...failure, kind, provider: route.provider, model: route.model, message,
     ...(resetAt === undefined ? {} : { resetAt }),

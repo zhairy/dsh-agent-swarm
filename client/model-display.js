@@ -48,6 +48,8 @@ Object.assign(zh, { stopped: '宿主已确认本轮结束；可继续未完成�
 Object.assign(en, { stopped: 'The host confirmed this run ended; unfinished work can be continued.' })
 Object.assign(zh, { unknownModel: '实际模型未由宿主报告' })
 Object.assign(en, { unknownModel: 'Actual model not reported by the host' })
+Object.assign(zh, { recoveryHint: '子智能体执行失败后，可在此切换模型并安全继续任务。', catalogLoading: '正在读取当前模型目录…', catalogUnavailable: '模型目录暂不可用，请刷新后选择。', catalogRetry: '刷新模型目录', invalidSelection: '请选择当前目录中的供应商、模型及推理强度。', catalogPartial: '部分供应商暂不可用；可选择已加载的模型，或刷新目录。' })
+Object.assign(en, { recoveryHint: 'If this subagent fails, switch its model here and continue the task safely.', catalogLoading: 'Loading the current model catalog…', catalogUnavailable: 'The model catalog is unavailable. Refresh before selecting.', catalogRetry: 'Refresh model catalog', invalidSelection: 'Select a provider, model and reasoning effort from the current catalog.', catalogPartial: 'Some providers are unavailable. Choose a loaded model or refresh the catalog.' })
 Object.assign(zh, { oneShotHint: '一次性审核或委派：选择只影响下一次模型请求，当前调用继续运行；若本轮已结束，需在父会话发起新审核或委派。', oneShotSettled: '一次性子会话已结束；在父会话发起新审核或委派。', inherited: '当前使用角色路由链', overridden: '已显式覆盖本子会话模型（保留角色回退链）' })
 Object.assign(en, { oneShotHint: 'One-shot review or delegation: selection affects the next model request only. The current request continues; start a new review or delegation in the parent after settlement.', oneShotSettled: 'This one-shot child has ended. Start a new review or delegation in the parent.', inherited: 'Using the role routing chain', overridden: 'Explicit model override for this child (role fallbacks remain)' })
 
@@ -112,6 +114,20 @@ const NO_SUBSCRIBE = () => () => undefined
 /** The browser only requests changes; actual/settled state always comes back from the host. */
 /** 与宿主 isResumable 一致：沉寂后暂停，或上一轮因模型错误结束的空闲持久会话可以继续 */
 const canContinue = (view) => view?.phase === 'paused' || (view?.phase === 'idle' && String(view?.reason ?? '').startsWith('host-run-failed:'))
+
+// 目录仅代表已配置候选；额度与调用准入仍由宿主在实际请求时检查。
+const ValidateCatalogSelection = (state) => {
+  if (state.catalogStatus !== 'ready') return false
+  const group = state.groups.find((item) => item.id === state.draft.provider)
+  const model = group?.models?.find((item) => item.id === state.draft.model)
+  return model !== undefined && (state.draft.reasoningEffort === '' || (model.reasoning?.efforts ?? []).some((item) => item.id === state.draft.reasoningEffort))
+}
+
+const getCatalogDraft = (groups, draft) => {
+  const model = groups.find((item) => item.id === draft.provider)?.models?.find((item) => item.id === draft.model)
+  return model !== undefined && draft.reasoningEffort !== '' && !(model.reasoning?.efforts ?? []).some((item) => item.id === draft.reasoningEffort)
+    ? { ...draft, reasoningEffort: '' } : draft
+}
 
 class AgentModelController {
   constructor (address, transport, requestTimeoutMs = 15000) {
@@ -197,6 +213,8 @@ class AgentModelController {
       view: undefined,
       groups: [],
       catalogStatus: 'idle',
+      catalogPartial: false,
+      catalogError: undefined,
       busy: false,
       error: undefined,
       notice: undefined
@@ -248,7 +266,7 @@ class AgentModelController {
         const notice = view.phase === 'paused' && this.state.notice === 'stopping' ? { notice: 'stopped' } : {}
         // 视图与提示都没有变化时不重复发布；按整视图比较，避免漏掉不改修订号的实时字段。
         if (this.state.status === 'ready' && this.state.view !== undefined && JSON.stringify(this.state.view) === JSON.stringify(view) && notice.notice === undefined) return
-        this.update({ status: 'ready', view, draft, ...notice })
+        this.update({ status: 'ready', view, draft: this.state.catalogStatus === 'ready' ? getCatalogDraft(this.state.groups, draft) : draft, ...notice })
       } catch (error) {
         if (!token.timedOut && generation === this.generation) this.update({ status: 'error', error: error instanceof Error ? error.message : String(error) })
       } finally {
@@ -265,7 +283,7 @@ class AgentModelController {
     if (this.pendingCatalog?.generation === this.catalogGeneration) return this.pendingCatalog.promise
     const generation = this.catalogGeneration
     const token = { generation, controller: new AbortController(), timedOut: false, expire: undefined, promise: undefined }
-    this.update({ catalogStatus: 'loading' })
+    this.update({ catalogStatus: 'loading', catalogError: undefined })
     const promise = (async () => {
       let timer
       const timeout = new Promise((_, reject) => {
@@ -275,7 +293,7 @@ class AgentModelController {
           token.controller.abort()
           if (this.pendingCatalog === token) {
             this.pendingCatalog = undefined
-            if (!silent) this.update({ catalogStatus: 'error', error: '模型目录读取超时；已取消本次读取，可重试。' })
+            if (!silent) this.update({ catalogStatus: 'error', catalogError: '模型目录读取超时；已取消本次读取，可重试。' })
           }
           reject(new Error('model catalog timeout'))
         }
@@ -285,9 +303,12 @@ class AgentModelController {
         const raw = await Promise.race([this.transport.catalog(token.controller.signal), timeout])
         const value = raw?.ok === true ? raw.value : raw
         if (!Array.isArray(value?.groups)) throw new Error('model catalog unavailable')
-        if (!token.timedOut && generation === this.catalogGeneration) this.update({ groups: value.groups, catalogStatus: 'ready' })
+        if (!token.timedOut && generation === this.catalogGeneration) {
+          const groups = value.groups.filter((group) => typeof group?.id === 'string' && Array.isArray(group.models))
+          this.update({ groups, draft: getCatalogDraft(groups, this.state.draft), catalogStatus: 'ready', catalogPartial: Array.isArray(value.failures) && value.failures.length > 0 })
+        }
       } catch (error) {
-        if (!token.timedOut && generation === this.catalogGeneration) this.update({ catalogStatus: 'error', error: error instanceof Error ? error.message : String(error) })
+        if (!token.timedOut && generation === this.catalogGeneration) this.update({ catalogStatus: 'error', catalogError: '模型目录读取失败；请刷新后重试。' })
       } finally {
         clearTimeout(timer)
         if (this.pendingCatalog === token) this.pendingCatalog = undefined
@@ -311,7 +332,7 @@ class AgentModelController {
     const input = { ...this.address, expectedRevision: view.revision, action }
     if (action === 'select') {
       const route = this.state.draft
-      if (route.provider === '' || route.model === '') return
+      if (!ValidateCatalogSelection(this.state)) { this.update({ notice: 'invalidSelection' }); return }
       input.route = { provider: route.provider, model: route.model, ...(route.reasoningEffort === '' ? {} : { reasoningEffort: route.reasoningEffort }) }
       input.interruptRunning = view.persistent === true && ['running', 'waiting', 'stopping'].includes(view.phase)
       if (this.state.retryRoute) input.retryRoute = true
@@ -360,7 +381,8 @@ const controlStyle = {
   input: { minWidth: 0, width: '100%', boxSizing: 'border-box', padding: 6 },
   line: { overflowWrap: 'anywhere', whiteSpace: 'normal', margin: '5px 0' },
   actions: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 },
-  button: { padding: '4px 8px', cursor: 'pointer' }
+  button: { padding: '4px 8px', cursor: 'pointer' },
+  recoveryButton: { padding: '5px 12px', borderRadius: 999, border: '1px solid #ca8a04', background: '#facc15', color: '#422006', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }
 }
 
 function AgentControlPanel ({ controller, t }) {
@@ -381,7 +403,7 @@ function AgentControlPanel ({ controller, t }) {
   const models = provider?.models ?? []
   const model = models.find((item) => item.id === state.draft.model)
   const efforts = model?.reasoning?.efforts ?? []
-  const readonly = view === undefined || (view.persistent !== true && (view.oneShotSettled === true || view.reason === 'one-shot-settled' || view.paused || ['stopping', 'recovery-required'].includes(view.phase)))
+  const readonly = view !== undefined && (view.persistent !== true && (view.oneShotSettled === true || view.reason === 'one-shot-settled' || view.paused || ['stopping', 'recovery-required'].includes(view.phase)))
   const disabled = state.busy || state.status !== 'ready'
   const field = (label, element) => h('label', { style: controlStyle.field }, h('span', null, t(label)), element)
   const route = view?.actual?.route
@@ -391,21 +413,26 @@ function AgentControlPanel ({ controller, t }) {
     view === undefined ? null : h('p', { style: controlStyle.line }, t(view.selectedNext === undefined ? 'inherited' : 'overridden')),
     h('p', { style: controlStyle.line, role: 'status' }, `${t('state')}：${view === undefined ? t('unavailable') : t(`phase_${view.phase}`)}`),
     state.error === undefined ? null : h('p', { role: 'alert', style: { ...controlStyle.line, color: 'var(--dsw-alias-state-error-primary, #c92a2a)' } }, state.error),
+    state.catalogError === undefined ? null : h('p', { role: 'alert', style: controlStyle.line }, state.catalogError),
     state.notice === undefined ? null : h('p', { role: 'status', style: controlStyle.line }, t(state.notice)),
     readonly ? null : h(React.Fragment, null,
-      field('provider', state.catalogStatus === 'ready' ? h('select', { style: controlStyle.input, value: state.draft.provider, disabled, 'aria-label': t('provider'), onChange: (event) => controller.setDraft({ provider: event.target.value }) }, h('option', { value: '' }, t('chooseProvider')), ...state.groups.map((item) => h('option', { key: item.id, value: item.id }, `${item.name ?? providerLabel(item.id)}（${item.id}）`)), state.draft.provider !== '' && provider === undefined ? h('option', { value: state.draft.provider }, state.draft.provider) : null) : h('input', { style: controlStyle.input, value: state.draft.provider, disabled, 'aria-label': t('provider'), onChange: (event) => controller.setDraft({ provider: event.target.value }) })),
-      field('model', state.catalogStatus === 'ready' ? h('select', { style: controlStyle.input, value: state.draft.model, disabled, 'aria-label': t('model'), onChange: (event) => controller.setDraft({ model: event.target.value }) }, h('option', { value: '' }, t('chooseModel')), ...models.map((item) => h('option', { key: item.id, value: item.id }, item.id)), state.draft.model !== '' && model === undefined ? h('option', { value: state.draft.model }, state.draft.model) : null) : h('input', { style: controlStyle.input, value: state.draft.model, disabled, 'aria-label': t('model'), onChange: (event) => controller.setDraft({ model: event.target.value }) })),
-      field('effort', efforts.length > 0 ? h('select', { style: controlStyle.input, value: state.draft.reasoningEffort, disabled, 'aria-label': t('effort'), onChange: (event) => controller.setDraft({ reasoningEffort: event.target.value }) }, h('option', { value: '' }, t('effortDefault')), ...efforts.map((item) => h('option', { key: item.id, value: item.id }, item.id))) : h('input', { style: controlStyle.input, value: state.draft.reasoningEffort, disabled: disabled || state.catalogStatus === 'ready', placeholder: t('effortDefault'), 'aria-label': t('effort'), onChange: (event) => controller.setDraft({ reasoningEffort: event.target.value }) })),
-      view.persistent !== true ? null : h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.retryRoute, disabled, onChange: (event) => controller.setOptions({ retryRoute: event.target.checked, forceRetry: false }) }), t('retryRoute')),
-      view.persistent === true && state.retryRoute ? h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.forceRetry, disabled, onChange: (event) => controller.setOptions({ forceRetry: event.target.checked }) }), t('forceRetry')) : null,
-      h('p', { style: controlStyle.line }, t(view.persistent === true ? 'routeHint' : 'oneShotHint'))),
+      canContinue(view) ? h('p', { role: 'note', style: controlStyle.line }, t('recoveryHint')) : null,
+      state.catalogStatus !== 'ready' ? h('p', { role: 'status', style: controlStyle.line }, t(state.catalogStatus === 'loading' ? 'catalogLoading' : 'catalogUnavailable')) : null,
+      state.catalogPartial ? h('p', { role: 'status', style: controlStyle.line }, t('catalogPartial')) : null,
+      field('provider', h('select', { style: controlStyle.input, value: provider === undefined ? '' : state.draft.provider, disabled: disabled || state.catalogStatus !== 'ready', 'aria-label': t('provider'), onChange: (event) => controller.setDraft({ provider: event.target.value }) }, h('option', { value: '' }, t('chooseProvider')), ...state.groups.map((item) => h('option', { key: item.id, value: item.id }, `${item.name ?? providerLabel(item.id)}（${item.id}）`)))),
+      field('model', h('select', { style: controlStyle.input, value: model === undefined ? '' : state.draft.model, disabled: disabled || state.catalogStatus !== 'ready' || provider === undefined, 'aria-label': t('model'), onChange: (event) => controller.setDraft({ model: event.target.value }) }, h('option', { value: '' }, t('chooseModel')), ...models.map((item) => h('option', { key: item.id, value: item.id }, item.name ?? item.id)))),
+      field('effort', h('select', { style: controlStyle.input, value: efforts.some((item) => item.id === state.draft.reasoningEffort) ? state.draft.reasoningEffort : '', disabled: disabled || model === undefined || efforts.length === 0, 'aria-label': t('effort'), onChange: (event) => controller.setDraft({ reasoningEffort: event.target.value }) }, h('option', { value: '' }, t('effortDefault')), ...efforts.map((item) => h('option', { key: item.id, value: item.id }, item.name ?? item.id)))),
+      view?.persistent !== true ? null : h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.retryRoute, disabled, onChange: (event) => controller.setOptions({ retryRoute: event.target.checked, forceRetry: false }) }), t('retryRoute')),
+      view?.persistent === true && state.retryRoute ? h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.forceRetry, disabled, onChange: (event) => controller.setOptions({ forceRetry: event.target.checked }) }), t('forceRetry')) : null,
+      view === undefined ? null : h('p', { style: controlStyle.line }, t(view.persistent === true ? 'routeHint' : 'oneShotHint'))),
     view?.oneShotSettled !== true && view?.reason !== 'one-shot-settled' ? null : h('p', { style: controlStyle.line }, t('oneShotSettled')),
     view?.persistent !== true || !canContinue(view) ? null : h(React.Fragment, null,
       view.needsSideEffectReview === true ? h('label', { style: { ...controlStyle.line, display: 'block' } }, h('input', { type: 'checkbox', checked: state.confirmSafeToContinue, disabled, onChange: (event) => controller.setOptions({ confirmSafeToContinue: event.target.checked }) }), t('reconcile'), h('p', { style: controlStyle.line }, t('reconcileHint'))) : null,
       field('steering', h('textarea', { style: controlStyle.input, value: state.steering, maxLength: 8000, disabled, 'aria-label': t('steering'), onChange: (event) => controller.setOptions({ steering: event.target.value }) }))),
     h('div', { style: controlStyle.actions },
       h('button', { type: 'button', style: controlStyle.button, disabled: state.busy, onClick: () => controller.load() }, t('refresh')),
-      readonly ? null : h('button', { type: 'button', style: controlStyle.button, disabled: disabled || state.draft.provider === '' || state.draft.model === '', onClick: () => controller.command('select') }, state.busy ? t('busy') : t('select')),
+      readonly ? null : h('button', { type: 'button', style: controlStyle.button, disabled: state.busy || state.catalogStatus === 'loading', onClick: () => controller.loadCatalog() }, t('catalogRetry')),
+      readonly ? null : h('button', { type: 'button', style: controlStyle.button, disabled: disabled || !ValidateCatalogSelection(state), onClick: () => controller.command('select') }, state.busy ? t('busy') : t('select')),
       ['running', 'waiting', 'recovery-required'].includes(view?.phase) ? h('button', { type: 'button', style: controlStyle.button, disabled, onClick: () => controller.command('stop') }, t('stop')) : null,
       canContinue(view) && !readonly ? h('button', { type: 'button', style: controlStyle.button, disabled: disabled || (view.needsSideEffectReview === true && !state.confirmSafeToContinue), onClick: () => controller.command('continue') }, t('continue')) : null))
 }
@@ -421,7 +448,7 @@ function AgentModelControls (props) {
   if (controller === undefined) return null
   const panel = open ? h(AgentControlPanel, { controller, t: props.t }) : null
   return h(React.Fragment, null,
-    h('button', { type: 'button', style: controlStyle.button, 'aria-expanded': open, onClick: () => setOpen(!open) }, props.t(open ? 'close' : 'controls')),
+    h('button', { type: 'button', style: controlStyle.recoveryButton, title: props.t('recoveryHint'), 'data-swarm-recovery-button': true, 'aria-expanded': open, onClick: () => setOpen(!open) }, props.t(open ? 'close' : 'controls')),
     HostModal === undefined
       ? open ? h('div', { role: 'dialog', 'aria-modal': true, 'aria-label': props.t('controls'), style: { position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', background: '#0004' } }, h('div', null, h('button', { type: 'button', onClick: () => setOpen(false) }, props.t('close')), panel)) : null
       : h(HostModal, { open, onClose: () => setOpen(false), title: props.t('controls'), closeLabel: props.t('close') }, panel))
@@ -433,14 +460,15 @@ const getAgentControlTransport = (ctx) => {
   const rpc = async (method, payload, signal) => {
     const connection = ctx.get('connection')
     if (typeof connection?.rpc?.call !== 'function') throw new Error('swarm control RPC unavailable')
-    const result = await connection.rpc.call('/api', `swarm.${method}`, payload, signal)
+    const result = await connection.rpc.call('/api', method, payload, signal)
     if (result?.ok !== true) throw Object.assign(new Error(`${result?.error?.message ?? 'agent control RPC failed'}${result?.error?.code === undefined ? '' : ` (${result.error.code})`}`), { code: result?.error?.code })
     return result.value
   }
   return {
-    view: (address, signal) => rpc('agentView', address, signal),
-    command: (input, signal) => rpc('agentControl', input, signal),
-    catalog: (signal) => ctx.remote.session.modelCatalog(signal),
+    view: (address, signal) => rpc('swarm.agentView', address, signal),
+    command: (input, signal) => rpc('swarm.agentControl', input, signal),
+    // modelCatalog 没有业务参数；signal 属于传输层，不能作为生成式 remote 的参数发送。
+    catalog: (signal) => rpc('session/modelCatalog', { args: {} }, signal),
     subscribeGeneration: (listener) => {
       resetListeners.add(listener)
       return () => resetListeners.delete(listener)
@@ -498,4 +526,4 @@ function apply (ctx) {
 exports.inject = inject
 exports.apply = apply
 exports.NS = NS
-exports.__test__ = { markerDefinition, headerDefinition, modelCallDefinition, ModelCallRow, ModelBadge, AgentModelController, AgentControlPanel, AgentModelControls, getAgentControlTransport, readHeaderRoute, readMessageRoute, getModelCallModeHook, routeText, DISPLAY }
+exports.__test__ = { markerDefinition, headerDefinition, modelCallDefinition, ModelCallRow, ModelBadge, AgentModelController, AgentControlPanel, AgentModelControls, ValidateCatalogSelection, getAgentControlTransport, readHeaderRoute, readMessageRoute, getModelCallModeHook, routeText, DISPLAY }

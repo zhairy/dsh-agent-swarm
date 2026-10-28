@@ -8,8 +8,16 @@
 
 DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文专家（谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔），用任务卡、门禁和真实证据决定是否验收；模型路由按你的订阅配置多层回退，故障时立即切到可用备用，最后一个可用模型短时故障时在预算内等待恢复。
 
-- 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.3）与 Node.js 22.12 及以上
+- 适配 DSH **0.2.0 / 0.2.1**（`>=0.2.0-rc.2 <0.2.2-0`，推荐 0.2.1-rc.3）与 Node.js 22.12 及以上
 - 新建会话选「百工模式」即可使用；Jev API key 可选
+
+### 3.1.8 的变化
+
+- 子智能体「模型与恢复」改为黄色圆角按钮，失败后可从此入口调整模型并安全继续任务。
+- 修复模型目录的零参数 RPC 被误传取消信号而失败的问题。供应商、模型和推理强度始终使用下拉框；目录加载失败可刷新，目录外选项无法提交。
+- Google Antigravity 的独立模型额度按模型处理并保留实际重置时间。Argon 耗尽不影响仍可用的 Flash，其他模型的 0% 用量不能证明当前模型还有额度。
+- 保留现有自动跨模型回退。DSH `0.2.2-alpha.2` 的真实恢复测试未通过，本版明确排除 `0.2.2`，继续使用已验证宿主。
+- 本机市场的下载源与 scope 目录误报已单独修复；这些主机配置不随插件包自动安装，详见 [升级与回退](docs/升级与回退.md)。
 
 ### 3.1.7 的变化
 
@@ -148,8 +156,16 @@ MIT，见 [LICENSE](LICENSE)。内嵌的 Jev 工具改编自 jev-mcp 0.2.1（MIT
 
 A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" leads 12 Chinese-named experts (requirements, architecture, math, code exploration, research, vision, complex implementation, command execution, small edits, independent review, verification, copywriting) and accepts work only on evidence: task cards, hard gates and real command results. Each role has a multi-layer model chain built from your subscriptions; failures switch to a usable backup immediately, and a short outage of the last usable model is waited out within a budget.
 
-- Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.3 recommended) on Node.js 22.12 or newer
+- Works with DSH **0.2.0 / 0.2.1** (`>=0.2.0-rc.2 <0.2.2-0`, 0.2.1-rc.3 recommended) on Node.js 22.12 or newer
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
+
+### What's new in 3.1.8
+
+- The subagent model and recovery entry is a rounded yellow button with recovery guidance.
+- Fixed the zero-argument model catalog RPC receiving an abort signal as a business argument. Provider, model and reasoning effort use catalog-backed dropdowns, with retryable catalog errors and validation before submission.
+- Google Antigravity quota failures stay scoped to the affected model and preserve reported reset times. An exhausted Argon route does not block a working Flash route.
+- Existing automatic cross-model fallback is retained. DSH `0.2.2-alpha.2` failed recovery integration tests, so this release explicitly excludes the `0.2.2` line.
+- Download-source and npm-scope diagnostic repairs were applied separately on the deployment host; installing this plugin does not change another machine's market configuration.
 
 ### What's new in 3.1.7
 

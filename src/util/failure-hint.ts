@@ -11,6 +11,7 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
     '请求上下文超过模型容量：需要先压缩或缩减材料，再开始新的请求；这不表示订阅额度耗尽或模型下线'],
   [/IMAGE_UNSUPPORTED/i, '当前请求的图像输入不被该模型支持：请选择有视觉能力的模型；这不表示该模型的纯文本请求不可用'],
   [/pool\s+["'][^"']+["']\s+exhausted/i, '模型池当前没有可用成员：停止原池重试，尝试已配置备用；具体成员故障原因尚不确定'],
+  [/\bIndividual quota reached\b/i, 'Google 返回当前模型的独立额度已耗尽；页面上其他模型的剩余额度不能用于此模型。可在「模型与恢复」选择有额度的 Gemini 模型，或等待此模型的服务端重置时间'],
   [/usage limit|(?:^|error[:：]\s*)QUOTA(?:$|\s*[;；])|quota\s+(exhausted|exceeded)|insufficient (balance|quota)|余额不足|额度(已)?(耗尽|用尽)/i, '额度用尽或余额不足：停止原故障域重试；是否已切换及有无备用以运行记录为准'],
   [/transport failed|fetch failed|ECONN(RESET|REFUSED|ABORTED)|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|socket hang up|\bTRANSPORT\b|\bNETWORK\b/i,
     '网络连接失败：无法连到模型服务（常见于本机断网、代理异常或服务端故障），网络恢复后会自动重试'],
