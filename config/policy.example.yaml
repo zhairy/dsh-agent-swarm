@@ -61,9 +61,7 @@
       maxTransientWaitMs: 5000
     execution:
       profile: bounded            # 默认 legacy；本例启用 quick/standard/algorithm 委派数量边界
-      maxCalls: 0                  # bounded 模式 0 使用按任务模式的默认数量；legacy 模式 0 不限
-      maxTokens: 0                 # 0 不限；正值需要可信调用估计，无法估计时拒绝启动
-      maxCostUsd: 0                # Jev 不计入执行预算
+      maxCalls: 0                  # bounded 模式 0 使用按任务模式的默认数量；legacy 模式 0 不限；Jev 不计入执行预算
     persistence:
       enabled: true
       directory: ''               # 留空使用 profile 下私有状态目录；恢复不自动重放写操作

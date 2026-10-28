@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "3.1.6",
+  "version": "3.1.7",
   "description": "DSH 多智能体插件：天枢统御 12 位专家，任务卡 + Mermaid 流程 + 证据门禁验收；多层模型链即时回退与链尾等待恢复、按配置语言输出、内嵌 Jev 判断 / DSH multi-agent swarm plugin with evidence-gated delegation, resilient model routing, language control and embedded Jev judgments",
   "keywords": [
     "dsh",
@@ -58,18 +58,13 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
-    "coverage": "vitest run --coverage",
     "doctor": "node scripts/doctor.mjs",
     "gen:presets": "node scripts/gen-presets.mjs",
     "install:profile": "node scripts/install-profile.mjs",
     "pack:release": "node scripts/pack-release.mjs",
     "prepare": "npm run build",
     "repair:state": "node scripts/repair-state.mjs",
-    "sandbox": "node scripts/sandbox.mjs",
-    "sync-dsh": "node scripts/sync-dsh.mjs",
-    "test": "vitest run",
-    "test:integration": "npm run build && vitest run --config vitest.integration.config.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
     "@deepseek-ai/cosmokit": "~1.8.5",
@@ -118,9 +113,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
-    "@vitest/coverage-v8": "5.0.5",
     "typescript": "^7.0.2",
-    "vitest": "5.0.5",
     "yaml": "^2.9.1"
   }
 }

@@ -497,8 +497,9 @@ const hasFailedCommand = (d: GateDelegationView, kinds: readonly string[]): bool
 
 const getVerdict = (d: GateDelegationView): unknown => (d.structured as { verdict?: unknown } | undefined)?.verdict
 
+// 交付契约已要求 pass 的命令全部为 0；门禁自身也核对，契约变化时不会放行失败命令。
 const isVerdictPass = (d: GateDelegationView): boolean =>
-  getVerdict(d) === 'pass' && getCommands(d).some((c) => typeof c.exitCode === 'number')
+  getVerdict(d) === 'pass' && getCommands(d).length > 0 && getCommands(d).every((c) => c.exitCode === 0)
 
 const getSatisfied = (gate: GateId, by: GateDelegationView | undefined, missing: string, notes: string[] = []): GateStatus =>
   by === undefined ? { gate, satisfied: false, missing, notes } : { gate, satisfied: true, by: by.delegationId, notes }
@@ -522,8 +523,9 @@ const getUnresolvedItems = <T>(
 
 /** 复核类门禁：最后一次编辑之后，任何一次失败都否决之前的通过 */
 const getVerifyStatus = (fuHe: GateDelegationView[]): GateStatus => {
-  const failing = fuHe.find((d) => getVerdict(d) === 'fail')
-  if (failing !== undefined) return getUnsatisfied('G_VERIFY', `复核 ${failing.delegationId} 判定为 fail，需修复后重新复核`)
+  // 判定为 partial 但命令失败同样是失败证据，不能被更早的 pass 掩盖。
+  const failing = fuHe.find((d) => getVerdict(d) === 'fail' || getCommands(d).some((c) => typeof c.exitCode === 'number' && c.exitCode !== 0))
+  if (failing !== undefined) return getUnsatisfied('G_VERIFY', `复核 ${failing.delegationId} 判定为 fail 或有失败的命令，需修复后重新复核`)
   return getSatisfied('G_VERIFY', fuHe.find(isVerdictPass), '缺少最后一次代码改动之后、判定为通过且带退出码的复核结果')
 }
 
@@ -557,7 +559,7 @@ const getMathVerifyStatus = (delegations: GateDelegationView[], resolutions: Fin
   const latest = verifies.find((record) => record.reviewPhase !== 'response')
   if (latest === undefined) return getUnsatisfied('G_MATH_VERIFY', '交叉回应不能替代首次独立验算')
   const claims = (latest.structured as { claims?: Array<{ status?: string; proofOrCounterexample?: string; evidenceType?: string }> } | undefined)?.claims ?? []
-  if (!claims.some((c) => c.status === 'proved' && c.evidenceType !== 'numerical_checked' && c.proofOrCounterexample?.trim())) return getUnsatisfied('G_MATH_VERIFY', `验算 ${latest.delegationId} 没有带推导证据的已证实结论`)
+  if (!claims.some((c) => c.status === 'proved' && c.evidenceType === 'proof' && c.proofOrCounterexample?.trim())) return getUnsatisfied('G_MATH_VERIFY', `验算 ${latest.delegationId} 没有标注 evidenceType=proof 且带推导的已证实结论；有限或数值检查不能满足验算门禁`)
   return getSatisfied('G_MATH_VERIFY', latest, '', latest.independence === 'not-achieved' ? ['验算与研算模型家族相同（独立性未实现）'] : [])
 }
 
@@ -620,7 +622,9 @@ export const getAcceptanceCheck = (gates: GateRequirement[], delegations: GateDe
   const statuses = gates.map((item) => getGateStatus(item.gate, delegations, resolutions, externalEditAt))
   const benchmark = statuses.find((s) => s.gate === 'G_BENCH')
   if (benchmark?.satisfied && perf !== undefined) {
-    const validation = ValidatePerformanceEvidence(perf, delegations)
+    // 性能证据也必须晚于最后一次编辑；历史测量不能替代当前代码的测量。
+    // getCompletedAfter 按完成时间倒序，校验以最后一条为最新，所以正序传入。
+    const validation = ValidatePerformanceEvidence(perf, [...getCompletedAfter(delegations, 'fu_he', getLastEditTime(delegations, externalEditAt))].reverse())
     if (validation.length > 0) { benchmark.satisfied = false; benchmark.missing = validation.join('；') }
   }
   const missing = statuses.filter((s) => !s.satisfied).map((s) => `${s.gate}：${s.missing ?? '未满足'}`)

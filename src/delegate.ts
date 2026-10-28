@@ -881,6 +881,8 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       }
       if (isThinkingReplayFailure(evaluation.error) && exec.controlledThreadId === undefined) {
         if (attempt >= config.agents.maxRetries) {
+          // 继续追加只会重复回放失败；关闭该连续会话，后续委派改用新会话。
+          session.threads.Update(threadId, { busy: false, closed: true })
           evaluation = {
             ...evaluation,
             unresolved: [...evaluation.unresolved, '宿主连续拒绝 thinking 历史回放；自动重建会话次数已用尽，需要升级宿主或人工核对']
@@ -1068,7 +1070,10 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     if (subagents === undefined) return block(session, record, '子智能体服务不可用')
     const attempts: RouteAttempt[] = []
     const choice = getNativeChoice(input, task, config)
-    if (choice !== undefined) {
+    // 原生后端的内部工具不经过宿主 ToolRuntime 审批；deny 写入/命令时改走 API，并记下原因。
+    const nativeDenied = config.approvals.mode === 'deny' && (config.approvals.scope.includes('write') || config.approvals.scope.includes('shell'))
+    if (choice !== undefined && nativeDenied) attempts.push({ route: `native:${choice}`, backend: 'spawn', outcome: 'skipped', reason: 'approvals-deny' })
+    else if (choice !== undefined) {
       const native = await tryNative(input, task, record, exec, session, config, subagents, choice, attempts)
       if (native !== undefined) return native
     }

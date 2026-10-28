@@ -251,7 +251,9 @@ export const reduceAuthorizationDecision = (record: AuthorizationDecision, event
     answerDigest, answerOrigin: clone(input.origin), appliesToBinding: clone(input.binding) })
 }
 
-export const createAuthorizationRepository = <T extends AuthorizationState>(store: DurableStateStore<T>, options: { now?: () => number; maxEntries?: number; maxPerTask?: number; id?: () => string } = {}) => {
+export const createAuthorizationRepository = <T extends AuthorizationState>(store: DurableStateStore<T>, options: { now?: () => number; maxEntries?: number; maxPerTask?: number; id?: () => string
+  /** 容量满时哪些终态决定可以回收；缺省不回收。调用方必须保证回收不会改变任何现有验收凭证绑定的决定集合。 */
+  canReclaim?: (decision: AuthorizationDecision) => boolean } = {}) => {
   const now = options.now ?? Date.now, maxEntries = options.maxEntries ?? 128, maxPerTask = options.maxPerTask ?? 64
   if (![maxEntries, maxPerTask].every(value => Number.isSafeInteger(value) && value > 0) || maxEntries > 128 || maxPerTask > 64) return fail('授权记录容量配置超出安全范围')
   let cachedSequence = -1, cache: Record<string, AuthorizationDecision> = {}
@@ -287,18 +289,33 @@ export const createAuthorizationRepository = <T extends AuthorizationState>(stor
       let result: AuthorizationDecision | undefined, reused = false
       await store.update('authorization/prepare', { build: (state) => {
         const all = Object.values(state.authorizationDecisions ?? {})
-        const previous = all.find(value => value.dedupKey === dedupKey)
+        // 已取消或作废的决定没有可沿用的答复：同一问题可以重新询问。
+        const previous = all.find(value => value.dedupKey === dedupKey && !['cancelled', 'invalidated'].includes(value.phase))
         if (previous !== undefined) { result = clone(previous); reused = true; return {} }
-        if (all.length >= maxEntries || all.filter(value => value.questionBinding.taskId === input.binding.taskId && value.questionBinding.rootSessionId === input.binding.rootSessionId
-          && value.questionBinding.workspaceId === input.binding.workspaceId).length >= maxPerTask) throw new SwarmError('CAPACITY_EXCEEDED', '授权记录容量已满；保留旧决定并经受支持的归档/核对入口处理，不重复询问或制造批准')
+        const sameBinding = (value: AuthorizationDecision): boolean => value.questionBinding.taskId === input.binding.taskId
+          && value.questionBinding.rootSessionId === input.binding.rootSessionId && value.questionBinding.workspaceId === input.binding.workspaceId
+        // 容量满时只回收调用方允许的、已答复（answered/approved）的最旧决定：等待中的决定绝不回收；
+        // 取消、作废与拒绝的记录要留着拦截迟到答复并阻止重问被拒的问题。单任务超限只回收同一任务的决定。
+        const reclaimed = new Set<string>()
+        const live = (): AuthorizationDecision[] => all.filter(value => !reclaimed.has(value.id))
+        for (;;) {
+          const totalOver = live().length >= maxEntries, taskOver = live().filter(sameBinding).length >= maxPerTask
+          if (!totalOver && !taskOver) break
+          const candidate = live().filter(value => ['answered', 'approved'].includes(value.phase) && (!taskOver || sameBinding(value)) && options.canReclaim?.(clone(value)) === true)
+            .sort((left, right) => left.updatedAt - right.updatedAt || left.id.localeCompare(right.id))[0]
+          if (candidate === undefined) break
+          reclaimed.add(candidate.id)
+        }
+        const kept = live()
+        if (kept.length >= maxEntries || kept.filter(sameBinding).length >= maxPerTask) throw new SwarmError('CAPACITY_EXCEEDED', '授权记录容量已满；保留旧决定并经受支持的归档/核对入口处理，不重复询问或制造批准')
         result = { id: options.id?.() ?? `auth-${randomUUID()}`, policyVersion: AUTHORIZATION_POLICY_VERSION, dedupKey, questionBinding: clone(input.binding),
           operationDigest: input.operationDigest, scopeDigest: input.scopeDigest, questions: getAuthorizationQuestionIdentities(questions), questionDigest: getValueDigest(questions),
           approvalRules: rules.map(rule => ({ questionId: rule.questionId,
             approveIndices: rule.approveLabels.map(label => questions.find(question => question.id === rule.questionId)!.options!.findIndex(option => option.label === label)),
             declineIndices: rule.declineLabels.map(label => questions.find(question => question.id === rule.questionId)!.options!.findIndex(option => option.label === label)) })),
           phase: 'prepared', decisionRevision: 1, createdAt: at, updatedAt: at }
-        if (!ValidateAuthorizationDecision(result) || state.authorizationDecisions?.[result.id] !== undefined) return fail('授权决定身份无效或重复')
-        return { set: { authorizationDecisions: { [result.id]: result } } }
+        if (!ValidateAuthorizationDecision(result) || kept.some(value => value.id === result!.id)) return fail('授权决定身份无效或重复')
+        return { set: { authorizationDecisions: { [result!.id]: result! } }, ...(reclaimed.size === 0 ? {} : { remove: { authorizationDecisions: [...reclaimed] } }) }
       } })
       cachedSequence = -1
       return { decision: clone(result!), reused }

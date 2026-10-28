@@ -147,7 +147,8 @@ export const getAcceptanceState = (
   task_goal: getRedactedText(task.card.goal),
   acceptance_criteria: task.card.acceptance.slice(0, 8).map((item) => getRedactedText(item, 200)),
   gates: acceptance.gates.map((gate) => ({ gate: gate.gate, satisfied: gate.satisfied })),
-  delegations: delegations.slice(0, 20).map((d) => ({
+  // 复评必须看到最后一次验证与审查；只取最早 20 条会漏掉后期返工结论。
+  delegations: delegations.slice(-20).map((d) => ({
     role: d.roleName,
     status: d.status,
     summary: getRedactedText(d.summary, 300),

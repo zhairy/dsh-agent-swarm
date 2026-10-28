@@ -84,6 +84,35 @@ export const createAuthorizationRuntime = (deps: AuthorizationRuntimeDeps) => {
     return promise
   }
   const assertHealthy = (state: RootState): void => { if (state.failure !== undefined) throw state.failure }
+  /** 释放已准入的用户回复；结算失败或回合结束时必须允许下一次重新准入。 */
+  const releaseTicket = (agent: AgentLike, state: RootState): void => {
+    const ticket = state.ticket
+    if (ticket === undefined) return
+    hostFor(agent).releasePendingReply(ticket.decisionId, ticket.messageId)
+    state.ticket = undefined
+  }
+  /** critical 结算失败后的受控对账：只重放已提交事实与中止回合的取消，不猜测授权。 */
+  const reconcileFailure = async (agent: AgentLike, state: RootState): Promise<void> => {
+    if (state.failure === undefined) return
+    try {
+      const context = await deps.getContext(agent)
+      await reconcileCommitted(agent, state, context)
+      if (state.interrupted) {
+        for (const decision of (await decisionsFor(agent, context)).filter(isAuthorizationWaiting)) {
+          const cancelled = await context.features.authorizations.cancel(decision.id, 'recovery-retry-after-failed-settle')
+          await notifySettled(agent, state, cancelled, false, true)
+        }
+      }
+    } catch {
+      // 对账仍失败时保持原有的脱敏失败，不把底层错误原文带给调用方。
+      deps.logger?.warn(`授权结算失败后的重新对账仍未完成：root=${agent.id}`)
+      throw state.failure
+    }
+    releaseTicket(agent, state)
+    state.failure = undefined
+    state.interrupted = false
+    deps.logger?.warn(`授权结算失败后已重新对账并恢复：root=${agent.id}`)
+  }
   const decisionsFor = async (agent: AgentLike, context: AuthorizationRuntimeContext): Promise<AuthorizationDecision[]> =>
     [...await deps.listDecisions(context)].filter(decision => decision.questionBinding.rootSessionId === agent.id)
   const independent = (agent: AgentLike) => deps.hasIndependentReadyWork?.(agent) ?? false
@@ -127,7 +156,7 @@ export const createAuthorizationRuntime = (deps: AuthorizationRuntimeDeps) => {
       const binding = await deps.refreshBinding(contextFor(context, decision), agent)
       if (state.interrupted) { const cancelled = await repo.cancel(decision.id, 'host-turn-aborted'); await notifySettled(agent, state, cancelled, false, true); return }
       const consumed = await repo.consumeAnswer(decision.id, { ...observation, binding, operationDigest: decision.operationDigest, scopeDigest: decision.scopeDigest })
-      state.ticket = undefined
+      releaseTicket(agent, state)
       let resumed = false
       if (state.hold !== undefined && context.task?.acceptance?.decision !== 'incomplete' && context.task?.acceptance?.status !== 'accepted') {
         const result = hostFor(agent).resumeAfterAnswer(agent, state.hold, consumed)
@@ -143,7 +172,7 @@ export const createAuthorizationRuntime = (deps: AuthorizationRuntimeDeps) => {
     if (observation.kind === 'cancelled') {
       await repo.cancel(decision.id, observation.reason)
       state.deferredCancelled.add(decision.id)
-      hostFor(agent).invalidateHeldGoal(agent.id); state.hold = undefined; state.ticket = undefined
+      hostFor(agent).invalidateHeldGoal(agent.id); state.hold = undefined; releaseTicket(agent, state)
       return
     }
     if (observation.kind === 'unavailable') await repo.unavailable(decision.id, observation.reason)
@@ -181,6 +210,7 @@ export const createAuthorizationRuntime = (deps: AuthorizationRuntimeDeps) => {
       await serial(agent, async state => {
         // Read-only diagnostics remain available even when a previous guard commit failed.
         if (state.failure !== undefined && safeWhileWaiting(execution)) return
+        if (state.failure !== undefined) await reconcileFailure(agent, state)
         assertHealthy(state)
         const context = await deps.getContext(agent)
         await reconcileCommitted(agent, state, context)
@@ -226,6 +256,7 @@ export const createAuthorizationRuntime = (deps: AuthorizationRuntimeDeps) => {
     beforeStep: async (agent: AgentLike, decision: PreStepDecisionLike): Promise<PreStepDecisionLike> => {
       if (!live(agent) || decision.kind === 'reject') return decision
       return serial(agent, async state => {
+        if (state.failure !== undefined) await reconcileFailure(agent, state)
         assertHealthy(state)
         const context = await deps.getContext(agent)
         await reconcileCommitted(agent, state, context)
@@ -253,6 +284,7 @@ export const createAuthorizationRuntime = (deps: AuthorizationRuntimeDeps) => {
     beforeRequest: async (agent: AgentLike): Promise<void> => {
       if (!live(agent)) return
       await serial(agent, async state => {
+        if (state.failure !== undefined) await reconcileFailure(agent, state)
         assertHealthy(state)
         const context = await deps.getContext(agent)
         await reconcileCommitted(agent, state, context)
@@ -287,9 +319,14 @@ export const createAuthorizationRuntime = (deps: AuthorizationRuntimeDeps) => {
       }, true).catch(() => undefined)
     },
     onTurnEnd: (agent: AgentLike, reason: { kind?: string } | undefined): void => {
-      if (!live(agent) || reason?.kind !== 'aborted') return
+      if (!live(agent)) return
+      const aborted = reason?.kind === 'aborted'
+      const state = stateFor(agent)
+      // 任何回合结束都释放已准入但未结算的回复；中止回合还要取消等待中的决定。
+      releaseTicket(agent, state)
+      if (!aborted) return
       hostFor(agent).invalidateHeldGoal(agent.id)
-      const state = stateFor(agent); state.hold = undefined; state.ticket = undefined; state.interrupted = true
+      state.hold = undefined; state.interrupted = true
       void serial(agent, async () => {
         const context = await deps.getContext(agent)
         for (const decision of await decisionsFor(agent, context)) {
@@ -305,7 +342,8 @@ export const createAuthorizationRuntime = (deps: AuthorizationRuntimeDeps) => {
       const state = roots.get(agent.id)
       if (state === undefined) return
       adapters.get(agent.id)?.invalidateHeldGoal(agent.id)
-      state.hold = undefined; state.ticket = undefined; state.interrupted = true
+      releaseTicket(agent, state)
+      state.hold = undefined; state.interrupted = true
       await state.tail
       adapters.delete(agent.id); roots.delete(agent.id)
     },

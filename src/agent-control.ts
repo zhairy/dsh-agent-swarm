@@ -342,9 +342,12 @@ export const createAgentControl = (deps: AgentControlDeps) => {
         if (receipt.accepted !== true) throw new Error('resume not accepted')
         return { ...receipt, control: clone(requireRecord(input.parentSessionId, input.childId)) }
       } catch (error) {
-        const live = records.get(current.childId)!
-        patch(live, { paused: true, phase: live.actual?.state === 'running' ? 'recovery-required' : 'paused', reason: 'continue-not-admitted' })
-        deps.setPaused(current.childId, true)
+        // 等待期间记录可能已随任务验收被回收：回收时已解除暂停，不再重新暂停没有控制记录的子会话，只抛出原始错误。
+        const live = records.get(current.childId)
+        if (live !== undefined) {
+          patch(live, { paused: true, phase: live.actual?.state === 'running' ? 'recovery-required' : 'paused', reason: 'continue-not-admitted' })
+          deps.setPaused(current.childId, true)
+        }
         await persist()
         throw error
       }

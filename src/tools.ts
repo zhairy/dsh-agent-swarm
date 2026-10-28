@@ -28,9 +28,7 @@ const getPlanningRecoveryText = (recovery: PlanningRecoveryInfo): string[] => re
   recovery.guidance
 ]
 
-/** 观察模式不自动审核：没有记录时如实说明，而不是显示 pending 诱导反复复审 */
-
-/** 预设行：只挂在天枢预设上，注册 4 个百工工具、7 个 Jev 判断工具与 2 个内嵌技能，并按模型家族补充天枢的调度说明 */
+/** 预设行：只挂在天枢预设上，注册百工与任务绑定工具、规划复审与经验工具、7 个 Jev 判断工具和 2 个内嵌技能，并按模型家族补充天枢的调度说明 */
 
 /**
  * 插件自身的位置与版本。
@@ -312,7 +310,7 @@ export const getStatusText = (result: StatusResult): string => {
       return `- ${d.delegationId} ${d.roleName} ${d.status} · ${d.route ?? '无路由'} · ${d.summary}${d.error === null ? '' : ` · 错误：${d.error}`}${review === undefined ? '' : ` · ${review}`}${d.evidenceAssessment === null ? '' : ` · 探索证据 ${d.evidenceAssessment.status}/${d.evidenceAssessment.disposition}`}`
     }),
     ...(task.acceptance === null ? [] : [`验收：${task.acceptance.status}（${task.acceptance.stopReason}）`]),
-    ...task.delegations.filter((d) => 'structured' in d).map((d) => `${d.delegationId} 结构化结果：${JSON.stringify((d as { structured?: unknown }).structured)}`)
+    ...task.delegations.filter((d) => (d as { structured?: unknown }).structured !== undefined).map((d) => `${d.delegationId} 结构化结果：${JSON.stringify((d as { structured?: unknown }).structured)}`)
   ])
   return clip([
     ...(tasks.length > 0 ? tasks : ['本会话还没有任务卡']),

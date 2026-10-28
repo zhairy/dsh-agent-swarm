@@ -211,12 +211,18 @@ class AgentModelController {
     if (value?.childId !== this.address.childId || value?.parentSessionId !== this.address.parentSessionId || !Number.isSafeInteger(value.revision) || value.revision < 1 || typeof value.phase !== 'string' || typeof value.persistent !== 'boolean') throw new Error('invalid host agent-control view')
     return value
   }
-  async load () {
+  async load (silent = false) {
     if (this.disposed) return
-    if (this.pendingLoad?.generation === this.generation) return this.pendingLoad.promise
+    if (this.pendingLoad?.generation === this.generation) {
+      // 显式刷新碰上进行中的静默轮询：复用同一读取，但要清掉旧的失败提示。
+      if (!silent && this.state.error !== undefined) this.update({ error: undefined })
+      return this.pendingLoad.promise
+    }
     const generation = this.generation
     const token = { generation, controller: new AbortController(), timedOut: false, expire: undefined, promise: undefined }
-    this.update({ status: this.state.view === undefined ? 'loading' : this.state.status, error: undefined })
+    // 周期轮询不得清掉用户操作刚产生的失败提示；只有显式刷新或读取失败重试才清空。
+    const keepActionError = silent && this.state.status === 'ready'
+    if (!keepActionError) this.update({ status: this.state.view === undefined ? 'loading' : this.state.status, error: undefined })
     const promise = (async () => {
       let timer
       const timeout = new Promise((_, reject) => {
@@ -239,7 +245,10 @@ class AgentModelController {
         const draft = !this.draftTouched && this.state.view === undefined && selected !== undefined
           ? { provider: selected.provider, model: selected.model, reasoningEffort: selected.reasoningEffort ?? '' }
           : this.state.draft
-        this.update({ status: 'ready', view, draft, ...(view.phase === 'paused' && this.state.notice === 'stopping' ? { notice: 'stopped' } : {}) })
+        const notice = view.phase === 'paused' && this.state.notice === 'stopping' ? { notice: 'stopped' } : {}
+        // 视图与提示都没有变化时不重复发布；按整视图比较，避免漏掉不改修订号的实时字段。
+        if (this.state.status === 'ready' && this.state.view !== undefined && JSON.stringify(this.state.view) === JSON.stringify(view) && notice.notice === undefined) return
+        this.update({ status: 'ready', view, draft, ...notice })
       } catch (error) {
         if (!token.timedOut && generation === this.generation) this.update({ status: 'error', error: error instanceof Error ? error.message : String(error) })
       } finally {
@@ -364,7 +373,7 @@ function AgentControlPanel ({ controller, t }) {
   React.useEffect(() => {
     if (view === undefined) return undefined
     const timer = setInterval(() => {
-      if (globalThis.document?.visibilityState !== 'hidden' && !controller.getSnapshot().busy) controller.load()
+      if (globalThis.document?.visibilityState !== 'hidden' && !controller.getSnapshot().busy) controller.load(true)
     }, 2000)
     return () => clearInterval(timer)
   }, [controller, view !== undefined])

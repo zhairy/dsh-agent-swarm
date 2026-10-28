@@ -266,42 +266,6 @@ function TaskProgressSummary ({ bundle, t }) {
 
 Object.assign(zh, { runtimeGuard: '运行守卫', runtimeActive: '可继续核对', runtimeStalled: '检测到重复轨迹', runtimeExhausted: '当前轨迹已耗尽', pendingDecision: '待用户答复', legacyAcceptance: '旧政策历史验收；不代表当前目标完成凭证' })
 Object.assign(en, { runtimeGuard: 'Runtime guard', runtimeActive: 'Active', runtimeStalled: 'Repeated trajectory detected', runtimeExhausted: 'Trajectory exhausted', pendingDecision: 'Awaiting user decision', legacyAcceptance: 'Historical acceptance under an earlier policy; not a current goal receipt' })
-Object.assign(zh, { evolution: '进化治理（只读）', noEvolution: '本任务无进化治理记录。', evolutionUnavailable: '治理状态不可用或绑定不一致。', evolutionPhase: '阶段', evolutionCandidate: '候选', evolutionEvaluation: '评测', evolutionShadow: '影子', evolutionCanary: 'Canary', evolutionRelease: '发布版本', evolutionRevoke: '撤回', evolutionNoApproval: '候选、评测通过和 Canary 活跃均不等于批准或任务验收。', evolutionSamples: '独立组', evolutionUnknown: '未知', evolutionUpper95: '误停 95% 上界', evolutionFalsePassUpper95: '误放行 95% 上界', evolutionChangedExecution: '不改变执行', evolutionAuthMissing: '授权引用缺失，不能视为已启用', evolutionCandidateState: '候选，未批准', evolutionEvaluatingState: '正在评测', evolutionValidatedState: '已复核，未激活', evolutionReleasedState: '已登记发布引用，未激活', evolutionShadowState: '影子观察，仅记录', evolutionCanaryState: '单根 Canary', evolutionActiveState: 'Canary 已完成，治理条目活跃', evolutionFailedState: '评测失败', evolutionStoppedState: '已停止', evolutionRevokedState: '已撤回', evolutionReconcileState: '重启后待核对' })
-Object.assign(en, { evolution: 'Evolution governance (read only)', noEvolution: 'No evolution governance record for this task.', evolutionUnavailable: 'Governance state is unavailable or its binding does not match.', evolutionPhase: 'Phase', evolutionCandidate: 'Candidate', evolutionEvaluation: 'Evaluation', evolutionShadow: 'Shadow', evolutionCanary: 'Canary', evolutionRelease: 'Release version', evolutionRevoke: 'Revocation', evolutionNoApproval: 'Candidate, passed evaluation, and active Canary do not mean approval or task acceptance.', evolutionSamples: 'Independent groups', evolutionUnknown: 'Unknown', evolutionUpper95: 'False-stop 95% upper bound', evolutionFalsePassUpper95: 'False-pass 95% upper bound', evolutionChangedExecution: 'Execution unchanged', evolutionAuthMissing: 'Authorization reference missing; not enabled', evolutionCandidateState: 'Candidate, not approved', evolutionEvaluatingState: 'Evaluating', evolutionValidatedState: 'Reviewed, not activated', evolutionReleasedState: 'Release reference registered, not activated', evolutionShadowState: 'Shadow observation only', evolutionCanaryState: 'Single-root Canary', evolutionActiveState: 'Canary complete; governance entry active', evolutionFailedState: 'Evaluation failed', evolutionStoppedState: 'Stopped', evolutionRevokedState: 'Revoked', evolutionReconcileState: 'Awaiting reconciliation after restart' })
-const EVOLUTION_PHASES = ['candidate', 'evaluating', 'validated', 'released', 'shadow', 'canary', 'active', 'failed', 'stopped', 'revoked', 'reconcile-required']
-const EVOLUTION_EVALUATION_STATES = ['missing', 'pending', 'passed', 'failed', 'unavailable']
-const EVOLUTION_SHADOW_STATES = ['not_started', 'observing', 'stopped']
-const EVOLUTION_CANARY_STATES = ['not_requested', 'awaiting_user', 'authorized', 'active', 'stopped', 'complete']
-const EVOLUTION_REVOKE_STATES = ['none', 'requested', 'pending_inflight', 'complete', 'blocked']
-const boundedText = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max
-const boundedCount = (value) => Number.isSafeInteger(value) && value >= 0
-const digestText = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
-const getEvolutionView = (view) => {
-  const evolution = view?.evolution
-  if (evolution === null || evolution === undefined) return { present: false, valid: true }
-  const binding = evolution.binding
-  if (evolution.schemaVersion !== 1 || !boundedCount(evolution.revision) || evolution.revision < 1
-    || !EVOLUTION_PHASES.includes(evolution.phase) || !boundedText(evolution.candidate?.id, 128)
-    || !['candidate', 'validated', 'deprecated'].includes(evolution.candidate?.lifecycle)
-    || !binding || binding.rootSessionId !== view?.rootSessionId || binding.taskId !== view?.task_id
-    || ['cardRevision', 'workflowRevision', 'requestRevision'].some((key) => binding[key] !== (view?.[key] ?? 1))
-    || evolution.candidate.digest !== undefined && !digestText(evolution.candidate.digest)
-    || !EVOLUTION_EVALUATION_STATES.includes(evolution.evaluation?.state)
-    || !EVOLUTION_SHADOW_STATES.includes(evolution.shadow?.state) || evolution.shadow.changedExecution !== false
-    || !boundedCount(evolution.shadow.samples) || !EVOLUTION_CANARY_STATES.includes(evolution.canary?.state)
-    || !boundedCount(evolution.canary.safetyViolations) || !EVOLUTION_REVOKE_STATES.includes(evolution.revoke?.state)
-    || !boundedCount(evolution.revoke.unresolvedHandles)
-    || evolution.release !== undefined && (!boundedText(evolution.release.version, 64) || !/^[a-f0-9]{40}$/.test(evolution.release.gitCommit ?? '')
-      || !digestText(evolution.release.artifactSha256) || !digestText(evolution.release.manifestDigest))) return { present: true, valid: false }
-  if (['passed', 'failed', 'unavailable'].includes(evolution.evaluation.state) && (!digestText(evolution.evaluation.resultDigest) || !boundedCount(evolution.evaluation.groupCount)
-    || !boundedCount(evolution.evaluation.stepCount) || !boundedCount(evolution.evaluation.unknown)
-    || typeof evolution.evaluation.falseStopUpper95 !== 'number' || evolution.evaluation.falseStopUpper95 < 0 || evolution.evaluation.falseStopUpper95 > 1
-    || typeof evolution.evaluation.falsePassUpper95 !== 'number' || evolution.evaluation.falsePassUpper95 < 0 || evolution.evaluation.falsePassUpper95 > 1)) return { present: true, valid: false }
-  const canaryAuthorized = evolution.canary.state !== 'active' && evolution.canary.state !== 'complete'
-    || boundedText(evolution.canary.authorizationRef, 512) && evolution.canary.scope?.rootSessionId === binding.rootSessionId
-      && evolution.canary.scope?.taskId === binding.taskId
-  return { present: true, valid: true, evolution, canaryAuthorized: Boolean(canaryAuthorized) }
-}
 function RuntimeGuardStatus ({ view, t }) {
   const runtime = view?.runtimeGuard
   if (runtime === undefined) return null
@@ -310,36 +274,6 @@ function RuntimeGuardStatus ({ view, t }) {
     control === null || control === undefined ? null : h('p', null, `${t('runtimeGuard')} · ${t({ active: 'runtimeActive', stalled: 'runtimeStalled', exhausted: 'runtimeExhausted' }[control.status] ?? 'runtimeGuard')}${control.reason ? ` · ${control.reason}` : ''}`),
     pending > 0 ? h('p', null, `${t('pendingDecision')} · ${pending}`) : null,
     view.acceptancePolicy === 'legacy-historical' ? h('p', null, t('legacyAcceptance')) : null)
-}
-
-function EvolutionStatusPanel ({ view, t }) {
-  const translate = typeof t === 'function' ? t : (key) => zh[key] ?? key
-  const parsed = getEvolutionView(view)
-  if (!parsed.present || !parsed.valid) return h('p', { role: 'status', 'data-swarm-evolution': parsed.valid ? 'absent' : 'invalid', style: styles.status },
-    translate(parsed.valid ? 'noEvolution' : 'evolutionUnavailable'))
-  const evolution = parsed.evolution
-  const phase = translate({
-    candidate: 'evolutionCandidateState', evaluating: 'evolutionEvaluatingState', validated: 'evolutionValidatedState',
-    released: 'evolutionReleasedState', shadow: 'evolutionShadowState', canary: 'evolutionCanaryState',
-    active: 'evolutionActiveState', failed: 'evolutionFailedState', stopped: 'evolutionStoppedState',
-    revoked: 'evolutionRevokedState', 'reconcile-required': 'evolutionReconcileState'
-  }[evolution.phase] ?? 'evolutionUnavailable')
-  const evaluation = evolution.evaluation
-  const evaluationLine = evaluation.state === 'missing' || evaluation.state === 'pending' ? `${translate('evolutionEvaluation')}：${evaluation.state}`
-    : `${translate('evolutionEvaluation')}：${evaluation.state} · ${translate('evolutionSamples')} ${evaluation.groupCount} · ${translate('evolutionUnknown')} ${evaluation.unknown} · ${translate('evolutionUpper95')} ${(evaluation.falseStopUpper95 * 100).toFixed(1)}% · ${translate('evolutionFalsePassUpper95')} ${(evaluation.falsePassUpper95 * 100).toFixed(1)}%`
-  const shadowLine = `${translate('evolutionShadow')}：${evolution.shadow.state} · ${evolution.shadow.samples} · ${translate('evolutionChangedExecution')}`
-  const canaryLine = `${translate('evolutionCanary')}：${evolution.canary.state}${parsed.canaryAuthorized ? '' : ` · ${translate('evolutionAuthMissing')}`}`
-  const revokeLine = evolution.revoke.state === 'none' ? null
-    : `${translate('evolutionRevoke')}：${evolution.revoke.state} · ${evolution.revoke.unresolvedHandles}`
-  const releaseLine = evolution.release === undefined ? null
-    : `${translate('evolutionRelease')}：${evolution.release.version} · ${evolution.release.gitCommit.slice(0, 12)} · ${evolution.release.artifactSha256.slice(0, 12)}`
-  return h('section', { 'data-swarm-evolution': evolution.phase, style: styles.card, 'aria-label': translate('evolution') },
-    h('strong', null, translate('evolution')),
-    h('p', null, `${translate('evolutionPhase')}：${phase}`),
-    h('p', null, `${translate('evolutionCandidate')}：${evolution.candidate.id.slice(0, 12)} · ${evolution.candidate.lifecycle}${evolution.candidate.digest ? ` · ${evolution.candidate.digest.slice(0, 12)}` : ''}`),
-    h('p', null, evaluationLine), h('p', null, shadowLine), h('p', null, canaryLine),
-    releaseLine === null ? null : h('p', null, releaseLine), revokeLine === null ? null : h('p', { role: 'status' }, revokeLine),
-    h('small', null, translate('evolutionNoApproval')))
 }
 
 function Freshness ({ snapshot, t }) {
@@ -410,6 +344,8 @@ function TaskFlowContent ({ taskId, fallback = '', historicalSource, snapshot = 
   const translate = typeof t === 'function' ? t : (key) => zh[key] ?? key
   const view = snapshot.value
   const planningStatus = compact ? 'historical' : view?.planningReview?.status ?? (view?.workflowMode === 'enforced' ? 'pending' : 'notReviewed')
+  // 还没读到任务视图时不能显示“流程已生成，等待审核”：按读取状态显示读取中或不可用。
+  const headerStatus = compact ? 'historical' : view === null ? (['unavailable', 'stale', 'offline'].includes(snapshot.status) ? 'unavailable' : 'loading') : planningStatus
   const bundle = getDiagramBundle(view)
   const markdown = compact ? fallback : getTaskMarkdown(view, fallback)
   const contract = [
@@ -421,9 +357,9 @@ function TaskFlowContent ({ taskId, fallback = '', historicalSource, snapshot = 
   const blocker = view?.blockedRecovery?.active === true && typeof view.blockedRecovery.summary === 'string' ? h('p', { role: 'status', 'data-swarm-current-block': '' }, `${translate('currentBlock')}：${view.blockedRecovery.summary}`) : null
   const canvas = compact ? h('p', { style: styles.status }, translate('openProgress')) : h(TaskDiagramPanel, { key: taskId, view, source: view?.flow?.mermaid ?? view?.mermaid ?? historicalSource, t: translate, preference: source?.readPreference(), setPreference: source?.setPreference })
   return h('section', { style: styles.card, 'data-swarm-task-flow': taskId, 'aria-label': translate('title') },
-    h('div', { style: styles.header }, h('strong', null, `${translate('title')} · ${taskId}`), h('span', { style: styles.status, 'data-planning-status': compact ? 'historical' : view === null ? 'pending' : planningStatus }, translate(compact ? 'historical' : view === null ? 'pending' : planningStatus)), typeof onRefresh !== 'function' ? null : h('button', { type: 'button', style: styles.button, onClick: onRefresh }, translate('refresh'))),
+    h('div', { style: styles.header }, h('strong', null, `${translate('title')} · ${taskId}`), h('span', { style: styles.status, 'data-planning-status': headerStatus }, translate(headerStatus === 'unavailable' && view !== null ? 'reviewUnavailable' : headerStatus)), typeof onRefresh !== 'function' ? null : h('button', { type: 'button', style: styles.button, onClick: onRefresh }, translate('refresh'))),
     h(Freshness, { snapshot, t: translate }),
-    ...(progressPage ? [progress, h(EvolutionStatusPanel, { view, t: translate }), h(RuntimeGuardStatus, { view, t: translate }), blocker, pending, canvas, h('details', { 'data-swarm-contract-details': '' }, h('summary', null, translate('contractDetails')), ...contract)] : [...contract, progress, blocker, pending, canvas]))
+    ...(progressPage ? [progress, h(RuntimeGuardStatus, { view, t: translate }), blocker, pending, canvas, h('details', { 'data-swarm-contract-details': '' }, h('summary', null, translate('contractDetails')), ...contract)] : [...contract, progress, blocker, pending, canvas]))
 }
 
 function TaskFlowRow (props) {
@@ -453,4 +389,4 @@ exports.validateTaskView = validateTaskView
 exports.TaskFlowContent = TaskFlowContent
 exports.useTaskSnapshot = useTaskSnapshot
 exports.dictionaries = { zh, en }
-exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, TaskFlowRow, TaskFlowContent, TaskDiagramPanel, TaskProgressSummary, Freshness, EvolutionStatusPanel, getEvolutionView, validateTaskView, useTaskSnapshot, zh, en, styles, DIAGRAM_KINDS }
+exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, TaskFlowRow, TaskFlowContent, TaskDiagramPanel, TaskProgressSummary, Freshness, validateTaskView, useTaskSnapshot, zh, en, styles, DIAGRAM_KINDS }

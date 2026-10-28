@@ -67,8 +67,12 @@ export const getHostApprovalPolicy = (approval: ApprovalServiceLike | undefined,
 }
 
 export const getApprovalPolicyDiagnostics = (config: ApprovalsConfigInfo, hostPolicy: HostApprovalPolicy): string[] => {
-  if (config.mode !== 'ask' || config.scope.length === 0) return []
-  const diagnostics = ['百工工具审批仅覆盖所选 ToolRuntime 调用；内部规划/复评 Jev HTTP 与原生 Codex/Claude 内部工具由各自接口管理。']
+  const diagnostics: string[] = []
+  if (config.mode === 'deny' && (config.scope.includes('write') || config.scope.includes('shell'))) {
+    diagnostics.push('审批为 deny 且覆盖写入或命令：所有原生 Codex/Claude 委派（含只读角色与自动升级）都改走 API 工具链，因为原生后端的内部工具不经过宿主 ToolRuntime 审批。')
+  }
+  if (config.mode !== 'ask' || config.scope.length === 0) return diagnostics
+  diagnostics.push('百工工具审批仅覆盖所选 ToolRuntime 调用；内部规划/复评 Jev HTTP 与原生 Codex/Claude 内部工具由各自接口管理。')
   if (hostPolicy === 'never') diagnostics.push('宿主审批策略为 never：审批请求会自动拒绝，专家子会话也可能由宿主固定为 never；百工不会自动更改该策略。')
   else if (hostPolicy === 'unavailable') diagnostics.push('宿主审批服务不可用：所选 ask 工具将拒绝执行。')
   else diagnostics.push('审批交给宿主的一次性应答渠道；服务存在不代表已配置应答者，拒绝、取消或不可用都不会执行工具。')

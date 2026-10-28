@@ -1,4 +1,4 @@
-import { getJevFailureKind, isJevProbability, isJevScore, type JevAskOutcome, type JevClient } from './jev.js'
+import { getJevFailureKind, getSecretFormatRedacted, isJevProbability, isJevScore, type JevAskOutcome, type JevClient } from './jev.js'
 import {
   CHECK_FLAG_THRESHOLD,
   CHECK_UNCERTAIN_MAX,
@@ -68,6 +68,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const fail = (message: string, ...loc: string[]): never => { throw new InvalidInput(message, loc) }
 
+const STATE_MAX_DEPTH = 64
+/** 发给 Jev 前替换字符串叶中的常见密钥格式；保留结构与其余正文，长度仍由请求体上限约束。 */
+const redactState = (value: unknown, depth = 0): unknown => {
+  if (typeof value === 'string') return getSecretFormatRedacted(value)
+  if (value === null || typeof value !== 'object') return value
+  // 超深结构直接拒绝，而不是把深层内容原样发出。
+  if (depth >= STATE_MAX_DEPTH) return fail(`state nesting exceeds ${STATE_MAX_DEPTH} levels`, 'state')
+  if (Array.isArray(value)) return value.map((item) => redactState(item, depth + 1))
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, redactState(item, depth + 1)]))
+}
 const getState = (value: unknown, name = 'state'): StateValue => {
   if (typeof value === 'string' || Array.isArray(value) || isRecord(value)) return value as StateValue
   return fail(`${name} must be a string, object, or array`, name)
@@ -223,7 +233,8 @@ export const intJevTools = (deps: JevToolDepsInfo) => {
 
   /** 一次提问；失败时抛出带信封的错误，供组合操作统一处理 */
   const askOnce = async (state: unknown, questions: Record<string, unknown>, signal?: AbortSignal) => {
-    const outcome = await deps.getClient().ask(state, questions, signal)
+    // 所有直通工具（含 screen 的 text、match 的 query/candidates）都在这里统一脱敏后再发出。
+    const outcome = await deps.getClient().ask(redactState(state), questions, signal)
     if (!outcome.ok) throw Object.assign(new Error('jev failed'), { envelope: getFailure(outcome) })
     // 组合工具和任意提问共用完整性/范围校验，防止各入口对同一坏答案得出不同结论。
     for (const [id, raw] of Object.entries(questions)) {

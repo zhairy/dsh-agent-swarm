@@ -10,7 +10,7 @@ export const PLANNING_REVIEW_QUESTION_VERSION = '4'
 export type PlanningReviewVerdict = 'pass' | 'changes_requested' | 'unknown' | 'needs-clarification'
 export type PlanningReviewStatus = 'pending' | 'reviewing' | 'pass' | 'pass_with_degradation' | 'changes_requested' | 'unknown' | 'needs-clarification' | 'review_required' | 'unavailable' | 'stale'
 export interface RequirementMapInfo { id: string; text: string; required: boolean; acceptanceIds: string[]; nodeIds: string[] }
-export interface PlanningExecutionPolicyInfo { maxAutoFixRounds?: number; maxPlanningReviewFixRounds?: number; planningReviewTimeoutMs?: number; workflowMode?: 'off' | 'advisory' | 'enforced'; profile?: 'legacy' | 'bounded'; maxCalls?: number; maxTokens?: number; maxCostUsd?: number; delegationLimit?: number }
+export interface PlanningExecutionPolicyInfo { maxAutoFixRounds?: number; maxPlanningReviewFixRounds?: number; planningReviewTimeoutMs?: number; workflowMode?: 'off' | 'advisory' | 'enforced'; profile?: 'legacy' | 'bounded'; maxCalls?: number; delegationLimit?: number }
 export interface ReviewSnapshotInputInfo {
   rootSessionId: string
   workspaceId: string
@@ -52,7 +52,7 @@ export interface ReviewSnapshot extends ReviewSnapshotInputInfo {
   runtimeRules: typeof PLANNING_RUNTIME_RULES
 }
 const PLANNING_RUNTIME_RULES = {
-  quota: 'maxCalls、maxTokens、maxCostUsd、delegationLimit 为 0 表示不限；Jev 不受生成模型预算限制。',
+  quota: 'legacy 模式下 maxCalls=0 表示不限；bounded 模式下 0 使用 quick/standard/algorithm 的默认委派上限 6/16/20；delegationLimit 为 0 表示不限；Jev 不受生成模型预算限制。',
   admission: 'enforced 模式必须当前规划通过且节点依赖满足才派发；规划通过不能替代实现后的验证门禁。',
   independence: '独立规划审核总是新建只读会话；执行阶段御史初审和算衡验算由宿主强制 session=new，显式回应阶段另行校验冻结初审。相同角色名不代表复用同一初审上下文。',
   failure: '审核超时或取消不授予执行权限；同一明确负结论不重新抽样。修正实质合同后才能复审；修复轮次上限以 executionPolicy 为准，无法满足则记录未完成。',

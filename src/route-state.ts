@@ -214,6 +214,8 @@ export interface RouteStateRegistry {
   DelAgent: (agentId: string) => void
   /** 宿主释放 Agent 时调用：连续会话子智能体的路由状态保留，其余清理 */
   ReleaseAgent: (agentId: string) => void
+  /** 只释放该会话持有的半开探测，不改变它的路由与恢复状态；用于本地中止等宿主不派发请求错误的结束路径。 */
+  ReleaseProbe: (agentId: string) => void
   /** 同步准入：链上没有可立即使用的路由时直接判定链耗尽 */
   getRequestOverride: (agent: AgentLike, resolved: CallConfigLike, presetRole: RoleId | undefined, config?: SwarmConfigInfo, explicitSelectionAvailable?: boolean) => CallConfigLike
   /** 宿主请求入口的准入：链上暂时没有可用路由时，在等待预算内等最早可能恢复的路由后重新准入 */
@@ -834,7 +836,9 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     },
     recover: async (payload, next, role, config, compaction) => {
       if (!managed(payload.agent, role)) return next()
-      if (manualPauses.has(payload.agent.id) || payload.signal?.aborted === true || staleFailure(payload)) return undefined
+      // 请求中止时探测并未得出结论：释放半开占用，避免该路由对其它根会话长期不可用。
+      if (payload.signal?.aborted === true) { health.release(payload.agent.id); return undefined }
+      if (manualPauses.has(payload.agent.id) || staleFailure(payload)) return undefined
       if (normalizeRouteFailure(payload.failure as RouteFailureMetadata, { provider: payload.provider, model: '' }).kind === 'context_exceeded') {
         const recovery = recoveryOf(payload.agent.id)
         const before = payload.agent.session?.surface?.replaceGeneration
@@ -1050,6 +1054,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       requestPositions.delete(agentId)
       lastResolved.delete(agentId)
     },
+    ReleaseProbe: (agentId) => health.release(agentId),
     ReleaseAgent: (agentId) => {
       quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
       health.release(agentId)
@@ -1138,7 +1143,9 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     },
     getErrorAction: (payload, action, presetRole, config) => {
       if (!managed(payload.agent, presetRole)) return action
-      if (manualPauses.has(payload.agent.id) || payload.signal?.aborted === true || staleFailure(payload)) return undefined
+      // 请求中止时探测并未得出结论：释放半开占用，避免该路由对其它根会话长期不可用。
+      if (payload.signal?.aborted === true) { health.release(payload.agent.id); return undefined }
+      if (manualPauses.has(payload.agent.id) || staleFailure(payload)) return undefined
       const recovery = recoveryOf(payload.agent.id)
       if (recovery.terminal !== undefined) return undefined
       const policy = policyOf(config)

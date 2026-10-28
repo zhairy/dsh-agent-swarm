@@ -54,33 +54,51 @@ export const JEV_QUESTIONS = {
 
 const REDACTED = '[已脱敏]'
 
-/** 键名像密钥的键值对：key: v、key=v，以及 JSON 的 "key": "v"（键名前后可有引号） */
-const SECRET_KEY_VALUE = /(["']?)([A-Za-z0-9_.-]*?(?:api[_-]?key|apikey|secret|token|password|passwd|pwd|authorization|credential|private[_-]?key|access[_-]?key)[A-Za-z0-9_.-]*)\1(\s*[:=]\s*)(["']?)([^"'\s,;}\]]{4,})\4/gi
+/**
+ * 键名像密钥的键值对：key: v、key=v，以及 JSON 的 "key": "v"（键名前后可有引号）。
+ * 键名必须从非键名字符之后开始，两侧长度有界，保证在无分隔的长串上也是线性匹配；
+ * 值可以是 "Bearer/Basic/Token <凭据>" 这类带认证方案的整体，避免只隐藏方案名而漏出凭据。
+ */
+const SECRET_KEY_VALUE = /(["']?)(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{0,64}?(?:api[_-]?key|apikey|secret|token|password|passwd|pwd|authorization|credential|private[_-]?key|access[_-]?key)[A-Za-z0-9_.-]{0,64})\1(\s*[:=]\s*)(["']?)((?:Bearer|Basic|Token|Digest|ApiKey)\s+[A-Za-z0-9._~+/=-]+|[^"'\s,;}\]]{4,})\4/gi
 
 /** 常见密钥格式（不依赖键名） */
-const SECRET_PATTERNS: readonly RegExp[] = [
+const COMMON_SECRET_PATTERNS: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
-  /\b(?:sk|tsk|pk|rk)[-_][A-Za-z0-9_-]{8,}/g,
   /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
-  /Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g
 ]
+const SECRET_PATTERNS: readonly RegExp[] = [...COMMON_SECRET_PATTERNS,
+  /\b(?:sk|tsk|pk|rk)[-_][A-Za-z0-9_-]{8,}/g,
+  /Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi]
+/**
+ * 直通工具送去判断的是正文本身：前缀与 Bearer 规则要求令牌前 64 个字符内含数字，
+ * 避免改写 pk_user_id、bearer bonds 这类普通词；前瞻有界，长串上保持线性。
+ */
+const DIRECT_SECRET_PATTERNS: readonly RegExp[] = [...COMMON_SECRET_PATTERNS,
+  /\b(?:sk|tsk|pk|rk)[-_](?=[A-Za-z0-9_-]{0,64}\d)[A-Za-z0-9_-]{8,}/g,
+  /Bearer\s+(?=[A-Za-z0-9._~+/=-]{0,64}\d)[A-Za-z0-9._~+/=-]{8,}/gi]
 
 const MAX_TEXT = 500
 
+/** 只替换常见密钥格式（线性匹配、不截断）；直通 Jev 工具用它，判断正文的其余部分保持原样。 */
+export const getSecretFormatRedacted = (text: string): string => DIRECT_SECRET_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, REDACTED), text)
+
 /**
  * 去掉密钥样式内容并截断，保证发往 Jev 的只有脱敏摘要。
+ * 先按键值整体替换（值可含认证方案与组合凭据），再替换独立的常见密钥格式；
  * 覆盖 JSON 形式的键值（结构化交付会先 JSON.stringify 再脱敏）、PEM 私钥、JWT 与常见服务的令牌前缀。
+ * 只处理截断点之后留有余量的前缀，跨越截断点的密钥仍能被整体识别。
  * @param {string} text - 原文
  * @param {number} [max=500] - 截断长度
  * @returns {string} 脱敏文本
  */
 export const getRedactedText = (text: string, max = MAX_TEXT): string =>
-  SECRET_PATTERNS
-    .reduce((acc, pattern) => acc.replace(pattern, REDACTED), text.replace(SECRET_KEY_VALUE, (_m, q1, key, sep, q2) => `${q1}${key}${q1}${sep}${q2}${REDACTED}${q2}`))
+  SECRET_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, REDACTED),
+    (text.length > max + 4096 ? text.slice(0, max + 4096) : text)
+      .replace(SECRET_KEY_VALUE, (_m, q1, key, sep, q2) => `${q1}${key}${q1}${sep}${q2}${REDACTED}${q2}`))
     .slice(0, max)
 
 /**
@@ -111,7 +129,7 @@ interface JevFailureLike { reason: string; status?: number; failureKind?: JevFai
 export const getJevFailureKind = (failure: JevFailureLike): JevFailureKind => {
   if (failure.failureKind !== undefined) return failure.failureKind
   if (failure.reason === 'disabled') return 'disabled'
-  if (failure.reason === 'missing-api-key') return 'configuration'
+  if (failure.reason === 'missing-api-key' || failure.reason === 'invalid-base-url') return 'configuration'
   if (failure.reason === 'credential-permission-denied' || failure.status === 403) return 'permission'
   if (failure.reason === 'credential-unavailable') return 'unknown'
   if (failure.status === 401) return 'authentication'
@@ -231,6 +249,13 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
   const now = deps.now ?? Date.now
   // 用户明确选择 Jev 全入口不限流；旧非零 RPS 仅保留配置兼容，不建立队列。
   const baseUrl = config.baseUrl.replace(/\/$/, '')
+  // 密钥只允许发往 https；本机回环允许 http（本地代理与测试）。地址非法时拒绝发送，绝不携带 Bearer 外发。
+  const endpointAllowed = ((): boolean => {
+    try {
+      const url = new URL(baseUrl)
+      return url.protocol === 'https:' || (url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(url.hostname))
+    } catch { return false }
+  })()
 
   // 默认定时器可清理；注入 sleep 的 Promise 也可被取消抢先结束，不必等待 Retry-After。
   const waitForRetry = (ms: number, signal?: AbortSignal): Promise<boolean> => new Promise((resolve, reject) => {
@@ -322,6 +347,7 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
    */
   const ask = async (state: unknown, questions: Record<string, unknown>, signal?: AbortSignal): Promise<JevAskOutcome> => {
     if (!config.enabled) return { ok: false, reason: 'disabled', attempts: 0 }
+    if (!endpointAllowed) return { ok: false, reason: 'invalid-base-url', attempts: 0, status: 400 }
     let key: string | undefined
     try { key = await getKey() } catch (error) { const failure = getJevCredentialError(error); return { ok: false, reason: failure.reason, attempts: 0, status: failure.reason === 'credential-permission-denied' ? 403 : 503 } }
     if (key === undefined) return { ok: false, reason: 'missing-api-key', attempts: 0, status: 401 }
@@ -346,6 +372,7 @@ export const intJevClient = (config: JevConfigInfo, deps: JevDepsInfo) => {
    */
   const listModels = async (signal?: AbortSignal): Promise<JevModelsOutcome> => {
     if (!config.enabled) return { ok: false, reason: 'disabled' }
+    if (!endpointAllowed) return { ok: false, reason: 'invalid-base-url', status: 400 }
     let key: string | undefined
     try { key = await getKey() } catch (error) { const failure = getJevCredentialError(error); return { ok: false, reason: failure.reason, status: failure.reason === 'credential-permission-denied' ? 403 : 503 } }
     if (key === undefined) return { ok: false, reason: 'missing-api-key', status: 401 }

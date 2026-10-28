@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * 生成 presets/*.patch.yml：以指定 DSH 版本 web-app 的 standard 预设为底，叠加 swarm 角色配置
- * 用法：npm run build && node scripts/gen-presets.mjs [--dsh <DSH 的 node_modules 目录>] [--write-fixture]
+ * 用法：npm run build && node scripts/gen-presets.mjs --dsh <DSH 的 node_modules 目录>
  * 例如全局安装的 DSH：--dsh "$(npm root -g)/@deepseek-ai/dsh/node_modules"
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -12,29 +12,18 @@ import { JS_TAG, getJsRevived } from './yaml-js-tag.mjs'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** 未指定 --dsh 时才使用开发沙箱（scripts/sandbox.mjs）安装的 DSH */
-const getModulesDir = async (dsh) => {
-  if (dsh !== undefined) return dsh
-  let sandbox
-  try {
-    sandbox = await import('./sandbox.mjs')
-  } catch {
-    throw new Error('没有开发沙箱（scripts/sandbox.mjs）：请用 --dsh 指定 DSH 的 node_modules 目录，例如 --dsh "$(npm root -g)/@deepseek-ai/dsh/node_modules"')
-  }
-  sandbox.ensureDsh()
-  return sandbox.getSandboxDshModules()
-}
-
 const HEADER = '# 由 scripts/gen-presets.mjs 生成，请勿手改；修改角色请编辑 src/role-registry.ts 或 src/preset-builder.ts 后重新生成\n'
 
-const getArgs = (argv) => ({
-  dsh: argv.includes('--dsh') ? argv[argv.indexOf('--dsh') + 1] : undefined,
-  writeFixture: argv.includes('--write-fixture')
-})
+const getArgs = (argv) => {
+  if (argv.length !== 2 || argv[0] !== '--dsh' || !argv[1]?.trim() || argv[1].startsWith('--')) {
+    throw new Error('用法：node scripts/gen-presets.mjs --dsh <DSH 的 node_modules 目录>')
+  }
+  return { dsh: argv[1] }
+}
 
 const main = async () => {
   const args = getArgs(process.argv.slice(2))
-  const modulesDir = await getModulesDir(args.dsh)
+  const modulesDir = args.dsh
   const standardFile = join(modulesDir, '@deepseek-ai', 'dsh-web-app', 'presets', 'standard.patch.yml')
   if (!existsSync(standardFile)) throw new Error(`找不到 ${standardFile}`)
   const load = (file) => import(pathToFileURL(join(REPO_ROOT, 'lib', file)).href)
@@ -58,9 +47,6 @@ const main = async () => {
   const pkg = JSON.parse(readFileSync(pkgFile, 'utf8'))
   const next = { ...pkg, dsh: { ...pkg.dsh, bundle: { ...(pkg.dsh?.bundle ?? {}), patch: getBundlePatchList() } } }
   writeFileSync(pkgFile, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-  if (args.writeFixture) {
-    writeFileSync(join(REPO_ROOT, 'tests', 'fixtures', 'standard-plugins.json'), `${JSON.stringify(standard, null, 2)}\n`, 'utf8')
-  }
   console.log(`已生成 ${ROLE_INFO_LIST.length} 个预设（standard 来源：${standardFile}）`)
 }
 

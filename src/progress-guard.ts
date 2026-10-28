@@ -137,7 +137,9 @@ export const createProgressGuard = <T extends ProgressGuardState>(store: Durable
         if (facts[locator] === undefined && Object.keys(facts).length >= 64) delete facts[Object.keys(facts)[0]!]
         facts[locator] = content
         const next = { ...control, observedFacts: facts }
-        if (next.status === 'stalled' && next.recoveries < RECOVERY_LIMIT) { next.status = 'active'; next.recoveries++; delete next.reason }
+        // 只有“新事实可以解除”的结构停滞能被事实清除；等待句柄未知、
+        // 重启对账与摘要碰撞必须由对应的核对结果解除，不能靠任意事实绕过。
+        if (next.status === 'stalled' && next.reason?.startsWith('LOOP_DETECTED') && next.recoveries < RECOVERY_LIMIT) { next.status = 'active'; next.recoveries++; delete next.reason }
         return { set: { runtimeControls: { [lineage]: next } } }
       } })
     }),
@@ -162,6 +164,9 @@ export const createProgressGuard = <T extends ProgressGuardState>(store: Durable
           const existing = handles[key]
           if (existing !== undefined && existing.id !== input.waitHandle.id) { control.status = 'stalled'; control.reason = '等待句柄摘要碰撞，需要独立核对' }
           else if (input.waitHandle.state === 'open') {
+            // 宿主只上报当前的开放等待：新的等待出现说明先前的开放等待已不再是阻塞点。只跟踪当前一个，
+            // 否则长任务里每次在途委派都会累加句柄，第 17 个就把谱系永久判为耗尽。未知句柄仍保留待核对。
+            for (const [handleKey, handle] of Object.entries(handles)) if (handle.state === 'open' && handleKey !== key) delete handles[handleKey]
             if (existing === undefined && Object.keys(handles).length >= 16) {
               control.status = 'exhausted'; control.reason = '等待句柄容量已用尽；停止新派发并保留诊断空间'
             } else {
@@ -178,11 +183,17 @@ export const createProgressGuard = <T extends ProgressGuardState>(store: Durable
           } else if (existing !== undefined) {
             delete handles[key]
             control.waitHandles = handles
+            // 等待句柄真正结算后才解除重启/未知造成的停滞；这是核对结果，不是任意新事实。
+            // 还有其它未知句柄时继续停滞，每个句柄都要有自己的结算。
+            if (control.status === 'stalled' && (control.reason?.startsWith('WAIT_HANDLE_UNKNOWN')
+              || control.reason === 'restart-requires-wait-handle-reconciliation')
+              && !Object.values(handles).some(handle => handle.state === 'unknown')) { control.status = 'active'; delete control.reason }
           }
           const changed = JSON.stringify(control) !== JSON.stringify(old ?? {})
           result = control
           if (!changed) return {}
-          if (input.waitHandle.state !== 'settled') return { set: { runtimeControls: { [input.lineageId]: control } } }
+          // 停滞或耗尽时结算的句柄也要落盘移除，否则后续结算仍看到已结束的句柄。
+          if (input.waitHandle.state !== 'settled' || control.status !== 'active') return { set: { runtimeControls: { [input.lineageId]: control } } }
         }
         const recovery = input.recoveryEvent !== undefined && input.recoveryEvent !== control.lastUserEvent
         if (recovery && control.status !== 'exhausted') {

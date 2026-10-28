@@ -365,7 +365,12 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
         journalPresent = true
       } catch (error) { if (!missing(error)) throw error }
       journalBytes = Buffer.byteLength(journal)
-      if (journalBytes > maxJournalBytes || (journal !== '' && !journal.endsWith('\n'))) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal is oversized or has an incomplete committed record')
+      if (journalBytes > maxJournalBytes) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal is oversized')
+      // 末尾未换行的是未确认的写入：丢弃这一条尾部记录，已提交记录仍然有效。
+      // 磁盘上的残片要在已提交前缀校验通过后原子重写掉，否则下一次追加会与它拼成坏行。
+      const tornTail = journal !== '' && !journal.endsWith('\n')
+      if (tornTail) journal = journal.slice(0, journal.lastIndexOf('\n') + 1)
+      journalBytes = Buffer.byteLength(journal)
       for (const line of journal.split('\n').filter(Boolean)) {
         const raw: unknown = JSON.parse(line)
         if (!journalShape(raw)) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal checksum/schema mismatch')
@@ -427,6 +432,7 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
         sequence = entry.sequence
       }
       if (snapshot === undefined && sequence === 0) await writeSnapshot(0)
+      if (tornTail) await atomicStateFile(directory, 'journal.jsonl', journal)
       // The first journal directory entry must be durable before any committed append is acknowledged.
       if (!journalPresent) await clearJournal()
     } catch (error) {

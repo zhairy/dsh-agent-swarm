@@ -1,9 +1,0 @@
-{
-  "phase": "final-client-browser-verification",
-  "files": {
-    "lib/client.js": "dd1fbbc9940dfea58ef601aed0d520536e228fc640d98bffb977fab22bd7b823",
-    "client/task-view-store.js": "50659d10168cdb63a225b35560454e9d21c7a9a9f48f9a9b1a2e3c9df5a8a592",
-    "client/task-progress.js": "6f32e86ab3e002d7dc32efb6093311863684534b60839f18f24872e11f55ceeb",
-    "client/task-flow.js": "7d46aeac1706f9936c0676f6d7127993ba6caf9aa30e36ceffe39b5312c0d9d6"
-  }
-}

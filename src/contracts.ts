@@ -8,7 +8,7 @@ export const SEVERITIES = ['critical', 'high', 'medium', 'low'] as const
 
 const str = (description?: string): JsonSchemaObject => ({ type: 'string', ...(description === undefined ? {} : { description }) })
 const num = (): JsonSchemaObject => ({ type: 'number' })
-const oneOf = (values: readonly string[]): JsonSchemaObject => ({ type: 'string', enum: values })
+const oneOf = (values: readonly string[], description?: string): JsonSchemaObject => ({ type: 'string', enum: values, ...(description === undefined ? {} : { description }) })
 const strList = (description?: string): JsonSchemaObject => ({ type: 'array', items: { type: 'string' }, ...(description === undefined ? {} : { description }) })
 const listOf = (items: JsonSchemaObject): JsonSchemaObject => ({ type: 'array', items })
 const obj = (properties: Record<string, JsonSchemaObject>, required: string[]): JsonSchemaObject =>
@@ -38,7 +38,7 @@ const SCHEMAS: Readonly<Record<DelegableRoleId, JsonSchemaObject>> = {
     definitions: strList(),
     invariants: strList(),
     claims: listOf(obj({ statement: str(), status: oneOf(['proved', 'refuted', 'unverified']), proofOrCounterexample: str(),
-      evidenceType: oneOf(['proof', 'counterexample', 'numerical_checked'])
+      evidenceType: oneOf(['proof', 'counterexample', 'numerical_checked'], 'proved 结论标 proof（演绎证明）；有限或数值检查标 numerical_checked 且不得标 proved；反驳标 counterexample。验算门禁只认 proof')
     }, ['statement', 'status'])),
     complexity: str(),
     numericError: str(),

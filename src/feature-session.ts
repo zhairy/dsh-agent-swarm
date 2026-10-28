@@ -603,8 +603,7 @@ export const createFeatureSession = async (input: {
     const mode = task.workflowDefinition?.mode ?? 'standard'
     const limits = {
       maxDelegations: config.execution.maxCalls || (bounded ? ({ quick: 6, standard: 16, algorithm: 20 })[mode] : 0),
-      maxMathCalls: config.math.maxCallsPerTask, maxMathWorkUnits: config.math.maxWorkUnitsPerTask,
-      maxTokens: config.execution.maxTokens, maxCostUsd: config.execution.maxCostUsd
+      maxMathCalls: config.math.maxCallsPerTask, maxMathWorkUnits: config.math.maxWorkUnitsPerTask
     }
     const signature = getCanonicalJson(limits)
     if (existing !== undefined && budgetLimits.get(task.taskId) === signature) return existing
@@ -654,7 +653,12 @@ export const createFeatureSession = async (input: {
   }
   const promotionLeases = createWorkspaceLeaseManager()
   const activePromotions = new Set<string>()
-  const authorizations = createAuthorizationRepository(store, { now: input.now })
+  const authorizations = createAuthorizationRepository(store, { now: input.now,
+    // 验收凭证绑定任务及 '@root' 的决定集合：回收只允许不改变任何现有凭证摘要的终态决定。
+    canReclaim: (decision) => {
+      const bound = input.tasks.getTasks().filter((task) => task.acceptance?.verificationReceipt !== undefined)
+      return decision.questionBinding.taskId === '@root' ? bound.length === 0 : !bound.some((task) => task.taskId === decision.questionBinding.taskId)
+    } })
   const experiences = createExperienceRepository(store, {
     now: input.now,
     verifyReview: async (entry, supplied) => {

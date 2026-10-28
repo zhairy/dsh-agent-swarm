@@ -36,10 +36,15 @@ export interface CheckpointInfo {
   progress?: string
 }
 
-const normalizePath = (path: string): string => path.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '')
+/** '.'、'./' 与 '/' 都表示任务根目录；其余路径去掉前缀 './' 与末尾 '/'。 */
+const normalizePath = (path: string): string => {
+  const value = path.replace(/\\/g, '/')
+  if (value === '' || value === '.' || value === './' || value === '/') return ''
+  return value.replace(/(?:^\.\/)+/, '').replace(/\/+$/, '')
+}
 const pathAllowed = (path: string, allowed: readonly string[]): boolean => {
   const candidate = normalizePath(path)
-  return !candidate.split('/').includes('..') && allowed.some((item) => { const base = normalizePath(item); return base === '.' || candidate === base || candidate.startsWith(`${base}/`) })
+  return !candidate.split('/').includes('..') && allowed.some((item) => { const base = normalizePath(item); return base === '' || candidate === base || candidate.startsWith(`${base}/`) })
 }
 
 /** 委派边界的五项短差量，不把底层工具调用变成长反思轮。 */

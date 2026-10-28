@@ -200,30 +200,6 @@ export interface EvolutionGovernance {
   updatedAt: number
 }
 
-export interface TaskEvolutionView {
-  schemaVersion: 1
-  revision: number
-  phase: EvolutionPhase
-  binding: {
-    rootSessionId: string
-    taskId: string
-    cardRevision: number
-    workflowRevision: number
-    requestRevision: number
-  }
-  candidate: {
-    id: string
-    lifecycle: 'candidate' | 'validated' | 'deprecated'
-    digest?: string
-  }
-  evaluation: EvolutionEvaluationState
-  shadow: EvolutionShadowState
-  canary: EvolutionCanaryState
-  revoke: EvolutionRevokeState
-  release?: EvolutionReleaseRef
-  updatedAt: number
-}
-
 export type EvolutionGovernanceEvent =
   | { type: 'begin-evaluation'; traceDigest: string; baselineDigest: string; candidateDigest: string }
   | { type: 'record-evaluation'; result: EvolutionEvaluationResult }
@@ -376,9 +352,10 @@ const getMetrics = (groups: readonly EvolutionReplayGroup[], decisions: readonly
 }
 
 const replay = (trace: EvolutionReplayTrace, policy: EvolutionDecisionPolicy): EvolutionDecision[] => {
-  const hits = new Map<string, number>()
   const decisions: EvolutionDecision[] = []
   for (const group of trace.groups) {
+    // 每组是独立谱系，与运行时按谱系计数一致；跨组共享计数会把独立样本误判为重复。
+    const hits = new Map<string, number>()
     for (const step of group.steps) {
       if (step.waitHandle?.state === 'open' && policy.respectOpenWait) { decisions.push('wait'); continue }
       if (step.userResume === true || (step.novelEvidence && policy.resetOnNewEvidence)) hits.delete(step.projectionDigest)
@@ -664,26 +641,6 @@ export const getEvolutionCanaryScopeDigest = (scope: EvolutionCanaryScope, artif
   rootSessionId: scope.rootSessionId, workspaceId: scope.workspaceId, taskId: scope.taskId, lineageId: scope.lineageId,
   artifactSha256, policyVersion: EVOLUTION_POLICY_VERSION
 })
-
-export const buildTaskEvolutionView = (input: {
-  id: string
-  status: 'candidate' | 'validated' | 'deprecated'
-  governance: EvolutionGovernance
-  source: { taskId: string }
-}, task: { sessionId: string; taskId: string; cardRevision?: number; workflowRevision?: number; requestRevision?: number }): TaskEvolutionView => {
-  if (!ValidateEvolutionGovernance(input.governance) || input.source.taskId !== task.taskId) throw new Error('Invalid task evolution binding')
-  return {
-    schemaVersion: 1, revision: input.governance.revision, phase: input.governance.phase,
-    binding: { rootSessionId: task.sessionId, taskId: task.taskId, cardRevision: task.cardRevision ?? 1,
-      workflowRevision: task.workflowRevision ?? 1, requestRevision: task.requestRevision ?? 1 },
-    candidate: { id: input.id, lifecycle: input.status,
-      ...(input.governance.evaluation.candidateDigest === undefined ? {} : { digest: input.governance.evaluation.candidateDigest }) },
-    evaluation: clone(input.governance.evaluation), shadow: clone(input.governance.shadow),
-    canary: clone(input.governance.canary), revoke: clone(input.governance.revoke),
-    ...(input.governance.release === undefined ? {} : { release: clone(input.governance.release) }),
-    updatedAt: input.governance.updatedAt
-  }
-}
 
 /** Restart cannot infer that an old process's in-flight evaluation/Canary is safe. */
 export const recoverEvolutionGovernance = (governance: EvolutionGovernance, at: number): EvolutionGovernance => {

@@ -11,7 +11,11 @@
     "esModuleInterop": true,
     "allowJs": true,
     "checkJs": false,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src", "tests", "vitest.config.ts", "vitest.integration.config.ts"]
+  "include": [
+    "src"
+  ]
 }

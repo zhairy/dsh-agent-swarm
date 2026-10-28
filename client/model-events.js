@@ -101,7 +101,8 @@ const modelCallDefinition = {
     // 分页或压缩窗口可能先看到隐藏占位，再看到没有请求头的 assistant 消息。
     // 同一路由沿用上一条已观测强度，避免把“缺少窗口起点”误画成模型切换。
     const effort = headerEffort ?? (previous?.provider === route.provider && previous?.model === route.model ? previous.reasoningEffort : undefined)
-    const sameRoute = previous !== undefined && previous.provider === route.provider && previous.model === route.model && previous.reasoningEffort === effort
+    const sameModel = previous !== undefined && previous.provider === route.provider && previous.model === route.model
+    const sameEffort = previous !== undefined && previous.reasoningEffort === effort
     const sameTurn = previous !== undefined && previous.turn === turn
     const location = match.location
     return {
@@ -113,9 +114,10 @@ const modelCallDefinition = {
       source: match.event.type === 'assistant/attempt' ? 'request-header-attempt' : 'assistant-message',
       failedAttempt: match.event.type === 'assistant/attempt',
       ...(effort === undefined ? {} : { reasoningEffort: effort }),
-      repeat: sameRoute && sameTurn,
-      switched: sameTurn && !sameRoute,
-      ...(sameTurn && !sameRoute ? { from: { provider: previous.provider, model: previous.model } } : {}),
+      repeat: sameModel && sameEffort && sameTurn,
+      switched: sameTurn && !sameModel,
+      effortChanged: sameTurn && sameModel && !sameEffort,
+      ...(sameTurn && !sameModel ? { from: { provider: previous.provider, model: previous.model } } : {}),
       ...(marker?.swarm === undefined ? {} : { swarm: marker.swarm }),
       anchorSeq: location?.kind === 'step' ? (location.step.start?.seq ?? match.event.seq) : match.event.seq
     }

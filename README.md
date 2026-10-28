@@ -2,8 +2,6 @@
 
 [中文](#中文) · [English](#english)
 
-![Model call lines in the chat and the model badge in the session header](assets/screenshots/model-calls.png)
-
 ---
 
 ## 中文
@@ -13,16 +11,14 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 适配 DSH **0.2.x**（`>=0.2.0-rc.2 <0.3.0`，推荐 0.2.1-rc.3）与 Node.js 22.12 及以上
 - 新建会话选「百工模式」即可使用；Jev API key 可选
 
-### 3.1.6 的变化
+### 3.1.7 的变化
 
-- 发布包只保留插件运行文件、用户文档和维护脚本，明确排除 PRD、实施计划、内部证据、源码与测试；打包检查会拒绝这些内容。
-- Mermaid 升级到 12.2.0；Node 侧解析器解析到 DOMPurify 3.4.17 与 KaTeX 0.18.10，浏览器侧预打包资源仍内嵌 DOMPurify 3.4.12，运行时以 `strict`、关闭 HTML 标签和 SVG 白名单复核降低风险。解析器审核版本直接来自实际安装依赖，生产依赖审计为零漏洞。
-- 一次性专家结束后会释放工具作用域、提示和就绪状态等进程内资源；普通完成记录与副作用复核记录分别受硬上限保护，迟到工具继续被拒绝。
-- 任务终结时只清理所属根会话的控制记录，并为删除最后一条记录显式持久化空快照；状态查询改用不生成六图的紧凑投影。
-- 任务进度读取在传输结算后释放容量，连接重建遗留的不合作请求也受有界保护；关闭模型面板、隐藏页面和模型目录无响应不会留下永久忙状态。
-- 连接重建后的迟到保存结果不会清空新草稿、覆盖 Jev 密钥输入或让保存状态卡住。
-- 修复 ESM 宿主中的 Mermaid Worker 入口与初始化失败重试；增量状态的段字节数按段缓存，重复容量检查避免反复遍历未变分片。
-- 发布同时产出版本化 tarball 与稳定 `dsh-agent-swarm.tgz` 别名，安装说明只引用实际存在的资产和源码仓库专用命令。
+- 本版是审计与稳定性版本：修复门禁、状态恢复、授权等待、路由恢复与 Jev 端点的正确性问题，并移除从未接入运行时的进化治理任务视图与只读面板。
+- 验算门禁只认标注 `proof` 的已证实结论；复核里任何失败命令都会否决之前的通过；性能验收只接受最后一次编辑之后的最新测量，验收复评读取最近的委派。
+- 状态恢复会丢弃日志末尾未确认的半条记录；授权准入按需释放、已答复的旧决定按需回收，critical 结算失败会在下一次进入时受控对账；长任务的在途等待不再累加到上限而把任务判为耗尽。
+- 所有 Jev 直通工具发送前替换常见密钥格式，复评脱敏改为线性匹配并整体替换认证方案与组合凭据；非 https（本机回环除外）的 baseUrl 会被拒绝；`approvals=deny` 覆盖写入或命令时，原生 Codex/Claude 委派改走 API 并记录原因。
+- 控制面板轮询不再清掉失败提示，推理强度变化不再误报为切换模型；移除不可用的 `maxTokens` / `maxCostUsd` 配置。
+- 公开仓库 main 恢复“仅插件”形态；3.1.6 的全部修复已并入本版（3.1.6 未单独创建 GitHub Release）。
 
 ### 3.1.3 的变化
 
@@ -130,17 +126,14 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 
 ### 开发（仅源码仓库）
 
-本节命令面向源码仓库。预构建 npm 包提供运行时文件、使用文档与维护工具，不包含源码构建或测试环境。
+公开源码树包含插件源码、构建脚本和用户文档，不附维护测试、沙箱或同步脚本。
 
 | 命令 | 作用 |
 |---|---|
 | `npm run build` | 编译 `src/` 到 `lib/` 并生成浏览器端 bundle |
-| `npm run typecheck` | 类型检查（含测试） |
-| `npm test` / `npm run coverage` | 单元测试 / 覆盖率 |
-| `npm run test:integration` | 在 `.sandbox/` 安装真实 DSH，用 mock LLM 跑端到端场景 |
+| `npm run typecheck` | 类型检查（仅 `src/`） |
 | `npm run gen:presets -- --dsh "$(npm root -g)/@deepseek-ai/dsh/node_modules"` | 以 DSH 的 standard 预设为底重新生成 13 个预设 |
 | `npm run doctor -- --profile <p>` | 只读检查本机环境（不输出密钥） |
-| `npm run sync-dsh -- --version <x>` | 适配新版 DSH：重新生成预设并跑全部测试 |
 | `npm run pack:release` | 构建、校验入口依赖闭包并打包发布物 |
 
 升级、回退与卸载见 [docs/升级与回退.md](docs/升级与回退.md)。
@@ -158,16 +151,14 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 - Works with DSH **0.2.x** (`>=0.2.0-rc.2 <0.3.0`, 0.2.1-rc.3 recommended) on Node.js 22.12 or newer
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
 
-### What's new in 3.1.6
+### What's new in 3.1.7
 
-- Release tarballs now contain runtime files, user documentation and maintenance scripts only; the pack guard rejects PRDs, plans, internal evidence, source and tests.
-- Mermaid is updated to 12.2.0. The Node-side parser resolves DOMPurify 3.4.17 and KaTeX 0.18.10; Mermaid's browser prebundle still embeds DOMPurify 3.4.12, so rendering uses `strict`, disabled HTML labels and SVG allowlist checks. Review records read the installed parser version, and the production dependency audit is clean.
-- Completed one-shot experts release tool scopes, prompts and readiness state; ordinary settled controls and side-effect-review records each have hard bounds, and late tool calls remain denied.
-- Terminal tasks release only controls owned by the matching root session and explicitly persist an empty snapshot when the final record is removed. Status queries use a compact projection without generating diagrams.
-- Task-view reads release capacity after transport settlement, and uncancellable requests from replaced connections stay inside a bounded set. Model-panel close, hidden-page polling and stalled catalog reads no longer leave permanent busy or loading states.
-- Late saves from a replaced connection cannot clear new drafts, overwrite a new Jev key input or leave saving stuck.
-- The Mermaid Worker parser entry now works under an ESM host and initialization failures can retry. Segment byte sizes are cached for incremental state checks.
-- Releases include both the versioned tarball and stable `dsh-agent-swarm.tgz` alias; installation docs reference assets that actually exist and mark source-repository-only commands.
+- This is an audit and stability release: it fixes correctness issues in gates, state recovery, authorization waits, route recovery and the Jev endpoint, and removes the never-wired evolution-governance task view and read-only panel.
+- The verification gate only accepts proved claims marked `proof`, any failed command in a review vetoes earlier passes, performance acceptance only accepts the latest measurement after the last edit, and acceptance review reads the most recent delegations.
+- Recovery discards an unconfirmed half-written journal tail; authorization admissions are released and old answered decisions reclaimed as needed, successive in-flight waits in long tasks no longer exhaust the task, and a critical settlement failure is reconciled on the next entry.
+- Every Jev direct tool replaces common secret formats before sending, review redaction matches in linear time and replaces auth schemes and combined credentials as a whole, a non-https `baseUrl` (loopback excepted) is rejected, and under `approvals=deny` for writes or commands native Codex/Claude delegations use the API tool chain with the reason recorded.
+- Control-panel polling no longer clears failure notices, a reasoning-effort change is not reported as a model switch, and the unusable `maxTokens` / `maxCostUsd` settings are removed.
+- Public `main` returns to a plugin-only tree; all 3.1.6 fixes are included here (3.1.6 did not get a separate GitHub Release).
 
 ### What's new in 3.1.3
 
@@ -257,17 +248,14 @@ Seven embedded Jev judgment tools (`jev_check`, `jev_classify`, `jev_score`, `je
 
 ### Development (source checkout only)
 
-These commands target a source checkout. The prebuilt npm package includes runtime files, usage documentation and maintenance tools, not a source-build or test environment.
+The public source tree ships the plugin sources, build scripts and user documentation; it does not include maintenance tests, the sandbox or the sync scripts.
 
 | Command | Purpose |
 |---|---|
 | `npm run build` | compile `src/` to `lib/` and build the browser bundle |
-| `npm run typecheck` | type-check sources and tests |
-| `npm test` / `npm run coverage` | unit tests / coverage |
-| `npm run test:integration` | install a real DSH under `.sandbox/` and run end-to-end scenarios against a mock LLM |
+| `npm run typecheck` | type-check `src/` only |
 | `npm run gen:presets -- --dsh "$(npm root -g)/@deepseek-ai/dsh/node_modules"` | regenerate the 13 presets from DSH's standard preset |
 | `npm run doctor -- --profile <p>` | read-only environment check (never prints secrets) |
-| `npm run sync-dsh -- --version <x>` | adapt to a new DSH version: regenerate presets and run all tests |
 | `npm run pack:release` | build, verify the entry dependency closure and pack the release tarball |
 
 Upgrade, rollback and removal: [docs/升级与回退.md](docs/升级与回退.md) (Chinese).

@@ -3,7 +3,6 @@ const EMPTY = Object.freeze({ value: null, status: 'idle', error: null, updatedA
 const HISTORICAL = Object.freeze({ value: null, status: 'historical', error: null, updatedAt: null })
 const CAPACITY = Object.freeze({ value: null, status: 'unavailable', error: '任务视图缓存已满；旧读取尚未结束。请等待传输结算后刷新，必要时重新加载页面。', updatedAt: null })
 const sharedStores = new WeakMap()
-const ACTIVE_EVOLUTION_PHASES = new Set(['shadow', 'canary', 'reconcile-required'])
 const ACTIVE_NODE_STATUSES = new Set(['ready', 'running'])
 const isTerminal = (value) => {
   const settledAcceptance = value?.acceptance?.status === 'accepted' || value?.acceptance?.decision === 'incomplete'
@@ -12,17 +11,19 @@ const isTerminal = (value) => {
   const activeDelegations = Array.isArray(value?.delegations) && value.delegations.some((record) =>
     ['queued', 'running'].includes(record?.status) || record?.finalization === 'processing')
   return settledAcceptance && !activeNodes && !activeDelegations
-    && value?.blockedRecovery?.active !== true && !ACTIVE_EVOLUTION_PHASES.has(value?.evolution?.phase)
+    && value?.blockedRecovery?.active !== true
 }
 const errorOf = (error) => error instanceof Error ? error : new Error(String(error))
-const isDenied = (error) => /(?:unauthorized|forbidden|permission.denied|access.denied|\b40[13]\b)/i.test(`${error?.code ?? ''} ${error?.message ?? ''}`)
+// 只认真正的鉴权失败：宿主传输错误写作 “transport failure …: HTTP 401”；消息里裸露的 401/403 可能是任务号（T-401）。
+const isDenied = (error) => /(?:unauthorized|forbidden|permission[-_. ]denied|access[-_. ]denied|\bHTTP\s+40[13]\b)/i.test(`${error?.code ?? ''} ${error?.message ?? ''}`)
+  || [401, 403].includes(error?.status ?? error?.statusCode)
 const REVISION_KEYS = ['cardRevision', 'workflowRevision', 'requestRevision']
 const getBinding = (value) => value !== null && value !== undefined && REVISION_KEYS.every((key) => Number.isSafeInteger(value[key]) && value[key] >= 1)
-  ? { ...Object.fromEntries(REVISION_KEYS.map((key) => [key, value[key]])), evolutionRevision: Number.isSafeInteger(value.evolutionRevision) && value.evolutionRevision >= 0 ? value.evolutionRevision : 0 }
+  ? Object.fromEntries(REVISION_KEYS.map((key) => [key, value[key]]))
   : undefined
-const isBehindBinding = (value, binding) => binding !== undefined && (getBinding(value) === undefined || [...REVISION_KEYS, 'evolutionRevision'].some((key) => (value[key] ?? 0) < binding[key]))
+const isBehindBinding = (value, binding) => binding !== undefined && (getBinding(value) === undefined || REVISION_KEYS.some((key) => (value[key] ?? 0) < binding[key]))
 const mergeBinding = (previous, next) => previous === undefined ? next : next === undefined ? previous
-  : Object.fromEntries([...REVISION_KEYS, 'evolutionRevision'].map((key) => [key, Math.max(previous[key], next[key])]))
+  : Object.fromEntries(REVISION_KEYS.map((key) => [key, Math.max(previous[key], next[key])]))
 
 const createTaskViewStore = ({ request, validateTask = (value) => value, generationSource, document: document_ = globalThis.document, intervalMs = 5000, timeoutMs = 15000, maxEntries = 8, now = Date.now }) => {
   const entries = new Map()
@@ -90,7 +91,7 @@ const createTaskViewStore = ({ request, validateTask = (value) => value, generat
   }
   const applyMinimumBinding = (entry, binding) => {
     const next = mergeBinding(entry.minimumBinding, binding)
-    if (next === undefined || (entry.minimumBinding !== undefined && [...REVISION_KEYS, 'evolutionRevision'].every((key) => next[key] === entry.minimumBinding[key]))) return
+    if (next === undefined || (entry.minimumBinding !== undefined && REVISION_KEYS.every((key) => next[key] === entry.minimumBinding[key]))) return
     entry.minimumBinding = next
     if (!isBehindBinding(entry.snapshot.value, next)) return
     emit(entry, { status: 'stale', error: '任务目录已更新，等待当前版本的正文快照。' })

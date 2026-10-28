@@ -365,10 +365,10 @@ const getPlanningErrors = (draft) => {
 const buildPlanning = (draft, layers) => {
   if (Object.keys(getPlanningErrors(draft)).length > 0) return undefined
   const review = { enabled: draft.enabled === true, requireJev: draft.requireJev === true, maxFixRounds: toNumber(draft.maxFixRounds), reviewAbove: toNumber(draft.reviewAbove), timeoutMs: toNumber(draft.timeoutMs) }
-  const kept = (raw, managed) => Object.fromEntries(Object.entries(asRecord(raw)).filter(([key, item]) => !managed.includes(key) && item !== WORKFLOW_DEFAULTS[key]))
+  const kept = (raw, managed, defaults) => Object.fromEntries(Object.entries(asRecord(raw)).filter(([key, item]) => !managed.includes(key) && item !== defaults[key]))
   return {
-    workflow: { ...kept(layers.workflow, ['mode']), ...(draft.workflowMode === PLANNING_DEFAULTS.workflowMode ? {} : { mode: draft.workflowMode }) },
-    planningReview: { ...kept(layers.planningReview, Object.keys(review)), ...Object.fromEntries(Object.entries(review).filter(([key, item]) => item !== PLANNING_DEFAULTS[key])) }
+    workflow: { ...kept(layers.workflow, ['mode'], WORKFLOW_DEFAULTS), ...(draft.workflowMode === PLANNING_DEFAULTS.workflowMode ? {} : { mode: draft.workflowMode }) },
+    planningReview: { ...kept(layers.planningReview, Object.keys(review), PLANNING_DEFAULTS), ...Object.fromEntries(Object.entries(review).filter(([key, item]) => item !== PLANNING_DEFAULTS[key])) }
   }
 }
 const samePlanning = (a, b) => Object.keys(PLANNING_DEFAULTS).every((key) => String(a[key]) === String(b[key]))

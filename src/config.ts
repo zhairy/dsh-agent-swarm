@@ -118,10 +118,8 @@ export const Config = Schema.object({
   }).default({}).description('规划审核：独立审核目标、流程设计与 Mermaid 代码；强制模式下建卡后自动进行，观察模式由天枢按需调用').volatile(),
   execution: Schema.object({
     profile: Schema.union(['legacy', 'bounded']).default('legacy'),
-    maxCalls: Schema.natural().default(0),
-    maxTokens: Schema.natural().default(0),
-    maxCostUsd: Schema.number().default(0)
-  }).default({}).description('生成模型执行预算；0 表示不限，Jev 完全排除').volatile(),
+    maxCalls: Schema.natural().default(0)
+  }).default({}).description('生成模型执行预算：按委派次数计数；legacy 模式 maxCalls=0 不限，bounded 模式 0 使用 quick/standard/algorithm 默认上限 6/16/20；Jev 完全排除').volatile(),
   recovery: Schema.object({
     maxTransientRetries: Schema.natural().default(1),
     maxLogicalAttempts: Schema.natural().default(8),
@@ -245,7 +243,7 @@ export interface SwarmConfigInfo {
   ledgerDir: string
   workflow: { mode: 'off' | 'advisory' | 'enforced'; maxNodes: number; maxEdges: number }
   planningReview: { enabled: boolean; requireJev: boolean; maxFixRounds: number; reviewAbove: number; timeoutMs: number }
-  execution: { profile: 'legacy' | 'bounded'; maxCalls: number; maxTokens: number; maxCostUsd: number }
+  execution: { profile: 'legacy' | 'bounded'; maxCalls: number }
   recovery: { maxTransientRetries: number; maxLogicalAttempts: number; maxShortRetryDelayMs: number; maxTransientWaitMs: number }
   persistence: { enabled: boolean; directory: string; maxStateBytes: number }
   messageBus: { enabled: boolean; maxPending: number }
@@ -255,7 +253,7 @@ export interface SwarmConfigInfo {
 
 export const DEFAULT_WORKFLOW_CONFIG: SwarmConfigInfo['workflow'] = { mode: 'advisory', maxNodes: 32, maxEdges: 64 }
 export const DEFAULT_PLANNING_REVIEW: SwarmConfigInfo['planningReview'] = { enabled: true, requireJev: false, maxFixRounds: 2, reviewAbove: 0.8, timeoutMs: 0 }
-export const DEFAULT_EXECUTION_CONFIG: SwarmConfigInfo['execution'] = { profile: 'legacy', maxCalls: 0, maxTokens: 0, maxCostUsd: 0 }
+export const DEFAULT_EXECUTION_CONFIG: SwarmConfigInfo['execution'] = { profile: 'legacy', maxCalls: 0 }
 export const DEFAULT_RECOVERY_CONFIG: SwarmConfigInfo['recovery'] = { maxTransientRetries: 1, maxLogicalAttempts: 8, maxShortRetryDelayMs: 2000, maxTransientWaitMs: 5000 }
 
 export const ROUTE_KEYS: readonly RouteKey[] = Object.keys(DEFAULT_ROUTE_CHAINS) as RouteKey[]

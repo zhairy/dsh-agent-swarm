@@ -90,7 +90,6 @@ import type { GoalsLike, UserQuestionsLike } from './host-contract.js'
 import { createAuthorizationRuntime, type AuthorizationRuntimeContext } from './authorization-runtime.js'
 import { getTaskRuntimeLineage } from './feature-session.js'
 import { isAuthorizationWaiting } from './authorization-wait.js'
-import { buildTaskEvolutionView, type TaskEvolutionView } from './evolution-governance.js'
 
 export interface LoggerLike {
   info: (message: string) => void
@@ -433,14 +432,6 @@ const getDelegationView = (d: DelegationRecord, verbose: boolean) => ({
   }
 }
 
-  const getTaskEvolution = (session: SessionStateInfo, task: TaskRecord): { revision: number; evolution: TaskEvolutionView | null } => {
-    try {
-      const entry = session.features?.experiences.listForTask(task.taskId).find(candidate => candidate.governance !== undefined)
-      if (entry?.governance === undefined) return { revision: 0, evolution: null }
-      return { revision: entry.governance.revision, evolution: buildTaskEvolutionView({ ...entry, governance: entry.governance }, task) }
-    } catch { return { revision: 0, evolution: null } }
-  }
-
 const getStatusResult = (tasks: ReturnType<typeof getTaskView>[], session: SessionStateInfo, diagnostics: string[]) => ({
   tasks,
   roleSuggestions: [] as ReturnType<typeof suggestRolesByCapabilities>,
@@ -545,7 +536,12 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       getAgentControls: () => agentControl.Export(session.sessionId).filter((record) => record.persistent),
       getRuntime: () => ({ rootEditAt: session.rootEditAt, taskSequence: session.taskSequence,
         counters: { ...session.counters }, rootUpgradeExplicit: [...session.rootUpgradeExplicit] })
+    }).catch((error) => {
+      // 初始化尚未产出 FeatureSession 的瞬时失败可以重试；失败结果不能永久缓存。
+      session.featuresPromise = undefined
+      throw error
     }).then(async (features) => {
+      let mutated = false
       try {
       routeState.RestoreHealth((await features.readRouteHealth()) ?? [])
       const runtime = features.getRestoredRuntime()
@@ -602,7 +598,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           explicit: record.continuationInput?.upgrade === true, role: record.role, ...(record.mode === undefined ? {} : { mode: record.mode }) })
         return { control, record, chain: reasons.length > 0 && configured.upgrade !== undefined ? getUpgradedChain(configured.upgrade.chain, configured.chain) : configured.chain }
       })
-      if (restoredControls.length > 0) agentControl.Restore(restoredControls, session.sessionId)
+      if (restoredControls.length > 0) { mutated = true; agentControl.Restore(restoredControls, session.sessionId) }
       for (const { control, record, chain } of restoredRoutes) {
         // Restore the policy fence before any cold child can dispatch. This does
         // not activate the Host child or authorize a new delegation; normal
@@ -621,6 +617,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       return features
       } catch (error) {
         await features.dispose().catch(() => undefined)
+        // 已经写入控制/路由内存态时不能直接重试；未发生变更的失败允许下次重新初始化。
+        if (!mutated) session.featuresPromise = undefined
         throw error
       }
     })
@@ -1922,11 +1920,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const tasks = (typeof input.task_id === 'string' ? [getTaskOrThrow(session, input.task_id)] : session.store.getTasks())
       .map((task) => deriveReconciledTask(session, deriveIntentRefresh(task, exec.agent)))
     const views = tasks.map((task) => {
-      const evolution = getTaskEvolution(session, task)
       return {
         ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null, getTaskOrThrow(session, task.taskId), input.compact !== true),
         runtimeGuard: getRuntimeView(session, task.taskId),
-        evolutionRevision: evolution.revision, evolution: evolution.evolution,
         acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
         stateRefreshRequired: !isTaskVersionCurrent(task, getTaskOrThrow(session, task.taskId)), publishedRevisions: getTaskBinding(getTaskOrThrow(session, task.taskId))
       }
@@ -2541,7 +2537,11 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         runtimeHumanInput.delete(agent.id)
         runtimeLastTool.delete(agent.id)
       }
-      if (event.type === 'turn/end' && (event.data as { reason?: { kind?: string } } | undefined)?.reason?.kind === 'aborted') runtimeWorkHolds.delete(sessionId)
+      if (event.type === 'turn/end' && (event.data as { reason?: { kind?: string } } | undefined)?.reason?.kind === 'aborted') {
+        runtimeWorkHolds.delete(sessionId)
+        // 用户本地中止时宿主不派发请求错误：在这里释放该根会话持有的半开探测，路由不会对其它会话长期不可用。
+        routeState.ReleaseProbe(agent.id)
+      }
     },
     getGuardReason,
     ObserveToolDispatch: (execution) => {
@@ -2606,8 +2606,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       await ensureFeatures(session, root)
       // 浏览器owner通过宿主认证；此处仅返回该已登记根的目录，不遍历其他根或正文。
       return { rootSessionId: sessionId, tasks: session.store.getTasks().map(task => ({
-        title: task.card.title, ...getTaskBinding(task), status: task.acceptance?.status ?? 'pending',
-        evolutionRevision: getTaskEvolution(session, task).revision
+        title: task.card.title, ...getTaskBinding(task), status: task.acceptance?.status ?? 'pending'
       })) }
     }
     ,getTaskViewForRpc: (sessionId, taskId) => {
@@ -2616,9 +2615,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const stored = getTaskOrThrow(session, taskId)
       const task = deriveReconciledTask(session, deriveIntentRefresh(stored, session.rootAgent))
       const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session), routeState.getRecovery(sessionId) ?? null, stored)
-      const evolution = getTaskEvolution(session, task)
       return { ...view,
-        rootSessionId: sessionId, evolutionRevision: evolution.revision, evolution: evolution.evolution,
+        rootSessionId: sessionId,
         runtimeGuard: getRuntimeView(session, taskId),
         acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
         diagrams: { ...view.diagrams, stateRefreshRequired: task !== stored },
