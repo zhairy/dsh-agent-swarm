@@ -1,5 +1,5 @@
 import { deduplicateContextPaths } from './memory.js'
-import { getLanguageInstruction, isOutputLanguage, type OutputLanguage } from './language.js'
+import { RELAXED_LANGUAGE_INSTRUCTION, getLanguageInstruction, isOutputLanguage, type OutputLanguage } from './language.js'
 import { getRoleRoute, type SwarmConfigInfo } from './config.js'
 import { ValidateStructuredOutput, getEvidenceFromOutput, getOutputSchema, type EvidenceItem } from './contracts.js'
 import type { BackendKind, DelegationRecord, DelegationRetryInfo, DelegationSessionInfo, Ledger, RouteAttempt, TaskRecord, TaskStore } from './evidence.js'
@@ -50,6 +50,8 @@ export interface DelegateInput {
   /** Host-only reviewed reference; never exposed by the tool schema. */
   referenceMemory?: string
   languageExplicit?: boolean
+  /** Host-only: the runtime chooses the language policy after each actual model route is resolved. */
+  languageManagedByRuntime?: boolean
   role: DelegableRoleId
   mode?: SuanHengMode
   prompt: string
@@ -183,7 +185,9 @@ export const getTaskBrief = (task: TaskRecord, input: DelegateInput, delegationI
   ].join('\n')
 }
 
-const getVisibleRequest = (input: DelegateInput): string => [input.prompt, getLanguageInstruction(input.language, input.languageExplicit ?? input.language !== undefined), ...(input.referenceMemory ? [input.referenceMemory] : [])].join('\n\n')
+const getVisibleRequest = (input: DelegateInput, suppressDefault = input.languageManagedByRuntime === true): string => [input.prompt,
+  ...(!suppressDefault || (input.languageExplicit ?? input.language !== undefined) ? [getLanguageInstruction(input.language, input.languageExplicit ?? input.language !== undefined)] : []),
+  ...(input.referenceMemory ? [input.referenceMemory] : [])].join('\n\n')
 
 /**
  * 一次性调用的任务说明（宿主提供结构化提交工具），按模型家族组织
@@ -248,12 +252,13 @@ export const getThreadRetryText = (role: DelegableRoleId, failure: { stopReason:
 /** 原生后端（Codex / Claude Code 客户端）对应的提示风格 */
 export const getNativeStyle = (kind: BackendKind): PromptStyle => (kind.startsWith('codex') ? 'gpt' : 'claude')
 
-export const getNativePromptText = (task: TaskRecord, input: DelegateInput, delegationId: string, mode?: SuanHengMode, style: PromptStyle = 'generic'): string =>
+export const getNativePromptText = (task: TaskRecord, input: DelegateInput, delegationId: string, mode?: SuanHengMode, style: PromptStyle = 'generic', relaxed = false): string =>
   [
-    getChildPersona(input.role, mode, style, input.language),
+    getChildPersona(input.role, mode, style, relaxed && !(input.languageExplicit ?? input.language !== undefined) ? null : input.language),
+    ...(relaxed && !(input.languageExplicit ?? input.language !== undefined) ? [RELAXED_LANGUAGE_INSTRUCTION] : []),
     getStyledTaskPrompt({
       brief: getTaskBrief(task, input, delegationId),
-      request: getVisibleRequest(input),
+      request: getVisibleRequest(input, relaxed),
       delivery: ['最后以一个 ```json 代码块输出结果，字段必须符合以下 JSON Schema（不要输出其他 json 代码块）：', JSON.stringify(getOutputSchema(input.role))].join('\n\n')
     }, style)
   ].join('\n\n')
@@ -535,7 +540,8 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     const cwd = getWorkspaceRoot(exec.agent)
     const before = await deps.gitStatus(cwd)
     const promptStyle = getNativeStyle(kind)
-    const text = getNativePromptText(task, input, record.delegationId, input.mode, promptStyle)
+    const relaxed = config.agents.languageExclusions.includes(kind.startsWith('codex') ? 'codex' : 'claude') && input.languageExplicit !== true
+    const text = getNativePromptText(task, input, record.delegationId, input.mode, promptStyle, relaxed)
     let outcome: { run: SubagentRunLike; result: SubagentResultLike }
     let published = false
     try {
@@ -1083,7 +1089,11 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
   const delegate = async (raw: unknown, exec: DelegateExecInfo, session: DelegateSessionInfo): Promise<DelegationRecord> => {
     const parsed = ValidateDelegateInput(raw)
     const errors = parsed.errors
-    const input = parsed.input === undefined ? undefined : { ...parsed.input, language: parsed.input.languageExplicit === false ? deps.getConfig().agents.language : parsed.input.language ?? deps.getConfig().agents.language, languageExplicit: parsed.input.languageExplicit ?? parsed.input.language !== undefined, ...(parsed.input.context_paths === undefined ? {} : { context_paths: deduplicateContextPaths(parsed.input.context_paths) }) }
+    const input = parsed.input === undefined ? undefined : { ...parsed.input, language: parsed.input.languageExplicit === false ? deps.getConfig().agents.language : parsed.input.language ?? deps.getConfig().agents.language, languageExplicit: parsed.input.languageExplicit ?? parsed.input.language !== undefined,
+      // Keep implicit preferences out of durable user messages: a later settings
+      // change or provider fallback must not inherit an obsolete language mandate.
+      languageManagedByRuntime: true,
+      ...(parsed.input.context_paths === undefined ? {} : { context_paths: deduplicateContextPaths(parsed.input.context_paths) }) }
     if (input === undefined) throw new SwarmError('INVALID_ARGS', errors.join('；'))
     const task = exec.admission?.task ?? session.store.getTask(input.task_id)
     if (task === undefined) throw new SwarmError('UNKNOWN_TASK', `未知任务：${input.task_id}。请先用 swarm_status 确认当前会话的任务，再用 swarm_task_card 创建或修订；任务卡按根会话与工作区隔离。`)

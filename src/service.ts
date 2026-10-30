@@ -1622,7 +1622,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
               prompt: [{ type: 'text', text: prompt }], outputSchema: schema, maxDepth: 1,
               agentPreset: getRoleInfo('yu_shi').presetId,
               toolFilter: { allow: allowed }, agentOptions: { provider: route.provider, model: route.model, ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}) },
-              persona: `${PLANNING_REVIEWER_PERSONA}\n${getLanguageInstruction(deps.getConfig().agents.language)}`
+              persona: config.agents.languageExclusions.includes(route.provider) ? PLANNING_REVIEWER_PERSONA : `${PLANNING_REVIEWER_PERSONA}\n${getLanguageInstruction(config.agents.language)}`
             })
             // 启动 API 也可能忽略取消；迟到的 child 不绑定任何任务权限，并主动关闭。
             void started.then((late) => {

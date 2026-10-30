@@ -29,14 +29,15 @@ const EMPTY_SLOT = Object.freeze({ provider: '', model: '', reasoningEffort: '' 
 const NO_UPGRADE = Object.freeze({ enabled: false, chain: [], triggers: [] })
 let settingsControllerSequence = 0
 /** 与宿主 DEFAULT_AGENTS_CONFIG 一致；构建时由 DATA.policy 注入，缺失时用这份兜底 */
-const POLICY_DEFAULTS = Object.freeze({ language: 'zh-CN', session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every', nativeTeamProjection: false, ...(DATA.policy?.defaults ?? {}) })
+const POLICY_DEFAULTS = Object.freeze({ language: 'zh-CN', languageExclusions: [], session: 'auto', repeatAbove: 0.5, sameCategoryAbove: 0.5, maxRetries: 3, retryBackoffMs: 5000, promptStyle: 'auto', networkWaitMs: 600000, rootRecoverMs: 600000, modelCallDisplay: 'every', nativeTeamProjection: false, ...(DATA.policy?.defaults ?? {}) })
 const SESSION_POLICIES = ['auto', 'continuable', 'oneshot']
 const CATALOG_TIMEOUT_MS = 15000
 const PROMPT_STYLES = ['auto', 'claude', 'gpt', 'generic']
 const MODEL_CALL_DISPLAYS = ['every', 'turn']
 const LANGUAGES = ['zh-CN', 'en', 'zh-TW', 'ja', 'ko']
 const LANGUAGE_NAMES = { 'zh-CN': '简体中文', en: 'English', 'zh-TW': '繁體中文', ja: '日本語', ko: '한국어' }
-const POLICY_KEYS = ['language', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffMs', 'promptStyle', 'networkWaitMs', 'rootRecoverMs', 'modelCallDisplay', 'nativeTeamProjection']
+const POLICY_KEYS = ['language', 'languageExclusions', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffMs', 'promptStyle', 'networkWaitMs', 'rootRecoverMs', 'modelCallDisplay', 'nativeTeamProjection']
+const getLanguageExclusions = value => Array.isArray(value) ? [...new Set(value.filter(id => typeof id === 'string' && id.length > 0 && id.length <= 512 && id.trim() === id && !/[\x00-\x1f\x7f]/.test(id)))].slice(0, 128).sort() : []
 /** Jev 密钥的默认凭据引用名（swarm-core 的 jev.apiKeyEnv） */
 const DEFAULT_JEV_REF = 'TYPESAFE_API_KEY'
 const WORKFLOW_MODES = ['off', 'advisory', 'enforced']
@@ -265,6 +266,8 @@ const en = {
 
 Object.assign(zh, { policyLanguage: '默认交付语言', policyLanguageHint: '每轮专家调用生效；本轮明确语言要求优先，JSON 键、代码和证据路径保持原文。语言差异不会触发业务重试。', errLanguage: '请选择支持的交付语言' })
 Object.assign(en, { policyLanguage: 'Default output language', policyLanguageHint: 'Applied on every expert turn. Explicit language requests take precedence. JSON keys, code and evidence paths remain unchanged; language differences never replay work.', errLanguage: 'Select a supported output language' })
+Object.assign(zh, { policyLanguageExclusions: '专家默认语言排除名单', policyLanguageExclusionsHint: '可多选服务商。勾选后，专家过程不注入默认语言要求；按实际调用和回退后的服务商生效。显式任务语言保留，天枢最终汇总仍遵循默认语言。此设置不保证模型内部推理使用英语。', policyLanguageExclusionsEmpty: '模型目录暂不可用，刷新后可选择服务商。已保存的选项仍可取消。', errLanguageExclusions: '请选择有效的服务商，最多 128 项' })
+Object.assign(en, { policyLanguageExclusions: 'Expert language exclusions', policyLanguageExclusionsHint: 'Select providers whose expert turns should use the model default language. Re-evaluated for the actual route after fallback. Explicit task language is preserved; final host summaries follow the default language. Internal reasoning language is not guaranteed.', policyLanguageExclusionsEmpty: 'Refresh the model catalog to select providers. Saved selections can still be removed.', errLanguageExclusions: 'Select valid providers, up to 128' })
 Object.assign(zh, { errRoutePolicy: '路由额度域配置不合法或超限，请在配置中修正后保存', resource_subscription: '订阅', resource_metered_api: '按量 API', resource_judgment_api: '判断 API', resource_unknown: '资源类型未声明' })
 Object.assign(en, { errRoutePolicy: 'Route quota policy is invalid or exceeds limits; repair its configuration before saving', resource_subscription: 'Subscription', resource_metered_api: 'Metered API', resource_judgment_api: 'Judgment API', resource_unknown: 'Resource type unspecified' })
 Object.assign(zh, {
@@ -577,6 +580,7 @@ const getPolicy = (value) => {
   return {
     ...merged,
     language: LANGUAGES.includes(merged.language) ? merged.language : 'zh-CN',
+    languageExclusions: getLanguageExclusions(record.languageExclusions),
     session: SESSION_POLICIES.includes(merged.session) ? merged.session : 'auto',
     promptStyle: PROMPT_STYLES.includes(merged.promptStyle) ? merged.promptStyle : 'auto',
     modelCallDisplay: MODEL_CALL_DISPLAYS.includes(merged.modelCallDisplay) ? merged.modelCallDisplay : 'every',
@@ -598,6 +602,7 @@ const getPolicyErrors = (policy) => {
   const retries = toNumber(policy.maxRetries)
   return {
     language: LANGUAGES.includes(policy.language ?? 'zh-CN') ? undefined : 'errLanguage',
+    languageExclusions: policy.languageExclusions === undefined || (Array.isArray(policy.languageExclusions) && policy.languageExclusions.length <= 128 && getLanguageExclusions(policy.languageExclusions).length === policy.languageExclusions.length) ? undefined : 'errLanguageExclusions',
     repeatAbove: policy.session === 'auto' ? ratio(policy.repeatAbove) : undefined,
     sameCategoryAbove: policy.session === 'oneshot' ? undefined : ratio(policy.sameCategoryAbove),
     maxRetries: Number.isInteger(retries) && retries >= 0 && retries <= 10 ? undefined : 'errRetries',
@@ -608,11 +613,12 @@ const getPolicyErrors = (policy) => {
 }
 
 /** 草稿里的时长字段：重试等待用秒，断网等待与恢复用分钟 */
-const DRAFT_KEYS = ['language', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffSec', 'promptStyle', 'networkWaitMin', 'rootRecoverMin', 'modelCallDisplay', 'nativeTeamProjection']
+const DRAFT_KEYS = ['language', 'languageExclusions', 'session', 'repeatAbove', 'sameCategoryAbove', 'maxRetries', 'retryBackoffSec', 'promptStyle', 'networkWaitMin', 'rootRecoverMin', 'modelCallDisplay', 'nativeTeamProjection']
 
 /** 已保存策略 → 编辑草稿（时长换成秒或分钟） */
 const toPolicyDraft = (policy) => ({
   language: policy.language,
+  languageExclusions: [...policy.languageExclusions],
   session: policy.session,
   repeatAbove: policy.repeatAbove,
   sameCategoryAbove: policy.sameCategoryAbove,
@@ -636,6 +642,7 @@ const buildPolicy = (draft, saved) => {
   const savedPolicy = getPolicy(saved)
   const value = {
     language: LANGUAGES.includes(draft.language) ? draft.language : 'zh-CN',
+    languageExclusions: getLanguageExclusions(draft.languageExclusions),
     session: SESSION_POLICIES.includes(draft.session) ? draft.session : 'auto',
     // Hidden controls must not turn an earlier half-edited value into null/NaN
     // when the selected session policy makes that threshold irrelevant.
@@ -650,10 +657,10 @@ const buildPolicy = (draft, saved) => {
     nativeTeamProjection: draft.nativeTeamProjection === true
   }
   const kept = Object.fromEntries(Object.entries(asRecord(saved)).filter(([key]) => !POLICY_KEYS.includes(key)))
-  return { ...kept, ...Object.fromEntries(Object.entries(value).filter(([key, item]) => item !== POLICY_DEFAULTS[key])) }
+  return { ...kept, ...Object.fromEntries(Object.entries(value).filter(([key, item]) => JSON.stringify(item) !== JSON.stringify(POLICY_DEFAULTS[key]))) }
 }
 
-const samePolicy = (a, b) => DRAFT_KEYS.every((key) => String(a[key]) === String(b[key]))
+const samePolicy = (a, b) => DRAFT_KEYS.every((key) => key === 'languageExclusions' ? JSON.stringify(getLanguageExclusions(a[key])) === JSON.stringify(getLanguageExclusions(b[key])) : String(a[key]) === String(b[key]))
 
 // ───────────────────────── 控制器 ─────────────────────────
 
@@ -1213,7 +1220,7 @@ class SwarmAgentsController {
     const policyErrors = this.policyDraft === undefined ? {} : getPolicyErrors(this.policyDraft)
     const policy = {
       value: policyValue,
-      custom: POLICY_KEYS.some((key) => savedPolicy[key] !== POLICY_DEFAULTS[key]),
+      custom: POLICY_KEYS.some((key) => JSON.stringify(savedPolicy[key]) !== JSON.stringify(POLICY_DEFAULTS[key])),
       dirty: this.policyDraft !== undefined,
       errors: policyErrors
     }
@@ -1738,9 +1745,10 @@ function PlanningCard ({ t, planning, editable, controller }) {
 }
 
 /** 专家会话与重试策略 */
-function PolicyCard ({ t, policy, editable, controller }) {
+function PolicyCard ({ t, policy, groups, editable, controller }) {
   const value = policy.value
   const auto = value.session === 'auto'
+  const providers = [...new Map([...groups.map(group => [group.id, group.name === group.id ? group.id : `${group.name}（${group.id}）`]), ...value.languageExclusions.filter(id => !groups.some(group => group.id === id)).map(id => [id, id])]).entries()]
   return h('div', { style: style.card, 'data-swarm-policy': 'agents' },
     h('div', { style: style.cardHead },
       h('span', { style: style.name }, t('policyTitle')),
@@ -1754,6 +1762,12 @@ function PolicyCard ({ t, policy, editable, controller }) {
     h('p', { style: style.note }, t('policyDescription')),
     h('div', { style: style.policyGrid },
       h('label', { style: style.field }, h('span', { style: style.fieldLabel }, t('policyLanguage')), h('select', { style: style.select, value: value.language, disabled: !editable, 'aria-label': t('policyLanguage'), onChange: event => controller.setPolicy({ language: event.target.value }) }, ...LANGUAGES.map(language => h('option', { key: language, value: language }, LANGUAGE_NAMES[language]))), h('span', { style: style.hint }, t('policyLanguageHint'))),
+      h('fieldset', { style: { ...style.field, margin: 0, minWidth: 0, border: 0, padding: 0 }, 'aria-label': t('policyLanguageExclusions') },
+        h('legend', { style: style.fieldLabel }, t('policyLanguageExclusions')),
+        h('span', { style: style.hint }, t('policyLanguageExclusionsHint')),
+        ...providers.map(([id, label]) => h('label', { key: id }, h('input', { type: 'checkbox', checked: value.languageExclusions.includes(id), disabled: !editable, 'aria-label': `${t('policyLanguageExclusions')}：${label}`, onChange: event => controller.setPolicy({ languageExclusions: getLanguageExclusions(event.target.checked ? [...value.languageExclusions, id] : value.languageExclusions.filter(item => item !== id)) }) }), label)),
+        providers.length === 0 ? h('span', { style: style.hint }, t('policyLanguageExclusionsEmpty')) : null,
+        policy.errors.languageExclusions === undefined ? null : h('span', { role: 'alert', style: style.fieldError }, t(policy.errors.languageExclusions))),
       h('label', { style: style.field },
         h('span', { style: style.fieldLabel }, t('policySession')),
         h('select', {
@@ -1876,7 +1890,7 @@ function SettingsOverview ({ state, t, jev }) {
 const getSettingsPanel = (id, { state, t, jev, editable, controller }) => {
   if (id === 'overview') return h(SettingsOverview, { state, t, jev })
   if (id === 'models') return state.rows.map(row => h(AgentCard, { key: row.key, t, row, groups: state.catalog.groups, editable, controller }))
-  if (id === 'execution') return h(PolicyCard, { t, policy: state.policy, editable, controller })
+  if (id === 'execution') return h(PolicyCard, { t, policy: state.policy, groups: state.catalog.groups, editable, controller })
   if (id === 'guards') return h(React.Fragment, null, h(PlanningCard, { t, planning: state.planning, editable, controller }), h(ApprovalsCard, { t, approvals: state.approvals, editable, controller }))
   return h(MathCard, { t, math: state.math, editable, controller })
 }
@@ -1965,4 +1979,4 @@ function apply (ctx) {
 exports.inject = inject
 exports.apply = apply
 exports.NS = NS
-exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, getMath, getMathErrors, buildMath, getPlanning, getPlanningErrors, buildPlanning, PlanningCard, MathCard, ApprovalsCard, JevTestLine, LayerGrid, RouteLayerRow, SettingsCategoryTabs, SwarmAgentsSection, getSettingsTabState, SwarmAgentsController, JevKeyController, DATA }
+exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, getMath, getMathErrors, buildMath, getPlanning, getPlanningErrors, buildPlanning, PlanningCard, PolicyCard, MathCard, ApprovalsCard, JevTestLine, LayerGrid, RouteLayerRow, SettingsCategoryTabs, SwarmAgentsSection, getSettingsTabState, SwarmAgentsController, JevKeyController, DATA }

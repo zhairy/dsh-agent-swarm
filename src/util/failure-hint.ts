@@ -4,12 +4,16 @@
  */
 
 const RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/function call is missing a thought_signature/i, '当前历史中的工具调用缺少该 Gemini 路由要求的 thought_signature；应切换兼容路由或先压缩历史，不能伪造签名。百工会隔离该协议不兼容路由，避免原请求反复失败'],
   [/route_chain_exhausted/i, '路由链上的模型在等待预算内都没有恢复：按上面各路由的状态修复账号或额度，或在「设置 → 百工 Agent」调整模型链与断网等待时间后重新委派'],
   [/content\[\]\.thinking[^\n]*thinking mode[^\n]*must be passed back|thinking (?:content|block)s?[^\n]*must be passed back/i,
     '当前会话的 thinking 消息格式与该模型不兼容：停止在同一路由重试，切换到兼容的备用模型；百工会隔离该故障路由并保留任务状态'],
   [/CONTEXT_WINDOW_EXCEEDED|maximum context (?:length|window)|exceeded (?:the )?model token limit|prompt (?:is )?too long/i,
     '请求上下文超过模型容量：需要先压缩或缩减材料，再开始新的请求；这不表示订阅额度耗尽或模型下线'],
   [/IMAGE_UNSUPPORTED/i, '当前请求的图像输入不被该模型支持：请选择有视觉能力的模型；这不表示该模型的纯文本请求不可用'],
+  [/pool\s+["'][^"']+["']\s+exhausted[^\n]*every member is cooling down[^\n]*\b(?:AUTH|INVALID_CREDENTIAL|MISSING_CREDENTIAL)\b/i, '订阅池成员因认证或权限错误冷却：请在「设置 → 订阅」检查登录与账号权限；刷新额度不能修复无效凭据或服务商拒绝的权限'],
+  [/pool\s+["'][^"']+["']\s+exhausted[^\n]*every member is cooling down/i, '订阅池仍保留本地成员冷却记录；它不等于当前服务端额度。可在「设置 → 订阅」刷新该账号额度再重试；若服务端仍返回额度或限流错误，应按新的响应等待恢复'],
+  [/pool\s+["'][^"']+["']\s+exhausted[^\n]*\b(?:TRANSPORT|NETWORK|TIMEOUT)\b/i, '订阅池成员遇到网络连接失败或超时，并非额度耗尽；检查网络与代理，恢复后重试或使用已配置备用'],
   [/pool\s+["'][^"']+["']\s+exhausted/i, '模型池当前没有可用成员：停止原池重试，尝试已配置备用；具体成员故障原因尚不确定'],
   [/\bIndividual quota reached\b/i, 'Google 返回当前模型的独立额度已耗尽；页面上其他模型的剩余额度不能用于此模型。可在「模型与恢复」选择有额度的 Gemini 模型，或等待此模型的服务端重置时间'],
   [/usage limit|(?:^|error[:：]\s*)QUOTA(?:$|\s*[;；])|quota\s+(exhausted|exceeded)|insufficient (balance|quota)|余额不足|额度(已)?(耗尽|用尽)/i, '额度用尽或余额不足：停止原故障域重试；是否已切换及有无备用以运行记录为准'],

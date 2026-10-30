@@ -225,8 +225,9 @@ const CHILD_AMBIGUITY_RULE = '- **Ambiguity**: 缺少库版本、数据结构、
  * @param {OutputLanguage} [language] - 给出时直接写入语言名称；省略时保留占位符，由 runtime 行替换
  * @returns {string[]} 规范，每条一行
  */
-export const getRoleRules = (id: RoleId, language?: OutputLanguage): string[] => {
+export const getRoleRules = (id: RoleId, language?: OutputLanguage | null): string[] => {
   const rules = [...ENGINEERING_RULES, ...(id === 'tian_shu' ? [] : [CHILD_AMBIGUITY_RULE]), ...(ROLE_RULES[id] ?? [])]
+  if (language === null) return rules.filter(rule => !rule.includes(LANGUAGE_PLACEHOLDER))
   return language === undefined ? rules : rules.map((rule) => rule.replaceAll(LANGUAGE_PLACEHOLDER, LANGUAGE_NAMES[language]))
 }
 
@@ -322,7 +323,7 @@ const JEV_HINT = '需要快速的类型化判断（核对结论是否有证据�
  * @param {OutputLanguage} [language] - 输出语言；省略时保留 {$language} 占位符
  * @returns {string} persona 文本
  */
-export const getChildPersona = (id: DelegableRoleId, mode?: SuanHengMode, style: PromptStyle = 'generic', language?: OutputLanguage): string => {
+export const getChildPersona = (id: DelegableRoleId, mode?: SuanHengMode, style: PromptStyle = 'generic', language?: OutputLanguage | null): string => {
   const role = getRoleInfo(id)
   return getStyledPersona({
     name: role.name,

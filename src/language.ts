@@ -7,6 +7,14 @@ export const LANGUAGE_NAMES: Readonly<Record<OutputLanguage, string>> = { 'zh-CN
 /** 预设 persona 里的语言占位符：runtime 行每次组装系统提示时替换为设置页选择的语言名称 */
 export const LANGUAGE_PLACEHOLDER = '{$language}'
 
+/** Supersedes earlier implicit preferences without erasing history or overriding explicit user requests. */
+export const RELAXED_LANGUAGE_INSTRUCTION = 'Expert language policy: provider default. Earlier implicit language preferences injected by this plugin do not apply to this expert request. Use the model\'s normal language behavior; preserve explicit user or task language requests, code, identifiers and schema keys.'
+
+/** Provider IDs are opaque catalog keys; keep saved offline entries and reject unsafe/unbounded values. */
+export const getLanguageExclusions = (value: unknown): string[] => Array.isArray(value)
+  ? [...new Set(value.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 512 && id.trim() === id && !/[\x00-\x1f\x7f]/.test(id)))].slice(0, 128).sort()
+  : []
+
 /** 用目标语言本身书写语言要求：英文写的「请用中文」对多数模型约束力弱，思考过程尤其容易回到英文 */
 const RULES: Readonly<Record<OutputLanguage, (explicit: boolean) => string>> = {
   'zh-CN': (explicit) => `输出语言：简体中文（zh-CN）。思考与推理过程、计划、工具调用说明、进度汇报和最终回复一律使用简体中文；代码、标识符、命令、文件路径、JSON 键、公式、引文与专业术语保持原文。${explicit ? '这是本次委派明确指定的语言。' : '用户本轮明确要求其他语言时以用户为准。'}`,

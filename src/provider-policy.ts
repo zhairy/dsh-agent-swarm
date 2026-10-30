@@ -22,7 +22,7 @@ export const getWireReasoningEffort = (route: Pick<RouteInfo, 'provider' | 'reas
 export const getRouteResourcePolicy = (route: RouteInfo): RouteResourcePolicy => {
   const inferred: RouteResourcePolicy = route.provider === 'qwen-token-plan-cn'
     ? { accessMode: 'subscription', quotaScope: 'plan', quotaDomainId: 'provider-instance:qwen-token-plan-cn' }
-    : route.provider === 'opencode-go' ? { accessMode: 'subscription', quotaScope: 'model' }
+    : ['opencode-go', 'dsh-opencode-go'].includes(route.provider) ? { accessMode: 'subscription', quotaScope: 'model' }
       : route.provider === 'antigravity' ? { accessMode: 'subscription', quotaScope: 'model' }
       : ['codex', 'claude'].includes(route.provider) ? { accessMode: 'subscription', quotaScope: 'unknown' }
         : route.provider === 'deepseek-official' ? { accessMode: 'metered_api', quotaScope: 'unknown' }
@@ -73,7 +73,7 @@ const MODEL = /Unpurchased|Access to model denied|not eligible for (?:using )?(?
 const AUTH = /\binvalid (?:api key|credentials?)\b|\bauthentication failed\b|\btoken (?:(?:has|is) )?expired\b|\b(?:not logged in|login required|please (?:log in|login|sign in))\b/i
 const RATE_WINDOW = /\b(?:rpm|tpm)\b|per (?:second|minute)|每(?:秒|分钟)|concurrent (?:requests|limit)|并发(?:请求|限制)/i
 const CONTEXT = /context[_ -]window[_ -]exceeded|maximum context (?:length|window)|context (?:length|window)[^\n]*(?:exceeded|too (?:large|long))|exceeded (?:the )?model token limit|prompt (?:is )?too long/i
-const THINKING_CONTRACT = /content\[\]\.thinking[^\n]*thinking mode[^\n]*must be passed back|thinking (?:content|block)s?[^\n]*must be passed back/i
+const THINKING_CONTRACT = /content\[\]\.thinking[^\n]*thinking mode[^\n]*must be passed back|thinking (?:content|block)s?[^\n]*must be passed back|function call is missing a thought_signature/i
 
 /** Probe delays, not subscription reset times. A new logical request admits at most one half-open owner. */
 export const ROUTE_RECOVERY_COOLDOWNS_MS: Readonly<Record<FailureKind, number>> = Object.freeze({
@@ -133,6 +133,9 @@ export const normalizeRouteFailure = (failure: RouteFailureMetadata, route: Rout
     // 订阅模型池以 AUTH 报告耗尽时，根因是池内账号凭据被拒，按认证失效处理（同 provider 其余模型一并跳过）；
     // 其他 AUTH 不够具体（任何带 401/403 的消息、可能因断网失败的令牌刷新），按状态码与消息细分
     else if (code === 'AUTH' && pool !== undefined && !MODEL.test(message)) kind = 'auth_invalid'
+    // Subscription pools preserve the member's failure code. A network failure
+    // must retain transient recovery semantics rather than becoming a quota failure.
+    else if (pool !== undefined && ['TRANSPORT', 'NETWORK', 'TIMEOUT'].includes(code)) kind = 'network_transient'
     else if (pool !== undefined || code === 'POOL_EXHAUSTED') kind = 'pool_exhausted'
     else if (BALANCE.test(message) || ['INSUFFICIENT_BALANCE', 'INSUFFICIENT_FUNDS'].includes(code)
       || (failure.status === 402 && (route.provider === 'deepseek-official' || policy.accessMode === 'metered_api'))) kind = 'insufficient_balance'
@@ -163,6 +166,8 @@ export const normalizeRouteFailure = (failure: RouteFailureMetadata, route: Rout
     ...(resetAt === undefined ? {} : { resetAt }),
     ...(failure.quotaDomainId ?? policy.quotaDomainId ? { quotaDomainId: failure.quotaDomainId ?? policy.quotaDomainId } : {}),
     ...(failure.quotaScope ?? policy.quotaScope ? { quotaScope: failure.quotaScope ?? policy.quotaScope } : {}),
+    // Preserve the pool's shared transient failure boundary without treating it as exhausted quota.
+    ...(pool !== undefined && ['network_transient', 'service_transient'].includes(kind) ? { quotaScope: 'pool' as const } : {}),
     // 文本里的池名称未证明跨 provider 是同一资源；只有显式opaque ID才跨别名共享。
     ...(failure.poolId ?? policy.poolId ?? pool ? { poolId: failure.poolId ?? policy.poolId ?? `provider-instance:${route.provider}:pool:${pool}` } : {})
   }

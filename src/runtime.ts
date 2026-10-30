@@ -7,11 +7,12 @@ import {
   type ContextCompactionLike,
   type PromptAssemblyLike,
   type SessionProjectionsLike,
+  type SystemPromptLike,
   type PluginContextLike,
   type RequestErrorActionLike,
   type RequestErrorPayloadLike
 } from './host-contract.js'
-import { LANGUAGE_NAMES, LANGUAGE_PLACEHOLDER, getLanguageInstruction, type OutputLanguage } from './language.js'
+import { LANGUAGE_NAMES, LANGUAGE_PLACEHOLDER, RELAXED_LANGUAGE_INSTRUCTION, getLanguageInstruction, type OutputLanguage } from './language.js'
 import { getPromptStyle, type PromptStylePolicy } from './model-family.js'
 import { ROLE_IDS, getChildPersona, isDelegableRoleId, isRoleId, type DelegableRoleId, type SuanHengMode } from './role-registry.js'
 import type { SwarmService } from './service.js'
@@ -36,16 +37,18 @@ export interface ChildPromptInfo {
  * @param {{ language: OutputLanguage; promptStyle: PromptStylePolicy; child?: ChildPromptInfo }} options - 语言、提示风格与子会话身份
  * @returns {PromptAssemblyLike} 新的组装结果
  */
-export const getRuntimeAssembly = (assembled: PromptAssemblyLike, options: { language: OutputLanguage; promptStyle: PromptStylePolicy; child?: ChildPromptInfo }): PromptAssemblyLike => {
+export const getRuntimeAssembly = (assembled: PromptAssemblyLike, options: { language: OutputLanguage; languageExclusions?: readonly string[]; dynamicLanguage?: boolean; promptStyle: PromptStylePolicy; child?: ChildPromptInfo }): PromptAssemblyLike => {
   const child = options.child
-  const language = child?.language ?? options.language
+  const language = child?.explicitLanguage === true ? child.language ?? options.language : options.language
   const variables = assembled.variables ?? {}
+  const excluded = child !== undefined && child.explicitLanguage !== true && typeof variables.provider === 'string' && options.languageExclusions?.includes(variables.provider) === true
+  const dynamic = child !== undefined && options.dynamicLanguage === true
   const style = getPromptStyle({ ...(variables.provider === undefined ? {} : { provider: variables.provider }), ...(variables.model === undefined ? {} : { model: variables.model }) }, options.promptStyle)
   const sections = (Array.isArray(assembled.sections) ? assembled.sections : []).filter((section) => section.name !== OUTPUT_LANGUAGE_SECTION).map((section) => {
-    if (child !== undefined && section.name === PERSONA_PREFIX_SECTION) return { name: section.name, text: child.persona ?? getChildPersona(child.role, child.mode, style, language), interpolate: false }
+    if (child !== undefined && section.name === PERSONA_PREFIX_SECTION) return { name: section.name, text: child.persona ?? getChildPersona(child.role, child.mode, style, excluded || dynamic ? null : language), interpolate: false }
     return section.text.includes(LANGUAGE_PLACEHOLDER) ? { ...section, text: section.text.replaceAll(LANGUAGE_PLACEHOLDER, LANGUAGE_NAMES[language]) } : section
   })
-  return { ...assembled, sections: [...sections, { name: OUTPUT_LANGUAGE_SECTION, text: getLanguageInstruction(language, child?.explicitLanguage === true), interpolate: false }] }
+  return { ...assembled, sections: excluded || dynamic ? sections : [...sections, { name: OUTPUT_LANGUAGE_SECTION, text: getLanguageInstruction(language, child?.explicitLanguage === true), interpolate: false }] }
 }
 
 /** 预设行：挂在全部 13 个预设上，在预设作用域内改写路由并处理回退 */
@@ -66,15 +69,30 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   if (service === undefined) return
   const role = readLive<unknown>((config as { role?: unknown } | undefined)?.role)
   const presetRole = isRoleId(role) ? role : undefined
+  const systemPrompt = ctx.get('systemPrompt') as SystemPromptLike | undefined
+  const dynamicLanguage = typeof systemPrompt?.context === 'function' && typeof systemPrompt.refreshContext === 'function'
+  const admittedProviders = new Map<string, string>()
+  const childOf = (agent: AgentLike | undefined): ChildPromptInfo | undefined => agent === undefined || getAgentHeader(agent).parentSession === undefined ? undefined
+    : service.getChildPrompt(agent.id) ?? (isDelegableRoleId(presetRole) ? { role: presetRole } : undefined)
+  if (dynamicLanguage) systemPrompt.context({
+    name: OUTPUT_LANGUAGE_SECTION, order: 130, required: true, interpolate: false,
+    text: ({ agent }) => {
+      const child = childOf(agent)
+      if (child === undefined || agent === undefined) return ''
+      const policy = service.getConfig().agents
+      const provider = admittedProviders.get(agent.id)
+      if (child.explicitLanguage !== true && provider !== undefined && policy.languageExclusions.includes(provider)) return RELAXED_LANGUAGE_INSTRUCTION
+      return getLanguageInstruction(child.explicitLanguage === true ? child.language ?? policy.language : policy.language, child.explicitLanguage === true)
+    }
+  })
   const isTracked = (agent: AgentLike): boolean => service.routeState.getChildRole(agent.id) !== undefined || (presetRole !== undefined && getAgentHeader(agent).parentSession === undefined)
   ctx.on('system-prompt/assemble', async (_assembly: unknown, context: { agent?: AgentLike } | undefined, next: () => Promise<PromptAssemblyLike>) => {
     const assembled = await next()
     const agent = context?.agent
     const config = service.getConfig()
     // 宿主冷恢复的持久子会话可能早于本插件登记：按所在角色预设兜底
-    const child = agent === undefined || getAgentHeader(agent).parentSession === undefined ? undefined
-      : service.getChildPrompt(agent.id) ?? (isDelegableRoleId(presetRole) ? { role: presetRole } : undefined)
-    return getRuntimeAssembly(assembled, { language: config.agents.language, promptStyle: config.agents.promptStyle, ...(child === undefined ? {} : { child }) })
+    const child = childOf(agent)
+    return getRuntimeAssembly(assembled, { language: config.agents.language, languageExclusions: config.agents.languageExclusions, dynamicLanguage, promptStyle: config.agents.promptStyle, ...(child === undefined ? {} : { child }) })
   })
   // Only the Host's explicit selection event means the user changed the picker.
   // Automatic request/header updates are observations, not selection intent.
@@ -103,6 +121,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     await service.routeState.PrepareQuotaRouting(payload.agent, resolved, presetRole, service.getConfig(), payload.signal)
     if (isTracked(payload.agent)) await service.routeState.WaitHealthReady(payload.agent.id, payload.signal)
     const result = await service.routeState.AdmitRequest(payload.agent, resolved, presetRole, service.getConfig(), explicitSelectionAvailable, payload.signal)
+    admittedProviders.set(payload.agent.id, result.provider)
     service.agentControl?.ObserveRequest(payload.agent.id, result)
     const selected = service.routeState.getChildOverride(payload.agent.id)
     if (selected !== undefined) service.agentControl?.ObserveSelection(payload.agent.id, selected)
@@ -127,6 +146,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   })
   ctx.on('agent/disposed', (event: { agent?: AgentLike } | undefined) => {
     const id = event?.agent?.id
+    if (id !== undefined) admittedProviders.delete(id)
     if (id !== undefined) service.routeState.ReleaseAgent(id)
   })
 }

@@ -7,7 +7,7 @@ import { DEFAULT_UPGRADES, UPGRADE_TRIGGERS, UPGRADEABLE_KEYS, isUpgradeTrigger,
 import { DEFAULT_REVIEW_THRESHOLDS, type ReviewThresholdsInfo } from './review.js'
 import { readLiveObject } from './util/live.js'
 import { DEFAULT_MATH_CONFIG, getMathConfig, MATH_GROUP_OPERATORS, MATH_LIMIT_MAXIMA, MATH_NUMERIC_MODES, MAX_MATH_CALLS_PER_TASK, MAX_MATH_WORK_PER_TASK, type MathConfigInfo } from './math/config.js'
-import { OUTPUT_LANGUAGES, getOutputLanguage, type OutputLanguage } from './language.js'
+import { OUTPUT_LANGUAGES, getLanguageExclusions, getOutputLanguage, type OutputLanguage } from './language.js'
 import { CALC_OPERATORS } from './math/schema.js'
 
 export const APPROVAL_SCOPES = ['write', 'shell', 'external_mcp', 'jev'] as const
@@ -80,6 +80,7 @@ export const Config = Schema.object({
   }).default({}).description('衡鉴复评（沿用 jev 的密钥、地址与模型）').volatile(),
   agents: Schema.object({
     language: Schema.union([...OUTPUT_LANGUAGES]).default('zh-CN').description('可见交付的默认语言；本轮用户明确要求优先，不改变JSON键与代码，不因语言重试业务'),
+    languageExclusions: Schema.array(Schema.string()).default([]).description('专家默认语言排除名单（provider ID）；按每次实际请求匹配，保留显式任务语言，天枢最终汇总仍使用默认语言'),
     session: Schema.union(['auto', 'oneshot', 'continuable']).default('auto')
       .description('专家会话策略：auto 由衡鉴（Jev）按任务判断一次性调用还是连续会话；oneshot 全部一次性；continuable 全部连续会话'),
     repeatAbove: Schema.number().default(0.5).description('衡鉴判断「同一大类任务还会再次调用该专家」的概率不低于此值时，开连续会话'),
@@ -187,6 +188,7 @@ export type AgentSessionPolicy = 'auto' | 'oneshot' | 'continuable'
 /** 专家的会话与重试策略 */
 export interface AgentsConfigInfo {
   language: OutputLanguage
+  languageExclusions: string[]
   session: AgentSessionPolicy
   repeatAbove: number
   sameCategoryAbove: number
@@ -213,6 +215,7 @@ export const DEFAULT_NETWORK_PROBE_URLS: readonly string[] = ['https://api.deeps
 
 export const DEFAULT_AGENTS_CONFIG: AgentsConfigInfo = {
   language: 'zh-CN',
+  languageExclusions: [],
   session: 'auto',
   repeatAbove: 0.5,
   sameCategoryAbove: 0.5,
@@ -318,6 +321,7 @@ const getAgentsConfig = (raw: unknown): AgentsConfigInfo => {
   return {
     ...merged,
     language: getOutputLanguage(merged.language),
+    languageExclusions: getLanguageExclusions(merged.languageExclusions),
     session: AGENT_SESSION_POLICIES.includes(merged.session) ? merged.session : 'auto',
     promptStyle: PROMPT_STYLES.includes(merged.promptStyle) ? merged.promptStyle : 'auto',
     networkProbeUrls: urls.length > 0 ? urls : [...DEFAULT_NETWORK_PROBE_URLS],

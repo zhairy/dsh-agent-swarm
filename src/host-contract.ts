@@ -266,6 +266,12 @@ export interface PromptAssemblyLike {
   [key: string]: unknown
 }
 
+/** Public dynamic context seam; rc.3 refreshes it after each actual route admission. */
+export interface SystemPromptLike {
+  context: (entry: { name: string; order: number; required?: boolean; interpolate?: boolean; text: (context: { agent?: AgentLike }) => string }) => () => void
+  refreshContext?: (...args: unknown[]) => unknown
+}
+
 /** 宿主 connection.fetch.register 接受的路由（与 dsh-plugin-subscriptions 相同的 RPC 线格式） */
 export interface FetchRouteLike {
   path: string

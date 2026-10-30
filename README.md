@@ -67,7 +67,7 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 | 变化 | 说明 |
 |---|---|
 | **铸剑等专家不再频繁「路由链耗尽」** | 链上没有可切换的模型时，最后一个可用模型的网络/服务端/限流类临时故障按 5 秒起、封顶 60 秒退避重试；其他模型被隔离但即将到期、或正由其他专家探测恢复时等它。发起请求时共用的订阅路由刚被另一位专家的失败隔离，也在预算内等待，不再直接失败。等待与断网等待共用每个请求的 `agents.networkWaitMs` 预算（默认 10 分钟，每个请求最多等 32 次），用尽才结束，并在结果里列出每条路由的状态；等待期间人工换的模型醒来后照用。订阅模型池以 `AUTH` 报告的耗尽按认证失效处理，其他 `AUTH` 按状态码细分；池与认证冷却按宿主恢复时间隔离（至多 30 分钟重探）；重新登录或普通目录/配置更新不会使隔离提前到期。登录后等待冷却，或在已有「模型与恢复」面板请求受控重试；重试仍按策略判定，不能绕过供应商 `resetAt` 或他人持有的半开探测。 |
-| **按设置的语言输出** | 每个预设都带 `- **Language**: 强制使用{$language}回答与思考（代码、变量名、命令、路径与专业术语保持原文）。`，运行时替换成「设置 → 百工 Agent」里选的语言，并在系统提示末尾追加用该语言书写的要求；换模型后照样生效。DSH 0.2.1 起专家子会话与原生 Codex / Claude Code 后端也使用按语言生成的委派 persona。已有探测中最终回复按设置语言输出；尽管语言要求已注入，DSH 显示的可见推理仍可能为英文，不能保证其始终遵循设置，见 [docs/使用.md](docs/使用.md#输出语言)。 |
+| **按设置的语言输出** | 支持在专家执行设置中按服务商多选排除默认语言要求，天枢最终汇总保持默认语言。未排除时，每个预设都带 `- **Language**: 强制使用{$language}回答与思考（代码、变量名、命令、路径与专业术语保持原文）。`，运行时替换成「设置 → 百工 Agent」里选的语言，并在系统提示末尾追加用该语言书写的要求；换模型后照样生效。DSH 0.2.1 起专家子会话与原生 Codex / Claude Code 后端也使用按语言生成的委派 persona。已有探测中最终回复按设置语言输出；尽管语言要求已注入，DSH 显示的可见推理仍可能为英文，不能保证其始终遵循设置，见 [docs/使用.md](docs/使用.md#输出语言)。 |
 | **工程规范写入全部角色** | 不过度工程化、不过度精简、不盲目重构、安全第一、异常带上下文日志、每项改动附可执行验证；铸剑/疾风另有 C.T.I.V. 流程、命名与测试要求，行舟/复核有终端安全规则，御史按四个维度和固定模板审查。 |
 | **任务卡不再因流程草稿被打回** | 天枢给的流程草稿缺少必需门禁（例如资金逻辑要求的 `G_MATH_VERIFY`）时由宿主自动补齐节点，不再报「workflow 缺少必需门禁」；与门禁顺序冲突的草稿依赖被绕过，其余业务先后保留。 |
 | **观察模式不再自动规划审核** | 一次长期目标实测中，自动审核耗时与全部专家执行相当且 94 次只通过 2 次；现在只在强制模式自动审核，观察模式按需调用 `swarm_review_plan`。 |
@@ -158,6 +158,13 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 
 - Works with DSH **0.2.0 / 0.2.1** (`>=0.2.0-rc.2 <0.2.2-0`, 0.2.1-rc.3 recommended) on Node.js 22.12 or newer
 - Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
+
+### What's new in 3.1.9
+
+- Provider checkboxes let expert requests use the model default language while final host summaries follow the configured output language. Explicit task language is preserved.
+- Language policy follows the actual provider after fallback and default changes on continued sessions.
+- Subscription-pool transport errors retain network recovery semantics; local cooldown messages explain how to refresh subscription usage without claiming current quota exhaustion.
+- Missing Gemini tool thought signatures are classified as protocol incompatibility, avoiding repeated requests to the same incompatible route.
 
 ### What's new in 3.1.8
 
@@ -279,3 +286,9 @@ Upgrade, rollback and removal: [docs/升级与回退.md](docs/升级与回退.md
 ### License
 
 MIT, see [LICENSE](LICENSE). The embedded Jev tools are adapted from jev-mcp 0.2.1 (MIT) and `skills/typesafe-ai` comes from TypeSafe AI (MIT); see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+### 专家默认语言排除
+
+在「设置 → 百工 Agent → 专家执行」的「专家默认语言排除名单」中多选服务商。勾选后，该服务商的专家过程使用模型默认语言；每次实际请求和模型回退都会重新匹配。任务明确指定的语言仍然保留，天枢面向用户的最终汇总继续遵循默认交付语言。此选项不保证模型内部推理使用英语，也不改变供应商的规则或使用限制。
+
+旧配置的排除名单为空；保存后立即作用于新的请求。旧会话里已有的用户指令和历史消息不会被改写；需要完全移除旧的语言要求时，请新建专家委派。
