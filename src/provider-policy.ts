@@ -22,7 +22,8 @@ export const getWireReasoningEffort = (route: Pick<RouteInfo, 'provider' | 'reas
 export const getRouteResourcePolicy = (route: RouteInfo): RouteResourcePolicy => {
   const inferred: RouteResourcePolicy = route.provider === 'qwen-token-plan-cn'
     ? { accessMode: 'subscription', quotaScope: 'plan', quotaDomainId: 'provider-instance:qwen-token-plan-cn' }
-    : ['opencode-go', 'dsh-opencode-go'].includes(route.provider) ? { accessMode: 'subscription', quotaScope: 'model' }
+    : route.provider === 'opencode-go' ? { accessMode: 'subscription', quotaScope: 'model' }
+      : route.provider === 'dsh-opencode-go' ? { accessMode: 'subscription', quotaScope: 'unknown' }
       : route.provider === 'antigravity' ? { accessMode: 'subscription', quotaScope: 'model' }
       : ['codex', 'claude'].includes(route.provider) ? { accessMode: 'subscription', quotaScope: 'unknown' }
         : route.provider === 'deepseek-official' ? { accessMode: 'metered_api', quotaScope: 'unknown' }
