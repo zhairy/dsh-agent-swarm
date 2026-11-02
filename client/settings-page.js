@@ -1737,7 +1737,7 @@ function JevKeyCard ({ t, jev, controller, editable }) {
     if (routing.value.source === 'third-party' && configState.catalog.status === 'idle') controller.loadCatalog()
   }, [controller, configState.catalog.status, routing.value.source])
   const info = state.info
-  const shadowed = info !== undefined && info.configured && info.writable === false
+  const shadowed = routing.value.source === 'official' && info !== undefined && info.configured && info.writable === false
   const statusText = info === undefined
     ? (state.status === 'error' ? t('jevLoadFailed') : t('jevUnknown'))
     : info.configured

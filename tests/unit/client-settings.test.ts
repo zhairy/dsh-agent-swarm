@@ -933,6 +933,7 @@ describe('Jev API key 卡片', () => {
       'jevTitle provider', 'jevTitle model', 'jevTitle effort'
     ])
     expect(nodes.some((node) => node.type === 'input' && node.props?.type === 'password')).toBe(false)
+    expect(JSON.stringify(card)).not.toContain('jevShadowed')
     expect(nodes.find((node) => node.type === 'input' && node.props?.type === 'checkbox')?.props.checked).toBe(true)
     controller.dispose()
   })
