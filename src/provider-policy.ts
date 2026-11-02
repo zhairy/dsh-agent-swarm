@@ -14,20 +14,53 @@ export interface RouteResourcePolicy {
   capabilities?: { generation?: boolean; structuredOutput?: boolean; vision?: boolean; tools?: boolean }
 }
 
+/**
+ * Provider IDs with a verified built-in resource contract.
+ *
+ * Client generation uses this list instead of deriving the settings-page map
+ * from display labels. A provider can therefore have a resource type even
+ * when its product label is missing, and the two concerns no longer drift.
+ */
+export const BUILTIN_ROUTE_PROVIDERS = [
+  'qwen-token-plan-cn',
+  'opencode-go',
+  'dsh-opencode-go',
+  'opencode',
+  'antigravity',
+  'codex',
+  'claude',
+  'grok',
+  'copilot',
+  'deepseek-official',
+  'jev'
+] as const
+
+export type BuiltinRouteProvider = typeof BUILTIN_ROUTE_PROVIDERS[number]
+
+const UNKNOWN_ROUTE_POLICY: Readonly<RouteResourcePolicy> = Object.freeze({ accessMode: 'unknown', quotaScope: 'unknown' })
+const BUILTIN_ROUTE_POLICIES: Readonly<Record<BuiltinRouteProvider, Readonly<RouteResourcePolicy>>> = Object.freeze({
+  'qwen-token-plan-cn': { accessMode: 'subscription', quotaScope: 'plan', quotaDomainId: 'provider-instance:qwen-token-plan-cn' },
+  'opencode-go': { accessMode: 'subscription', quotaScope: 'model' },
+  // The DSH adapter can rotate between gateway accounts, so the public route
+  // name does not prove a single model quota domain. Keep route-level isolation.
+  'dsh-opencode-go': { accessMode: 'subscription', quotaScope: 'unknown' },
+  opencode: { accessMode: 'metered_api', quotaScope: 'unknown' },
+  antigravity: { accessMode: 'subscription', quotaScope: 'model' },
+  codex: { accessMode: 'subscription', quotaScope: 'unknown' },
+  claude: { accessMode: 'subscription', quotaScope: 'unknown' },
+  grok: { accessMode: 'subscription', quotaScope: 'unknown' },
+  copilot: { accessMode: 'subscription', quotaScope: 'unknown' },
+  'deepseek-official': { accessMode: 'metered_api', quotaScope: 'unknown' },
+  jev: { accessMode: 'judgment_api', quotaScope: 'unknown' }
+})
+
 /** Existing Codex wire contract: catalog ultra is sent as max; other providers retain their own levels. */
 export const getWireReasoningEffort = (route: Pick<RouteInfo, 'provider' | 'reasoningEffort'>): string | undefined =>
   route.provider === 'codex' && route.reasoningEffort === 'ultra' ? 'max' : route.reasoningEffort
 
 /** 已核验内置 provider 契约，不按模型名称猜额度域。自定义接入可显式覆盖为 unknown。 */
 export const getRouteResourcePolicy = (route: RouteInfo): RouteResourcePolicy => {
-  const inferred: RouteResourcePolicy = route.provider === 'qwen-token-plan-cn'
-    ? { accessMode: 'subscription', quotaScope: 'plan', quotaDomainId: 'provider-instance:qwen-token-plan-cn' }
-    : route.provider === 'opencode-go' ? { accessMode: 'subscription', quotaScope: 'model' }
-      : route.provider === 'dsh-opencode-go' ? { accessMode: 'subscription', quotaScope: 'unknown' }
-      : route.provider === 'antigravity' ? { accessMode: 'subscription', quotaScope: 'model' }
-      : ['codex', 'claude'].includes(route.provider) ? { accessMode: 'subscription', quotaScope: 'unknown' }
-        : route.provider === 'deepseek-official' ? { accessMode: 'metered_api', quotaScope: 'unknown' }
-          : route.provider === 'jev' ? { accessMode: 'judgment_api', quotaScope: 'unknown' } : { accessMode: 'unknown', quotaScope: 'unknown' }
+  const inferred = BUILTIN_ROUTE_POLICIES[route.provider as BuiltinRouteProvider] ?? UNKNOWN_ROUTE_POLICY
   if (route.policy === undefined) return inferred
   const policy = { ...inferred, ...route.policy }
   if (route.policy.quotaDomainId === undefined && (

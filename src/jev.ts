@@ -4,9 +4,11 @@ import { normalizeRouteFailure, isTerminalRouteFailure } from './provider-policy
 /** Jev 调用配置 */
 export interface JevConfigInfo {
   enabled: boolean
+  source: 'official' | 'third-party'
   apiKeyEnv: string
   baseUrl: string
   model: string
+  thirdParty?: { provider: string; model: string; reasoningEffort?: string }
   timeoutMs: number
   maxRetries: number
   /** 兼容旧配置；Jev 不主动限流，此值不再参与发送决策 */
@@ -17,9 +19,11 @@ export interface JevConfigInfo {
 
 export const DEFAULT_JEV_CONFIG: JevConfigInfo = {
   enabled: true,
+  source: 'official',
   apiKeyEnv: 'TYPESAFE_API_KEY',
   baseUrl: 'https://api.typesafe.ai',
   model: 'jev-1.14.0',
+  thirdParty: { provider: '', model: '' },
   timeoutMs: 10000,
   maxRetries: 4,
   maxRequestsPerSecond: 0,
@@ -129,15 +133,16 @@ interface JevFailureLike { reason: string; status?: number; failureKind?: JevFai
 export const getJevFailureKind = (failure: JevFailureLike): JevFailureKind => {
   if (failure.failureKind !== undefined) return failure.failureKind
   if (failure.reason === 'disabled') return 'disabled'
-  if (failure.reason === 'missing-api-key' || failure.reason === 'invalid-base-url') return 'configuration'
+  if (failure.reason === 'missing-api-key' || failure.reason === 'invalid-base-url' || failure.reason === 'missing-third-party-model') return 'configuration'
   if (failure.reason === 'credential-permission-denied' || failure.status === 403) return 'permission'
   if (failure.reason === 'credential-unavailable') return 'unknown'
   if (failure.status === 401) return 'authentication'
   if (failure.status === 402) return 'billing'
   if (failure.reason === 'aborted') return 'cancelled'
-  if (['malformed-response', 'no-models'].includes(failure.reason)) return 'invalid-response'
-  if (failure.reason === 'request-too-large' || [400, 404, 422].includes(failure.status ?? 0)) return 'invalid-request'
-  if (['network', 'timeout'].includes(failure.reason) || failure.status === 429 || (failure.status ?? 0) >= 500) return 'availability'
+  if (['malformed-response', 'no-models', 'response-too-large'].includes(failure.reason)) return 'invalid-response'
+  if (['request-too-large', 'request-not-serializable'].includes(failure.reason) || [400, 404, 422].includes(failure.status ?? 0)) return 'invalid-request'
+  if (['model-runtime-unavailable', 'model-catalog-unavailable', 'model-error'].includes(failure.reason)
+    || ['network', 'timeout'].includes(failure.reason) || failure.status === 429 || (failure.status ?? 0) >= 500) return 'availability'
   return 'unknown'
 }
 

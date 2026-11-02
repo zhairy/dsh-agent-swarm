@@ -69,6 +69,10 @@ const zh = {
   custom: '已自定义',
   builtin: '内置默认',
   reset: '恢复默认',
+  expandAgent: '展开模型路由',
+  collapseAgent: '收起模型路由',
+  layers: '层',
+  needsCorrection: '需修正',
   save: '保存',
   saving: '保存中…',
   discard: '放弃修改',
@@ -132,8 +136,14 @@ const zh = {
   policyNativeTeamHint: '实验性，默认关闭。仅投影 DSH 原生团队已有成员、共享任务和实时状态，并可打开成员会话；不会创建成员、修改共享任务或绕过百工门禁。',
   policyOn: '启用',
   policyOff: '关闭',
-  jevTitle: 'Jev 模型 API Key',
-  jevDescription: '百工内嵌 TypeSafe Jev（System One）：衡鉴分流、专家会话判断、交付复评，以及 7 个 jev_* 判断工具（jev_ask / jev_check / jev_classify / jev_score / jev_match / jev_screen / jev_health）都直接在插件内调用，不需要外部 MCP。密钥保存在 DSH 凭据存储中，不会显示，也不会写入配置文件。',
+  jevTitle: 'Jev 判断模型',
+  jevDescription: '百工内嵌 Jev 兼容判断：衡鉴分流、专家会话判断、交付复评，以及 7 个 jev_* 工具（jev_ask / jev_check / jev_classify / jev_score / jev_match / jev_screen / jev_health）都直接在插件内调用，不需要外部 MCP。可使用 TypeSafe 官方接口，或从 DSH 模型目录选择第三方兼容模型。',
+  jevThirdParty: '使用第三方 Jev 兼容模型',
+  jevThirdPartyHint: '官方与第三方互斥。第三方模型从当前 DSH 模型目录选择，并沿用该 API 的凭据、额度和模型能力。',
+  jevOfficial: 'TypeSafe 官方',
+  jevSaveFirst: '先保存模型来源，再测试连接。',
+  errJevProvider: '请选择第三方供应商',
+  errJevModel: '请选择第三方模型',
   jevRef: '凭据引用',
   jevConfigured: '已配置',
   jevMissing: '未配置',
@@ -176,6 +186,10 @@ const en = {
   custom: 'Customized',
   builtin: 'Built-in default',
   reset: 'Reset to default',
+  expandAgent: 'Expand model routes',
+  collapseAgent: 'Collapse model routes',
+  layers: 'layers',
+  needsCorrection: 'Needs correction',
   save: 'Save',
   saving: 'Saving…',
   discard: 'Discard',
@@ -239,8 +253,14 @@ const en = {
   policyNativeTeamHint: 'Experimental and off by default. It projects existing native DSH team members, shared tasks and live status, and can open member sessions. It never creates members, edits shared tasks or bypasses Agent Swarm gates.',
   policyOn: 'Enabled',
   policyOff: 'Off',
-  jevTitle: 'Jev API key',
-  jevDescription: 'The swarm embeds TypeSafe Jev (System One): triage, expert session planning, delivery review and the 7 jev_* judgment tools (jev_ask / jev_check / jev_classify / jev_score / jev_match / jev_screen / jev_health) call it directly from the plugin, with no external MCP. The key is kept in the DSH credential store; it is never displayed or written to configuration.',
+  jevTitle: 'Jev judgment model',
+  jevDescription: 'The swarm embeds Jev-compatible judgments for triage, expert session planning, delivery review and the 7 jev_* tools (jev_ask / jev_check / jev_classify / jev_score / jev_match / jev_screen / jev_health) without an external MCP. Use the official TypeSafe API or select a third-party compatible model from the live DSH catalog.',
+  jevThirdParty: 'Use a third-party Jev-compatible model',
+  jevThirdPartyHint: 'Official and third-party sources are mutually exclusive. The third-party model comes from the current DSH model catalog and uses that API provider\'s credentials, quota and model capabilities.',
+  jevOfficial: 'TypeSafe official',
+  jevSaveFirst: 'Save the model source before testing the connection.',
+  errJevProvider: 'Select a third-party provider',
+  errJevModel: 'Select a third-party model',
   jevRef: 'Credential reference',
   jevConfigured: 'Configured',
   jevMissing: 'Not configured',
@@ -430,6 +450,15 @@ const cloneResourcePolicy = (raw) => {
   } catch { return undefined }
 }
 
+/** Ignore schema-generated empty shells; they are not user policy. */
+const meaningfulResourcePolicy = (policy) => {
+  if (policy === undefined || policy === null || typeof policy !== 'object' || Array.isArray(policy)) return undefined
+  const fields = Object.fromEntries(Object.entries(policy).filter(([key, value]) => key === 'capabilities'
+    ? value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value) && Object.values(value).some((item) => typeof item === 'boolean')
+    : value !== undefined && value !== ''))
+  return Object.keys(fields).length === 0 ? undefined : fields
+}
+
 const policyDigest = (policy) => {
   const sort = (value) => Array.isArray(value) ? value.map(sort) : value !== null && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sort(value[key])])) : value
   return JSON.stringify(sort(policy))
@@ -443,12 +472,13 @@ const getResourceAccessMode = (slot) => {
 
 const toSlot = (route) => {
   const record = asRecord(route)
-  const policy = record.policy === undefined ? undefined : cloneResourcePolicy(record.policy)
+  const copied = record.policy === undefined ? undefined : cloneResourcePolicy(record.policy)
+  const policy = copied === undefined ? undefined : meaningfulResourcePolicy(copied)
   return {
     provider: typeof record.provider === 'string' ? record.provider : '',
     model: typeof record.model === 'string' ? record.model : '',
     reasoningEffort: typeof record.reasoningEffort === 'string' ? record.reasoningEffort : '',
-    ...(record.policy === undefined ? {} : policy === undefined ? { policyInvalid: true } : { policy })
+    ...(record.policy === undefined || copied !== undefined ? (policy === undefined ? {} : { policy }) : { policyInvalid: true })
   }
 }
 
@@ -684,11 +714,13 @@ class SwarmAgentsController {
     this.approvalsDraft = undefined
     this.mathDraft = undefined
     this.planningDraft = undefined
+    this.jevRoutingDraft = undefined
     this.draftRevision = undefined
     this.catalog = { status: 'idle', groups: [], failures: [] }
     this.pendingCatalog = undefined
     this.catalogReloadRequested = false
     this.saving = false
+    this.expandedAgents = new Set()
     this.notice = undefined
     this.conflicted = false
     this.disposed = false
@@ -720,6 +752,23 @@ class SwarmAgentsController {
     if (!SETTINGS_TABS.some(tab => tab.id === id) || this.disposed) return
     this.cancelLayerDrag()
     this.activeTab = id
+    this.publish()
+  }
+
+  isAgentExpanded (agentKey) {
+    return this.expandedAgents.has(agentKey)
+  }
+
+  toggleAgentExpanded (agentKey) {
+    if (!DATA.agents.some((agent) => agent.key === agentKey)) return false
+    if (this.expandedAgents.has(agentKey)) this.expandedAgents.delete(agentKey)
+    else this.expandedAgents.add(agentKey)
+    this.publish()
+    return this.expandedAgents.has(agentKey)
+  }
+
+  setAllAgentsExpanded (expanded) {
+    this.expandedAgents = expanded ? new Set(DATA.agents.map((agent) => agent.key)) : new Set()
     this.publish()
   }
 
@@ -853,7 +902,31 @@ class SwarmAgentsController {
 
   savedMath () { return getMath(asRecord(this.form.getSnapshot().value).math) }
 
-  hasDrafts () { return this.drafts.size > 0 || this.policyDraft !== undefined || this.approvalsDraft !== undefined || this.mathDraft !== undefined || this.planningDraft !== undefined }
+  hasDrafts () { return this.drafts.size > 0 || this.policyDraft !== undefined || this.approvalsDraft !== undefined || this.mathDraft !== undefined || this.planningDraft !== undefined || this.jevRoutingDraft !== undefined }
+
+  savedJevRouting () { return getJevRouting(asRecord(this.form.getSnapshot().value).jev) }
+
+  setJevRouting (patch) {
+    if (!this.canEdit()) return
+    if (!this.hasDrafts()) this.draftRevision = this.form.getSnapshot().revision
+    const base = this.jevRoutingDraft ?? this.savedJevRouting()
+    const thirdPartyPatch = asRecord(patch.thirdParty)
+    const providerChanged = typeof thirdPartyPatch.provider === 'string' && thirdPartyPatch.provider !== base.thirdParty.provider
+    const modelChanged = typeof thirdPartyPatch.model === 'string' && thirdPartyPatch.model !== base.thirdParty.model
+    const thirdParty = providerChanged
+      ? { ...base.thirdParty, provider: thirdPartyPatch.provider,
+          model: typeof thirdPartyPatch.model === 'string' ? thirdPartyPatch.model : '',
+          reasoningEffort: typeof thirdPartyPatch.reasoningEffort === 'string' ? thirdPartyPatch.reasoningEffort : '' }
+      : { ...base.thirdParty, ...thirdPartyPatch,
+          ...(modelChanged && typeof thirdPartyPatch.reasoningEffort !== 'string' ? { reasoningEffort: '' } : {}) }
+    this.jevRoutingDraft = { ...base, ...patch, thirdParty }
+    if (sameJevRouting(this.jevRoutingDraft, this.savedJevRouting())) this.jevRoutingDraft = undefined
+    if (!this.hasDrafts()) this.draftRevision = undefined
+    this.notice = undefined
+    this.publish()
+  }
+
+  resetJevRouting () { this.setJevRouting(getJevRouting(undefined)) }
 
   setMath (patch) {
     if (!this.canEdit()) return
@@ -965,6 +1038,10 @@ class SwarmAgentsController {
       const slot = { ...slots[index], ...patch }
       // 换供应商：若新供应商下没有同名模型则清空模型；推理强度随模型重选
       if (patch.provider !== undefined) {
+        if (patch.provider !== slots[index].provider) {
+          delete slot.policy
+          delete slot.policyInvalid
+        }
         if (slot.provider === '' || !this.hasModel(slot.provider, slot.model)) slot.model = ''
         slot.reasoningEffort = ''
       }
@@ -1042,6 +1119,7 @@ class SwarmAgentsController {
     this.approvalsDraft = undefined
     this.mathDraft = undefined
     this.planningDraft = undefined
+    this.jevRoutingDraft = undefined
     this.draftRevision = undefined
     this.conflicted = false
     this.notice = undefined
@@ -1061,6 +1139,7 @@ class SwarmAgentsController {
     if (this.drafts.size > 0) {
       const result = buildRoutes(this.routes(), this.drafts)
       if (!result.ok) {
+        for (const key of result.keys) this.expandedAgents.add(key)
         this.publish()
         return
       }
@@ -1089,6 +1168,11 @@ class SwarmAgentsController {
       if (planning === undefined) { this.publish(); return }
       ops.push({ op: 'set', path: ['workflow'], value: planning.workflow }, { op: 'set', path: ['planningReview'], value: planning.planningReview })
     }
+    if (this.jevRoutingDraft !== undefined) {
+      const jev = buildJevRouting(asRecord(snapshot.value).jev, this.jevRoutingDraft)
+      if (jev === undefined) { this.publish(); return }
+      ops.push({ op: 'set', path: ['jev'], value: jev })
+    }
     const connectionGeneration = this.connectionGeneration
     const saveGeneration = ++this.saveGeneration
     this.saving = true
@@ -1109,6 +1193,7 @@ class SwarmAgentsController {
       this.approvalsDraft = undefined
       this.mathDraft = undefined
       this.planningDraft = undefined
+      this.jevRoutingDraft = undefined
       this.draftRevision = undefined
       this.conflicted = false
       this.notice = 'saved'
@@ -1230,6 +1315,9 @@ class SwarmAgentsController {
     const savedPlanning = this.savedPlanning()
     const planning = { value: this.planningDraft ?? savedPlanning, dirty: this.planningDraft !== undefined, custom: !samePlanning(savedPlanning, PLANNING_DEFAULTS),
       errors: this.planningDraft === undefined ? {} : getPlanningErrors(this.planningDraft) }
+    const savedJevRouting = this.savedJevRouting()
+    const jevRoutingValue = this.jevRoutingDraft ?? savedJevRouting
+    const jevRouting = { value: jevRoutingValue, dirty: this.jevRoutingDraft !== undefined, errors: this.jevRoutingDraft === undefined ? {} : getJevRoutingErrors(jevRoutingValue) }
     return {
       status: snapshot.status,
       activeTab: this.activeTab,
@@ -1239,10 +1327,11 @@ class SwarmAgentsController {
       approvals,
       math,
       planning,
+      jevRouting,
       catalog: this.catalog,
       saving: this.saving,
       dirty: this.hasDrafts(),
-      invalid: rows.some((row) => row.dirty && hasErrors(row.errors)) || Object.values(policyErrors).some((error) => error !== undefined) || approvals.error !== undefined || (math.dirty && Object.keys(math.errors).length > 0) || Object.keys(planning.errors).length > 0,
+      invalid: rows.some((row) => row.dirty && hasErrors(row.errors)) || Object.values(policyErrors).some((error) => error !== undefined) || approvals.error !== undefined || (math.dirty && Object.keys(math.errors).length > 0) || Object.keys(planning.errors).length > 0 || Object.keys(jevRouting.errors).length > 0,
       conflicted: this.conflicted,
       notice: this.notice
     }
@@ -1255,7 +1344,31 @@ class SwarmAgentsController {
   }
 }
 
-// ───────────────────────── Jev API key ─────────────────────────
+// ───────────────────────── Jev source and API key ─────────────────────────
+
+const JEV_SOURCES = ['official', 'third-party']
+const EMPTY_THIRD_PARTY_JEV = Object.freeze({ provider: '', model: '', reasoningEffort: '' })
+const getJevRouting = (raw) => {
+  const value = asRecord(raw), thirdParty = asRecord(value.thirdParty)
+  return {
+    source: JEV_SOURCES.includes(value.source) ? value.source : 'official',
+    thirdParty: {
+      ...thirdParty,
+      provider: typeof thirdParty.provider === 'string' ? thirdParty.provider : '',
+      model: typeof thirdParty.model === 'string' ? thirdParty.model : '',
+      reasoningEffort: typeof thirdParty.reasoningEffort === 'string' ? thirdParty.reasoningEffort : ''
+    }
+  }
+}
+const getJevRoutingErrors = (value) => value.source !== 'third-party' ? {} : {
+  ...(value.thirdParty.provider === '' ? { provider: 'errJevProvider' } : {}),
+  ...(value.thirdParty.model === '' ? { model: 'errJevModel' } : {})
+}
+const sameJevRouting = (left, right) => policyDigest(left) === policyDigest(right)
+const buildJevRouting = (saved, draft) => {
+  if (Object.keys(getJevRoutingErrors(draft)).length > 0) return undefined
+  return { ...asRecord(saved), source: draft.source, thirdParty: { ...draft.thirdParty } }
+}
 
 /**
  * Jev API key 卡片的状态：宿主 RPC 给出密钥是否已配置与来源（从不返回密钥值），
@@ -1612,12 +1725,17 @@ function JevTestLine ({ t, test }) {
   return h('span', { style: style.statusOk, role: 'status' }, `${t('jevOk')}：${test.model}；${t('jevModels')} ${models.join('、') || '—'}；${t('jevLatency')} ${latency} ms`)
 }
 
-/** Jev API key 卡片（页面顶部） */
-function JevKeyCard ({ t, jev }) {
+/** Jev source and API key card (page header). */
+function JevKeyCard ({ t, jev, controller, editable }) {
   const state = React.useSyncExternalStore(jev.subscribe, jev.getSnapshot)
+  const configState = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot)
+  const routing = configState.jevRouting
   React.useEffect(() => {
     if (state.status === 'idle') jev.load()
   }, [jev, state.status])
+  React.useEffect(() => {
+    if (routing.value.source === 'third-party' && configState.catalog.status === 'idle') controller.loadCatalog()
+  }, [controller, configState.catalog.status, routing.value.source])
   const info = state.info
   const shadowed = info !== undefined && info.configured && info.writable === false
   const statusText = info === undefined
@@ -1625,18 +1743,31 @@ function JevKeyCard ({ t, jev }) {
     : info.configured
       ? `${t('jevConfigured')}${info.source === undefined ? '' : ` · ${t('jevSource')} ${info.source}`}${info.writable === false ? `（${t('jevReadOnly')}）` : ''}`
       : t('jevMissing')
-  const busy = state.saving || state.status === 'loading'
+  const busy = state.saving || state.status === 'loading' || routing.dirty
+  const thirdParty = routing.value.thirdParty
+  const common = { t, slot: thirdParty, label: t('jevTitle'), groups: configState.catalog.groups, disabled: !editable || routing.value.source !== 'third-party', onChange: (patch) => controller.setJevRouting({ thirdParty: patch }) }
   return h('div', { style: style.card, 'data-swarm-jev': 'key' },
     h('div', { style: style.cardHead },
       h('span', { style: style.name }, t('jevTitle')),
       h('span', { style: { ...style.tag, ...(info?.configured ? { color: color.success, borderColor: color.success } : {}) } }, statusText),
       h('span', { style: style.spacer }),
-      h('button', { type: 'button', style: style.btnSmall, disabled: state.testing, onClick: () => { jev.test() } }, state.testing ? t('jevTesting') : t('jevTest'))
+      h('button', { type: 'button', style: style.btnSmall, disabled: state.testing || routing.dirty, title: routing.dirty ? t('jevSaveFirst') : '', onClick: () => { jev.test() } }, state.testing ? t('jevTesting') : t('jevTest'))
     ),
     h('p', { style: style.note }, t('jevDescription')),
+    h('label', { style: style.switchLabel },
+      h('input', { type: 'checkbox', checked: routing.value.source === 'third-party', disabled: !editable,
+        onChange: (event) => controller.setJevRouting({ source: event.target.checked ? 'third-party' : 'official' }) }),
+      t('jevThirdParty')),
+    h('p', { style: style.hint }, t('jevThirdPartyHint')),
+    routing.value.source === 'third-party' ? h(React.Fragment, null,
+      h('div', { style: style.routeFields }, h(ProviderSelect, common), h(ModelSelect, common), h(EffortSelect, common)),
+      routing.errors.provider === undefined ? null : h('span', { style: style.fieldError, role: 'alert' }, t(routing.errors.provider)),
+      routing.errors.model === undefined ? null : h('span', { style: style.fieldError, role: 'alert' }, t(routing.errors.model))
+    ) : null,
+    routing.dirty ? h('p', { style: style.statusBad, role: 'status' }, t('jevSaveFirst')) : null,
     state.loadError === undefined ? null : h('p', { style: style.statusBad, role: 'alert' }, state.loadError),
     h('span', { style: style.hint }, `${t('jevRef')}：${info?.ref ?? jev.getRef()}`),
-    h('div', { style: style.keyRow },
+    routing.value.source === 'official' ? h('div', { style: style.keyRow },
       h('input', {
         style: style.keyInput,
         type: 'password',
@@ -1653,7 +1784,7 @@ function JevKeyCard ({ t, jev }) {
       info?.configured && info.writable !== false
         ? h('button', { type: 'button', style: style.btnSmall, disabled: busy, onClick: () => { jev.clear() } }, t('jevClear'))
         : null
-    ),
+    ) : null,
     shadowed ? h('p', { style: style.note }, t('jevShadowed')) : null,
     state.notice === undefined ? null : h('span', { style: style.statusOk, role: 'status' }, t(state.notice)),
     state.error === undefined ? null : h('span', { style: style.statusBad, role: 'alert' }, state.error),
@@ -1833,24 +1964,40 @@ function PolicyCard ({ t, policy, groups, editable, controller }) {
 }
 
 function AgentCard ({ t, row, groups, editable, controller }) {
+  const expanded = controller.isAgentExpanded(row.key)
+  const invalid = hasErrors(row.errors)
+  const primary = slotLabel(row.slots[0])
+  const bodyId = `swarm-agent-body-${row.key.replace(/[^A-Za-z0-9_-]/g, '-')}`
   return h('div', { style: { ...style.card, ...(row.custom ? {} : { opacity: 0.92 }) }, 'data-swarm-agent': row.key },
     h('div', { style: style.cardHead },
       h('span', { style: style.name }, row.name),
       h('span', { style: style.title }, row.title),
       h('span', { style: style.tag }, row.custom ? t('custom') : t('builtin')),
       row.dirty ? h('span', { style: { ...style.tag, color: color.primary } }, t('pending')) : null,
+      invalid ? h('span', { style: { ...style.tag, color: color.danger } }, t('needsCorrection')) : null,
       h('span', { style: style.spacer }),
+      h('span', { style: style.title, 'data-swarm-agent-summary': row.key }, `${t('primary')} ${primary} · ${row.slots.length} ${t('layers')}`),
       row.custom
         ? h('button', { type: 'button', style: style.btnSmall, disabled: !editable, onClick: () => controller.resetAgent(row.key) }, t('reset'))
-        : null
+        : null,
+      h('button', {
+        type: 'button', style: style.btnSmall, 'data-swarm-agent-toggle': row.key,
+        'aria-expanded': expanded, 'aria-controls': bodyId,
+        'aria-label': `${expanded ? t('collapseAgent') : t('expandAgent')}：${row.name}`,
+        title: expanded ? t('collapseAgent') : t('expandAgent'),
+        onClick: () => controller.toggleAgentExpanded(row.key)
+      }, expanded ? `▲ ${t('collapseAgent')}` : `▼ ${t('expandAgent')}`)
     ),
-    row.note === undefined ? null : h('p', { style: style.note }, row.note),
-    h(LayerGrid, { t, rowKey: row.key, rowName: row.name, target: 'chain', slots: row.slots, errors: row.errors.chain, groups, editable, controller }),
-    row.upgrade === undefined ? null : h(UpgradeBlock, { t, row, groups, editable, controller })
+    expanded ? h('div', { id: bodyId, 'data-swarm-agent-body': row.key },
+      row.note === undefined ? null : h('p', { style: style.note }, row.note),
+      h(LayerGrid, { t, rowKey: row.key, rowName: row.name, target: 'chain', slots: row.slots, errors: row.errors.chain, groups, editable, controller }),
+      row.upgrade === undefined ? null : h(UpgradeBlock, { t, row, groups, editable, controller })
+    ) : null
   )
 }
 
 const getSettingsTabState = (state, id) => {
+  if (id === 'overview') return { dirty: state.jevRouting.dirty, invalid: Object.keys(state.jevRouting.errors).length > 0 }
   if (id === 'models') return { dirty: state.rows.some(row => row.dirty), invalid: state.rows.some(row => row.dirty && hasErrors(row.errors)) }
   if (id === 'execution') return { dirty: state.policy.dirty, invalid: Object.values(state.policy.errors).some(error => error !== undefined) }
   if (id === 'guards') return { dirty: state.approvals.dirty || state.planning.dirty, invalid: state.approvals.error !== undefined || Object.keys(state.planning.errors).length > 0 }
@@ -1878,9 +2025,9 @@ function SettingsCategoryTabs ({ state, t, controller }) {
     }))
 }
 
-function SettingsOverview ({ state, t, jev }) {
+function SettingsOverview ({ state, t, jev, controller, editable }) {
   return h(React.Fragment, null,
-    jev === undefined ? null : h(JevKeyCard, { key: 'jev', t, jev }),
+    jev === undefined ? null : h(JevKeyCard, { key: 'jev', t, jev, controller, editable }),
     h('div', { style: style.card },
       h('h3', { style: { ...style.name, margin: 0 } }, t('routeOverview')),
       h('p', { style: style.description }, `${t('configuredAgents')}：${state.rows.length} · ${t('customizedAgents')}：${state.rows.filter(row => row.custom).length}`),
@@ -1888,7 +2035,7 @@ function SettingsOverview ({ state, t, jev }) {
 }
 
 const getSettingsPanel = (id, { state, t, jev, editable, controller }) => {
-  if (id === 'overview') return h(SettingsOverview, { state, t, jev })
+  if (id === 'overview') return h(SettingsOverview, { state, t, jev, controller, editable })
   if (id === 'models') return state.rows.map(row => h(AgentCard, { key: row.key, t, row, groups: state.catalog.groups, editable, controller }))
   if (id === 'execution') return h(PolicyCard, { t, policy: state.policy, groups: state.catalog.groups, editable, controller })
   if (id === 'guards') return h(React.Fragment, null, h(PlanningCard, { t, planning: state.planning, editable, controller }), h(ApprovalsCard, { t, approvals: state.approvals, editable, controller }))
@@ -1979,4 +2126,4 @@ function apply (ctx) {
 exports.inject = inject
 exports.apply = apply
 exports.NS = NS
-exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, getMath, getMathErrors, buildMath, getPlanning, getPlanningErrors, buildPlanning, PlanningCard, PolicyCard, MathCard, ApprovalsCard, JevTestLine, LayerGrid, RouteLayerRow, SettingsCategoryTabs, SwarmAgentsSection, getSettingsTabState, SwarmAgentsController, JevKeyController, DATA }
+exports.__test__ = { getSlots, getOverride, getSlotErrors, getChain, getUpgradeView, buildRoutes, getPolicy, getPolicyErrors, buildPolicy, toPolicyDraft, cloneResourcePolicy, getResourceAccessMode, getApprovals, buildApprovals, getApprovalErrors, getMath, getMathErrors, buildMath, getPlanning, getPlanningErrors, buildPlanning, getJevRouting, getJevRoutingErrors, buildJevRouting, PlanningCard, PolicyCard, MathCard, ApprovalsCard, JevKeyCard, JevTestLine, LayerGrid, RouteLayerRow, AgentCard, SettingsCategoryTabs, SwarmAgentsSection, getSettingsTabState, SwarmAgentsController, JevKeyController, DATA }

@@ -61,9 +61,15 @@ export const Config = Schema.object({
   }).default({}).description('原生后端实例名与每会话调用上限').volatile(),
   jev: Schema.object({
     enabled: Schema.boolean().default(true),
+    source: Schema.union(['official', 'third-party']).default('official').description('JEV 来源；官方与第三方互斥'),
     apiKeyEnv: Schema.string().default('TYPESAFE_API_KEY'),
     baseUrl: Schema.string().default('https://api.typesafe.ai'),
     model: Schema.string().default('jev-1.14.0'),
+    thirdParty: Schema.object({
+      provider: Schema.string().default(''),
+      model: Schema.string().default(''),
+      reasoningEffort: Schema.string().default('')
+    }).default({}).description('从当前 DSH 模型目录选择的第三方 Jev 兼容模型'),
     timeoutMs: Schema.natural().default(10000),
     maxRetries: Schema.natural().default(4).description('单次 Jev 请求失败后的重试次数；Jev 调用不设会话额度'),
     maxRequestsPerSecond: Schema.natural().default(0).description('兼容旧配置；Jev 不设插件侧限流，所有入口实际按不限处理'),
@@ -272,6 +278,22 @@ const getMerged = <T extends object>(defaults: T, raw: unknown): T => {
   ) as T
 }
 
+const getJevConfig = (raw: unknown): JevConfigInfo => {
+  const source = readLiveObject(raw)
+  const merged = getMerged(DEFAULT_JEV_CONFIG, source) as JevConfigInfo
+  const thirdParty = readLiveObject(asRecord(source).thirdParty)
+  return {
+    ...merged,
+    source: source.source === 'third-party' ? 'third-party' : 'official',
+    thirdParty: {
+      provider: typeof thirdParty.provider === 'string' ? thirdParty.provider : '',
+      model: typeof thirdParty.model === 'string' ? thirdParty.model : '',
+      ...(typeof thirdParty.reasoningEffort !== 'string' || thirdParty.reasoningEffort === '' ? {} : { reasoningEffort: thirdParty.reasoningEffort })
+    },
+    maxRequestsPerSecond: 0
+  }
+}
+
 const isRoute = (value: unknown): value is RouteInfo => {
   const record = asRecord(value)
   return typeof record.provider === 'string' && record.provider !== '' && typeof record.model === 'string' && record.model !== ''
@@ -351,7 +373,7 @@ export const getSwarmConfig = (raw: unknown): SwarmConfigInfo => {
     })(),
     nativeEscalation: plain.nativeEscalation === 'auto' ? 'auto' : 'manual',
     native: getMerged(DEFAULT_NATIVE_CONFIG, plain.native),
-    jev: { ...getMerged(DEFAULT_JEV_CONFIG, plain.jev), maxRequestsPerSecond: 0 },
+    jev: getJevConfig(plain.jev),
     thresholds: getMerged(DEFAULT_TRIAGE_THRESHOLDS, plain.jev),
     review: getMerged(DEFAULT_REVIEW_CONFIG, plain.review),
     agents: getAgentsConfig(plain.agents),

@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "3.1.9",
+  "version": "3.2.0",
   "description": "DSH 多智能体插件：天枢统御 12 位专家，任务卡 + Mermaid 流程 + 证据门禁验收；多层模型链即时回退与链尾等待恢复、按配置语言输出、内嵌 Jev 判断 / DSH multi-agent swarm plugin with evidence-gated delegation, resilient model routing, language control and embedded Jev judgments",
   "keywords": [
     "dsh",
@@ -45,6 +45,7 @@
     "docs/使用.md",
     "docs/升级与回退.md",
     "docs/路线图.md",
+    "docs/3.2.0-架构演进.md",
     "lib",
     "!lib/preset-builder.*",
     "locale",
@@ -64,6 +65,7 @@
     "pack:release": "node scripts/pack-release.mjs",
     "prepare": "npm run build",
     "repair:state": "node scripts/repair-state.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
