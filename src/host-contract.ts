@@ -210,6 +210,7 @@ export interface LlmLike {
   listProviders: () => Array<{ id: string }>
   resolveModelInfo: (provider: string, model: string, signal?: AbortSignal) => Promise<{ inputModalities?: readonly string[]; reasoning?: { efforts: readonly { id: string; name?: string }[]; defaultEffort?: string } }>
   resolveCallConfig?: (config: Pick<CallConfigLike, 'provider' | 'model' | 'reasoningEffort'>, signal?: AbortSignal) => Promise<CallConfigLike>
+  stream?: (options: { provider: string; model: string; reasoningEffort?: string; system?: string; messages: Array<{ role: 'user'; content: ContentBlockLike[] }>; signal?: AbortSignal }) => AsyncIterable<Record<string, unknown>>
 }
 
 /** 工具守卫看到的执行信息 */

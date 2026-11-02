@@ -325,6 +325,7 @@ export type LedgerEventType =
   | 'session/plan' | 'delegation/retry'
   | 'workflow/review' | 'workflow/checkpoint' | 'workflow/stale' | 'math/computed'
   | 'message/send' | 'message/ack' | 'state/recovered' | 'experience/candidate'
+  | 'worktree/created'
 
 /** 账本事件（一行 JSON） */
 export interface LedgerEvent {

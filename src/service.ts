@@ -16,7 +16,9 @@ import { getRoleRoute, type SwarmConfigInfo } from './config.js'
 import { DispatchAdmissionError, intDelegator, getToolFilter, type ChildScopeRequest, type DelegateExecInfo, type DelegateSessionInfo, type PlanSessionInput } from './delegate.js'
 import type { ChildPromptInfo } from './runtime.js'
 import { startChild } from './subagent-compat.js'
-import { intLedger, intTaskStore, type AcceptanceRecord, type AssessmentInfo, type DelegationRecord, type TaskRecord, type TriageRecord } from './evidence.js'
+import { getLedgerEvents, intLedger, intTaskStore, type AcceptanceRecord, type AssessmentInfo, type DelegationRecord, type TaskRecord, type TriageRecord } from './evidence.js'
+import { createSwarmEventJournal, type SwarmEventJournal } from './event-journal.js'
+import { appendLegacyEventToJournal } from './ledger-event-bridge.js'
 import {
   SPAWN_PROVIDER,
   WRITE_TOOL_NAMES,
@@ -77,6 +79,7 @@ import { getCalculateOptions, getMathAvailability } from './math/config.js'
 import { createWorkspaceLeaseManager, type WorkspaceLease } from './util/workspace-lease.js'
 import type { ToolExecLike } from './tool-shape.js'
 import { getPlanningRecovery } from './planning-recovery.js'
+import { ParseCreatedWorktree, WORKTREE_TOOL, intWorktreeRegistry, type WorktreeBindingInfo, type WorktreeRegistry } from './worktree-binding.js'
 import { discoverProjectFiles } from './project-discovery.js'
 import { createAgentControl, type AgentControl } from './agent-control.js'
 import type { AgentControlRpcInput } from './rpc.js'
@@ -90,6 +93,7 @@ import type { GoalsLike, UserQuestionsLike } from './host-contract.js'
 import { createAuthorizationRuntime, type AuthorizationRuntimeContext } from './authorization-runtime.js'
 import { getTaskRuntimeLineage } from './feature-session.js'
 import { isAuthorizationWaiting } from './authorization-wait.js'
+import { projectTicketLifecycle } from './ticket-lifecycle.js'
 
 export interface LoggerLike {
   info: (message: string) => void
@@ -214,6 +218,8 @@ export interface RootUpgradeView {
 }
 
 interface SessionStateInfo extends DelegateSessionInfo {
+  journal: SwarmEventJournal
+  worktrees: WorktreeRegistry
   counters: { native: number; jev: number; review: number; session: number }
   /** 天枢根会话最近一次调用 write/edit 的时刻；0 表示没有 */
   rootEditAt: number
@@ -388,12 +394,14 @@ const getDelegationView = (d: DelegationRecord, verbose: boolean) => ({
   ...(verbose ? { structured: d.structured, evidence: d.evidence, attempts: d.attempts, evidenceAssessmentDetails: d.evidenceAssessment } : {})
 })
 
-  const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean, externalEditAt: number, recovery?: RequestRecoveryState | null, delegationBindingTask: TaskRecord = task, includeDiagrams = true) => {
+  const getTaskView = (task: TaskRecord, delegations: DelegationRecord[], config: SwarmConfigInfo, verbose: boolean, externalEditAt: number, recovery?: RequestRecoveryState | null, delegationBindingTask: TaskRecord = task, includeDiagrams = true, worktrees: WorktreeBindingInfo[] = []) => {
   const current = getCurrentDelegations(task, delegations, task.artifactSnapshot?.digest)
   const gates = getEffectiveGates(task.gates, current, externalEditAt)
   const check = getAcceptanceCheck(gates, current, task.acceptance?.resolutions ?? [], externalEditAt, task.card.perf)
   return {
     task_id: task.taskId,
+    ticket: projectTicketLifecycle(task, delegations),
+    worktrees,
     title: task.card.title,
     goal: task.card.goal,
     card: task.card,
@@ -492,10 +500,24 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const getSession = (sessionId: string): SessionStateInfo => {
     const existing = sessions.get(sessionId)
     if (existing !== undefined) return existing
+    const legacyLedger = intLedger(getLedgerDir(), sessionId, (error) => deps.logger?.warn(`账本写入失败：${String(error)}`))
+    const journal = createSwarmEventJournal({ directory: join(deps.dshHome, 'share', 'dsh-agent-swarm', 'events-v2'), rootSessionId: sessionId, now: () => new Date(now()) })
+    const ledger: ReturnType<typeof intLedger> = {
+      path: legacyLedger.path,
+      AddLedgerEvent: (event) => {
+        legacyLedger.AddLedgerEvent(event)
+        try { appendLegacyEventToJournal(journal, { ts: new Date(now()).toISOString(), sessionId, ...event }) }
+        catch (error) { deps.logger?.warn(`V2 事件账本镜像失败：${String(error)}`) }
+      }
+    }
+    const worktrees = intWorktreeRegistry({ now })
+    worktrees.hydrate(getLedgerEvents(ledger.path))
     const created: SessionStateInfo = {
       sessionId,
       store: intTaskStore(),
-      ledger: intLedger(getLedgerDir(), sessionId, (error) => deps.logger?.warn(`账本写入失败：${String(error)}`)),
+      ledger,
+      journal,
+      worktrees,
       editLock: intMutex(),
       counters: { native: 0, jev: 0, review: 0, session: 0 },
       threads: intThreadRegistry(),
@@ -1043,6 +1065,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const jev = intJevHub({
     getConfig: () => deps.getConfig().jev,
     getCredentials: deps.getCredentials,
+    getLlm: () => {
+      const llm = deps.getLlm()
+      return llm?.stream === undefined ? undefined : llm as unknown as import('./jev-third-party.js').ThirdPartyJevLlmLike
+    },
     fetch: deps.fetch,
     sleep,
     now,
@@ -1921,7 +1947,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       .map((task) => deriveReconciledTask(session, deriveIntentRefresh(task, exec.agent)))
     const views = tasks.map((task) => {
       return {
-        ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null, getTaskOrThrow(session, task.taskId), input.compact !== true),
+        ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null, getTaskOrThrow(session, task.taskId), input.compact !== true, session.worktrees.project(task.taskId)),
         runtimeGuard: getRuntimeView(session, task.taskId),
         acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
         stateRefreshRequired: !isTaskVersionCurrent(task, getTaskOrThrow(session, task.taskId)), publishedRevisions: getTaskBinding(getTaskOrThrow(session, task.taskId))
@@ -2124,9 +2150,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         ? '专家已经取消，延迟工具调用被拒绝'
         : '一次性专家已经结束，延迟工具调用被拒绝'
     }
-    if (closing && execution.agent !== undefined && isManagedAgent(execution.agent) && (WRITE_TOOL_NAMES.includes(execution.name) || ['bash', 'pwsh'].includes(execution.name))) return '百工正在停止，拒绝新增写入或命令执行'
-    const writer = WRITE_TOOL_NAMES.includes(execution.name) || ['bash', 'pwsh'].includes(execution.name)
+    if (closing && execution.agent !== undefined && isManagedAgent(execution.agent) && (WRITE_TOOL_NAMES.includes(execution.name) || execution.name === WORKTREE_TOOL || ['bash', 'pwsh'].includes(execution.name))) return '百工正在停止，拒绝新增写入、工作树或命令执行'
+    const writer = WRITE_TOOL_NAMES.includes(execution.name) || execution.name === WORKTREE_TOOL || ['bash', 'pwsh'].includes(execution.name)
     const role = getRoleForAgent(execution.agent)
+    if (role === 'tian_shu' && execution.name === WORKTREE_TOOL) return '天枢是路由与会话主持者，不能直接创建可写工作树；请委派铸剑或疾风执行'
     if (isManagedAgent(execution.agent)) {
       const denied = getToolApprovalDenial(execution, deps.getConfig().approvals)
       if (denied !== undefined) return denied
@@ -2142,6 +2169,19 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         const currentTask = session.store.getTask(binding.taskId)
         const task = currentTask === undefined ? undefined : deriveReconciledTask(session, deriveIntentRefresh(currentTask, session.rootAgent ?? execution.agent))
         if (task === undefined || !isTaskVersionCurrent(task, binding)) return '专家绑定的是旧任务版本，不能继续执行工具'
+      }
+      const workspaceEditor = role !== undefined && getRoleInfo(role).permission === 'workspace-edit'
+      if (execution.name === WORKTREE_TOOL) {
+        if (!workspaceEditor) return '只有可编辑工作区的专家能够创建可写工作树'
+        const denied = session.worktrees.canCreate({ agentId: execution.agent.id, taskId: binding.taskId })
+        if (denied !== undefined) return denied
+      } else if (writer && workspaceEditor) {
+        const worktreeToolLoaded = deps.getTools()?.schemas(execution.agent).some((tool) => tool.name === WORKTREE_TOOL) === true
+        if (worktreeToolLoaded) {
+          const bound = session.worktrees.findByAgent(execution.agent.id)
+          if (bound === undefined) return '可编辑专家尚未创建隔离工作树；请先调用 create_worktree，再修改文件或运行命令'
+          if (bound.taskId !== binding.taskId) return '当前专家仍绑定其它任务的工作树，不能在新任务中写入'
+        }
       }
       if (['read', 'read_image', 'glob', 'grep', 'write', 'edit'].includes(execution.name)) {
         const canonical = (path: string): string => {
@@ -2480,6 +2520,26 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     ObserveManagedToolResult: (execution, result) => {
       authorizationRuntime.observeFinalResult(execution, result)
       const agent = execution.agent
+      if (execution.name === WORKTREE_TOOL && agent !== undefined && !(result !== null && typeof result === 'object' && (result as { isError?: boolean }).isError === true)) {
+        const owner = childOwners.get(agent.id)
+        const control = agentControl.get(agent.id)
+        const parsed = ParseCreatedWorktree(result)
+        if (owner === undefined || control === undefined) {
+          deps.logger?.warn(`Git 工作树结果无法绑定：agent=${agent.id} 缺少活动委派身份`)
+        } else if (parsed === undefined) {
+          deps.logger?.warn(`Git 工作树结果无效：agent=${agent.id} 未返回 path/branch/baseCommit/repositoryRoot`)
+        } else {
+          const session = getSession(owner)
+          const existed = session.worktrees.findByPath(parsed.path)
+          try {
+            const binding = session.worktrees.bind({ ...parsed, agentId: agent.id, taskId: control.taskId, delegationId: control.delegationId })
+            if (existed === undefined) session.ledger.AddLedgerEvent({ type: 'worktree/created', taskId: control.taskId, delegationId: control.delegationId,
+              data: { ...binding, agentId: agent.id } })
+          } catch (error) {
+            deps.logger?.warn(`Git 工作树绑定被拒绝：agent=${agent.id} path=${parsed.path} reason=${getErrorText(error)}`)
+          }
+        }
+      }
       if (agent === undefined || !isRootTianShu(agent) || !observedReadTools.has(execution.name) || result === null || typeof result !== 'object' || (result as { isError?: boolean }).isError === true) return
       const run = (runtimeEvidenceBarrier.get(agent.id) ?? Promise.resolve()).then(async () => {
         const context = await authorizationContext(agent), features = getSession(agent.id).features!
@@ -2552,7 +2612,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       }
       if (WRITE_TOOL_NAMES.includes(execution.name)) AddRootEdit(execution.agent, getRoleForAgent(execution.agent))
       if (execution.agent !== undefined && childOwners.has(execution.agent.id)
-        && (WRITE_TOOL_NAMES.includes(execution.name) || ['bash', 'pwsh'].includes(execution.name))) agentControl.MarkSideEffectRisk(execution.agent.id)
+        && (WRITE_TOOL_NAMES.includes(execution.name) || execution.name === WORKTREE_TOOL || ['bash', 'pwsh'].includes(execution.name))) agentControl.MarkSideEffectRisk(execution.agent.id)
     },
     getRoleForAgent,
     isManagedAgent,
@@ -2614,9 +2674,12 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       if (session === undefined || session.rootAgent === undefined || !isRootTianShu(session.rootAgent)) throw new SwarmError('PERMISSION_DENIED', '该会话不是已登记的百工根会话')
       const stored = getTaskOrThrow(session, taskId)
       const task = deriveReconciledTask(session, deriveIntentRefresh(stored, session.rootAgent))
-      const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session), routeState.getRecovery(sessionId) ?? null, stored)
+      const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session), routeState.getRecovery(sessionId) ?? null, stored, true, session.worktrees.project(taskId))
+      const journal = session.journal.read()
+      const projection = session.journal.project()
       return { ...view,
         rootSessionId: sessionId,
+        eventJournal: { schemaVersion: 2, sequence: projection.sequence, issues: journal.issues.length, projection },
         runtimeGuard: getRuntimeView(session, taskId),
         acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
         diagrams: { ...view.diagrams, stateRefreshRequired: task !== stored },

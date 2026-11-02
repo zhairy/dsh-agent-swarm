@@ -1,6 +1,7 @@
 import { CAPABILITY_TOOL_CANDIDATES, type Capability } from './host-contract.js'
 import { LANGUAGE_NAMES, LANGUAGE_PLACEHOLDER, type OutputLanguage } from './language.js'
 import { getStyledPersona, type PromptStyle } from './model-family.js'
+import { WORKTREE_TOOL } from './worktree-binding.js'
 
 /** 13 个角色的稳定 ASCII ID（天枢 + 12 个可委派角色） */
 export const ROLE_IDS = [
@@ -171,6 +172,8 @@ const COMMON_CHILD_BOUNDARIES = [
   '不要为了确认自己使用的模型或供应商去读取 DSH 的配置、凭据或会话文件：实际使用的模型由系统记录在委派结果里，任务要求报告模型时写「由系统记录」即可。'
 ]
 
+const WORKTREE_BOUNDARY = '可编辑专家在修改任何文件或运行命令前，先调用 create_worktree 从当前本地 HEAD 创建独立工作树，再在返回目录中修改和验证。只使用本 attempt 绑定的工作树；不得复用其它任务或专家的工作树。修改后核对 git status、git diff 和真实测试结果。工作树默认保留，即使失败也不得自动删除；存在未提交文件或未合并提交时必须保留并交给天枢/用户处理。'
+
 const MODE_TEXT: Readonly<Record<SuanHengMode, string>> = {
   research: '当前模式：研算。在实现之前定义语义，提出候选算法，给出不变量、复杂度与数值误差分析。',
   verify: '当前模式：验算。独立检验给定的实现或规格：寻找反例，核对不变量与数值误差，不要假定任何已有结论正确。'
@@ -305,7 +308,10 @@ export const getWantedTools = (id: RoleId, options: { allowWeb?: boolean } = {})
   const role = getRoleInfo(id)
   const webOpen = role.web === 'always' || (role.web === 'on-request' && options.allowWeb === true)
   const capabilities = role.capabilities.filter((cap) => cap !== 'web' || webOpen)
-  return [...new Set(capabilities.flatMap((cap) => [...CAPABILITY_TOOL_CANDIDATES[cap]]))]
+  return [...new Set([
+    ...capabilities.flatMap((cap) => [...CAPABILITY_TOOL_CANDIDATES[cap]]),
+    ...(role.permission === 'workspace-edit' ? [WORKTREE_TOOL] : [])
+  ])]
 }
 
 export const getRoleTag = (id: RoleId): string => `[[swarm:role=${id}]]`
@@ -329,7 +335,7 @@ export const getChildPersona = (id: DelegableRoleId, mode?: SuanHengMode, style:
     name: role.name,
     title: role.title,
     duty: role.duty,
-    boundaries: [...role.boundaries, ...COMMON_CHILD_BOUNDARIES, ...(role.capabilities.includes('jev') ? [JEV_HINT] : [])],
+    boundaries: [...role.boundaries, ...COMMON_CHILD_BOUNDARIES, ...(role.permission === 'workspace-edit' ? [WORKTREE_BOUNDARY] : []), ...(role.capabilities.includes('jev') ? [JEV_HINT] : [])],
     deliverables: role.deliverables,
     rules: getRoleRules(id, language),
     ...(id === 'suan_heng' ? { modeText: MODE_TEXT[mode ?? 'research'] } : {}),

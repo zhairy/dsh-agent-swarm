@@ -9,7 +9,15 @@
 DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文专家（谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔），用任务卡、门禁和真实证据决定是否验收；模型路由按你的订阅配置多层回退，故障时立即切到可用备用，最后一个可用模型短时故障时在预算内等待恢复。
 
 - 适配 DSH **0.2.0 / 0.2.1**（`>=0.2.0-rc.2 <0.2.2-0`，推荐 0.2.1-rc.3）与 Node.js 22.12 及以上
-- 新建会话选「百工模式」即可使用；Jev API key 可选
+- 新建会话选「百工模式」即可使用；Jev 可选择 TypeSafe 官方接口，或从 DSH 当前模型目录选择第三方 Jev 兼容模型
+
+### 3.2.0 的变化
+
+- 模型路由中的专家卡默认全部收起；卡片可独立展开/收起主备链与升级链，错误卡会自动展开。
+- Jev 官方与第三方来源互斥。第三方模式从 DSH 当前供应商目录选择供应商、模型和推理强度，不再手工输入模型 ID，也不读取官方 API key。
+- 接入 DSH 官方 Git 工作树工具。铸剑和疾风必须先创建隔离工作树才能写入；工作树与任务/委派绑定，不能跨任务复用，重启后保留并标记为需要人工恢复。
+- 新增 Ticket 生命周期、统一 RouteEngine、Worker 边界、事件日志和 Watchdog 核心模块，同时保留原有专家角色、额度、认证、模型资格、主备回退与证据门禁。
+- 补齐 Antigravity、DSH OpenCode Go、OpenCode 与相关模型家族的资源额度与能力元数据。
 
 ### 3.1.8 的变化
 
@@ -157,7 +165,15 @@ MIT，见 [LICENSE](LICENSE)。内嵌的 Jev 工具改编自 jev-mcp 0.2.1（MIT
 A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" leads 12 Chinese-named experts (requirements, architecture, math, code exploration, research, vision, complex implementation, command execution, small edits, independent review, verification, copywriting) and accepts work only on evidence: task cards, hard gates and real command results. Each role has a multi-layer model chain built from your subscriptions; failures switch to a usable backup immediately, and a short outage of the last usable model is waited out within a budget.
 
 - Works with DSH **0.2.0 / 0.2.1** (`>=0.2.0-rc.2 <0.2.2-0`, 0.2.1-rc.3 recommended) on Node.js 22.12 or newer
-- Start a session in the "百工模式" (Agent Swarm) preset; a Jev API key is optional
+- Start a session in the "百工模式" (Agent Swarm) preset. Jev can use the official TypeSafe API or a third-party Jev-compatible model selected from the live DSH catalog.
+
+### What's new in 3.2.0
+
+- Expert cards are collapsed by default and expand independently to show primary, fallback and upgrade routes; invalid saved drafts reopen automatically.
+- Official and third-party Jev sources are mutually exclusive. Third-party mode uses catalog-backed provider/model/reasoning selectors, never asks for a model ID and does not read the official API key.
+- Managed editing experts use the native DSH Git worktree tool. A worktree is bound to one ticket/assignment, cannot be reused across tickets, survives restart as manual-recovery state, and is never auto-removed.
+- Adds Ticket lifecycle, RouteEngine, Router/Worker, event journal and Watchdog cores while retaining the existing experts, quota/authentication/eligibility checks, fallback chains and evidence gates.
+- Adds resource and capability metadata for Antigravity, DSH OpenCode Go, OpenCode and the relevant model families.
 
 ### What's new in 3.1.9
 

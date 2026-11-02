@@ -5,10 +5,16 @@ import { normalizeRouteFailure, getRouteFailure, getRouteResourcePolicy, getWire
 
 export const PROVIDER_QWEN = 'qwen-token-plan-cn'
 export const PROVIDER_GO = 'opencode-go'
+export const PROVIDER_DSH_GO = 'dsh-opencode-go'
+export const PROVIDER_OPENCODE = 'opencode'
 export const PROVIDER_DS = 'deepseek-official'
-/** dsh-plugin-subscriptions 提供的订阅 provider：ChatGPT（Codex）与 Claude */
+/** Subscription providers exposed by dsh-plugin-subscriptions. */
 export const PROVIDER_CODEX = 'codex'
 export const PROVIDER_CLAUDE = 'claude'
+export const PROVIDER_ANTIGRAVITY = 'antigravity'
+export const PROVIDER_GROK = 'grok'
+export const PROVIDER_COPILOT = 'copilot'
+export const PROVIDER_JEV = 'jev'
 
 /** 一条模型路由 */
 export interface RouteInfo {
@@ -21,7 +27,7 @@ export interface RouteInfo {
 /** 路由表的键：算衡按模式拆成两条 */
 export type RouteKey = Exclude<RoleId, 'suan_heng'> | 'suan_heng:research' | 'suan_heng:verify'
 export type EscalationKind = 'codex' | 'claude'
-export type ModelFamily = 'deepseek' | 'qwen' | 'kimi' | 'glm' | 'minimax' | 'mimo' | 'gpt' | 'grok' | 'claude' | 'hunyuan' | 'longcat' | 'muse' | 'other'
+export type ModelFamily = 'deepseek' | 'qwen' | 'kimi' | 'glm' | 'minimax' | 'mimo' | 'gpt' | 'gemini' | 'grok' | 'claude' | 'hunyuan' | 'longcat' | 'muse' | 'other'
 
 type CatalogInfo = Readonly<Record<string, { vision: boolean }>>
 
@@ -52,6 +58,7 @@ export const QWEN_TOKEN_PLAN_MODELS: CatalogInfo = {
 /** pi-ai 0.87.1 内置的 opencode-go 目录 */
 export const OPENCODE_GO_MODELS: CatalogInfo = {
   'minimax-m3': { vision: true },
+  'minimax-m3.1-flash': { vision: true },
   'qwen3.8-flash': { vision: true },
   'deepseek-v4-flash': { vision: false },
   'deepseek-v4-flash-vision-exp': { vision: true },
@@ -66,6 +73,7 @@ export const OPENCODE_GO_MODELS: CatalogInfo = {
   'kimi-k2.6': { vision: true },
   'kimi-k2.7-code': { vision: true },
   'kimi-k3': { vision: true },
+  'kimi-k3.1-pro': { vision: true },
   'longcat-2.0': { vision: false },
   'mimo-v2.5': { vision: true },
   'mimo-v2.5-pro': { vision: false },
@@ -88,6 +96,29 @@ export const OPENCODE_GO_MODELS: CatalogInfo = {
 export const DEEPSEEK_OFFICIAL_MODELS: CatalogInfo = {
   'deepseek-flash': { vision: true },
   'deepseek-v4-pro': { vision: false }
+}
+
+/** Fallback capabilities for Antigravity models; live host metadata remains authoritative. */
+export const ANTIGRAVITY_MODELS: CatalogInfo = {
+  'gemini-4-argon-low': { vision: true },
+  'gemini-4-argon-medium': { vision: true },
+  'gemini-4-argon-high': { vision: true },
+  'gemini-3.8-flash-low': { vision: true },
+  'gemini-3.8-flash-medium': { vision: true },
+  'gemini-3.8-flash-high': { vision: true },
+  'gemini-3.8-flash-tiered': { vision: true },
+  'gemini-3-flash': { vision: true },
+  'gemini-3.1-flash-image': { vision: true },
+  'gemini-2.5-flash': { vision: true },
+  'gemini-2.5-flash-lite': { vision: true },
+  'gemini-2.5-flash-thinking': { vision: true },
+  'gemini-2.5-pro': { vision: true },
+  'claude-opus-5-5-low': { vision: true },
+  'claude-opus-5-5-high': { vision: true },
+  'claude-sonnet-5-5-low': { vision: true },
+  'claude-sonnet-5-5-medium': { vision: true },
+  'claude-sonnet-5-5-high': { vision: true },
+  'gpt-oss-120b-medium': { vision: true }
 }
 
 const q = (model: string, reasoningEffort?: string): RouteInfo => ({ provider: PROVIDER_QWEN, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) })
@@ -183,9 +214,15 @@ export const getRouteLabel = (route: RouteInfo): string => `${route.provider}/${
 export const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   [PROVIDER_CODEX]: 'ChatGPT 订阅',
   [PROVIDER_CLAUDE]: 'Claude 订阅',
+  [PROVIDER_ANTIGRAVITY]: 'Google Antigravity',
   [PROVIDER_QWEN]: '阿里云百炼 Token Plan',
   [PROVIDER_GO]: 'OpenCode Go',
-  [PROVIDER_DS]: 'DeepSeek 官方 API'
+  [PROVIDER_DSH_GO]: 'DSH OpenCode Go',
+  [PROVIDER_OPENCODE]: 'OpenCode Zen',
+  [PROVIDER_DS]: 'DeepSeek 官方 API',
+  [PROVIDER_GROK]: 'Grok 订阅',
+  [PROVIDER_COPILOT]: 'GitHub Copilot 订阅',
+  [PROVIDER_JEV]: 'Jev 判断 API'
 }
 
 /**
@@ -209,6 +246,7 @@ const FAMILY_RULES: ReadonlyArray<readonly [RegExp, ModelFamily]> = [
   [/^minimax/, 'minimax'],
   [/^mimo/, 'mimo'],
   [/^gpt|codex/, 'gpt'],
+  [/^gemini/, 'gemini'],
   [/^grok/, 'grok'],
   [/claude/, 'claude'],
   [/^hy\d/, 'hunyuan'],
@@ -242,6 +280,8 @@ const CATALOG_BY_PROVIDER: Readonly<Record<string, CatalogInfo>> = {
   [PROVIDER_CODEX]: CODEX_MODELS,
   [PROVIDER_CLAUDE]: CLAUDE_MODELS,
   [PROVIDER_GO]: OPENCODE_GO_MODELS,
+  [PROVIDER_DSH_GO]: OPENCODE_GO_MODELS,
+  [PROVIDER_ANTIGRAVITY]: ANTIGRAVITY_MODELS,
   [PROVIDER_DS]: DEEPSEEK_OFFICIAL_MODELS
 }
 
