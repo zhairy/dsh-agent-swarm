@@ -1,5 +1,4 @@
-import type { LlmFailureLike } from './host-contract.js'
-import type { RouteInfo } from './routes.js'
+import type { RouteFailureInput, RouteInfo } from './routes.js'
 
 export type FailureKind = 'quota_exhausted' | 'pool_exhausted' | 'insufficient_balance' | 'auth_invalid'
   | 'model_unavailable' | 'rate_limited' | 'network_transient' | 'service_transient' | 'context_exceeded' | 'capability_mismatch'
@@ -73,7 +72,7 @@ export const getRouteResourcePolicy = (route: RouteInfo): RouteResourcePolicy =>
   return policy
 }
 
-export interface RouteFailureMetadata extends LlmFailureLike {
+export interface RouteFailureMetadata extends RouteFailureInput {
   kind?: string
   quotaDomainId?: string
   quotaScope?: RouteResourcePolicy['quotaScope']

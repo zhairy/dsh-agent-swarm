@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { getRoleRoute, getSwarmConfig } from '../../src/config.js'
 import type { DelegationRecord, TaskRecord } from '../../src/evidence.js'
 import { ValidateTaskCard, type TaskCard } from '../../src/policy.js'
-import { DEFAULT_ROUTE_CHAINS } from '../../src/routes.js'
+import { DEFAULT_ROUTE_CHAINS } from '../../src/domain/routing/routes.js'
 import {
   DEFAULT_UPGRADES,
   UPGRADEABLE_KEYS,
@@ -12,7 +12,7 @@ import {
   getUpgradeReasons,
   getUpgradedChain,
   type UpgradeInfo
-} from '../../src/upgrade.js'
+} from '../../src/domain/routing/upgrade.js'
 
 const makeTask = (flags: Record<string, boolean>, extra: Partial<TaskRecord> = {}, perf?: Record<string, unknown>): TaskRecord => {
   const card = ValidateTaskCard({ title: 't', goal: 'g', acceptance: ['a'], flags, ...(perf === undefined ? {} : { perf }) }).card as TaskCard

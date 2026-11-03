@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
-import { createSwarmEventJournal, reduceSwarmEvents } from '../../src/event-journal.js'
+import { createSwarmEventJournal, EVENT_JOURNAL_MAX_LINE_BYTES, reduceSwarmEvents } from '../../src/event-journal.js'
 
 const directory = () => join(mkdtempSync(join(tmpdir(), 'swarm-events-')), 'events')
 const event = (id: string, type: Parameters<ReturnType<typeof createSwarmEventJournal>['append']>[0]['type'] = 'ticket/state-changed') => ({
@@ -34,5 +34,49 @@ describe('v3.2.0 event journal', () => {
     const reopened = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-a' })
     expect(reopened.read()).toMatchObject({ issues: [{ reason: 'invalid-json' }] })
     expect(readFileSync(reopened.path, 'utf8').endsWith('\n')).toBe(true)
+  })
+
+  it('seals at the byte threshold and reopens a valid cross-segment digest chain', () => {
+    const dir = directory()
+    const journal = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-sealed', sealAfterBytes: 16_384 })
+    const bulk = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => [`k${index}`, index]))
+    for (let index = 1; index <= 6; index++) journal.append({ ...event(`e${index}`), payload: { stage: 'running', ...bulk } })
+    expect(journal.segments().length).toBeGreaterThanOrEqual(2)
+    const reopened = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-sealed', sealAfterBytes: 16_384 })
+    const events = reopened.read().events
+    expect(events.map((item) => item.seq)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(events[0]?.previousDigest).toBe('GENESIS')
+    expect(events[1]?.previousDigest).toBe(events[0]?.digest)
+    expect(events[5]?.previousDigest).toBe(events[4]?.digest)
+    expect(reopened.read().issues).toEqual([])
+  })
+
+  it('allows a person to clear a durable quarantine without erasing prior audit events', () => {
+    const journal = createSwarmEventJournal({ directory: directory(), rootSessionId: 'session-unquarantine' })
+    journal.append({ ...event('quarantine'), type: 'ticket/quarantined', actor: { kind: 'watchdog', id: 'watchdog' }, payload: { stage: 'quarantined' } })
+    expect(journal.project().tickets['T-1']?.quarantined).toBe(true)
+    journal.append({ ...event('clear'), type: 'ticket/state-changed', actor: { kind: 'person', id: 'root' }, payload: { stage: 'person:failed', quarantined: false } })
+    expect(journal.project().tickets['T-1']).toMatchObject({ stage: 'person:failed', quarantined: false })
+  })
+
+  it('enforces the configured line ceiling without creating a partial event', () => {
+    const journal = createSwarmEventJournal({ directory: directory(), rootSessionId: 'session-line', maxLineBytes: 2048 })
+    expect(() => journal.append({ ...event('too-large'), payload: { body: 'x'.repeat(EVENT_JOURNAL_MAX_LINE_BYTES) } })).toThrow(/line limit/i)
+    expect(journal.read().events).toEqual([])
+  })
+
+  it('replays 100,000 events with a contiguous deterministic projection', { timeout: 60_000 }, () => {
+    const dir = directory()
+    try {
+      const journal = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-100k', sealAfterBytes: 8 * 1024 * 1024 })
+      for (let index = 1; index <= 100_000; index++) journal.append({ ...event(`bulk-${index}`), payload: { stage: `stage-${index}` } })
+      const replay = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-100k', sealAfterBytes: 8 * 1024 * 1024 })
+      const result = replay.read()
+      expect(result.issues).toEqual([])
+      expect(result.events).toHaveLength(100_000)
+      expect(result.events.at(-1)?.seq).toBe(100_000)
+      expect(result.events.at(-1)?.previousDigest).toMatch(/^[a-f0-9]{64}$/)
+      expect(replay.project()).toMatchObject({ sequence: 100_000, tickets: { 'T-1': { stage: 'stage-100000' } } })
+    } finally { rmSync(join(dir, '..'), { recursive: true, force: true }) }
   })
 })

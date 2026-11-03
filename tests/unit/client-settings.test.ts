@@ -26,7 +26,8 @@ const DATA = {
 
 /** 以 CommonJS 方式执行设置页源码：注入测试数据与最小 React 桩 */
 const loadPage = (reactOverrides: Record<string, unknown> = {}): any => {
-  const source = readFileSync(join(__dirname, '../../client/settings-page.js'), 'utf8')
+  const source = ['settings-shell.js', 'settings-locales.js', 'settings-route-model.js', 'settings-controller.js', 'settings-jev.js', 'settings-components.js', 'settings-page.js']
+    .map((file) => readFileSync(join(__dirname, '../../client', file), 'utf8')).join('\n')
     .replace('const DATA = __SWARM_DATA__', `const DATA = ${JSON.stringify(DATA)}`)
   const module = { exports: {} as any }
   const navigation = { exports: {} as any }

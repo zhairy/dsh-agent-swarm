@@ -21,7 +21,8 @@ const runState = async (scenario: 'root-write' | 'writer-completion') => {
   const overlay = `${workspace}.patch.yml`, out = `${workspace}.out.json`
   writeFileSync(overlay, YAML.stringify([
     { id: 'swarm-core', config: { persistence: { enabled: true }, jev: { enabled: false }, review: { enabled: false },
-      planningReview: { enabled: false, requireJev: false }, workflow: { mode: 'advisory' }, agents: { maxRetries: 0, networkWaitMs: 0 },
+      planningReview: { enabled: false, requireJev: false }, workflow: { mode: 'advisory' }, router: { workspaceWrites: scenario === 'root-write' ? 'allow' : 'deny' },
+      agents: { maxRetries: 0, networkWaitMs: 0 },
       routes: Object.fromEntries(['tian_shu', 'tan_wei', 'ji_feng', 'fu_he', 'yu_shi'].map(role => [role, { chain: [{ provider: PROVIDER, model: role === 'tian_shu' ? 'root' : `role-${role}` }], upgrade: { enabled: false } }])) } },
     { insert: [{ id: 'swarm-state-consistency-driver', name: join(DRIVER_DIR, 'state-consistency-scenarios.js') }] }
   ]))

@@ -32,7 +32,7 @@ const makeService = (options: { config?: Record<string, unknown>; env?: Partial<
     })
   }
   // 旧门禁/路由用例聚焦原行为，独立规划审核由 planning-runtime 用例覆盖。
-  const config: SwarmConfigInfo = getSwarmConfig({ planningReview: { enabled: false }, ...options.config })
+  const config: SwarmConfigInfo = getSwarmConfig({ planningReview: { enabled: false }, router: { workspaceWrites: 'allow' }, ...options.config })
   const fixtureLlm = { listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'opencode-go' }, { id: 'deepseek-official' }], resolveModelInfo: async () => ({ inputModalities: ['text', 'image'], reasoning: { efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((id) => ({ id, name: id })) } }) }
   const deps: SwarmServiceDepsInfo = {
     getConfig: () => config,
@@ -662,6 +662,13 @@ describe('守卫与诊断', () => {
     service.routeState.AddChild('kid', { chain: [], role: 'fu_he' })
     expect(service.getGuardReason({ name: 'write', agent: { id: 'kid', session: { header: { agentPreset: 'tian-shu' } } } })).toContain('「复核」')
     expect(service.getRoleForAgent({ id: 'kid' })).toBe('fu_he')
+  })
+
+  it('默认禁止天枢 Router 直接写入或运行命令', () => {
+    const { service } = makeService({ config: { router: { workspaceWrites: 'deny' } } })
+    expect(service.getGuardReason({ name: 'edit', agent: root })).toContain('Router')
+    expect(service.getGuardReason({ name: 'bash', agent: root })).toContain('Router')
+    expect(service.getGuardReason({ name: 'read', agent: root })).toBeUndefined()
   })
 
   it('百工管理的会话：百工预设的根会话与百工委派的子会话；其他插件的子会话不算', () => {

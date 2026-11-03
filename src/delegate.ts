@@ -19,8 +19,8 @@ import {
 import { getPromptStyle, getStyledTaskPrompt, type PromptStyle } from './model-family.js'
 import { isNetworkSuspect, type NetworkMonitorInfo } from './network.js'
 import { GATE_IDS, GATE_ROLE, ValidateDelegationBudget, type GateId } from './policy.js'
-import { getValidatedQuotaOrder, type FallbackEventInfo, type RouteStateRegistry } from './route-state.js'
-import { startChild, supportsContinuableSessions } from './subagent-compat.js'
+import { getValidatedQuotaOrder, type FallbackEventInfo, type RouteEngine } from './application/routing/engine.js'
+import { startChild, supportsContinuableSessions } from './adapters/dsh-host/subagent.js'
 import {
   getChildPersona,
   getRoleInfo,
@@ -30,14 +30,16 @@ import {
   type DelegableRoleId,
   type SuanHengMode
 } from './role-registry.js'
-import { FindUsableRoutes, getModelFamily, getRouteKey, getRouteLabel, type EscalationKind, type ModelFamily, type RouteInfo, type RouteProbe } from './routes.js'
+import { FindUsableRoutes, getModelFamily, getRouteKey, getRouteLabel, type EscalationKind, type ModelFamily, type RouteInfo, type RouteProbe } from './domain/routing/routes.js'
 import { SESSION_CHOICES, getRuleSessionPlan, type ChildEndHub, type SessionChoice, type SessionPlan, type ThreadInfo, type ThreadRegistry } from './threads.js'
-import { getUpgradeReasons, getUpgradedChain } from './upgrade.js'
+import { getUpgradeReasons, getUpgradedChain } from './domain/routing/upgrade.js'
 import { SwarmError, getErrorText } from './util/errors.js'
 import { getExplainedError } from './util/failure-hint.js'
 import { getChangedFiles, type GitStatusInfo } from './util/git.js'
 import type { MutexInfo } from './util/mutex.js'
 import { ValidateImagePaths, getImageBlocks } from './vision.js'
+import { getValueDigest } from './workflow.js'
+import { validateWorkerSubmission, type AssignmentEnvelope } from './router-worker.js'
 
 export const DELEGATE_BACKENDS = ['auto', 'api', 'codex', 'claude'] as const
 export type DelegateBackend = typeof DELEGATE_BACKENDS[number]
@@ -338,7 +340,7 @@ export interface DelegateExecInfo {
   /** Trusted control-plane target; never accepted as a model/tool parameter. */
   controlledThreadId?: string
   /** Server-owned frozen contract and final publication gate; never parsed from tool input. */
-  admission?: { task: TaskRecord; dispatch: <T>(publish: () => Promise<T>) => Promise<T> }
+  admission?: { task: TaskRecord; dispatch: <T>(publish: () => Promise<T>) => Promise<T>; assertCurrent?: () => void; attemptId?: string; leaseEpoch?: number }
 }
 
 /** 委派执行依赖（全部可替换，便于测试） */
@@ -350,7 +352,7 @@ export interface DelegateDepsInfo {
   probe: RouteProbe
   probeForChild?: (childId: string, route: RouteInfo, signal?: AbortSignal) => ReturnType<RouteProbe>
   orderQuotaRoutes?: (routes: readonly RouteInfo[], signal?: AbortSignal, protectedRoutes?: readonly RouteInfo[]) => Promise<readonly RouteInfo[]>
-  routeState: RouteStateRegistry
+  routeState: RouteEngine
   readFile: (path: string) => Promise<Uint8Array>
   gitStatus: (cwd: string) => Promise<GitStatusInfo | undefined>
   now: () => number
@@ -434,8 +436,29 @@ const getEvaluation = (role: DelegableRoleId, mode: SuanHengMode | undefined, re
  */
 export const intDelegator = (deps: DelegateDepsInfo) => {
   const finish = (session: DelegateSessionInfo, record: DelegationRecord, patch: Partial<DelegationRecord>): DelegationRecord => {
+    let effectivePatch = patch
+    if (record.assignment !== undefined) {
+      const task = session.store.getTask(record.taskId)
+      const validation = task === undefined
+        ? { accepted: false as const, reason: 'ticket-mismatch' as const }
+        : validateWorkerSubmission(record.assignment, {
+            ticketId: task.taskId,
+            assignmentId: record.attemptId ?? record.delegationId,
+            requestRevision: task.requestRevision ?? 1,
+            cardRevision: task.cardRevision ?? 1,
+            workflowRevision: task.workflowRevision ?? 1,
+            leaseEpoch: record.assignment.leaseEpoch,
+            inputDigest: record.continuationInput === undefined ? record.assignment.inputDigest : getValueDigest(record.continuationInput)
+          })
+      if (!validation.accepted) effectivePatch = {
+        ...patch,
+        status: 'failed',
+        summary: `Worker submission rejected: ${validation.reason}`,
+        error: `STALE_EVIDENCE: ${validation.reason}`
+      }
+    }
     const finishedAt = deps.now()
-    const next = session.store.UpdateDelegation(record.delegationId, { ...patch, finishedAt, durationMs: finishedAt - record.startedAt })
+    const next = session.store.UpdateDelegation(record.delegationId, { ...effectivePatch, finishedAt, durationMs: finishedAt - record.startedAt })
     session.ledger.AddLedgerEvent({
       type: `delegation/${next.status}` as 'delegation/completed',
       taskId: next.taskId,
@@ -453,9 +476,30 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     finish(session, record, { status: 'blocked', summary: reason, error: reason, attempts: [...record.attempts, ...attempts] })
 
   const markRunning = (session: DelegateSessionInfo, record: DelegationRecord, backend: BackendKind): DelegationRecord => {
-    const next = session.store.UpdateDelegation(record.delegationId, { status: 'running', backend })
+    const next = session.store.UpdateDelegation(record.delegationId, { status: 'running', backend, lastHeartbeatAt: deps.now() })
     session.ledger.AddLedgerEvent({ type: 'delegation/running', taskId: next.taskId, delegationId: next.delegationId, data: { backend } })
     return next
+  }
+
+  const assignWorker = (session: DelegateSessionInfo, record: DelegationRecord, input: DelegateInput, workerKind: AssignmentEnvelope['workerKind'], provider: string, model: string,
+    reasoningEffort?: string, permissions: readonly string[] = [], identity: { assignmentId?: string; leaseEpoch?: number } = {}): DelegationRecord => {
+    const assignment: AssignmentEnvelope = {
+      ticketId: record.taskId,
+      assignmentId: identity.assignmentId ?? record.attemptId ?? record.delegationId,
+      role: record.role,
+      workerKind,
+      provider,
+      model,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      requestRevision: record.requestRevision ?? 1,
+      cardRevision: record.cardRevision ?? 1,
+      workflowRevision: record.workflowRevision ?? 1,
+      leaseEpoch: identity.leaseEpoch ?? 0,
+      inputDigest: getValueDigest(input),
+      permissions: [...new Set(permissions)],
+      createdAt: deps.now()
+    }
+    return session.store.UpdateDelegation(record.delegationId, { assignment })
   }
 
   /**
@@ -536,7 +580,10 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     }
     session.counters.native += 1
     session.ledger.AddLedgerEvent({ type: 'native/call', taskId: task.taskId, delegationId: record.delegationId, data: { provider, kind, used: session.counters.native } })
-    const running = markRunning(session, record, kind)
+    const assigned = assignWorker(session, record, input, kind.startsWith('codex') ? 'native-codex' : 'native-claude', provider, kind,
+      undefined, ['native'], { ...(exec.admission?.attemptId === undefined ? {} : { assignmentId: exec.admission.attemptId }),
+        ...(exec.admission?.leaseEpoch === undefined ? {} : { leaseEpoch: exec.admission.leaseEpoch }) })
+    const running = markRunning(session, assigned, kind)
     const cwd = getWorkspaceRoot(exec.agent)
     const before = await deps.gitStatus(cwd)
     const promptStyle = getNativeStyle(kind)
@@ -1025,7 +1072,12 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
         return block(session, record, `图片入库失败：${getErrorText(error)}`, attempts)
       }
     }
-    const running = markRunning(session, record, 'spawn')
+    const initialRoute = selection.usable[0]!
+    const permissions = toolFilter?.allow ?? toolFilter?.deny?.map((name) => `deny:${name}`) ?? ['structured_output']
+    const assigned = assignWorker(session, record, input, 'expert', initialRoute.provider, initialRoute.model, initialRoute.reasoningEffort, permissions,
+      { ...(exec.admission?.attemptId === undefined ? {} : { assignmentId: exec.admission.attemptId }),
+        ...(exec.admission?.leaseEpoch === undefined ? {} : { leaseEpoch: exec.admission.leaseEpoch }) })
+    const running = markRunning(session, assigned, 'spawn')
     const cwd = getWorkspaceRoot(exec.agent)
     const before = await deps.gitStatus(cwd)
     const fallbacks: RouteAttempt[] = []

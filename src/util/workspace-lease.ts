@@ -117,6 +117,7 @@ export interface WorkspaceLeaseManager {
   acquire: (cwd: string, owner: string, kind: WorkspaceLeaseKind, signal?: AbortSignal) => Promise<WorkspaceLease>
   getStatus: (cwd: string) => Promise<{ workspaceId: string; busy: boolean; mutationUnknown: boolean; owner?: string; leaseEpoch: number }>
   peekStatus: (cwd: string) => { workspaceId: string; busy: boolean; mutationUnknown: boolean; owner?: string; leaseEpoch: number } | undefined
+  isCurrent: (lease: WorkspaceLease) => boolean
   reconcile: (cwd: string, owner: string, confirmedStopped: boolean) => Promise<void>
   reconcileStoppedProcess: (cwd: string) => Promise<boolean>
 }
@@ -137,6 +138,13 @@ export const createWorkspaceLeaseManager = (options: { ownerDirectory?: string }
       const state = workspaces.get(canonical)
       if (state === undefined) return undefined
       return { workspaceId: state.workspaceId, busy: state.active !== undefined || state.pumping, mutationUnknown: state.mutationUnknown, ...(state.active === undefined ? {} : { owner: state.active.owner }), leaseEpoch: state.epoch }
+    },
+    isCurrent: (lease) => {
+      let canonical: string
+      try { canonical = realpathSync.native(lease.cwd) } catch { return false }
+      const state = workspaces.get(canonical)
+      return state?.active?.leaseId === lease.leaseId && state.active.owner === lease.owner
+        && state.active.leaseEpoch === lease.leaseEpoch && !state.mutationUnknown
     },
     acquire: async (cwd, owner, kind, signal) => {
       if (!owner || !['write', 'edit', 'verify'].includes(kind)) throw new WorkspaceLeaseError('LEASE_INVALID', 'Invalid execution lease')

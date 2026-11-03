@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createAgentControl, ValidateAgentControlRecords, type AgentControlDeps } from '../../src/agent-control.js'
-import { intRouteStateRegistry } from '../../src/route-state.js'
+import { createRouteEngine } from '../../src/application/routing/engine.js'
 
 const original = { provider: 'qwen-token-plan-cn', model: 'old', reasoningEffort: 'high' }
 const chosen = { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
 const binding = { childId: 'child', parentSessionId: 'root', taskId: 'T-1', delegationId: 'D-1', persistent: true, cardRevision: 1, workflowRevision: 1, requestRevision: 1 }
 const fixture = (options: { persist?: () => Promise<void>; resume?: () => Promise<{ accepted: true }>; isDelegationActive?: () => boolean } = {}) => {
-  const routes = intRouteStateRegistry()
+  const routes = createRouteEngine()
   routes.AddChild('child', { chain: [original], role: 'tan_wei', persistent: true, logicalRequestId: 'D-1' })
   const interrupt = vi.fn(async () => undefined)
   const resume = vi.fn<AgentControlDeps['resume']>(options.resume ?? (async () => ({ accepted: true as const })))
@@ -25,7 +25,7 @@ const fixture = (options: { persist?: () => Promise<void>; resume?: () => Promis
 
 describe('persistent subagent control uses actual routing and host settlement', () => {
   it('bounds settled one-shot controls without evicting persistent controls', () => {
-    const routes = intRouteStateRegistry()
+    const routes = createRouteEngine()
     const control = createAgentControl({ validateRoute: async (route) => route, interrupt: vi.fn(), resume: vi.fn(), applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause })
     control.Register(binding)
     for (let index = 0; index < 300; index++) {
@@ -41,7 +41,7 @@ describe('persistent subagent control uses actual routing and host settlement', 
   })
 
   it('rejects a persistent control beyond the durable schema cap', () => {
-    const routes = intRouteStateRegistry()
+    const routes = createRouteEngine()
     const control = createAgentControl({ validateRoute: async (route) => route, interrupt: vi.fn(), resume: vi.fn(), applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause })
     for (let index = 0; index < 4096; index++) {
       control.Register({ ...binding, childId: `persistent-${index}`, delegationId: `D-${index}` })
@@ -51,7 +51,7 @@ describe('persistent subagent control uses actual routing and host settlement', 
   })
 
   it('keeps settled one-shots that still require side-effect review outside the ordinary cap', () => {
-    const routes = intRouteStateRegistry()
+    const routes = createRouteEngine()
     const control = createAgentControl({ validateRoute: async (route) => route, interrupt: vi.fn(), resume: vi.fn(), applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause })
     for (let index = 0; index < 301; index++) {
       const childId = `one-shot-${index}`
@@ -64,7 +64,7 @@ describe('persistent subagent control uses actual routing and host settlement', 
   })
 
   it('hard-bounds side-effect review records separately', () => {
-    const routes = intRouteStateRegistry()
+    const routes = createRouteEngine()
     const control = createAgentControl({ validateRoute: async (route) => route, interrupt: vi.fn(), resume: vi.fn(), applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause })
     for (let index = 0; index < 301; index++) {
       const childId = `review-${index}`
@@ -101,7 +101,7 @@ describe('persistent subagent control uses actual routing and host settlement', 
 
   it('forgets only the owning root and persists an empty control snapshot for that root', async () => {
     const persist = vi.fn(async () => undefined)
-    const routes = intRouteStateRegistry()
+    const routes = createRouteEngine()
     const control = createAgentControl({ validateRoute: async (route) => route, interrupt: vi.fn(), resume: vi.fn(),
       applyOverride: routes.SetChildOverride, setPaused: routes.SetManualPause, persist })
     control.Register({ ...binding, childId: 'root-a-child', taskId: 'T-1', delegationId: 'D-a' })
@@ -113,7 +113,7 @@ describe('persistent subagent control uses actual routing and host settlement', 
   })
 
   it('一次性规划审核可以切换下一请求，当前 attempt 不被取消或伪改模型，结束后禁止重放', async () => {
-    const routes = intRouteStateRegistry()
+    const routes = createRouteEngine()
     routes.AddChild('reviewer', { chain: [original], role: 'yu_shi', logicalRequestId: 'plan-1' })
     const interrupt = vi.fn(async () => undefined)
     const resume = vi.fn(async () => ({ accepted: true as const }))

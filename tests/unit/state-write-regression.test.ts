@@ -29,7 +29,7 @@ const make = async (options: { onStart?: (role: keyof typeof VALID_OUTPUTS, home
   await writeFile(join(home, 'src', 'math.ts'), 'export const stableSum = (values: number[]) => values.reduce((a, b) => a + b, 0)\n')
   const root: AgentLike = { id: 'state-regression-root', session: { header: { agentPreset: 'tian-shu', cwd: home } } }
   const config = getSwarmConfig({ jev: { enabled: false }, review: { enabled: false }, planningReview: { enabled: false },
-    persistence: { enabled: true }, workflow: { mode: 'advisory' }, agents: { session: 'oneshot', maxRetries: 0 } })
+    persistence: { enabled: true }, workflow: { mode: 'advisory' }, router: { workspaceWrites: 'allow' }, agents: { session: 'oneshot', maxRetries: 0 } })
   let childSequence = 0
   const start = vi.fn(async (_provider: string, request: SubagentStartRequestLike) => {
     const role = ROLE_TAG_PATTERN.exec(request.persona ?? '')?.[1] as keyof typeof VALID_OUTPUTS

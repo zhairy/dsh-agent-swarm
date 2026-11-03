@@ -31,7 +31,9 @@ afterEach(async () => {
 
 const page = () => {
   const data = { namespace: 'swarm-core', agents: [], triggers: [], math: { defaults: DEFAULT_MATH_CONFIG, groups: MATH_GROUP_OPERATORS, limitMaxima: MATH_LIMIT_MAXIMA, maxWorkPerTask: MAX_MATH_WORK_PER_TASK, maxCallsPerTask: MAX_MATH_CALLS_PER_TASK } }
-  const source = readFileSync(join(__dirname, '../../client/settings-page.js'), 'utf8').replace('const DATA = __SWARM_DATA__', `const DATA = ${JSON.stringify(data)}`)
+  const source = ['settings-shell.js', 'settings-locales.js', 'settings-route-model.js', 'settings-controller.js', 'settings-jev.js', 'settings-components.js', 'settings-page.js']
+    .map((file) => readFileSync(join(__dirname, '../../client', file), 'utf8')).join('\n')
+    .replace('const DATA = __SWARM_DATA__', `const DATA = ${JSON.stringify(data)}`)
   const module = { exports: {} as any }
   new Function('require', 'module', 'exports', source)((id: string) => {
     if (id === 'react') return { createElement: () => null, useSyncExternalStore: () => undefined, useEffect: () => undefined }

@@ -9,12 +9,12 @@ import { intThreadRegistry, type ThreadRegistry } from '../../src/threads.js'
 import { getWorkspaceId } from '../../src/artifacts.js'
 import { ValidateTaskCard } from '../../src/policy.js'
 import { getWorkflowDigest, intWorkflowState, type WorkflowDefinition } from '../../src/workflow.js'
-import { intRouteHealth } from '../../src/route-health.js'
-import { intRouteStateRegistry } from '../../src/route-state.js'
+import { intRouteHealth } from '../../src/domain/routing/health.js'
+import { createRouteEngine } from '../../src/application/routing/engine.js'
 import { SwarmError } from '../../src/util/errors.js'
 import type { ContextBindingInfo } from '../../src/context-store.js'
 import type { CallConfigLike } from '../../src/host-contract.js'
-import type { RouteInfo } from '../../src/routes.js'
+import type { RouteInfo } from '../../src/domain/routing/routes.js'
 
 const homes: string[] = []
 const disposers: Array<() => Promise<void>> = []
@@ -113,7 +113,7 @@ describe('feature state capacity', () => {
     health.record(route, { provider: route.provider, model: route.model, kind: 'quota_exhausted', message: 'capacity fixture' })
     clock = 5000
     // 与 service 新接线一致：健康只走有界 sidecar；内存态不写任务状态、不产生 route_health_persist_failed。
-    const registry = intRouteStateRegistry(undefined, undefined, {
+    const registry = createRouteEngine(undefined, undefined, {
       health, now: () => clock,
       onHealthChange: async (snapshot) => { await h.features.persistRouteHealth(snapshot) }
     })

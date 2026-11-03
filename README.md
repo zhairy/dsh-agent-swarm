@@ -8,8 +8,16 @@
 
 DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文专家（谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔），用任务卡、门禁和真实证据决定是否验收；模型路由按你的订阅配置多层回退，故障时立即切到可用备用，最后一个可用模型短时故障时在预算内等待恢复。
 
-- 适配 DSH **0.2.0 / 0.2.1**（`>=0.2.0-rc.2 <0.2.2-0`，推荐 0.2.1-rc.3）与 Node.js 22.12 及以上
+- 适配 DSH **0.2.0 / 0.2.1**（`>=0.2.0-rc.2 <0.2.2-0`，推荐 0.2.1-rc.5）与 Node.js 22.19 及以上
 - 新建会话选「百工模式」即可使用；Jev 可选择 TypeSafe 官方接口，或从 DSH 当前模型目录选择第三方 Jev 兼容模型
+
+### 3.3.0 的变化
+
+- 完成 strangler 运行时接管：`service.ts` 成为组合门面，Host Guard、上下文/邮箱/数学/经验查询和 DSH 子智能体适配拆为独立 application/adaptor 模块。
+- StateStore 成功提交成为唯一业务状态源；V2 事件在提交后确定性同步，加入备份、manifest、审批/证据映射、投影差分、封片和 10 万事件重放。
+- Router 默认禁止直接写入、运行命令和创建工作树；Worker 提交校验 Ticket、revision、input digest 与当前 workspace lease epoch，Watchdog 可隔离未知副作用并从事件恢复。
+- 升级到 DSH `0.2.1-rc.5` 与 `pi-ai@1.5.0`。官方 OpenAI 目录仍错误写为 272k，因此继续使用准确的 1050k profile 覆盖；272k 是长上下文计价阈值，不是上限。
+- 订阅兼容构建基于 `dsh-plugin-subscriptions@0.9.12`，保留 Claude 空文本块与 Gemini 4 Argon 修补；所有本地 rc.5 插件都显式声明并实测宿主版本。
 
 ### 3.2.1 的变化
 
@@ -171,8 +179,16 @@ MIT，见 [LICENSE](LICENSE)。内嵌的 Jev 工具改编自 jev-mcp 0.2.1（MIT
 
 A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" leads 12 Chinese-named experts (requirements, architecture, math, code exploration, research, vision, complex implementation, command execution, small edits, independent review, verification, copywriting) and accepts work only on evidence: task cards, hard gates and real command results. Each role has a multi-layer model chain built from your subscriptions; failures switch to a usable backup immediately, and a short outage of the last usable model is waited out within a budget.
 
-- Works with DSH **0.2.0 / 0.2.1** (`>=0.2.0-rc.2 <0.2.2-0`, 0.2.1-rc.3 recommended) on Node.js 22.12 or newer
+- Works with DSH **0.2.0 / 0.2.1** (`>=0.2.0-rc.2 <0.2.2-0`, 0.2.1-rc.5 recommended) on Node.js 22.19 or newer
 - Start a session in the "百工模式" (Agent Swarm) preset. Jev can use the official TypeSafe API or a third-party Jev-compatible model selected from the live DSH catalog.
+
+### What's new in 3.3.0
+
+- Completes the strangler runtime handoff: `service.ts` is now a facade, while host guards, context/mailbox/math/experience queries and DSH subagent adaptation are separate application/adapter modules.
+- The committed StateStore snapshot is the sole business-state source. V2 events are synchronized after commit with backups, manifests, approval/evidence mappings, projection diffs, segmented journals and 100k-event replay.
+- The router is write-denied by default. Worker submissions validate ticket revisions, input digests and the live workspace lease epoch; the watchdog quarantines unknown side effects and restores quarantine from events.
+- Upgrades the verified host to DSH `0.2.1-rc.5` and `pi-ai@1.5.0`. The upstream OpenAI catalog still reports 272k for `gpt-6.1-sol`, so the accurate 1.05M profile override remains; 272k is a long-context pricing threshold, not the model limit.
+- The subscription compatibility build is based on `dsh-plugin-subscriptions@0.9.12` and retains the Claude empty-block and Gemini 4 Argon fixes. Local rc.5 plugin builds declare and test the exact host version.
 
 ### What's new in 3.2.1
 

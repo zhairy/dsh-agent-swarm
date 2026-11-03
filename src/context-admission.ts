@@ -1,5 +1,5 @@
 import type { CallConfigLike } from './host-contract.js'
-import type { RouteInfo } from './routes.js'
+import type { RouteInfo } from './domain/routing/routes.js'
 
 export interface ModelContextInfo {
   context?: { contextWindow?: number }

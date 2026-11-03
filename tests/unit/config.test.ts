@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Config, DEFAULT_NATIVE_CONFIG, ROUTE_KEYS, getRoleRoute, getSwarmConfig } from '../../src/config.js'
 import { DEFAULT_BUDGETS, DEFAULT_TRIAGE_THRESHOLDS } from '../../src/policy.js'
 import { DEFAULT_JEV_CONFIG } from '../../src/jev.js'
-import { DEFAULT_ROUTE_CHAINS } from '../../src/routes.js'
+import { DEFAULT_ROUTE_CHAINS } from '../../src/domain/routing/routes.js'
 
 describe('Config schema', () => {
   it('空配置解析出 volatile 引用，合并后等于默认值', () => {
@@ -19,6 +19,9 @@ describe('Config schema', () => {
     expect(config.planningReview.timeoutMs).toBe(0)
     expect(getSwarmConfig({ planningReview: { timeoutMs: 180000 } }).planningReview.timeoutMs).toBe(180000)
     expect(config.ledgerDir).toBe('')
+    expect(config.router).toEqual({ workspaceWrites: 'deny' })
+    expect(config.proactive.mode).toBe('observe')
+    expect(config.watchdog.enabled).toBe(true)
   })
 
   it('覆盖值生效，嵌套字段按默认补齐', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createQuotaReader, createSubscriptionQuotaInvoker, getQuotaAccountId, mapQuotaRoutes, normalizeSubscriptionUsage, QUOTA_FRESHNESS_NOTICE, SUBSCRIPTION_QUOTA_PROVIDERS, type QuotaRpcInvoke } from '../../src/quota.js'
-import { DEFAULT_ROUTE_CHAINS } from '../../src/routes.js'
-import { DEFAULT_UPGRADES } from '../../src/upgrade.js'
+import { createQuotaReader, createSubscriptionQuotaInvoker, getQuotaAccountId, mapQuotaRoutes, normalizeSubscriptionUsage, QUOTA_FRESHNESS_NOTICE, SUBSCRIPTION_QUOTA_PROVIDERS, type QuotaRpcInvoke } from '../../src/domain/routing/resources.js'
+import { DEFAULT_ROUTE_CHAINS } from '../../src/domain/routing/routes.js'
+import { DEFAULT_UPGRADES } from '../../src/domain/routing/upgrade.js'
 
 const status = (accounts: Record<string, { key: string; isDefault: boolean }[]> = {}) => ({ providers: Object.fromEntries(SUBSCRIPTION_QUOTA_PROVIDERS.map((provider) => [provider, { busy: false, accounts: accounts[provider] ?? [] }])) })
 const usage = (usedPercent = 42) => ({ supported: true, windows: [{ kind: 'session', usedPercent, resetsAt: 20_000 }, { kind: 'weekly', usedPercent: 12, resetsAt: 100_000 }] })

@@ -26,7 +26,7 @@ export const apply = ctx => {
   const directory = process.env.SWARM_AUTH_EVIDENCE_DIR
   mkdirSync(directory, { recursive: true })
   const waitMs = Number(process.env.SWARM_AUTH_WAIT_MS ?? 300000)
-  const state = { hostVersion: '0.2.1-rc.3', provider: 'deterministic-local-fixture', requestedWaitMs: waitMs, sessions: {}, errors: [], startedAt: new Date().toISOString() }
+  const state = { hostVersion: process.env.SWARM_HOST_VERSION ?? '0.2.1-rc.3', provider: 'deterministic-local-fixture', requestedWaitMs: waitMs, sessions: {}, errors: [], startedAt: new Date().toISOString() }
   const handles = [], scopes = [], byId = new Map()
   let finished = false
   const save = phase => writeFileSync(join(directory, 'host-auth-live.json'), JSON.stringify({ ...state, phase }, null, 2))
@@ -44,7 +44,7 @@ export const apply = ctx => {
   const adapter = {
     providerInfo: provider => ({ id: provider, name: 'isolated authorization fixture' }), providerRetryPolicy: () => undefined, imageRequestPricing: () => undefined,
     listModels: async () => [{ id: 'root', name: 'root', inputModalities: ['text'] }],
-    resolveModel: async (provider, model) => ({ provider, id: model, name: model, inputModalities: ['text'], context: { contextWindow: 200000 } }),
+    resolveModel: async (provider, model) => ({ provider, id: model, name: model, inputModalities: ['text'], context: { contextWindow: 1000000 }, defaultMaxTokens: 65536 }),
     async prepareCall(provider, model) { return { model: await this.resolveModel(provider, model), stream: options => this.stream(options) } },
     async *stream(options) {
       if (options.purpose !== undefined) { yield* text('isolated fixture'); return }
@@ -71,7 +71,8 @@ export const apply = ctx => {
     const current = byId.get(session.id)
     if (!current) return
     current.events.push({ seq: event.seq, type: event.type, ...(event.type === 'goal/change' ? { operation: event.data.operation, phase: event.data.goal?.phase } : {}),
-      ...(event.type === 'turn/end' ? { reason: event.data.reason.kind } : {}) })
+      ...(event.type === 'turn/end' ? { reason: event.data.reason.kind } : {}), ...(event.type === 'request/header' ? { config: event.data.header?.config } : {}) })
+    if (event.type === 'request/header') current.requestHeader = event.data.header?.config
     if (event.type === 'tool/call' && event.data.name === 'ask_user_question') current.callId = event.data.callId
     if (event.type === 'tool/result' && event.data.message.toolCallId === current.callId) {
       const raw = event.data.message.content?.find(block => block.type === 'text')?.text
@@ -93,11 +94,16 @@ export const apply = ctx => {
   const create = async (kind, stopDuringQuestion = false) => {
     const scope = await ctx.agentPresets.acquireScope('tian-shu'); scopes.push(scope)
     const handle = await ctx.agents.create({ sessionId: 'auth-313-' + kind + '-' + randomUUID(), meta: { cwd: process.cwd(), agentPreset: 'tian-shu' },
-      agentOptions: { provider: 'swarm-auth-313-mock', model: 'root' }, setup: async agentCtx => { await ctx.agentPresets.mount(agentCtx, 'tian-shu') } })
+      agentOptions: { provider: 'swarm-auth-313-mock', model: 'root', maxTokens: 65536 }, setup: async agentCtx => { await ctx.agentPresets.mount(agentCtx, 'tian-shu') } })
     handles.push(handle)
     const current = { kind, sessionId: handle.agent.id, requests: [], questionRequests: 0, events: [], errors: [], goalChanges: [] }
     byId.set(handle.agent.id, current); state.sessions[kind] = current
     const exec = { agent: handle.agent, signal: new AbortController().signal }
+    current.providers = ctx.llm.listProviders().map(provider => provider.id)
+    current.routeConfig = ctx.get('agentSwarm').getConfig().routes.tian_shu
+    current.modelInfo = await ctx.llm.resolveModelInfo('swarm-auth-313-mock', 'root').catch(error => ({ error: String(error) }))
+    current.measurement = (() => { try { return ctx.get('tokenMeter')?.measure(handle.agent.session) } catch (error) { return { error: String(error) } } })()
+    current.resolveCallConfig = await ctx.llm.resolveCallConfig({ provider: 'swarm-auth-313-mock', model: 'root' }).catch(error => ({ error: String(error) }))
     const card = await ctx.get('agentSwarm').AddTaskCard({ title: '隔离授权验收 ' + kind, goal: '验证真实宿主等待和来源，不实施业务', acceptance: ['pending不批准，晚答复可追溯'], scope: ['README.md'], flags: {} }, exec)
     current.taskId = card.task_id
     ctx.goals.create(handle.agent, { objective: '隔离授权验收 ' + kind, maxGoalRounds: 100 })
@@ -213,6 +219,17 @@ export const apply = ctx => {
     assert(state.errors.length === 0, 'actual Host emitted unexpected Agent errors')
     finish('done')
   }
-  setTimeout(() => run().catch(error => finish('error', error)), 300)
+  setTimeout(() => run().catch(error => {
+    try {
+      const routeState = ctx.get('agentSwarm').routeState
+      for (const current of Object.values(state.sessions)) current.routeDiagnostics = {
+        terminal: routeState.getTerminal(current.sessionId),
+        detail: routeState.getTerminalDetail(current.sessionId),
+        recovery: routeState.getRecovery(current.sessionId),
+        health: routeState.getHealth()
+      }
+    } catch (diagnosticError) { state.diagnosticError = String(diagnosticError) }
+    finish('error', error)
+  }), 300)
   setTimeout(() => finish('timeout', new Error('isolated Host observation exceeded deadline')), waitMs + 90000)
 }

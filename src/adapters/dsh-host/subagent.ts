@@ -1,5 +1,5 @@
-import type { AgentLike, ContentBlockLike, SubagentActivationLike, SubagentRunLike, SubagentStartRequestLike, SubagentsLike } from './host-contract.js'
-import { SwarmError } from './util/errors.js'
+import type { AgentLike, ContentBlockLike, SubagentActivationLike, SubagentRunLike, SubagentStartRequestLike, SubagentsLike } from '../../host-contract.js'
+import { SwarmError } from '../../util/errors.js'
 
 /** 版本无关的子智能体启动参数：旧宿主用 persona/toolFilter，0.2.1-alpha 起由 agentPreset 指定的预设负责 composition。 */
 export interface ChildStartInput {
