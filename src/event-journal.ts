@@ -137,12 +137,14 @@ export interface SwarmEventJournal {
 }
 
 /** Append-only, checksummed JSONL journal. It records facts but never replays external side effects. */
-export const createSwarmEventJournal = (input: { directory: string; rootSessionId: string; now?: () => Date; sealAfterBytes?: number }): SwarmEventJournal => {
+export const createSwarmEventJournal = (input: { directory: string; rootSessionId: string; now?: () => Date; sealAfterBytes?: number; maxLineBytes?: number }): SwarmEventJournal => {
   const path = join(input.directory, safeSessionFile(input.rootSessionId))
   const stem = safeSessionFile(input.rootSessionId).replace(/\.jsonl$/, '')
   const sealAfterBytes = input.sealAfterBytes ?? EVENT_JOURNAL_SEAL_BYTES
+  const maxLineBytes = input.maxLineBytes ?? EVENT_JOURNAL_MAX_LINE_BYTES
   const now = input.now ?? (() => new Date())
   if (!Number.isSafeInteger(sealAfterBytes) || sealAfterBytes < 1024) throw new Error('Event journal seal size is too small')
+  if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes < 1024 || maxLineBytes > EVENT_JOURNAL_MAX_LINE_BYTES) throw new Error('Event journal line limit is invalid')
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const escapedStem = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const sealPattern = new RegExp(`^${escapedStem}\\.segment-(\\d+)-(\\d+)\\.jsonl$`)
@@ -198,7 +200,7 @@ export const createSwarmEventJournal = (input: { directory: string; rootSessionI
       const event: SwarmEvent = { ...withoutDigest, digest: eventDigest(withoutDigest) }
       const line = `${JSON.stringify(event)}\n`
       const lineBytes = Buffer.byteLength(line)
-      if (lineBytes > EVENT_JOURNAL_MAX_LINE_BYTES) throw new Error('Event exceeds journal line limit')
+      if (lineBytes > maxLineBytes) throw new Error('Event exceeds journal line limit')
       if (activeBytes + lineBytes > sealAfterBytes) sealActive()
       appendFileSync(path, line, { encoding: 'utf8', mode: 0o600 })
       activeBytes += lineBytes

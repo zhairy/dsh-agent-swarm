@@ -32,6 +32,7 @@ import {
 import { createAuthorizationRepository, ValidateAuthorizationDecision, type AuthorizationState } from './authorization-wait.js'
 import { createProgressGuard, ValidateProgressControl, ValidateProgressPage, type ProgressGuardState, type ProgressPage } from './progress-guard.js'
 import { ValidateVerificationReceipt } from './verification-receipt.js'
+import { ValidateAssignmentEnvelope } from './router-worker.js'
 
 /**
  * 内存态（persistence.enabled=false）不写日志与快照，持久化的 4MiB 上限不适用；
@@ -256,7 +257,7 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
     const recordIdsByTask = new Map<string, Set<string>>()
     for (const [index, record] of state.delegations.entries()) {
       at(`$.delegations[${index}]`, 'DELEGATION_FORMAT')
-      if (!object(record) || !identifier(record.delegationId) || recordIds.has(record.delegationId) || !tasks.has(record.taskId) || !isDelegableRoleId(record.role) || !['queued', 'running', 'completed', 'failed', 'blocked'].includes(record.status) || (record.finalization !== undefined && !['processing', 'ready', 'cancelled', 'failed'].includes(record.finalization)) || typeof record.summary !== 'string' || !strings(record.unresolved) || !Array.isArray(record.evidence) || record.evidence.some((e) => !object(e) || !['command', 'step', 'finding', 'source', 'observation', 'claim', 'file-change'].includes(e.kind) || typeof e.ref !== 'string') || ![record.cardRevision, record.workflowRevision, record.requestRevision].every(optionalRevision) || !Number.isFinite(record.startedAt)) return invalid()
+      if (!object(record) || !identifier(record.delegationId) || recordIds.has(record.delegationId) || !tasks.has(record.taskId) || !isDelegableRoleId(record.role) || !['queued', 'running', 'completed', 'failed', 'blocked'].includes(record.status) || (record.finalization !== undefined && !['processing', 'ready', 'cancelled', 'failed'].includes(record.finalization)) || (record.assignment !== undefined && !ValidateAssignmentEnvelope(record.assignment)) || typeof record.summary !== 'string' || !strings(record.unresolved) || !Array.isArray(record.evidence) || record.evidence.some((e) => !object(e) || !['command', 'step', 'finding', 'source', 'observation', 'claim', 'file-change'].includes(e.kind) || typeof e.ref !== 'string') || ![record.cardRevision, record.workflowRevision, record.requestRevision].every(optionalRevision) || !Number.isFinite(record.startedAt) || (record.lastHeartbeatAt !== undefined && (!Number.isFinite(record.lastHeartbeatAt) || record.lastHeartbeatAt < record.startedAt))) return invalid()
       at(`$.delegations[${index}].structured`, 'STRUCTURED_OUTPUT_FORMAT')
       if (record.status === 'completed' && ValidateStructuredOutput(record.role, record.structured, record.mode).length > 0) return invalid()
       at(`$.delegations[${index}].continuationInput`, 'CONTINUATION_BINDING')

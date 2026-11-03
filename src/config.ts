@@ -46,6 +46,25 @@ export const Config = Schema.object({
   scheduling: Schema.object({ strategy: Schema.union(['fifo', 'priority', 'roundRobin']).default('fifo'), maxActive: Schema.natural().min(1).max(32).default(8), maxPending: Schema.natural().min(1).max(512).default(128) }).default({}).description('每个根会话的有界委派调度；不代替任务依赖、预算或工作区租约').volatile(),
   memory: Schema.object({ enabled: Schema.boolean().default(false), maxMatches: Schema.natural().min(1).max(10).default(3), maxChars: Schema.natural().min(256).max(16000).default(4000), ttlMs: Schema.natural().min(1000).max(31536000000).default(604800000) }).default({}).description('从本根会话经验库召回已复核参考，盲审不注入；不缓存执行结果或删除原始证据').volatile(),
   rootFallback: Schema.boolean().default(true).description('主会话模型致命失败时按角色链回退').volatile(),
+  proactive: Schema.object({
+    mode: Schema.union(['off', 'observe', 'auto']).default('observe'),
+    rules: Schema.array(Schema.string()).default([])
+  }).default({}).description('推断型主动工作授权；默认 observe，只记录 would-accept，不启动 Worker').volatile(),
+  events: Schema.object({
+    journal: Schema.boolean().default(true),
+    sealAfterBytes: Schema.natural().min(65536).max(268435456).default(67108864),
+    maxLineBytes: Schema.natural().min(1024).max(65536).default(65536)
+  }).default({}).description('V2 事件日志封片与单行上限').volatile(),
+  watchdog: Schema.object({
+    enabled: Schema.boolean().default(true),
+    heartbeatMs: Schema.natural().min(1000).max(3600000).default(15000),
+    suspectAfterMisses: Schema.natural().min(1).max(20).default(2),
+    inputRetryBaseMs: Schema.natural().min(100).max(60000).default(2000),
+    inputRetryMaxMs: Schema.natural().min(1000).max(3600000).default(60000),
+    quarantineOnUnknownWrite: Schema.boolean().default(true)
+  }).default({}).description('单实例 Watchdog 的停滞、租约和未知副作用检查').volatile(),
+  router: Schema.object({ workspaceWrites: Schema.union(['allow', 'deny']).default('deny') }).default({})
+    .description('天枢 Router 是否可直接写工作区；deny 时写入必须交给 Worker').volatile(),
   approvals: Schema.object({
     mode: Schema.union(['inherit', 'ask', 'deny']).default('inherit'),
     scope: Schema.array(Schema.union([...APPROVAL_SCOPES])).default([...APPROVAL_SCOPES])
@@ -242,6 +261,10 @@ export interface SwarmConfigInfo {
   approvals: ApprovalsConfigInfo
   routes: Partial<Record<RouteKey, RoleRouteInfo>>
   rootFallback: boolean
+  proactive: { mode: 'off' | 'observe' | 'auto'; rules: readonly string[] }
+  events: { journal: boolean; sealAfterBytes: number; maxLineBytes: number }
+  watchdog: { enabled: boolean; heartbeatMs: number; suspectAfterMisses: number; inputRetryBaseMs: number; inputRetryMaxMs: number; quarantineOnUnknownWrite: boolean }
+  router: { workspaceWrites: 'allow' | 'deny' }
   nativeEscalation: 'manual' | 'auto'
   native: NativeConfigInfo
   jev: JevConfigInfo
@@ -264,6 +287,10 @@ export const DEFAULT_WORKFLOW_CONFIG: SwarmConfigInfo['workflow'] = { mode: 'adv
 export const DEFAULT_PLANNING_REVIEW: SwarmConfigInfo['planningReview'] = { enabled: true, requireJev: false, maxFixRounds: 2, reviewAbove: 0.8, timeoutMs: 0 }
 export const DEFAULT_EXECUTION_CONFIG: SwarmConfigInfo['execution'] = { profile: 'legacy', maxCalls: 0 }
 export const DEFAULT_RECOVERY_CONFIG: SwarmConfigInfo['recovery'] = { maxTransientRetries: 1, maxLogicalAttempts: 8, maxShortRetryDelayMs: 2000, maxTransientWaitMs: 5000 }
+export const DEFAULT_PROACTIVE_CONFIG: SwarmConfigInfo['proactive'] = { mode: 'observe', rules: [] }
+export const DEFAULT_EVENTS_CONFIG: SwarmConfigInfo['events'] = { journal: true, sealAfterBytes: 67108864, maxLineBytes: 65536 }
+export const DEFAULT_WATCHDOG_CONFIG: SwarmConfigInfo['watchdog'] = { enabled: true, heartbeatMs: 15000, suspectAfterMisses: 2, inputRetryBaseMs: 2000, inputRetryMaxMs: 60000, quarantineOnUnknownWrite: true }
+export const DEFAULT_ROUTER_CONFIG: SwarmConfigInfo['router'] = { workspaceWrites: 'deny' }
 
 export const ROUTE_KEYS: readonly RouteKey[] = Object.keys(DEFAULT_ROUTE_CHAINS) as RouteKey[]
 
@@ -365,6 +392,22 @@ export const getSwarmConfig = (raw: unknown): SwarmConfigInfo => {
     memory: { enabled: memory.enabled === true, maxMatches: bounded(memory.maxMatches, 3, 1, 10), maxChars: bounded(memory.maxChars, 4000, 256, 16000), ttlMs: bounded(memory.ttlMs, 604800000, 1000, 31536000000) },
     routes: getRouteOverrides(plain.routes),
     rootFallback: typeof plain.rootFallback === 'boolean' ? plain.rootFallback : true,
+    proactive: (() => {
+      const raw = asRecord(plain.proactive), mode = ['off', 'observe', 'auto'].includes(String(raw.mode)) ? raw.mode as SwarmConfigInfo['proactive']['mode'] : 'observe'
+      const rules = Array.isArray(raw.rules) ? [...new Set(raw.rules.filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 128))].slice(0, 128) : []
+      return { mode, rules }
+    })(),
+    events: (() => {
+      const raw = asRecord(plain.events)
+      return { journal: typeof raw.journal === 'boolean' ? raw.journal : true, sealAfterBytes: bounded(raw.sealAfterBytes, 67108864, 65536, 268435456), maxLineBytes: bounded(raw.maxLineBytes, 65536, 1024, 65536) }
+    })(),
+    watchdog: (() => {
+      const raw = asRecord(plain.watchdog)
+      return { enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true, heartbeatMs: bounded(raw.heartbeatMs, 15000, 1000, 3600000),
+        suspectAfterMisses: bounded(raw.suspectAfterMisses, 2, 1, 20), inputRetryBaseMs: bounded(raw.inputRetryBaseMs, 2000, 100, 60000),
+        inputRetryMaxMs: bounded(raw.inputRetryMaxMs, 60000, 1000, 3600000), quarantineOnUnknownWrite: typeof raw.quarantineOnUnknownWrite === 'boolean' ? raw.quarantineOnUnknownWrite : true }
+    })(),
+    router: { workspaceWrites: asRecord(plain.router).workspaceWrites === 'allow' ? 'allow' : 'deny' },
     approvals: (() => {
       const raw = readLiveObject(plain.approvals)
       const mode = raw.mode === 'ask' || raw.mode === 'deny' ? raw.mode : 'inherit'

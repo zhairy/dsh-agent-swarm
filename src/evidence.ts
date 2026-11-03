@@ -60,6 +60,8 @@ export interface DelegationRecord extends GateDelegationView {
   childId?: string
   error?: string
   startedAt: number
+  /** Last observed host activity for the active assignment. */
+  lastHeartbeatAt?: number
   durationMs?: number
   /** 本次委派触发了容灾升级：原因与升级模型链 */
   upgrade?: { reasons: string[]; chain: string[] }
@@ -78,6 +80,8 @@ export interface DelegationRecord extends GateDelegationView {
   /** Trusted original bounded arguments used only for an explicit, validated manual continuation. */
   continuationInput?: import('./delegate.js').DelegateInput
   evidenceAssessment?: import('./evidence-assessment.js').EvidenceAssessment
+  /** Immutable execution envelope frozen at worker dispatch. */
+  assignment?: import('./router-worker.js').AssignmentEnvelope
 }
 
 /** 一次委派的会话方式 */

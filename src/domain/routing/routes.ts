@@ -1,4 +1,3 @@
-import type { LlmFailureLike, LlmLike } from '../../host-contract.js'
 import type { RoleId, SuanHengMode } from '../../role-registry.js'
 import { getErrorText } from '../../util/errors.js'
 import { normalizeRouteFailure, getRouteFailure, getRouteResourcePolicy, getWireReasoningEffort, type RouteResourcePolicy } from './provider-policy.js'
@@ -16,6 +15,33 @@ export const PROVIDER_ANTIGRAVITY = 'antigravity'
 export const PROVIDER_GROK = 'grok'
 export const PROVIDER_COPILOT = 'copilot'
 export const PROVIDER_JEV = 'jev'
+
+
+/** Stable domain-side failure input; host adapters structurally satisfy it. */
+export interface RouteFailureInput {
+  code?: string
+  status?: number
+  message?: string
+  providerRetryAfterMs?: number
+  requestId?: string
+  kind?: string
+  quotaDomainId?: string
+  quotaScope?: 'account' | 'plan' | 'model' | 'pool' | 'unknown'
+  poolId?: string
+  resetAt?: string
+}
+
+/** Stable domain-side LLM catalog port; DSH's ctx.llm is adapted at the composition boundary. */
+export interface RouteLlmInput {
+  listProviders: () => Array<{ id: string }>
+  resolveModelInfo: (provider: string, model: string, signal?: AbortSignal) => Promise<{
+    inputModalities?: readonly string[]
+    reasoning?: { efforts: readonly { id: string; name?: string }[]; defaultEffort?: string }
+    context?: { contextWindow?: number }
+    defaultMaxTokens?: number
+  }>
+  resolveCallConfig?: (config: { provider: string; model: string; reasoningEffort?: string }, signal?: AbortSignal) => Promise<unknown>
+}
 
 /** 一条模型路由 */
 export interface RouteInfo {
@@ -348,10 +374,10 @@ const UNPURCHASED_MESSAGE = /Unpurchased|Access to model denied|not eligible for
 
 /**
  * 对模型请求失败分类，决定是否换路由
- * @param {LlmFailureLike | undefined} failure - 失败信息
+ * @param {RouteFailureInput | undefined} failure - 失败信息
  * @returns {FailureClass} 分类
  */
-export const getFailureClass = (failure: LlmFailureLike | undefined): FailureClass => {
+export const getFailureClass = (failure: RouteFailureInput | undefined): FailureClass => {
   if (failure === undefined) return 'other'
   const code = String(failure.code ?? '').toUpperCase()
   const status = failure.status ?? 0
@@ -375,16 +401,16 @@ export const PROBE_CACHE_MAX_ENTRIES = 512
 export const PROBE_PENDING_WAIT_MS = 30_000
 
 /** Cordis creates a fresh caller-context proxy per get(); identity alone uses its public original symbol. */
-const getMetadataIdentity = (llm: LlmLike | undefined): object | undefined => {
+const getMetadataIdentity = (llm: RouteLlmInput | undefined): object | undefined => {
   if (llm === undefined) return undefined
   const original: unknown = Reflect.get(llm, Symbol.for('cordis.original'))
   return original !== null && (typeof original === 'object' || typeof original === 'function') ? original : llm
 }
 
-type RouteFailureObserver = (route: RouteInfo, failure: LlmFailureLike) => void | Promise<void>
+type RouteFailureObserver = (route: RouteInfo, failure: RouteFailureInput) => void | Promise<void>
 /** One service/health registry observes each shared metadata failure once, including durable rejection. */
 export const createRouteFailureObserver = (observer: RouteFailureObserver): RouteFailureObserver => {
-  const observations = new WeakMap<LlmFailureLike, Promise<void>>()
+  const observations = new WeakMap<RouteFailureInput, Promise<void>>()
   return (route, failure) => {
     let observation = observations.get(failure)
     if (observation === undefined) {
@@ -395,10 +421,10 @@ export const createRouteFailureObserver = (observer: RouteFailureObserver): Rout
   }
 }
 
-type RouteMetadataResult = RouteProbeResult & { failure?: LlmFailureLike }
+type RouteMetadataResult = RouteProbeResult & { failure?: RouteFailureInput }
 export interface RouteMetadataCache {
   /** Metadata only. Callers must check their own current health/admission on every use. */
-  probe: (llm: LlmLike, route: RouteInfo) => Promise<RouteMetadataResult>
+  probe: (llm: RouteLlmInput, route: RouteInfo) => Promise<RouteMetadataResult>
 }
 const probeKey = (route: RouteInfo): string => {
   const resource = getRouteResourcePolicy(route)
@@ -423,7 +449,7 @@ export const createRouteMetadataCache = (options: { now?: () => number; maxEntri
   type Entry = { at: number; result: RouteMetadataResult } | PendingEntry
   const entries = new Map<string, Entry>()
   let owner: object | undefined
-  const resolveMetadata = async (llm: LlmLike, route: RouteInfo): Promise<RouteMetadataResult> => {
+  const resolveMetadata = async (llm: RouteLlmInput, route: RouteInfo): Promise<RouteMetadataResult> => {
     try {
       const resource = getRouteResourcePolicy(route)
       if (resource.accessMode === 'judgment_api' || resource.capabilities?.generation === false || resource.capabilities?.tools === false) return { ok: false, reason: 'capability-incompatible: generation-tools-unavailable' }
@@ -514,11 +540,11 @@ const waitForMetadata = (pending: Promise<RouteMetadataResult>, signal?: AbortSi
 /**
  * 基于 ctx.llm 的路由预检：provider 已注册且模型可解析。
  * 订阅类 provider 解析模型可能要访问网络（实测单次 2–3 秒），结果按路由短时缓存，并发的同一预检共用一次调用
- * @param {() => LlmLike | undefined} getLlm - 取 LLM 服务
+ * @param {() => RouteLlmInput | undefined} getLlm - 取 LLM 服务
  * @param {{ now?: () => number }} [options] - 时钟
  * @returns {RouteProbe} 预检函数
  */
-export const intRouteProbe = (getLlm: () => LlmLike | undefined, options: {
+export const intRouteProbe = (getLlm: () => RouteLlmInput | undefined, options: {
   now?: () => number
   metadataCache?: RouteMetadataCache
   isRouteAvailable?: (route: RouteInfo) => boolean

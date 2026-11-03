@@ -116,7 +116,7 @@ describe('task execution through the public service', () => {
     await vi.waitFor(() => expect(runtime.runs).toHaveLength(1))
     const child = runtime.runs[0]!.agent
     await vi.waitFor(() => expect(runtime.service.getGuardReason({ name: 'write', arguments: { path: 'subject.ts' }, agent: child })).not.toContain('身份绑定尚未就绪'), { timeout: 5000 })
-    expect(runtime.service.getGuardReason({ name: 'create_worktree', arguments: { name: 'ticket-work' }, agent: runtime.root })).toContain('不能直接创建')
+    expect(runtime.service.getGuardReason({ name: 'create_worktree', arguments: { name: 'ticket-work' }, agent: runtime.root })).toContain('Router')
     expect(runtime.service.getGuardReason({ name: 'write', arguments: { path: 'subject.ts' }, agent: child })).toContain('尚未创建隔离工作树')
     expect(runtime.service.getGuardReason({ name: 'create_worktree', arguments: { name: 'ticket-work' }, agent: child })).toBeUndefined()
     const result = { path: join(runtime.home, '.agents/worktrees/ticket-work'), branch: 'ticket-work', baseCommit: 'abc123', repositoryRoot: runtime.home }
@@ -142,6 +142,19 @@ describe('task execution through the public service', () => {
     expect(taskView(runtime, first.task_id).acceptance).toBeNull()
     await expect(runtime.service.AddTaskCard(card({ task_id: first.task_id, expected_card_revision: first.cardRevision, goal: 'stale writer' }), runtime.exec())).rejects.toThrow()
     expect(taskView(runtime, first.task_id).cardRevision).toBe(revised.cardRevision)
+  })
+
+  it('rejects a worker submission after the frozen ticket revision changes', async () => {
+    const runtime = await makeRuntime({ pending: true })
+    const created = await runtime.service.AddTaskCard(card(), runtime.exec())
+    const work = trackWork(runtime.service.delegate({ task_id: created.task_id, role: 'mou_ding', node_id: 'analysis', prompt: '提交分析证据', backend: 'api', session: 'oneshot' }, runtime.exec()))
+    await vi.waitFor(() => expect(runtime.runs).toHaveLength(1))
+    await runtime.service.AddTaskCard(card({ task_id: created.task_id, expected_card_revision: created.cardRevision, goal: 'revised while worker is running' }), runtime.exec())
+    runtime.runs[0]!.release()
+    const rejected = await work
+    expect(rejected).toMatchObject({ status: 'failed' })
+    expect(rejected.summary).toContain('stale-card-revision')
+    expect(taskView(runtime, created.task_id).ticket.stage).toMatchObject({ stage: 'person', action: 'failed' })
   })
 
   it('blocks benchmark acceptance when exitCode=0 but p95=9999 exceeds 10ms', async () => {
@@ -266,7 +279,7 @@ describe('task execution through the public service', () => {
   })
 
   it('revokes delayed writer tools on cancellation and fences advisory root writes while side effects are unknown', async () => {
-    const runtime = await makeRuntime({ pending: true, config: { workflow: { mode: 'advisory' } } })
+    const runtime = await makeRuntime({ pending: true, config: { workflow: { mode: 'advisory' }, router: { workspaceWrites: 'allow' } } })
     const created = await runtime.service.AddTaskCard(card({ flags: { changesCode: true } }), runtime.exec())
     const refs = contextRefs(runtime, created.task_id, created)
     const cancellation = new AbortController()
@@ -292,7 +305,7 @@ describe('task execution through the public service', () => {
   })
 
   it('cancelled writer releases the workspace once the host confirms the child is gone; no restart needed', async () => {
-    const runtime = await makeRuntime({ pending: true, config: { workflow: { mode: 'advisory' } }, getAgent: () => undefined })
+    const runtime = await makeRuntime({ pending: true, config: { workflow: { mode: 'advisory' }, router: { workspaceWrites: 'allow' } }, getAgent: () => undefined })
     const created = await runtime.service.AddTaskCard(card({ flags: { changesCode: true } }), runtime.exec())
     const cancellation = new AbortController()
     const running = runtime.service.delegate({ task_id: created.task_id, role: 'ji_feng', node_id: 'implementation', prompt: '写入后被取消', backend: 'api', session: 'oneshot' }, { agent: runtime.root, signal: cancellation.signal })

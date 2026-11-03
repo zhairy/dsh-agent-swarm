@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DelegationRecord, TaskRecord } from '../../src/evidence.js'
 import type { TaskCard } from '../../src/policy.js'
-import { evaluateProactiveAdmission, projectTicketLifecycle, revalidateMandate, type Mandate } from '../../src/ticket-lifecycle.js'
+import { evaluateProactiveAdmission, projectTicketLifecycle, revalidateMandate, type Mandate } from '../../src/domain/tickets/lifecycle.js'
 
 const card = { title: 'Ticket', goal: 'goal', acceptance: ['done'], scope: ['src'] } as TaskCard
 const task = (acceptance?: TaskRecord['acceptance']): TaskRecord => ({

@@ -1,4 +1,4 @@
-import type { DelegationRecord, TaskRecord } from './evidence.js'
+import type { DelegationRecord, TaskRecord } from '../../evidence.js'
 
 export const ACCEPT_MODES = ['off', 'observe', 'auto'] as const
 export type AcceptMode = typeof ACCEPT_MODES[number]
@@ -83,7 +83,8 @@ export const projectTicketLifecycle = (task: TaskRecord, delegations: readonly D
   if (task.acceptance !== undefined) {
     const outcome = task.acceptance.decision === 'accept' ? 'accepted' : task.acceptance.decision === 'reject' ? 'rejected' : 'incomplete'
     stage = { stage: 'ended', outcome }
-  } else if (last?.status === 'blocked') stage = { stage: 'person', action: 'blocked' }
+  } else if (last?.finalization === 'failed' || last?.finalization === 'cancelled') stage = { stage: 'person', action: 'failed' }
+  else if (last?.status === 'blocked') stage = { stage: 'person', action: 'blocked' }
   else if (last?.status === 'failed') stage = { stage: 'person', action: 'failed' }
   else if (hasRunning(delegations)) stage = { stage: 'working', action: 'running' }
   else if (hasQueued(delegations)) stage = { stage: 'working', action: 'queued' }
