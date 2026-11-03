@@ -1,4 +1,4 @@
-import type { RouteInfo } from './routes.js'
+import type { RouteInfo } from './domain/routing/routes.js'
 import { SwarmError } from './util/errors.js'
 
 /** Manual controls are a pause/selection latch, not a second task scheduler. */

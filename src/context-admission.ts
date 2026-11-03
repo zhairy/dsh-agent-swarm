@@ -1,5 +1,6 @@
 import type { CallConfigLike } from './host-contract.js'
-import type { RouteInfo } from './routes.js'
+import type { RouteInfo } from './domain/routing/routes.js'
+import { getAuthoritativeModelMetadata } from './model-metadata.js'
 
 export interface ModelContextInfo {
   context?: { contextWindow?: number }
@@ -13,6 +14,7 @@ export interface ContextAdmissionInfo {
   reservedOutputTokens?: number
   safetyMarginTokens?: number
   safeInputTokens?: number
+  metadataSource?: 'host' | 'openai-api-compat'
   reason?: string
 }
 
@@ -30,7 +32,9 @@ export const getContextAdmission = (input: {
   modelInfo?: ModelContextInfo
 }): ContextAdmissionInfo => {
   const measured = input.measurement?.totalTokens
-  const contextWindow = input.modelInfo?.context?.contextWindow
+  const hostContextWindow = input.modelInfo?.context?.contextWindow
+  const authoritative = getAuthoritativeModelMetadata(input.route.provider, input.route.model)
+  const contextWindow = authoritative?.contextWindow ?? hostContextWindow
   if (typeof measured !== 'number' || !Number.isFinite(measured) || measured < 0
     || typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow <= 1) {
     return { ok: true, ...(typeof measured === 'number' ? { measuredTokens: measured } : {}), ...(typeof contextWindow === 'number' ? { contextWindow } : {}) }
@@ -38,7 +42,7 @@ export const getContextAdmission = (input: {
   const requested = typeof input.call.maxTokens === 'number' && Number.isSafeInteger(input.call.maxTokens) && input.call.maxTokens > 0
     ? input.call.maxTokens : 0
   const configured = typeof input.modelInfo?.defaultMaxTokens === 'number' && Number.isSafeInteger(input.modelInfo.defaultMaxTokens) && input.modelInfo.defaultMaxTokens > 0
-    ? input.modelInfo.defaultMaxTokens : 0
+    ? input.modelInfo.defaultMaxTokens : authoritative?.maxTokens ?? 0
   const reservedOutputTokens = Math.min(Math.max(requested, configured), contextWindow - 1)
   const safetyMarginTokens = Math.min(CONTEXT_SAFETY_MARGIN_TOKENS, Math.max(0, contextWindow - reservedOutputTokens - 1))
   const safeInputTokens = Math.max(0, contextWindow - reservedOutputTokens - safetyMarginTokens)
@@ -49,6 +53,7 @@ export const getContextAdmission = (input: {
     reservedOutputTokens,
     safetyMarginTokens,
     safeInputTokens,
+    ...(authoritative === undefined ? {} : { metadataSource: 'openai-api-compat' as const }),
     ...(measured <= safeInputTokens ? {} : { reason: 'context-window-insufficient' })
   }
 }

@@ -74,6 +74,22 @@ export interface WorkerSubmission {
 
 export type WorkerSubmissionResult = { accepted: true } | { accepted: false; reason: 'ticket-mismatch' | 'assignment-mismatch' | 'stale-request-revision' | 'stale-card-revision' | 'stale-workflow-revision' | 'stale-lease' | 'input-mismatch' }
 
+export const ValidateAssignmentEnvelope = (value: unknown): value is AssignmentEnvelope => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const envelope = value as Record<string, unknown>
+  return typeof envelope.ticketId === 'string' && envelope.ticketId.length > 0 && envelope.ticketId.length <= 128
+    && typeof envelope.assignmentId === 'string' && envelope.assignmentId.length > 0 && envelope.assignmentId.length <= 128
+    && typeof envelope.role === 'string' && envelope.role.length > 0 && envelope.role.length <= 64
+    && ['expert', 'native-codex', 'native-claude'].includes(String(envelope.workerKind))
+    && typeof envelope.provider === 'string' && envelope.provider.length > 0 && envelope.provider.length <= 128
+    && typeof envelope.model === 'string' && envelope.model.length > 0 && envelope.model.length <= 256
+    && (envelope.reasoningEffort === undefined || (typeof envelope.reasoningEffort === 'string' && envelope.reasoningEffort.length <= 64))
+    && [envelope.requestRevision, envelope.cardRevision, envelope.workflowRevision, envelope.leaseEpoch].every((item) => typeof item === 'number' && Number.isSafeInteger(item) && item >= 0)
+    && typeof envelope.inputDigest === 'string' && /^[a-f0-9]{64}$/i.test(envelope.inputDigest)
+    && Array.isArray(envelope.permissions) && envelope.permissions.length <= 256 && envelope.permissions.every((item) => typeof item === 'string' && item.length > 0 && item.length <= 128)
+    && typeof envelope.createdAt === 'number' && Number.isFinite(envelope.createdAt)
+}
+
 export const validateWorkerSubmission = (envelope: AssignmentEnvelope, submission: WorkerSubmission): WorkerSubmissionResult => {
   if (submission.ticketId !== envelope.ticketId) return { accepted: false, reason: 'ticket-mismatch' }
   if (submission.assignmentId !== envelope.assignmentId) return { accepted: false, reason: 'assignment-mismatch' }

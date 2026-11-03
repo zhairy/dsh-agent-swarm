@@ -4,7 +4,7 @@ import { CONTEXT_SAFETY_MARGIN_TOKENS, formatContextAdmissionError, getContextAd
 describe('context-aware model admission', () => {
   it('reserves output and safety headroom before admitting a measured session', () => {
     const result = getContextAdmission({
-      route: { provider: 'openai', model: 'gpt-6.1-sol' },
+      route: { provider: 'custom-openai', model: 'gpt-6.1-sol' },
       call: { maxTokens: 128000 },
       measurement: { totalTokens: 368003 },
       modelInfo: { context: { contextWindow: 272000 }, defaultMaxTokens: 128000 }
@@ -22,7 +22,7 @@ describe('context-aware model admission', () => {
 
   it('admits a session below the safe input budget and preserves unknown-host compatibility', () => {
     expect(getContextAdmission({
-      route: { provider: 'openai', model: 'gpt-6.1-sol' },
+      route: { provider: 'custom-openai', model: 'gpt-6.1-sol' },
       call: { maxTokens: 128000 },
       measurement: { totalTokens: 63500 },
       modelInfo: { context: { contextWindow: 272000 }, defaultMaxTokens: 128000 }
@@ -34,13 +34,13 @@ describe('context-aware model admission', () => {
 
   it('uses the model default output cap when this request omits maxTokens', () => {
     expect(getContextAdmission({
-      route: { provider: 'openai', model: 'gpt-6.1-sol' },
+      route: { provider: 'custom-openai', model: 'gpt-6.1-sol' },
       call: {},
       measurement: { totalTokens: 200000 },
       modelInfo: { context: { contextWindow: 272000 }, defaultMaxTokens: 128000 }
     })).toMatchObject({ ok: false, reservedOutputTokens: 128000, safeInputTokens: 139904 })
     expect(getContextAdmission({
-      route: { provider: 'openai', model: 'gpt-6.1-sol' },
+      route: { provider: 'custom-openai', model: 'gpt-6.1-sol' },
       call: { maxTokens: 8192 },
       measurement: { totalTokens: 200000 },
       modelInfo: { context: { contextWindow: 272000 }, defaultMaxTokens: 128000 }

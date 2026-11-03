@@ -32,7 +32,7 @@ const makeService = (options: { config?: Record<string, unknown>; env?: Partial<
     })
   }
   // 旧门禁/路由用例聚焦原行为，独立规划审核由 planning-runtime 用例覆盖。
-  const config: SwarmConfigInfo = getSwarmConfig({ planningReview: { enabled: false }, ...options.config })
+  const config: SwarmConfigInfo = getSwarmConfig({ planningReview: { enabled: false }, router: { workspaceWrites: 'allow' }, ...options.config })
   const fixtureLlm = { listProviders: () => [{ id: 'qwen-token-plan-cn' }, { id: 'opencode-go' }, { id: 'deepseek-official' }], resolveModelInfo: async () => ({ inputModalities: ['text', 'image'], reasoning: { efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((id) => ({ id, name: id })) } }) }
   const deps: SwarmServiceDepsInfo = {
     getConfig: () => config,
@@ -53,13 +53,13 @@ const makeService = (options: { config?: Record<string, unknown>; env?: Partial<
 
 describe('模型上下文档位准入', () => {
   it('串联 tokenMeter、模型上下文元数据和回退链，在发请求前跳过超窗模型', async () => {
-    const primary = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
+    const primary = { provider: 'custom-openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
     const fallback = { provider: 'context-wide', model: 'window-1m', reasoningEffort: 'max' }
     const measure = vi.fn(() => ({ totalTokens: 368003 }))
     const resolveModelInfo = vi.fn(async (provider: string) => ({
       inputModalities: ['text'],
-      context: { contextWindow: provider === 'openai' ? 272000 : 1000000 },
-      defaultMaxTokens: provider === 'openai' ? 128000 : 65536,
+      context: { contextWindow: provider === 'custom-openai' ? 272000 : 1000000 },
+      defaultMaxTokens: provider === 'custom-openai' ? 128000 : 65536,
       reasoning: { efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((id) => ({ id, name: id })) }
     }))
     const llm = {
@@ -86,7 +86,7 @@ describe('模型上下文档位准入', () => {
   })
 
   it('token 测量失败时保持旧路由行为，不阻断第三方 provider', async () => {
-    const route = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
+    const route = { provider: 'custom-openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
     const llm = {
       listProviders: () => [{ id: route.provider }],
       resolveModelInfo: async () => ({
@@ -662,6 +662,13 @@ describe('守卫与诊断', () => {
     service.routeState.AddChild('kid', { chain: [], role: 'fu_he' })
     expect(service.getGuardReason({ name: 'write', agent: { id: 'kid', session: { header: { agentPreset: 'tian-shu' } } } })).toContain('「复核」')
     expect(service.getRoleForAgent({ id: 'kid' })).toBe('fu_he')
+  })
+
+  it('默认禁止天枢 Router 直接写入或运行命令', () => {
+    const { service } = makeService({ config: { router: { workspaceWrites: 'deny' } } })
+    expect(service.getGuardReason({ name: 'edit', agent: root })).toContain('Router')
+    expect(service.getGuardReason({ name: 'bash', agent: root })).toContain('Router')
+    expect(service.getGuardReason({ name: 'read', agent: root })).toBeUndefined()
   })
 
   it('百工管理的会话：百工预设的根会话与百工委派的子会话；其他插件的子会话不算', () => {

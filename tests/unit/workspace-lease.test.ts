@@ -13,6 +13,8 @@ describe('canonical workspace execution leases', () => {
       const b = createWorkspaceLeaseManager({ ownerDirectory: owners })
       const alias = join(directory, 'alias'); await symlink(directory, alias)
       const first = await a.acquire(directory, 'root-a', 'write')
+      expect(a.isCurrent(first)).toBe(true)
+      expect(b.isCurrent(first)).toBe(true)
       let granted = false
       const waiting = b.acquire(alias, 'root-b', 'verify').then((lease) => { granted = true; return lease })
       await new Promise((resolve) => setImmediate(resolve))
@@ -21,7 +23,10 @@ describe('canonical workspace execution leases', () => {
       const second = await waiting
       expect(second.workspaceId).toBe(first.workspaceId)
       expect(second.leaseEpoch).toBeGreaterThan(first.leaseEpoch)
+      expect(a.isCurrent(first)).toBe(false)
+      expect(a.isCurrent(second)).toBe(true)
       await second.release()
+      expect(a.isCurrent(second)).toBe(false)
       expect((await a.getStatus(directory)).busy).toBe(false)
     } finally { await rm(directory, { recursive: true, force: true }) }
   })

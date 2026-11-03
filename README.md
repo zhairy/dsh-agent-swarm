@@ -8,13 +8,28 @@
 
 DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文专家（谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔），用任务卡、门禁和真实证据决定是否验收；模型路由按你的订阅配置多层回退，故障时立即切到可用备用，最后一个可用模型短时故障时在预算内等待恢复。
 
-- 适配 DSH **0.2.0 / 0.2.1**（`>=0.2.0-rc.2 <0.2.2-0`，推荐 0.2.1-rc.3）与 Node.js 22.12 及以上
+- 适配 DSH **0.2.0 / 0.2.1**（`>=0.2.0-rc.2 <0.2.2-0`，推荐 0.2.1-rc.5）与 Node.js 22.19 及以上
 - 新建会话选「百工模式」即可使用；Jev 可选择 TypeSafe 官方接口，或从 DSH 当前模型目录选择第三方 Jev 兼容模型
+
+### 3.3.1 的变化
+
+- 修正直接 OpenAI API 的 GPT-6 元数据：Astra、Sol、6.1 Sol、Luna 和 6.1 Terra 使用官方 1.05M context，不再把 272K 长上下文计价分界当成容量上限。
+- Codex/ChatGPT Work 与第三方兼容网关继续使用各自报告或订阅渠道的限制；公共 API 的 1.05M 不会无条件覆盖它们。
+- 新增 profile 检查与安全修复脚本；`--apply` 会先备份，再以原子写入修复当前直接 OpenAI provider 中已存在的模型条目。
+- 明确区分上下文与输出容量：1.05M context 不代表 1.05M output，reasoning tokens 与可见文本共享 128K 输出预算。
+
+### 3.3.0 的变化
+
+- 完成 strangler 运行时接管：`service.ts` 成为组合门面，Host Guard、上下文/邮箱/数学/经验查询和 DSH 子智能体适配拆为独立 application/adaptor 模块。
+- StateStore 成功提交成为唯一业务状态源；V2 事件在提交后确定性同步，加入备份、manifest、审批/证据映射、投影差分、封片和 10 万事件重放。
+- Router 默认禁止直接写入、运行命令和创建工作树；Worker 提交校验 Ticket、revision、input digest 与当前 workspace lease epoch，Watchdog 可隔离未知副作用并从事件恢复。
+- 升级到 DSH `0.2.1-rc.5` 与 `pi-ai@1.5.0`。官方 OpenAI 目录仍错误写为 272k，因此继续使用准确的 1050k profile 覆盖；272k 是长上下文计价阈值，不是上限。
+- 订阅兼容构建基于 `dsh-plugin-subscriptions@0.9.12`，保留 Claude 空文本块与 Gemini 4 Argon 修补；所有本地 rc.5 插件都显式声明并实测宿主版本。
 
 ### 3.2.1 的变化
 
 - 修复超大会话切换到上下文较小模型后只输出 reasoning 并显示“已达到输出 token 上限”。模型派发前现在使用 DSH 原生 `ctx.tokenMeter` 测量会话，并从 `ctx.llm.resolveModelInfo` 读取候选路由的 `contextWindow` 与 `defaultMaxTokens`；超窗路由会被跳过，整条链都不足时明确返回“未调用模型”。
-- 官方 OpenAI `gpt-6.1-sol` 的 `272000` 上下文声明保持原样，不会误用 `openai-codex` 的另一条模型目录。旧 DSH、未声明上下文或没有 token meter 的第三方模型继续采用原行为。
+- 3.2.1 当时读取宿主的 `272000` 声明；后续核对确认这是直接 GPT-6 API 的长上下文计价分界，而不是 1.05M 容量上限。3.3.1 已修正直接 OpenAI provider，同时继续隔离 Codex 与第三方目录。
 - 明确 3.2.0 是增量重构：Ticket、RouteEngine、Router/Worker、EventJournal V2 和 Watchdog 模块已建立，但全量运行时迁移尚未完成。3.2.1 完成上下文准入和原生 seam 硬化，不虚假宣称全量重构结束。
 - 保留宿主对 `ask_user_question`、`todo_write`、`time-context`、`AGENTS.md`、jobs、goal、计划模式和 Git worktree 的所有权；Swarm 只在路由、授权、租约、证据和工作树绑定边界消费其公开接口。
 
@@ -171,13 +186,28 @@ MIT，见 [LICENSE](LICENSE)。内嵌的 Jev 工具改编自 jev-mcp 0.2.1（MIT
 
 A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" leads 12 Chinese-named experts (requirements, architecture, math, code exploration, research, vision, complex implementation, command execution, small edits, independent review, verification, copywriting) and accepts work only on evidence: task cards, hard gates and real command results. Each role has a multi-layer model chain built from your subscriptions; failures switch to a usable backup immediately, and a short outage of the last usable model is waited out within a budget.
 
-- Works with DSH **0.2.0 / 0.2.1** (`>=0.2.0-rc.2 <0.2.2-0`, 0.2.1-rc.3 recommended) on Node.js 22.12 or newer
+- Works with DSH **0.2.0 / 0.2.1** (`>=0.2.0-rc.2 <0.2.2-0`, 0.2.1-rc.5 recommended) on Node.js 22.19 or newer
 - Start a session in the "百工模式" (Agent Swarm) preset. Jev can use the official TypeSafe API or a third-party Jev-compatible model selected from the live DSH catalog.
+
+### What's new in 3.3.1
+
+- Corrects the direct OpenAI API metadata overlay: GPT-6 Astra, GPT-6 Sol, GPT-6.1 Sol, GPT-6 Luna and GPT-6.1 Terra use the documented 1.05M context instead of the erroneous 272K long-context pricing boundary.
+- Keeps provider boundaries: Codex/ChatGPT Work and third-party compatible gateways continue to use their own reported or subscription-specific limits.
+- Adds `scripts/repair-openai-metadata.mjs` to inspect an active profile without changes and, with `--apply`, back up and atomically repair existing direct OpenAI model entries.
+- Separates context capacity from output capacity in diagnostics: 1.05M context does not mean 1.05M output, and reasoning tokens share the 128K output budget.
+
+### What's new in 3.3.0
+
+- Completes the strangler runtime handoff: `service.ts` is now a facade, while host guards, context/mailbox/math/experience queries and DSH subagent adaptation are separate application/adapter modules.
+- The committed StateStore snapshot is the sole business-state source. V2 events are synchronized after commit with backups, manifests, approval/evidence mappings, projection diffs, segmented journals and 100k-event replay.
+- The router is write-denied by default. Worker submissions validate ticket revisions, input digests and the live workspace lease epoch; the watchdog quarantines unknown side effects and restores quarantine from events.
+- Upgrades the verified host to DSH `0.2.1-rc.5` and `pi-ai@1.5.0`. The upstream OpenAI catalog still reports 272k for `gpt-6.1-sol`, so the accurate 1.05M profile override remains; 272k is a long-context pricing threshold, not the model limit.
+- The subscription compatibility build is based on `dsh-plugin-subscriptions@0.9.12` and retains the Claude empty-block and Gemini 4 Argon fixes. Local rc.5 plugin builds declare and test the exact host version.
 
 ### What's new in 3.2.1
 
 - Fixed large sessions that switched to a smaller-context model and then returned only reasoning with a length stop. Route admission now uses DSH's native `ctx.tokenMeter`, `contextWindow`, and `defaultMaxTokens`, skips unsafe routes, and fails before dispatch when no candidate can hold the session.
-- Official OpenAI `gpt-6.1-sol` keeps its `272000` context declaration and is never confused with the separate `openai-codex` catalog entry. Older hosts and models without context metadata retain legacy behavior.
+- 3.2.1 initially consumed the host declaration for OpenAI models. 3.2.1 later proved that the host's `272000` value was the long-context price boundary for direct GPT-6 models; 3.3.1 corrects that metadata while keeping Codex and third-party provider limits separate.
 - The release states the real 3.2.0 boundary: its core modules exist, but the full runtime migration is not complete. Native ask-user, todo, time context, workspace instructions, jobs, goal, plan mode, and Git worktree remain host-owned.
 
 ### What's new in 3.2.0

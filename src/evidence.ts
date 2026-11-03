@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { EvidenceItem } from './contracts.js'
 import type { FindingResolution, GateDelegationView, GateRequirement, TaskCard, TriageAnswers } from './policy.js'
-import type { RouteInfo } from './routes.js'
+import type { RouteInfo } from './domain/routing/routes.js'
 import { SwarmError } from './util/errors.js'
 import type { OrchestrationPlan } from './orchestration.js'
 import type { PromptStyle } from './model-family.js'
@@ -60,6 +60,8 @@ export interface DelegationRecord extends GateDelegationView {
   childId?: string
   error?: string
   startedAt: number
+  /** Last observed host activity for the active assignment. */
+  lastHeartbeatAt?: number
   durationMs?: number
   /** 本次委派触发了容灾升级：原因与升级模型链 */
   upgrade?: { reasons: string[]; chain: string[] }
@@ -78,6 +80,8 @@ export interface DelegationRecord extends GateDelegationView {
   /** Trusted original bounded arguments used only for an explicit, validated manual continuation. */
   continuationInput?: import('./delegate.js').DelegateInput
   evidenceAssessment?: import('./evidence-assessment.js').EvidenceAssessment
+  /** Immutable execution envelope frozen at worker dispatch. */
+  assignment?: import('./router-worker.js').AssignmentEnvelope
 }
 
 /** 一次委派的会话方式 */

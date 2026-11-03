@@ -11,7 +11,7 @@ import { FLAG_KEYS, GATE_IDS, PLANNING_SCOPE_MAX_ITEMS, PLANNING_SCOPE_MAX_TEXT_
 import { COMPLEXITY_LABELS, DIMENSION_LABELS } from './orchestration.js'
 import { ROLE_TAG_PATTERN, getDelegableRoleIds, getRoleCatalogText, getRoleInfo, isDelegableRoleId } from './role-registry.js'
 import { getAssessmentText } from './review.js'
-import { getRouteDisplay } from './routes.js'
+import { getRouteDisplay } from './domain/routing/routes.js'
 import { getEmbeddedSkills } from './skills.js'
 import { SESSION_CHOICES } from './threads.js'
 import type { AcceptResultInfo, SwarmService } from './service.js'

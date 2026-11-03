@@ -35,11 +35,11 @@ import {
   isSameRoute,
   type RouteInfo,
   type RouteProbe
-} from '../../src/routes.js'
+} from '../../src/domain/routing/routes.js'
 import { ROLE_IDS } from '../../src/role-registry.js'
-import { DEFAULT_UPGRADES } from '../../src/upgrade.js'
-import { normalizeRouteFailure, getRouteResourcePolicy } from '../../src/provider-policy.js'
-import { intRouteStateRegistry } from '../../src/route-state.js'
+import { DEFAULT_UPGRADES } from '../../src/domain/routing/upgrade.js'
+import { normalizeRouteFailure, getRouteResourcePolicy } from '../../src/domain/routing/provider-policy.js'
+import { createRouteEngine } from '../../src/application/routing/engine.js'
 
 describe('默认路由表', () => {
   it('每个路由键都有非空链，且覆盖全部角色（算衡分研算/验算）', () => {
@@ -114,7 +114,7 @@ describe('路由工具函数', () => {
   })
   it('解析预检的结构化quota进入共享隔离，缓存15s过期也不反复查询同账号', async () => {
     let at = 0
-    const state = intRouteStateRegistry(undefined, undefined, { now: () => at })
+    const state = createRouteEngine(undefined, undefined, { now: () => at })
     const calls: string[] = []
     const first: RouteInfo = { provider: 'p', model: 'first', policy: { quotaDomainId: 'account-a', quotaScope: 'account' } }
     const peer: RouteInfo = { provider: 'p', model: 'peer', policy: { quotaDomainId: 'account-a', quotaScope: 'account' } }
@@ -136,7 +136,7 @@ describe('路由工具函数', () => {
   it('解析预检等待健康态提交，持久写失败不能变成可忽略预检结果', async () => {
     let release!: () => void
     const pending = new Promise<void>((resolve) => { release = resolve })
-    const state = intRouteStateRegistry(undefined, undefined, { onHealthChange: () => pending })
+    const state = createRouteEngine(undefined, undefined, { onHealthChange: () => pending })
     const route: RouteInfo = { provider: 'p', model: 'first', policy: { quotaDomainId: 'account', quotaScope: 'account' } }
     const llm = { listProviders: () => [{ id: 'p' }], resolveModelInfo: async () => { throw Object.assign(new Error('quota exhausted'), { code: 'QUOTA' }) } }
     const source = () => llm

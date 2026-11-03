@@ -1,4 +1,4 @@
-import type { DelegationRecord, TaskRecord } from './evidence.js'
+import type { DelegationRecord, TaskRecord } from '../../evidence.js'
 
 export const ACCEPT_MODES = ['off', 'observe', 'auto'] as const
 export type AcceptMode = typeof ACCEPT_MODES[number]
@@ -49,6 +49,11 @@ export interface TicketProjection {
 
 const enabled = (rule: string, rules: readonly string[]): boolean => rules.includes(rule)
 
+/** Stable projection key used by the event journal and migration manifest. */
+export const getTicketStageKey = (stage: TicketProjection['stage']): string => stage.stage === 'working' || stage.stage === 'person'
+  ? `${stage.stage}:${stage.action}`
+  : stage.stage === 'ended' ? `ended:${stage.outcome}` : stage.stage
+
 /** Decide proactive admission without granting any host or workspace permission. */
 export const evaluateProactiveAdmission = (request: AdmissionRequest): AdmissionDecision => {
   if (request.strength === 'explicit') return { kind: 'accept', mandateRequired: true }
@@ -83,7 +88,8 @@ export const projectTicketLifecycle = (task: TaskRecord, delegations: readonly D
   if (task.acceptance !== undefined) {
     const outcome = task.acceptance.decision === 'accept' ? 'accepted' : task.acceptance.decision === 'reject' ? 'rejected' : 'incomplete'
     stage = { stage: 'ended', outcome }
-  } else if (last?.status === 'blocked') stage = { stage: 'person', action: 'blocked' }
+  } else if (last?.finalization === 'failed' || last?.finalization === 'cancelled') stage = { stage: 'person', action: 'failed' }
+  else if (last?.status === 'blocked') stage = { stage: 'person', action: 'blocked' }
   else if (last?.status === 'failed') stage = { stage: 'person', action: 'failed' }
   else if (hasRunning(delegations)) stage = { stage: 'working', action: 'running' }
   else if (hasQueued(delegations)) stage = { stage: 'working', action: 'queued' }

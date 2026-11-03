@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-import { BUILTIN_ROUTE_PROVIDERS, getRouteResourcePolicy } from '../lib/provider-policy.js'
-import { createRouteMetadataCache, getRouteDisplay, PROVIDER_LABELS } from '../lib/routes.js'
+import { BUILTIN_ROUTE_PROVIDERS, getRouteResourcePolicy } from '../lib/domain/routing/provider-policy.js'
+import { createRouteMetadataCache, getRouteDisplay, PROVIDER_LABELS } from '../lib/domain/routing/routes.js'
 
 const expectedSubscriptions = ['antigravity', 'dsh-opencode-go']
 

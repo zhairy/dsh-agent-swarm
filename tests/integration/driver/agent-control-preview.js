@@ -3,7 +3,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { resolve, dirname, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { getRpcRoutes } from '../../../lib/rpc.js'
-import { PROVIDER_LABELS } from '../../../lib/routes.js'
+import { PROVIDER_LABELS } from '../../../lib/domain/routing/routes.js'
 import { CONTROL_MODEL_CATALOG } from './agent-control-scenarios.js'
 
 /** Browser QA bridge uses actual production RPC handlers and actual running Host child. */

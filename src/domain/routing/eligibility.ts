@@ -1,6 +1,5 @@
-import type { LlmFailureLike } from './host-contract.js'
 import { getRouteResourcePolicy, normalizeRouteFailure, type FailureKind, type RouteResourcePolicy } from './provider-policy.js'
-import type { RouteInfo } from './routes.js'
+import type { RouteFailureInput, RouteInfo } from './routes.js'
 
 export interface RouteEligibilitySnapshot {
   configuredProviders: readonly string[]
@@ -33,7 +32,7 @@ export interface FailureFact {
   retryAfterMs?: number
 }
 
-export const toFailureFact = (route: RouteInfo, failure: LlmFailureLike, at = Date.now()): FailureFact => {
+export const toFailureFact = (route: RouteInfo, failure: RouteFailureInput, at = Date.now()): FailureFact => {
   const normalized = normalizeRouteFailure(failure, route, at)
   return { kind: normalized.kind, provider: route.provider, model: route.model, message: normalized.message,
     retryable: ['rate_limited', 'network_transient', 'service_transient', 'pool_exhausted'].includes(normalized.kind),

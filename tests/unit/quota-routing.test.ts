@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createQuotaReader, getQuotaAccountId, SUBSCRIPTION_QUOTA_PROVIDERS, type QuotaRouteInput, type QuotaRpcInvoke } from '../../src/quota.js'
-import { createQuotaRouteEvaluator, getQuotaRouteDecision, getQuotaRouteMembership, getSubscriptionPoolConfiguration, stableOrderQuotaRoutes, type QuotaRoutingInput } from '../../src/quota-routing.js'
+import { createQuotaReader, getQuotaAccountId, SUBSCRIPTION_QUOTA_PROVIDERS, type QuotaRouteInput, type QuotaRpcInvoke } from '../../src/domain/routing/resources.js'
+import { createQuotaRouteEvaluator, getQuotaRouteDecision, getQuotaRouteMembership, getSubscriptionPoolConfiguration, stableOrderQuotaRoutes, type QuotaRoutingInput } from '../../src/domain/routing/quota.js'
 
 const route = { provider: 'codex', model: 'gpt' }
 const window = (usedPercent: number, scope?: string, resetsAt: number | undefined = 100_000) => ({ kind: 'weekly', usedPercent, ...(scope === undefined ? {} : { scope }), ...(resetsAt === undefined ? {} : { resetsAt }) })

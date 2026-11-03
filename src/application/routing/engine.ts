@@ -1,4 +1,4 @@
-import { getRoleRoute, type SwarmConfigInfo } from './config.js'
+import { getRoleRoute, type SwarmConfigInfo } from '../../config.js'
 import {
   getAgentHeader,
   type AgentLike,
@@ -7,16 +7,16 @@ import {
   type LlmFailureLike,
   type RequestErrorActionLike,
   type RequestErrorPayloadLike
-} from './host-contract.js'
-import type { RoleId } from './role-registry.js'
-import { isNetworkSuspect, SleepWithSignal, type NetworkMonitorInfo } from './network.js'
-import { normalizeRouteFailure, isTerminalRouteFailure, getRouteResourcePolicy, getWireReasoningEffort, type FailureKind, type RouteFailureMetadata } from './provider-policy.js'
-import { intRouteHealth, type RouteHealth, type RouteHealthSnapshot } from './route-health.js'
-import { SwarmError } from './util/errors.js'
-import { getFailureClass, getRouteKey, getRouteLabel, isSameRoute, type FailureClass, type RouteInfo, type RouteProbe } from './routes.js'
-import { getUpgradedChain } from './upgrade.js'
-import { getCanonicalJson } from './workflow.js'
-import { formatContextAdmissionError } from './context-admission.js'
+} from '../../host-contract.js'
+import type { RoleId } from '../../role-registry.js'
+import { isNetworkSuspect, SleepWithSignal, type NetworkMonitorInfo } from '../../network.js'
+import { normalizeRouteFailure, isTerminalRouteFailure, getRouteResourcePolicy, getWireReasoningEffort, type FailureKind, type RouteFailureMetadata } from '../../domain/routing/provider-policy.js'
+import { intRouteHealth, type RouteHealth, type RouteHealthSnapshot } from '../../domain/routing/health.js'
+import { SwarmError } from '../../util/errors.js'
+import { getFailureClass, getRouteKey, getRouteLabel, isSameRoute, type FailureClass, type RouteInfo, type RouteProbe } from '../../domain/routing/routes.js'
+import { getUpgradedChain } from '../../domain/routing/upgrade.js'
+import { getCanonicalJson } from '../../workflow.js'
+import { formatContextAdmissionError } from '../../context-admission.js'
 
 /** 一次路由回退 */
 export interface FallbackEventInfo {
@@ -93,7 +93,7 @@ export interface NetworkWaitEventInfo {
 }
 
 /** 路由状态注册表的可选依赖 */
-export interface RouteStateOptionsInfo {
+export interface RouteEngineOptions {
   now?: () => number
   /** 联网探测；缺省时不做断网等待 */
   network?: NetworkMonitorInfo
@@ -112,9 +112,9 @@ export interface RouteStateOptionsInfo {
   orderQuotaRoutes?: (routes: readonly RouteInfo[], signal?: AbortSignal, protectedRoutes?: readonly RouteInfo[]) => Promise<readonly RouteInfo[]>
   onRouteSuccess?: (route: RouteInfo) => void
   /** Preflight a candidate against the current session's measured context. */
-  admitContext?: (agent: AgentLike, route: RouteInfo, resolved: CallConfigLike, signal?: AbortSignal) => Promise<import('./context-admission.js').ContextAdmissionInfo>
+  admitContext?: (agent: AgentLike, route: RouteInfo, resolved: CallConfigLike, signal?: AbortSignal) => Promise<import('../../context-admission.js').ContextAdmissionInfo>
   /** Advisory fact for diagnostics; rejection itself still occurs before provider dispatch. */
-  onContextRejected?: (event: { agentId: string; scope: 'child' | 'root'; route: RouteInfo; journal: import('./context-admission.js').ContextAdmissionInfo }) => void
+  onContextRejected?: (event: { agentId: string; scope: 'child' | 'root'; route: RouteInfo; journal: import('../../context-admission.js').ContextAdmissionInfo }) => void
 }
 
 export interface RequestRecoveryState {
@@ -171,7 +171,7 @@ class AdmissionProbe {
 }
 
 /** 路由状态注册表：spawn 子智能体按链回退，swarm 预设的根会话按角色链回退 */
-export interface RouteStateRegistry {
+export interface RouteEngine {
   /** 登记子智能体（或连续会话的新一轮）：路由链从头开始，已试记录清空 */
   AddChild: (agentId: string, state: { chain: RouteInfo[]; role: RoleId; onFallback?: (event: FallbackEventInfo) => void; persistent?: boolean; logicalRequestId?: string; initialRoute?: RouteInfo; initialQuotaOrder?: readonly RouteInfo[]; respectStoredOverride?: boolean; requireVision?: boolean }) => void
   BeginLogicalRequest: (agentId: string, logicalRequestId: string) => void
@@ -286,10 +286,10 @@ const FindNextIndex = (chain: RouteInfo[], start: number, tried: ReadonlySet<str
  * 创建路由状态注册表
  * @param {(event: FallbackEventInfo) => void} [onRootFallback] - 根会话回退时的回调（记日志）
  * @param {RouteProbe} [probe] - 根会话回退前的可用性预检；缺省时不预检
- * @param {RouteStateOptionsInfo} [options] - 时钟与断网等待
- * @returns {RouteStateRegistry} 注册表
+ * @param {RouteEngineOptions} [options] - 时钟与断网等待
+ * @returns {RouteEngine} 注册表
  */
-export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo) => void, probe?: RouteProbe, options: RouteStateOptionsInfo = {}): RouteStateRegistry => {
+export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) => void, probe?: RouteProbe, options: RouteEngineOptions = {}): RouteEngine => {
   const now = options.now ?? Date.now
   const health = options.health ?? intRouteHealth(now)
   const recoveries = new Map<string, RequestRecoveryState>()
@@ -719,7 +719,10 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     if (recovery.terminal !== undefined) throw new SwarmError('SERVICE_UNAVAILABLE', recovery.terminal)
     if (countedAttempts(recovery) >= policyOf(config).maxLogicalAttempts) { terminal(agent.id, 'recovery_attempts_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'recovery_attempts_exhausted') }
     const declared = config === undefined || _presetRole === undefined ? undefined : getRoleRoute(config, getRouteKey(_presetRole)).chain.find((route) => isSameRoute(route, preferredRoot))
-    let route = child === undefined ? (roots.get(agent.id)?.override ?? (upgrades.get(agent.id) === undefined ? undefined : upgrades.get(agent.id)!.chain[upgrades.get(agent.id)!.index]) ?? { ...preferredRoot, ...(declared?.policy === undefined ? {} : { policy: declared.policy }) }) : child.chain[child.index]
+    const preferredRoute: RouteInfo = { provider: preferredRoot.provider, model: preferredRoot.model,
+      ...(preferredRoot.reasoningEffort === undefined ? {} : { reasoningEffort: preferredRoot.reasoningEffort }),
+      ...(declared?.policy === undefined ? {} : { policy: declared.policy }) }
+    let route = child === undefined ? (roots.get(agent.id)?.override ?? (upgrades.get(agent.id) === undefined ? undefined : upgrades.get(agent.id)!.chain[upgrades.get(agent.id)!.index]) ?? preferredRoute) : child.chain[child.index]
     const pendingRetry = manualRetries.get(agent.id)
     if (route !== undefined && pendingRetry !== undefined && isSameRoute(route, pendingRetry.route)) {
       manualRetries.delete(agent.id)
@@ -738,9 +741,21 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     // 已由本请求持有的半开/人工许可不能再走全局 probe（它会把自己的 claim 当作隔离）。
     const returning = route !== undefined && health.getRelatedEntries(route).length > 0
     const routeCheck = route === undefined || contextChecks === undefined ? undefined : contextChecks.get(admissionKey(route))
-    if (route === undefined || !canServe(route) || (contextChecks !== undefined && routeCheck !== true)
-      || (returning && health.isAvailable(route) && !accepts(route)) || !health.claim(route, agent.id)) {
-      if (child === undefined && config?.rootFallback === false) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'root-fallback-disabled: route_chain_exhausted') }
+    // A missing context result means metadata work was invalidated by a live
+    // selection/identity change. It is not a negative eligibility fact: re-enter
+    // admission and fetch the current route instead of exhausting the chain.
+    if (route !== undefined && contextChecks !== undefined && routeCheck === undefined) throw new AdmissionProbe(route)
+    const routeServable = route !== undefined && canServe(route)
+    const routeHealthy = route !== undefined && health.isAvailable(route)
+    const routeAccepted = route === undefined || !returning || !routeHealthy || accepts(route)
+    const canClaimRoute = route !== undefined && routeServable && (contextChecks === undefined || routeCheck === true)
+      && !(returning && routeHealthy && !routeAccepted)
+    const routeClaimed = canClaimRoute && health.claim(route, agent.id)
+    if (!canClaimRoute || !routeClaimed) {
+      if (child === undefined && config?.rootFallback === false) {
+        recovery.terminalDetail = `route=${route === undefined ? 'missing' : getRouteLabel(route)} servable=${routeServable} context=${String(routeCheck)} healthy=${routeHealthy} accepted=${routeAccepted} claimed=${routeClaimed}`
+        terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'root-fallback-disabled: route_chain_exhausted')
+      }
       const baseChain = config === undefined || _presetRole === undefined ? [] : getRoleRoute(config, getRouteKey(_presetRole)).chain
       const declaredChain = effectiveChain(agent.id, child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain)))
       // 用户可在对话框选择未列入角色备用链的模型。启用上下文准入时，
@@ -776,7 +791,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     return next
   }
 
-  const api: RouteStateRegistry = {
+  const api: RouteEngine = {
     BeginLogicalRequest: begin,
     BeginRequestStep: (id, turn, step) => { requestPositions.set(id, { turn, step }); begin(id, `${children.get(id)?.logicalRequestId ?? id}:${turn}:${step}`) },
     FinishLogicalRequest: (id) => {
@@ -1094,7 +1109,7 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     AdmitRequest: async (agent, resolved, presetRole, config, explicitSelectionAvailable = false, signal) => {
       const checks = probe === undefined ? undefined : new Map<string, boolean>()
       const contextChecks = options.admitContext === undefined ? undefined : new Map<string, boolean>()
-      const contextRejected = new Map<string, import('./context-admission.js').ContextAdmissionInfo>()
+      const contextRejected = new Map<string, import('../../context-admission.js').ContextAdmissionInfo>()
       for (;;) {
         if (signal?.aborted === true) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
         if (managed(agent, presetRole)) {

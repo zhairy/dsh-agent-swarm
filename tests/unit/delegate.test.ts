@@ -19,9 +19,9 @@ import {
 import { getLedgerEvents, intLedger, intTaskStore, type DelegationRecord } from '../../src/evidence.js'
 import type { SubagentResultLike, SubagentStartRequestLike } from '../../src/host-contract.js'
 import { ValidateTaskCard, type TaskCard } from '../../src/policy.js'
-import { intRouteStateRegistry } from '../../src/route-state.js'
+import { createRouteEngine } from '../../src/application/routing/engine.js'
 import { intChildEndHub, intThreadRegistry } from '../../src/threads.js'
-import type { RouteInfo, RouteProbe } from '../../src/routes.js'
+import type { RouteInfo, RouteProbe } from '../../src/domain/routing/routes.js'
 import { intMutex } from '../../src/util/mutex.js'
 import { VALID_OUTPUTS } from '../fixtures/valid-outputs.js'
 
@@ -45,7 +45,7 @@ const makeHarness = (overrides: Partial<DelegateDepsInfo> & { config?: SwarmConf
   const plans = [...(overrides.plans ?? [])]
   const providers = new Set(['spawn', ...(overrides.providers ?? [])])
   let seq = 0
-  const routeState = intRouteStateRegistry()
+  const routeState = createRouteEngine()
   const subagents = {
     list: () => [...providers],
     getProvider: (name: string) => (providers.has(name) ? { capabilities: {} } : undefined),
@@ -268,7 +268,7 @@ describe('intDelegator.delegate', () => {
 
   it('运行中回退：记录 fallback 并以最终路由为准', async () => {
     const config = getSwarmConfig({})
-    let registry = intRouteStateRegistry()
+    let registry = createRouteEngine()
     const h = track(makeHarness({ plans: [{
       result: { output: [], structured: VALID_OUTPUTS.fu_he, stopReason: 'completed' },
       onStarted: (id) => {
@@ -774,7 +774,7 @@ describe('trusted dispatch admission', () => {
     const fallback = { provider: 'qwen-token-plan-cn', model: 'qwen3.8-flash' }
     const api = { provider: 'deepseek-official', model: 'deepseek-flash' }
     const orderQuotaRoutes = vi.fn(async (routes: readonly RouteInfo[]) => [routes[1]!, routes[0]!, routes[2]!])
-    let snapshot: ReturnType<ReturnType<typeof intRouteStateRegistry>['getChild']>
+    let snapshot: ReturnType<ReturnType<typeof createRouteEngine>['getChild']>
     const h = track(makeHarness({ config: getSwarmConfig({ agents: { session: 'oneshot' }, routes: { fu_he: { chain: [primary, fallback, api] } } }), orderQuotaRoutes,
       plans: [{ result: { output: [], structured: VALID_OUTPUTS.fu_he, stopReason: 'completed' }, onStarted: (id) => { snapshot = h.routeState.getChild(id) } }]
     }))

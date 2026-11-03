@@ -37,12 +37,12 @@ const stage = () => {
   return { base, plugin, home, workspace, state, evidence, patch }
 }
 
-describe('真实rc.3授权等待与晚答复', () => {
+describe.each(['0.2.1-rc.3', '0.2.1-rc.5'])('真实%s授权等待与晚答复', (hostVersion) => {
   it('pending无LLM/goal增长；真实答复落账、错误来源/暂停/替换/取消不复活旧目标', async () => {
     const fixture = stage()
-    const run = await runDshAsync({ version: '0.2.1-rc.3', args: ['--profile', 'auth313', '--patch', fixture.patch], cwd: fixture.workspace,
+    const run = await runDshAsync({ version: hostVersion, args: ['--profile', 'auth313', '--patch', fixture.patch], cwd: fixture.workspace,
       timeout: observationMs + 90000, env: { DSH_HOME: fixture.home, SWARM_AUTH_WAIT_MS: String(observationMs), SWARM_AUTH_EVIDENCE_DIR: fixture.evidence,
-        SWARM_AUTH_PLUGIN: fixture.plugin, SWARM_AUTH_STATE: fixture.state } })
+        SWARM_AUTH_PLUGIN: fixture.plugin, SWARM_AUTH_STATE: fixture.state, SWARM_HOST_VERSION: hostVersion } })
     const path = join(fixture.evidence, 'host-auth-result.json')
     if (!existsSync(path)) throw new Error(`SDK fixture produced no result: ${run.stdout}\n${run.stderr}`)
     const result = JSON.parse(readFileSync(path, 'utf8'))

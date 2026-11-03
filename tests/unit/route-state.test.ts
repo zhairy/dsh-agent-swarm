@@ -3,11 +3,11 @@ import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { getSwarmConfig } from '../../src/config.js'
-import { intRouteStateRegistry, type FallbackEventInfo } from '../../src/route-state.js'
-import type { PreferredRecoveryEventInfo } from '../../src/route-state.js'
-import { DEFAULT_ROUTE_CHAINS } from '../../src/routes.js'
-import { intRouteHealth } from '../../src/route-health.js'
-import type { RouteInfo } from '../../src/routes.js'
+import { createRouteEngine, type FallbackEventInfo } from '../../src/application/routing/engine.js'
+import type { PreferredRecoveryEventInfo } from '../../src/application/routing/engine.js'
+import { DEFAULT_ROUTE_CHAINS } from '../../src/domain/routing/routes.js'
+import { intRouteHealth } from '../../src/domain/routing/health.js'
+import type { RouteInfo } from '../../src/domain/routing/routes.js'
 import { apply as applyRuntime } from '../../src/runtime.js'
 import type { PluginContextLike } from '../../src/host-contract.js'
 
@@ -25,13 +25,13 @@ describe('automatic source quota routing', () => {
   const effective = [qwen, claude, primary, api]
   const cfg = getSwarmConfig({ agents: { rootRecoverMs: 60_000 }, routes: { tian_shu: { chain: declared } } })
   const order = (routes: readonly RouteInfo[]) => effective.map((item) => routes.find((route) => route.provider === item.provider)!)
-  const fail = (registry: ReturnType<typeof intRouteStateRegistry>, selected: RouteInfo, agent = root, role: 'tian_shu' | undefined = 'tian_shu') => registry.recover({ agent, provider: selected.provider, failure: { status: 400 } }, async () => undefined, role, cfg)
+  const fail = (registry: ReturnType<typeof createRouteEngine>, selected: RouteInfo, agent = root, role: 'tian_shu' | undefined = 'tian_shu') => registry.recover({ agent, provider: selected.provider, failure: { status: 400 } }, async () => undefined, role, cfg)
 
   it('the runtime automatically selects quota preference on the first request and tries deferred subscriptions before API', async () => {
     const orderQuotaRoutes = vi.fn(async (routes: readonly RouteInfo[]) => order(routes))
     const onRouteSuccess = vi.fn()
     const probe = vi.fn(async () => ({ ok: true as const, vision: true }))
-    const registry = intRouteStateRegistry(undefined, probe, { orderQuotaRoutes, onRouteSuccess })
+    const registry = createRouteEngine(undefined, probe, { orderQuotaRoutes, onRouteSuccess })
     const listeners = new Map<string, (...args: any[]) => any>()
     applyRuntime({
       get: (name: string) => name === 'agentSwarm' ? { routeState: registry, getConfig: () => cfg, WaitAgentReady: async () => undefined, BeforeManagedRequest: async () => undefined } : name === 'sessionProjections' ? { stateOf: () => ({ pending: false }) } : undefined,
@@ -55,7 +55,7 @@ describe('automatic source quota routing', () => {
   })
 
   it('a child keeps its declared preference while fallback enumerates the complete effective order', async () => {
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: true }), { orderQuotaRoutes: async (routes) => order(routes) })
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: true }), { orderQuotaRoutes: async (routes) => order(routes) })
     registry.AddChild(child.id, { chain: declared, initialRoute: qwen, initialQuotaOrder: effective, role: 'tan_wei', logicalRequestId: 'D-quota-child' })
     registry.BeginRequestStep(child.id, 0, 0)
     await registry.PreparePreferredRecovery(child, qwen, undefined, cfg)
@@ -71,7 +71,7 @@ describe('automatic source quota routing', () => {
   })
 
   it('a trusted spawned child keeps the model actually started after an earlier quota-preferred start failed', async () => {
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: true }), { orderQuotaRoutes: async (routes) => order(routes) })
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: true }), { orderQuotaRoutes: async (routes) => order(routes) })
     // Quota preferred Qwen, but startSpawn failed there and actually created Codex.
     registry.AddChild(child.id, { chain: declared, initialRoute: primary, initialQuotaOrder: effective, role: 'tan_wei' })
     registry.BeginRequestStep(child.id, 0, 0)
@@ -86,7 +86,7 @@ describe('automatic source quota routing', () => {
   it('an actual preferred recovery trial is protected once from old source quota reports', async () => {
     let clock = 0
     const orderQuotaRoutes = vi.fn(async (routes: readonly RouteInfo[], _signal?: AbortSignal, protectedRoutes?: readonly RouteInfo[]) => protectedRoutes?.some((route) => route.provider === primary.provider) ? [...routes] : order(routes))
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: true }), { now: () => clock, orderQuotaRoutes })
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: true }), { now: () => clock, orderQuotaRoutes })
     registry.AddChild(child.id, { chain: declared, initialRoute: qwen, initialQuotaOrder: effective, role: 'tan_wei', persistent: true })
     registry.BeginRequestStep(child.id, 0, 0)
     await registry.PreparePreferredRecovery(child, qwen, undefined, cfg)
@@ -108,7 +108,7 @@ describe('automatic source quota routing', () => {
       if (route.provider === claude.provider) await new Promise<void>((resolve) => { release = resolve })
       return { ok: true as const, vision: true }
     })
-    const registry = intRouteStateRegistry(undefined, probe)
+    const registry = createRouteEngine(undefined, probe)
     const upgradeChain = [primary, qwen, claude].map((route, index) => ({ ...route, policy: { accessMode: 'subscription' as const, quotaDomainId: `upgrade-domain-${index}` } }))
     registry.SetRootUpgrade(root.id, upgradeChain, primary)
     registry.BeginRequestStep(root.id, 0, 0)
@@ -135,7 +135,7 @@ describe('automatic source quota routing', () => {
   it('a disposed root or a manual selection cannot be overwritten by a late fallback probe', async () => {
     for (const transition of ['dispose', 'select'] as const) {
       let release!: () => void
-      const registry = intRouteStateRegistry(undefined, async () => {
+      const registry = createRouteEngine(undefined, async () => {
         await new Promise<void>((resolve) => { release = resolve })
         return { ok: true, vision: true }
       })
@@ -154,7 +154,7 @@ describe('automatic source quota routing', () => {
 
   it('manual child/root selection and rootFallback=false bypass automatic quota sorting', async () => {
     const orderQuotaRoutes = vi.fn(async (routes: readonly RouteInfo[]) => order(routes))
-    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes })
+    const registry = createRouteEngine(undefined, undefined, { orderQuotaRoutes })
     registry.AddChild(child.id, { chain: declared, role: 'tan_wei' })
     registry.SetChildOverride(child.id, primary)
     registry.BeginRequestStep(child.id, 0, 0)
@@ -172,7 +172,7 @@ describe('automatic source quota routing', () => {
 
   it('a legacy root picker change invalidates already prepared automatic quota order', async () => {
     const orderQuotaRoutes = vi.fn(async (routes: readonly RouteInfo[]) => order(routes))
-    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes })
+    const registry = createRouteEngine(undefined, undefined, { orderQuotaRoutes })
     registry.BeginRequestStep(root.id, 0, 0)
     await registry.PrepareQuotaRouting(root, primary, 'tian_shu', cfg)
     expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg)).toMatchObject(qwen)
@@ -186,11 +186,11 @@ describe('automatic source quota routing', () => {
 
   it('health and capability checks remain authoritative on a new quota-preferred root route', async () => {
     const probe = vi.fn(async (route: RouteInfo) => route.provider === qwen.provider ? { ok: false as const, reason: 'provider-not-configured' } : { ok: true as const, vision: true })
-    const registry = intRouteStateRegistry(undefined, probe, { orderQuotaRoutes: async (routes) => order(routes) })
+    const registry = createRouteEngine(undefined, probe, { orderQuotaRoutes: async (routes) => order(routes) })
     registry.BeginRequestStep(root.id, 0, 0)
     await registry.PrepareQuotaRouting(root, primary, 'tian_shu', cfg)
     expect(registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)).toMatchObject(claude)
-    const isolated = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes: async (routes) => order(routes) })
+    const isolated = createRouteEngine(undefined, undefined, { orderQuotaRoutes: async (routes) => order(routes) })
     await isolated.ObserveRouteFailure(qwen, { code: 'QUOTA' }, cfg)
     isolated.BeginRequestStep(root.id, 0, 0)
     await isolated.PrepareQuotaRouting(root, primary, 'tian_shu', cfg)
@@ -201,7 +201,7 @@ describe('automatic source quota routing', () => {
   it('cancellation or disposal while quota is pending never admits a model or resurrects request state', async () => {
     let release!: (routes: readonly RouteInfo[]) => void
     const orderQuotaRoutes = vi.fn(() => new Promise<readonly RouteInfo[]>((resolve) => { release = resolve }))
-    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes })
+    const registry = createRouteEngine(undefined, undefined, { orderQuotaRoutes })
     registry.AddChild(child.id, { chain: declared, role: 'tan_wei' })
     registry.BeginRequestStep(child.id, 0, 0)
     const controller = new AbortController()
@@ -220,7 +220,7 @@ describe('automatic source quota routing', () => {
 
   it('a late cancelled quota read cannot erase the newer step effective fallback chain', async () => {
     const releases: Array<(routes: readonly RouteInfo[]) => void> = []
-    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes: () => new Promise<readonly RouteInfo[]>((resolve) => { releases.push(resolve) }) })
+    const registry = createRouteEngine(undefined, undefined, { orderQuotaRoutes: () => new Promise<readonly RouteInfo[]>((resolve) => { releases.push(resolve) }) })
     registry.AddChild(child.id, { chain: declared, role: 'tan_wei' })
     const old = new AbortController()
     registry.BeginLogicalRequest(child.id, 'old-step')
@@ -242,7 +242,7 @@ describe('automatic source quota routing', () => {
   })
 
   it('new quota preference cannot rewind the established root fallback before its recovery timer', async () => {
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => 0, orderQuotaRoutes: async (routes) => order(routes) })
+    const registry = createRouteEngine(undefined, undefined, { now: () => 0, orderQuotaRoutes: async (routes) => order(routes) })
     registry.BeginRequestStep(root.id, 0, 0)
     await registry.PrepareQuotaRouting(root, primary, 'tian_shu', cfg)
     registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)
@@ -261,7 +261,7 @@ describe('automatic source quota routing', () => {
     const otherEffort = { ...primary, reasoningEffort: 'low' }
     const declaredChain = [declaredPrimary, otherEffort, api]
     const selected = getSwarmConfig({ routes: { tian_shu: { chain: declaredChain } } })
-    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes: async () => [{ ...primary, policy: { quotaDomainId: 'forged' } }, api, api] })
+    const registry = createRouteEngine(undefined, undefined, { orderQuotaRoutes: async () => [{ ...primary, policy: { quotaDomainId: 'forged' } }, api, api] })
     registry.BeginRequestStep(root.id, 0, 0)
     await registry.PrepareQuotaRouting(root, primary, 'tian_shu', selected)
     expect(registry.getRequestOverride(root, primary, 'tian_shu', selected, true)).toMatchObject(primary)
@@ -272,7 +272,7 @@ describe('automatic source quota routing', () => {
   it('quota sorting neither resets the eight-attempt ceiling nor lets a restarted delegation admit a ninth model', async () => {
     const routes = Array.from({ length: 9 }, (_, index) => ({ provider: `subscription-${index}`, model: `model-${index}` }))
     const orderQuotaRoutes = vi.fn(async (chain: readonly RouteInfo[]) => [...chain.slice(1), chain[0]!])
-    const registry = intRouteStateRegistry(undefined, undefined, { orderQuotaRoutes })
+    const registry = createRouteEngine(undefined, undefined, { orderQuotaRoutes })
     registry.AddChild(child.id, { chain: routes, role: 'tan_wei', logicalRequestId: 'D-eight' })
     registry.BeginRequestStep(child.id, 0, 0)
     await registry.PrepareQuotaRouting(child, routes[0]!, undefined, cfg)
@@ -300,9 +300,17 @@ describe('context-aware route admission', () => {
   const fallback = { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' }
   const selected = getSwarmConfig({ routes: { tian_shu: { chain: [primary, fallback] } } })
 
+  it('combines a healthy metadata probe with context admission instead of exhausting the route', async () => {
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }), { admitContext: async () => ({ ok: true }) })
+    registry.BeginRequestStep(root.id, 0, 0)
+    await expect(registry.AdmitRequest(root, { provider: 'fixture', model: 'combined' }, 'tian_shu',
+      getSwarmConfig({ routes: { tian_shu: { chain: [{ provider: 'fixture', model: 'combined' }] } } }), true))
+      .resolves.toMatchObject({ provider: 'fixture', model: 'combined' })
+  })
+
   it('skips an otherwise healthy route that cannot hold the measured session and selects the next safe route', async () => {
     const rejected: Array<{ route: RouteInfo; journal: any }> = []
-    const registry = intRouteStateRegistry(undefined, undefined, {
+    const registry = createRouteEngine(undefined, undefined, {
       admitContext: async (_agent, route) => route.provider === 'openai'
         ? { ok: false, reason: 'context-window-insufficient', measuredTokens: 368003, contextWindow: 272000, reservedOutputTokens: 128000, safetyMarginTokens: 4096, safeInputTokens: 139904 }
         : { ok: true, measuredTokens: 368003, contextWindow: 1000000, reservedOutputTokens: 32768, safetyMarginTokens: 4096, safeInputTokens: 963136 },
@@ -315,7 +323,7 @@ describe('context-aware route admission', () => {
   })
 
   it('fails before dispatch with a context recovery error when every route is too small', async () => {
-    const registry = intRouteStateRegistry(undefined, undefined, {
+    const registry = createRouteEngine(undefined, undefined, {
       admitContext: async () => ({ ok: false, reason: 'context-window-insufficient', measuredTokens: 368003, contextWindow: 272000, reservedOutputTokens: 128000, safetyMarginTokens: 4096, safeInputTokens: 139904 })
     })
     registry.BeginRequestStep(root.id, 0, 0)
@@ -325,7 +333,7 @@ describe('context-aware route admission', () => {
   })
 
   it('keeps legacy admission unchanged when token measurement is unavailable', async () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.BeginRequestStep(root.id, 0, 0)
     await expect(registry.AdmitRequest(root, { ...fallback, maxTokens: 32768 }, 'tian_shu', selected, true)).resolves.toMatchObject(fallback)
   })
@@ -335,7 +343,7 @@ describe('context-aware route admission', () => {
     const explicit = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
     const cfg = getSwarmConfig({ routes: { tian_shu: { chain: [declaredFallback] } } })
     const admitted: string[] = []
-    const registry = intRouteStateRegistry(undefined, undefined, {
+    const registry = createRouteEngine(undefined, undefined, {
       admitContext: async (_agent, route) => {
         admitted.push(route.provider)
         return route.provider === 'openai'
@@ -352,7 +360,7 @@ describe('context-aware route admission', () => {
     const declaredFallback = { provider: 'declared-fallback', model: 'm', reasoningEffort: 'max' }
     const explicit = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
     const cfg = getSwarmConfig({ routes: { tian_shu: { chain: [declaredFallback] } } })
-    const registry = intRouteStateRegistry(undefined, undefined, {
+    const registry = createRouteEngine(undefined, undefined, {
       admitContext: async () => ({ ok: true, measuredTokens: 63500, contextWindow: 1000000, reservedOutputTokens: 128000, safetyMarginTokens: 4096, safeInputTokens: 867904 })
     })
     registry.BeginRequestStep(root.id, 0, 0)
@@ -365,7 +373,7 @@ describe('request recovery lifetime', () => {
   const cfg = getSwarmConfig({ routes: { tian_shu: { chain: [route] } } })
 
   it('failed and cancelled one-shot delegations release all scoped state after terminal consumption', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     for (let index = 0; index < 2500; index++) {
       const id = `disposed-${index}`
       const requestId = `D-finished-${index}`
@@ -385,7 +393,7 @@ describe('request recovery lifetime', () => {
   })
 
   it('disposing and restarting a child within the same delegation does not reset the eight-admission ceiling', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild('first', { chain: [route], role: 'tan_wei', logicalRequestId: 'D-restart' })
     registry.BeginRequestStep('first', 0, 0)
     for (let index = 0; index < 8; index++) registry.getRequestOverride({ id: 'first' }, route, undefined)
@@ -403,7 +411,7 @@ describe('request recovery lifetime', () => {
   })
 
   it('finishing a persistent delegation preserves its current recovery, selected model and pause fence', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     const chosen = { provider: 'manual', model: 'chosen' }
     registry.AddChild(child.id, { chain: [route, chosen], role: 'tan_wei', persistent: true, logicalRequestId: 'D-persistent-1' })
     registry.RecordUserSelection(child.id, chosen, 1)
@@ -428,7 +436,7 @@ describe('request recovery lifetime', () => {
   })
 
   it('new root steps discard old failed state while repeated current step ids retain the counter', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     for (let step = 0; step < 2500; step++) {
       registry.BeginRequestStep(root.id, 0, step)
       registry.getRequestOverride(root, route, 'tian_shu', cfg, true)
@@ -442,7 +450,7 @@ describe('request recovery lifetime', () => {
   })
 
   it('a late duplicate persistent-child step after owner cleanup retains its exhausted admission counter', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild(child.id, { chain: [route], role: 'tan_wei', persistent: true, logicalRequestId: 'D-late' })
     registry.BeginRequestStep(child.id, 0, 0)
     for (let index = 0; index < 8; index++) registry.getRequestOverride(child, route, undefined)
@@ -454,7 +462,7 @@ describe('request recovery lifetime', () => {
   })
 
   it('legacy unscoped dispose retains only a bounded terminal receipt, never full request histories', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     for (let index = 0; index < 2500; index++) {
       const id = `legacy-${index}`
       registry.AddChild(id, { chain: [route], role: 'tan_wei' })
@@ -470,12 +478,12 @@ describe('request recovery lifetime', () => {
 
 describe('durable successful route recovery', () => {
   const route = { provider: 'synthetic', model: 'success' }
-  const prepare = (onHealthChange: NonNullable<Parameters<typeof intRouteStateRegistry>[2]>['onHealthChange'], extra: Parameters<typeof intRouteStateRegistry>[2] = {}) => {
+  const prepare = (onHealthChange: NonNullable<Parameters<typeof createRouteEngine>[2]>['onHealthChange'], extra: Parameters<typeof createRouteEngine>[2] = {}) => {
     let clock = 0
     const health = intRouteHealth(() => clock)
     health.record(route, { provider: route.provider, model: route.model, kind: 'quota_exhausted', message: 'synthetic fixture' })
     clock = 5000
-    const registry = intRouteStateRegistry(undefined, undefined, { health, now: () => clock, onHealthChange, ...extra })
+    const registry = createRouteEngine(undefined, undefined, { health, now: () => clock, onHealthChange, ...extra })
     registry.AddChild(child.id, { chain: [route], role: 'tan_wei', persistent: true, logicalRequestId: 'D-success' })
     registry.BeginRequestStep(child.id, 0, 0)
     expect(registry.RequestRouteRetry(route, child.id, { force: true }).ok).toBe(true)
@@ -582,7 +590,7 @@ describe('durable successful route recovery', () => {
     clock = 5000
     const commits: Array<{ resolve: () => void; reject: (error: Error) => void }> = []
     const hook = vi.fn(() => new Promise<void>((resolve, reject) => { commits.push({ resolve, reject }) }))
-    const registry = intRouteStateRegistry(undefined, undefined, { health, now: () => clock, onHealthChange: hook, healthCommitWaitMs: waitMs })
+    const registry = createRouteEngine(undefined, undefined, { health, now: () => clock, onHealthChange: hook, healthCommitWaitMs: waitMs })
     for (const [id, selected] of [['first', route], ['second', other]] as const) {
       registry.AddChild(id, { chain: [selected], role: 'tan_wei', persistent: true, logicalRequestId: `D-${id}` })
       registry.RequestRouteRetry(selected, id, { force: true })
@@ -632,7 +640,7 @@ describe('long-running preferred route recovery', () => {
     let clock = 0
     const events: PreferredRecoveryEventInfo[] = []
     const probe = vi.fn(async () => ({ ok: true as const, vision: false }))
-    const registry = intRouteStateRegistry(undefined, probe, { now: () => clock, onPreferredRecovery: (event) => events.push(event) })
+    const registry = createRouteEngine(undefined, probe, { now: () => clock, onPreferredRecovery: (event) => events.push(event) })
     registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true, logicalRequestId: 'D-long' })
     registry.BeginRequestStep(child.id, 0, 0)
     await registry.PreparePreferredRecovery(child, primary, undefined, cfg)
@@ -656,7 +664,7 @@ describe('long-running preferred route recovery', () => {
 
   it('本地中止没有请求错误时，ReleaseProbe 仍能释放该会话的半开探测而不改变路由健康', async () => {
     let clock = 0
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
     registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true, logicalRequestId: 'D-local-abort' })
     registry.BeginRequestStep(child.id, 0, 0)
     await registry.PreparePreferredRecovery(child, primary, undefined, cfg)
@@ -675,7 +683,7 @@ describe('long-running preferred route recovery', () => {
 
   it('请求中止时释放半开探测，路由不会对其它根会话长期不可用', async () => {
     let clock = 0
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
     registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true, logicalRequestId: 'D-abort' })
     registry.BeginRequestStep(child.id, 0, 0)
     await registry.PreparePreferredRecovery(child, primary, undefined, cfg)
@@ -694,7 +702,7 @@ describe('long-running preferred route recovery', () => {
 
   it('same logical retries cannot rewind to the preferred route and a failed probe backs off across new steps', async () => {
     let clock = 0
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }), { now: () => clock, sleep: async () => undefined })
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }), { now: () => clock, sleep: async () => undefined })
     registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true, logicalRequestId: 'D-no-flap' })
     registry.BeginRequestStep(child.id, 0, 0)
     await registry.PreparePreferredRecovery(child, primary, undefined, cfg)
@@ -720,7 +728,7 @@ describe('long-running preferred route recovery', () => {
 
   it('only an explicit selection event pins the fallback, including selection of the same current model', async () => {
     let clock = 0
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
     registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true, initialRoute: backup })
     registry.BeginRequestStep(child.id, 0, 0)
     registry.getRequestOverride(child, primary, undefined, cfg, true)
@@ -738,7 +746,7 @@ describe('long-running preferred route recovery', () => {
     let clock = 10000
     let vision = false
     const probe = vi.fn(async () => ({ ok: true as const, vision }))
-    const registry = intRouteStateRegistry(undefined, probe, { now: () => clock })
+    const registry = createRouteEngine(undefined, probe, { now: () => clock })
     registry.AddChild(child.id, { chain: [primary, backup], initialRoute: backup, role: 'guan_xiang', persistent: true, requireVision: true })
     registry.BeginRequestStep(child.id, 0, 0)
     await registry.PreparePreferredRecovery(child, backup, undefined, cfg)
@@ -761,7 +769,7 @@ describe('long-running preferred route recovery', () => {
     const missing = { provider: 'missing', model: 'not-configured' }
     const textOnly = { provider: 'text', model: 'text-only' }
     const probe = vi.fn(async (route: RouteInfo) => route.provider === missing.provider ? { ok: false as const, reason: 'provider-not-configured' } : { ok: true as const, vision: route.provider === backup.provider })
-    const registry = intRouteStateRegistry(undefined, probe)
+    const registry = createRouteEngine(undefined, probe)
     registry.AddChild(child.id, { chain: [primary, missing, textOnly, backup], role: 'guan_xiang', requireVision: true })
     registry.getRequestOverride(child, primary, undefined, cfg, true)
     expect(await registry.recover({ agent: child, provider: primary.provider, failure: { status: 400 } }, vi.fn(), undefined, cfg)).toEqual({ kind: 'retry' })
@@ -775,7 +783,7 @@ describe('long-running preferred route recovery', () => {
     let configured = false
     const upgraded = { provider: 'strong', model: 'expert' }
     const probe = vi.fn(async (route: RouteInfo) => route.model === upgraded.model && !configured ? { ok: false as const, reason: 'provider-unavailable' } : { ok: true as const, vision: false })
-    const registry = intRouteStateRegistry(undefined, probe, { now: () => clock })
+    const registry = createRouteEngine(undefined, probe, { now: () => clock })
     registry.RestoreRootPreference(root.id, primary)
     registry.SetRootUpgrade(root.id, [upgraded, backup], backup)
     registry.BeginRequestStep(root.id, 0, 0)
@@ -797,7 +805,7 @@ describe('long-running preferred route recovery', () => {
 
   it('ending an upgrade clears its automatic fallback even outside the old upgrade chain; explicit user choices survive', async () => {
     const upgraded = { provider: 'strong', model: 'expert' }
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }))
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }))
     registry.RestoreRootPreference(root.id, primary)
     registry.SetRootUpgrade(root.id, [upgraded])
     registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)
@@ -819,7 +827,7 @@ describe('long-running preferred route recovery', () => {
       let clock = 0
       const selected = getSwarmConfig({ agents: { rootRecoverMs: recoverMs }, routes: { tian_shu: { chain: [primary, backup] } } })
       const probe = vi.fn(async () => ({ ok: true as const, vision: false }))
-      const registry = intRouteStateRegistry(undefined, probe, { now: () => clock })
+      const registry = createRouteEngine(undefined, probe, { now: () => clock })
       registry.RestoreRootPreference(root.id, primary)
       if (upgraded) registry.SetRootUpgrade(root.id, [primary, backup], primary)
       registry.BeginRequestStep(root.id, 0, 0)
@@ -840,7 +848,7 @@ describe('long-running preferred route recovery', () => {
   })
 
   it('legacy hosts also distinguish the last actual fallback header from a new user choice', async () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true })
     registry.getRequestOverride(child, primary, undefined, cfg)
     await registry.recover({ agent: child, provider: primary.provider, failure: { status: 400 } }, vi.fn(), undefined, cfg)
@@ -853,7 +861,7 @@ describe('long-running preferred route recovery', () => {
 
   it('a root timer expiring inside the same logical retry never replays the failed preferred route', async () => {
     let clock = 0
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => clock })
+    const registry = createRouteEngine(undefined, undefined, { now: () => clock })
     registry.getRequestOverride(root, primary, 'tian_shu', cfg, true)
     await registry.recover({ agent: root, provider: primary.provider, failure: { status: 400 } }, vi.fn(), 'tian_shu', cfg)
     clock = 10000
@@ -866,7 +874,7 @@ describe('long-running preferred route recovery', () => {
     const preferred = { ...primary, policy: { quotaDomainId: 'preferred-account', quotaScope: 'account' as const } }
     const fallback = { ...backup, policy: { quotaDomainId: 'fallback-account', quotaScope: 'account' as const } }
     const selected = getSwarmConfig({ routes: { tian_shu: { chain: [preferred, fallback] } } })
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.RestoreRootPreference(root.id, primary)
     expect(registry.getRequestOverride(root, backup, 'tian_shu', selected, true)).toMatchObject(primary)
     await registry.recover({ agent: root, provider: primary.provider, failure: { code: 'QUOTA' } }, vi.fn(), 'tian_shu', selected)
@@ -878,7 +886,7 @@ describe('long-running preferred route recovery', () => {
     for (const interval of [0, 180000]) {
       let clock = 0
       const selected = getSwarmConfig({ agents: { rootRecoverMs: interval }, routes: { tian_shu: { chain: [primary, backup] } } })
-      const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
+      const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
       registry.RestoreRootPreference(root.id, primary)
       registry.SetRootUpgrade(root.id, [primary, backup], primary)
       registry.BeginRequestStep(root.id, 0, 0)
@@ -915,7 +923,7 @@ describe('manual child routing and bounded context recovery', () => {
     const backup = { provider: 'provider-b', model: 'backup' }
     const chosen = { provider: 'provider-c', model: 'new' }
     let release!: () => void
-    const registry = intRouteStateRegistry(undefined, async (route) => {
+    const registry = createRouteEngine(undefined, async (route) => {
       if (route.provider === backup.provider) await new Promise<void>((resolve) => { release = resolve })
       return { ok: true as const, vision: true }
     })
@@ -937,7 +945,7 @@ describe('manual child routing and bounded context recovery', () => {
     const original = { provider: 'provider-a', model: 'old' }
     const chosen = { provider: 'provider-b', model: 'new' }
     const onFallback = vi.fn()
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true as const, vision: true }))
+    const registry = createRouteEngine(undefined, async () => ({ ok: true as const, vision: true }))
     const cfg = getSwarmConfig({ agents: { networkWaitMs: 0 } })
     registry.AddChild(child.id, { chain: [original], role: 'yu_shi', logicalRequestId: 'plan-manual', onFallback })
     expect(registry.getRequestOverride(child, original, undefined, cfg, true)).toEqual(original)
@@ -958,7 +966,7 @@ describe('manual child routing and bounded context recovery', () => {
     const first = { provider: 'codex', model: 'first', policy: domain }
     const alias = { provider: 'codex', model: 'alias', policy: domain }
     const independent = { provider: 'qwen-token-plan-cn', model: 'backup' }
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => 1000 })
+    const registry = createRouteEngine(undefined, undefined, { now: () => 1000 })
     registry.AddChild(child.id, { chain: [first, alias, independent], role: 'tan_wei', persistent: true })
     registry.getRequestOverride(child, first, undefined)
     registry.getErrorAction({ agent: child, provider: 'codex', failure: { kind: 'quota_exhausted', quotaDomainId: 'trusted-account', quotaScope: 'account' } }, undefined, undefined, config)
@@ -978,7 +986,7 @@ describe('manual child routing and bounded context recovery', () => {
     expect(registry.getRequestOverride(child, first, undefined)).toMatchObject({ provider: 'codex', model: 'alias', reasoningEffort: 'max' })
   })
   it('persistent overrides survive new logical rounds; real host-resolved changes including effort take priority', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild(child.id, { chain, role: 'tan_wei', persistent: true, logicalRequestId: 'D-1' })
     registry.getRequestOverride(child, chain[0]!, undefined)
     const chosen = { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
@@ -996,7 +1004,7 @@ describe('manual child routing and bounded context recovery', () => {
   })
 
   it('context overflow calls the real compaction seam once; only measured surface replacement authorizes a retry', async () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     const agent = { id: 'context-child', session: { header: { parentSession: 'root' }, surface: { replaceGeneration: 4 } } }
     registry.AddChild(agent.id, { chain, role: 'tan_wei', persistent: true, logicalRequestId: 'context-request' })
     registry.getRequestOverride(agent, chain[0]!, undefined)
@@ -1015,7 +1023,7 @@ describe('manual child routing and bounded context recovery', () => {
   })
 
   it('a compact callback returning success without actual shrink cannot retry or poison the route', async () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     const agent = { id: 'context-no-shrink', session: { header: { parentSession: 'root' }, surface: { replaceGeneration: 4 } } }
     registry.AddChild(agent.id, { chain, role: 'tan_wei' })
     const next = vi.fn(async () => ({ kind: 'retry' }))
@@ -1028,7 +1036,7 @@ describe('manual child routing and bounded context recovery', () => {
 
 describe('子智能体路由', () => {
   it('请求时套用当前路由并去掉继承的推理强度', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild('c1', { chain, role: 'fu_he' })
     expect(registry.getRequestOverride(child, { provider: 'x', model: 'y', reasoningEffort: 'max', maxTokens: 10 }, undefined))
       .toEqual({ provider: 'a', model: 'm1', maxTokens: 10 })
@@ -1037,7 +1045,7 @@ describe('子智能体路由', () => {
 
   it('致命失败切到下一条并回调；链尽后交回宿主动作', () => {
     const events: FallbackEventInfo[] = []
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild('c1', { chain, role: 'fu_he', onFallback: (event) => events.push(event) })
     registry.getRequestOverride(child, { provider: 'x', model: 'y' }, undefined)
     const action = registry.getErrorAction({ agent: child, provider: 'a', failure: { code: 'QUOTA' } }, undefined, undefined, config)
@@ -1051,7 +1059,7 @@ describe('子智能体路由', () => {
   })
 
   it('认证失败跳过未知账号同 provider；瞬时失败由有界策略管理', async () => {
-    const registry = intRouteStateRegistry(undefined, undefined, { sleep: async () => undefined })
+    const registry = createRouteEngine(undefined, undefined, { sleep: async () => undefined })
     registry.AddChild('c1', { chain: [chain[0], chain[2], chain[1]], role: 'fu_he' })
     registry.getRequestOverride(child, { provider: 'x', model: 'y' }, undefined)
     const hostRetry = { kind: 'retry' }
@@ -1061,7 +1069,7 @@ describe('子智能体路由', () => {
   })
 
   it('DelAgent 清理状态', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild('c1', { chain, role: 'fu_he' })
     registry.DelAgent('c1')
     expect(registry.getChild('c1')).toBeUndefined()
@@ -1072,7 +1080,7 @@ describe('子智能体路由', () => {
 describe('根会话回退', () => {
   it('选择器路由致命失败时按角色链回退，跳过已失败路由', () => {
     const events: FallbackEventInfo[] = []
-    const registry = intRouteStateRegistry((event) => events.push(event))
+    const registry = createRouteEngine((event) => events.push(event))
     const first = DEFAULT_ROUTE_CHAINS.tian_shu[0]
     registry.getRequestOverride(root, { provider: first.provider, model: first.model }, 'tian_shu')
     expect(registry.getErrorAction({ agent: root, provider: first.provider, failure: { code: 'QUOTA' } }, undefined, 'tian_shu', config)).toEqual({ kind: 'retry' })
@@ -1082,7 +1090,7 @@ describe('根会话回退', () => {
   })
 
   it('回退后用户在选择器里换了模型：清除覆盖与已试记录，尊重新选择', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     const picked = { provider: 'p', model: 'picked' }
     registry.getRequestOverride(root, picked, 'tian_shu')
     registry.getErrorAction({ agent: root, provider: 'p', failure: { code: 'QUOTA' } }, undefined, 'tian_shu', config)
@@ -1101,7 +1109,7 @@ describe('根会话回退', () => {
       return route.model === 'ok' ? { ok: true as const, vision: false } : { ok: false as const, reason: 'model-unavailable' }
     }
     const events: FallbackEventInfo[] = []
-    const registry = intRouteStateRegistry((event) => events.push(event), probe)
+    const registry = createRouteEngine((event) => events.push(event), probe)
     registry.getRequestOverride(root, { provider: 'codex', model: 'picked' }, 'tian_shu')
     await expect(registry.getErrorAction({ agent: root, provider: 'codex', failure: { status: 400 } }, undefined, 'tian_shu', custom)).resolves.toEqual({ kind: 'retry' })
     expect(probed).toEqual(['q/gone', 'g/ok'])
@@ -1115,7 +1123,7 @@ describe('根会话回退', () => {
   })
 
   it('容灾升级：根会话改走升级链；升级模型失败先在升级链内回退；用户换模型则撤销升级', async () => {
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true, vision: false }))
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }))
     const picked = { provider: 'codex', model: 'gpt-6-sol' }
     const astra = { provider: 'codex', model: 'gpt-6-astra' }
     const opus = { provider: 'claude', model: 'claude-opus-5-5' }
@@ -1137,7 +1145,7 @@ describe('根会话回退', () => {
   })
 
   it('关闭 rootFallback、非 swarm 预设、未跟踪的子会话都不干预', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     const off = getSwarmConfig({ rootFallback: false })
     const failure = { agent: root, provider: 'x', failure: { code: 'QUOTA' } }
     expect(registry.getErrorAction(failure, undefined, 'tian_shu', off)).toBeUndefined()
@@ -1160,7 +1168,7 @@ describe('故障恢复', () => {
 
   it('额度隔离不会被十分钟根恢复或重新登记清除；显式清除后才能恢复', () => {
     let at = 0
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at })
+    const registry = createRouteEngine(undefined, undefined, { now: () => at })
     const picked = { provider: 'codex', model: 'gpt-6-sol' }
     registry.getRequestOverride(root, picked, 'tian_shu', config)
     registry.getErrorAction({ agent: root, provider: 'codex', failure: { code: 'QUOTA' } }, undefined, 'tian_shu', config)
@@ -1181,7 +1189,7 @@ describe('故障恢复', () => {
   it('断网：等待网络恢复后在原路由重试，不消耗路由链；联网时按常规回退', async () => {
     const waits: Array<{ recovered?: boolean }> = []
     const offline = makeNetwork([false])
-    const registry = intRouteStateRegistry(undefined, undefined, { network: offline.network, onNetworkWait: (event) => waits.push(event) })
+    const registry = createRouteEngine(undefined, undefined, { network: offline.network, onNetworkWait: (event) => waits.push(event) })
     const picked = { provider: 'deepseek-official', model: 'deepseek-flash' }
     registry.getRequestOverride(root, picked, 'tian_shu', config)
     const failure = { code: 'TRANSPORT', message: 'DeepSeek Messages transport failed' }
@@ -1189,7 +1197,7 @@ describe('故障恢复', () => {
     expect(registry.getRequestOverride(root, picked, 'tian_shu', config)).toEqual(picked)
     expect(waits.map((event) => event.recovered)).toEqual([undefined, true])
     const online = makeNetwork([true])
-    const other = intRouteStateRegistry(undefined, undefined, { network: online.network })
+    const other = createRouteEngine(undefined, undefined, { network: online.network })
     other.getRequestOverride(root, picked, 'tian_shu', config)
     await expect(other.getErrorAction({ agent: root, provider: 'deepseek-official', failure }, undefined, 'tian_shu', config)).resolves.toEqual({ kind: 'retry' })
     expect(online.calls.waitOnline).toBe(0)
@@ -1198,14 +1206,14 @@ describe('故障恢复', () => {
 
   it('NO_ADAPTER仅说No eligible account不冒充断网；明确transport失败才走网络恢复', async () => {
     const offline = makeNetwork([false])
-    const registry = intRouteStateRegistry(undefined, undefined, { network: offline.network })
+    const registry = createRouteEngine(undefined, undefined, { network: offline.network })
     const picked = { provider: 'codex', model: 'gpt-6-sol' }
     registry.getRequestOverride(root, picked, 'tian_shu', config)
     expect(await registry.recover({ agent: root, provider: 'codex', failure: { code: 'NO_ADAPTER', message: 'No eligible account for codex/gpt-6-sol' } }, vi.fn(), 'tian_shu', config)).toEqual({ kind: 'retry' })
     expect(offline.calls.waitOnline).toBe(0)
     expect(registry.getRequestOverride(root, picked, 'tian_shu', config)).not.toEqual(picked)
     const transport = makeNetwork([false])
-    const networkFailure = intRouteStateRegistry(undefined, undefined, { network: transport.network })
+    const networkFailure = createRouteEngine(undefined, undefined, { network: transport.network })
     networkFailure.getRequestOverride(root, picked, 'tian_shu', config)
     expect(await networkFailure.recover({ agent: root, provider: 'codex', failure: { code: 'NO_ADAPTER', message: 'No eligible account: token refresh transport failed' } }, vi.fn(), 'tian_shu', config)).toEqual({ kind: 'retry' })
     expect(transport.calls.waitOnline).toBe(1)
@@ -1214,13 +1222,13 @@ describe('故障恢复', () => {
 
   it('断网等待超时按常规回退；额度类失败不探测网络；networkWaitMs=0 关闭等待', async () => {
     const stuck = makeNetwork([false], false)
-    const registry = intRouteStateRegistry(undefined, undefined, { network: stuck.network })
+    const registry = createRouteEngine(undefined, undefined, { network: stuck.network })
     registry.AddChild('c1', { chain, role: 'fu_he' })
     registry.getRequestOverride(child, { provider: 'x', model: 'y' }, undefined, config)
     await expect(registry.getErrorAction({ agent: child, provider: 'a', failure: { code: 'TIMEOUT' } }, undefined, undefined, config)).resolves.toEqual({ kind: 'retry' })
     expect(registry.getChild('c1')?.route?.model).toBe('m2')
     const quota = makeNetwork([false])
-    const plain = intRouteStateRegistry(undefined, undefined, { network: quota.network })
+    const plain = createRouteEngine(undefined, undefined, { network: quota.network })
     plain.AddChild('c1', { chain, role: 'fu_he' })
     expect(plain.getErrorAction({ agent: child, provider: 'a', failure: { code: 'QUOTA' } }, undefined, undefined, config)).toEqual({ kind: 'retry' })
     expect(quota.calls.isOnline).toBe(0)
@@ -1232,7 +1240,7 @@ describe('故障恢复', () => {
   it('断网等待与链尾保持共用本请求的 networkWaitMs 预算，用尽后按角色链回退；取消时交回宿主', async () => {
     let at = 0
     const network = { isOnline: async () => false, waitOnline: async (_signal: AbortSignal | undefined, maxMs: number) => { at += Math.min(maxMs, 240_000); return true } }
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, network })
+    const registry = createRouteEngine(undefined, undefined, { now: () => at, network })
     registry.getRequestOverride(root, { provider: 'p', model: 'm' }, 'tian_shu', config)
     const failure = { code: 'NETWORK' }
     for (let index = 0; index < 3; index++) {
@@ -1244,13 +1252,13 @@ describe('故障恢复', () => {
     expect(registry.getRequestOverride(root, { provider: 'p', model: 'm' }, 'tian_shu', config).model).toBe(DEFAULT_ROUTE_CHAINS.tian_shu[0].model)
     const controller = new AbortController()
     controller.abort()
-    const aborted = intRouteStateRegistry(undefined, undefined, { network: makeNetwork([false], false).network })
+    const aborted = createRouteEngine(undefined, undefined, { network: makeNetwork([false], false).network })
     aborted.getRequestOverride(root, { provider: 'p', model: 'm' }, 'tian_shu', config)
     expect(await aborted.getErrorAction({ agent: root, provider: 'p', failure, signal: controller.signal }, undefined, 'tian_shu', config)).toBeUndefined()
   })
 
   it('发往 Codex 的 ultra 推理强度映射为 max', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild('c1', { chain: [{ provider: 'codex', model: 'gpt-6-astra', reasoningEffort: 'ultra' }], role: 'suan_heng' })
     expect(registry.getRequestOverride(child, { provider: 'x', model: 'y' }, undefined)).toEqual({ provider: 'codex', model: 'gpt-6-astra', reasoningEffort: 'max' })
     registry.AddChild('c2', { chain: [{ provider: 'other', model: 'm', reasoningEffort: 'ultra' }], role: 'suan_heng' })
@@ -1264,7 +1272,7 @@ describe('共享故障域与有界恢复', () => {
   const independent: RouteInfo = { provider: 'subscription', model: 'c', policy: { quotaDomainId: 'account-b', quotaScope: 'account' } }
 
   it('标准Qwen provider无custom failure字段也跨模型/根/线程共享plan；Go额度仅隔离原model', async () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     const qwen = { provider: 'qwen-token-plan-cn', model: 'glm-5.3' }
     const other = { provider: 'qwen-token-plan-cn', model: 'qwen3.8-flash' }
     const go = { provider: 'opencode-go', model: 'glm-5.3' }
@@ -1280,7 +1288,7 @@ describe('共享故障域与有界恢复', () => {
   })
 
   it('Jev类judgment API和明示无生成能力不会作为主生成或备用', () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild(child.id, { chain: [
       { provider: 'jev', model: 'jev-latest', policy: { accessMode: 'judgment_api' } },
       { provider: 'nongenerative', model: 'choice', policy: { capabilities: { generation: false } } }, independent
@@ -1289,7 +1297,7 @@ describe('共享故障域与有界恢复', () => {
   })
 
   it('同账号不同模型跨root/thread共享隔离，独立账号仍可用，重登记不清额度', async () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild(child.id, { chain: [accountA, sameAccount, independent], role: 'fu_he' })
     registry.getRequestOverride(child, { ...accountA }, undefined)
     expect(await registry.recover({ agent: child, provider: accountA.provider, failure: { code: 'QUOTA' } }, vi.fn(), undefined, config)).toEqual({ kind: 'retry' })
@@ -1306,7 +1314,7 @@ describe('共享故障域与有界恢复', () => {
     const sleep = vi.fn(async () => undefined)
     const next = vi.fn(async () => ({ kind: 'retry' }))
     const network = { isOnline: vi.fn(async () => false), waitOnline: vi.fn(async () => false) }
-    const registry = intRouteStateRegistry(undefined, undefined, { sleep, network })
+    const registry = createRouteEngine(undefined, undefined, { sleep, network })
     const pooled = { ...accountA, policy: { poolId: 'claude-opus-5-5' } }
     const alias = { provider: 'alias', model: 'opus', policy: { poolId: 'claude-opus-5-5' } }
     registry.AddChild(child.id, { chain: [pooled, alias, independent], role: 'fu_he' })
@@ -1316,7 +1324,7 @@ describe('共享故障域与有界恢复', () => {
     expect(next).not.toHaveBeenCalled()
     expect(network.isOnline).not.toHaveBeenCalled()
     expect(sleep).not.toHaveBeenCalled()
-    const slow = intRouteStateRegistry(undefined, undefined, { sleep })
+    const slow = createRouteEngine(undefined, undefined, { sleep })
     slow.AddChild(child.id, { chain: [accountA, independent], role: 'fu_he' })
     slow.getRequestOverride(child, { ...accountA }, undefined)
     expect(await slow.recover({ agent: child, provider: accountA.provider, failure: { code: 'RATE_LIMIT', providerRetryAfterMs: 9060669 } }, next, undefined, config)).toEqual({ kind: 'retry' })
@@ -1325,7 +1333,7 @@ describe('共享故障域与有界恢复', () => {
   })
 
   it('没有备用返回真实宿主undefined终态，即使next提供retry也不执行', async () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     registry.AddChild(child.id, { chain: [accountA], role: 'fu_he' })
     registry.getRequestOverride(child, { ...accountA }, undefined)
     const next = vi.fn(async () => ({ kind: 'retry' }))
@@ -1338,7 +1346,7 @@ describe('共享故障域与有界恢复', () => {
 
   it('瞬时失败仅短重试一次；逻辑8次上限不被同逻辑重登记清空', async () => {
     const sleep = vi.fn(async () => undefined)
-    const registry = intRouteStateRegistry(undefined, undefined, { sleep })
+    const registry = createRouteEngine(undefined, undefined, { sleep })
     registry.AddChild(child.id, { chain: [accountA, independent], role: 'fu_he', logicalRequestId: 'logical-1' })
     registry.BeginRequestStep(child.id, 1, 0)
     registry.getRequestOverride(child, { ...accountA }, undefined)
@@ -1356,7 +1364,7 @@ describe('共享故障域与有界恢复', () => {
 
   it('真实reset到期仅允许一个half-open，解析模型和10分钟不清隔离，成功才清除', async () => {
     let at = 0
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at })
+    const registry = createRouteEngine(undefined, undefined, { now: () => at })
     registry.AddChild(child.id, { chain: [accountA, independent], role: 'fu_he' })
     registry.getRequestOverride(child, { ...accountA }, undefined)
     await registry.recover({ agent: child, provider: accountA.provider, failure: { code: 'QUOTA', resetAt: new Date(3600000).toISOString() } }, vi.fn(), undefined, config)
@@ -1374,7 +1382,7 @@ describe('共享故障域与有界恢复', () => {
 
   it('half-open失败不会因为旧reset已过而不断重开；任务明示再试另有入口', async () => {
     let at = 0
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, sleep: async () => undefined })
+    const registry = createRouteEngine(undefined, undefined, { now: () => at, sleep: async () => undefined })
     registry.AddChild(child.id, { chain: [accountA, independent], role: 'fu_he' })
     registry.getRequestOverride(child, { ...accountA }, undefined)
     await registry.recover({ agent: child, provider: accountA.provider, failure: { code: 'QUOTA', resetAt: new Date(1000).toISOString() } }, vi.fn(), undefined, config)
@@ -1389,13 +1397,13 @@ describe('共享故障域与有界恢复', () => {
 
   it('完整健康态恢复保留quota域与别名，不因根十分钟窗口清除，拒绝坏状态不部分写入', async () => {
     let at = 0
-    const first = intRouteStateRegistry(undefined, undefined, { now: () => at })
+    const first = createRouteEngine(undefined, undefined, { now: () => at })
     first.AddChild(child.id, { chain: [accountA, independent], role: 'fu_he' })
     first.getRequestOverride(child, { ...accountA }, undefined)
     await first.recover({ agent: child, provider: accountA.provider, failure: { code: 'QUOTA' } }, vi.fn(), undefined, config)
     const snapshot = JSON.parse(JSON.stringify(first.getHealth()))
     at = 600001
-    const recovered = intRouteStateRegistry(undefined, undefined, { now: () => at })
+    const recovered = createRouteEngine(undefined, undefined, { now: () => at })
     recovered.RestoreHealth(snapshot)
     expect(recovered.isRouteAvailable(sameAccount)).toBe(false)
     const cfg = getSwarmConfig({ routes: { tian_shu: { chain: [accountA, sameAccount, independent] } } })
@@ -1414,7 +1422,7 @@ describe('共享故障域与有界恢复', () => {
       const persisted = new Promise<void>((resolve) => { commit = resolve })
       const hook = vi.fn(() => persisted)
       const next = vi.fn(async () => ({ kind: 'retry' }))
-      const registry = intRouteStateRegistry(undefined, undefined, { onHealthChange: hook })
+      const registry = createRouteEngine(undefined, undefined, { onHealthChange: hook })
       registry.AddChild(child.id, { chain: [accountA, ...backups], role: 'fu_he' })
       registry.getRequestOverride(child, { ...accountA }, undefined)
       let returned = false
@@ -1434,7 +1442,7 @@ describe('共享故障域与有界恢复', () => {
     let commit!: () => void, reject!: (error: Error) => void
     const persisted = new Promise<void>((resolve, fail) => { commit = resolve; reject = fail })
     const onHealthChange = vi.fn(() => persisted)
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => 1000, onHealthChange })
+    const registry = createRouteEngine(undefined, undefined, { now: () => 1000, onHealthChange })
     let settled = false
     const observation = Promise.resolve(registry.ObserveRouteFailure(accountA, { code: 'TRANSPORT', message: 'fetch failed: ENETUNREACH' }, config))
       .then(() => { settled = true; return { committed: true } }, (error: unknown) => { settled = true; return { error } })
@@ -1449,7 +1457,7 @@ describe('共享故障域与有界恢复', () => {
   })
 
   it('健康态持久化失败停止模型与外层重启，而不选择备用或调用宿主next', async () => {
-    const registry = intRouteStateRegistry(undefined, undefined, { onHealthChange: async () => { throw new Error('disk-write-failed') } })
+    const registry = createRouteEngine(undefined, undefined, { onHealthChange: async () => { throw new Error('disk-write-failed') } })
     registry.AddChild(child.id, { chain: [accountA, independent], role: 'fu_he' })
     registry.getRequestOverride(child, { ...accountA }, undefined)
     const next = vi.fn(async () => ({ kind: 'retry' }))
@@ -1461,7 +1469,7 @@ describe('共享故障域与有界恢复', () => {
 
   it('恢复不继承旧进程half-open所有者，当前进程单trial仍受互斥保护', async () => {
     let at = 0
-    const first = intRouteStateRegistry(undefined, undefined, { now: () => at })
+    const first = createRouteEngine(undefined, undefined, { now: () => at })
     first.AddChild(child.id, { chain: [accountA, independent], role: 'fu_he' })
     first.getRequestOverride(child, { ...accountA }, undefined)
     await first.recover({ agent: child, provider: accountA.provider, failure: { code: 'QUOTA', resetAt: new Date(1000).toISOString() } }, vi.fn(), undefined, config)
@@ -1469,7 +1477,7 @@ describe('共享故障域与有界恢复', () => {
     first.AddChild('old-half', { chain: [accountA, independent], role: 'fu_he' })
     first.getRequestOverride({ id: 'old-half' }, { ...accountA }, undefined)
     expect(first.getHealth()[0]?.halfOpenAgent).toBe('old-half')
-    const recovered = intRouteStateRegistry(undefined, undefined, { now: () => at })
+    const recovered = createRouteEngine(undefined, undefined, { now: () => at })
     recovered.RestoreHealth(first.getHealth())
     expect(recovered.getHealth()[0]?.halfOpenAgent).toBeUndefined()
     recovered.AddChild('new-half', { chain: [accountA, independent], role: 'fu_he' })
@@ -1494,7 +1502,7 @@ describe.skipIf(!existsSync(resolve(hostRoot, 'dsh-llm-retry/lib/index.js')))(`�
     const events: string[] = []
     const picked = { provider: 'pool-provider', model: 'pool' }
     const cfg = getSwarmConfig({ routes: { tian_shu: { chain: [picked, { provider: 'independent', model: 'backup' }] } } })
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     let ready!: () => void
     const readiness = new Promise<void>((resolve) => { ready = resolve })
     ctx.provide('agentSwarm', { routeState: registry, getConfig: () => cfg, WaitAgentReady: () => readiness, BeforeManagedRequest: async () => undefined })
@@ -1556,7 +1564,7 @@ describe('链尾保持：长期目标中铸剑链耗尽（D-74）的回归', () 
 
   it('宿主以 AUTH 报告的模型池冷却按认证失效隔离（至多 30 分钟重探），同 provider 的其他模型不再白试', () => {
     let at = 0
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at })
+    const registry = createRouteEngine(undefined, undefined, { now: () => at })
     registry.AddChild(child.id, { chain: [opus, sonnet, flash], role: 'zhu_jian', logicalRequestId: 'D-auth' })
     registry.BeginRequestStep(child.id, 1, 1)
     registry.getRequestOverride(child, opus, undefined, config)
@@ -1572,7 +1580,7 @@ describe('链尾保持：长期目标中铸剑链耗尽（D-74）的回归', () 
     let at = 0
     const sleeps: number[] = []
     const health = intRouteHealth(() => at)
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, health, sleep: async (ms) => { sleeps.push(ms); at += ms } })
+    const registry = createRouteEngine(undefined, undefined, { now: () => at, health, sleep: async (ms) => { sleeps.push(ms); at += ms } })
     registry.AddChild(child.id, { chain: zhuJian, role: 'zhu_jian', logicalRequestId: 'D-74' })
     registry.BeginRequestStep(child.id, 3, 19)
     for (const [route, failure] of [[opus, authPool('claude-opus-5-5')], [astra, { code: 'RATE_LIMIT', message: 'pool "gpt-6-astra" exhausted: every member is cooling down', providerRetryAfterMs: 7_200_000 }], [sonnet, authPool('claude-sonnet-5')], [kimi, { status: 401, code: 'AUTH', message: 'api_key_expired', providerRetryAfterMs: 3_600_000 }]] as const) {
@@ -1603,7 +1611,7 @@ describe('链尾保持：长期目标中铸剑链耗尽（D-74）的回归', () 
   it('链尾在等待中恢复时继续执行；全部隔离但有路由即将到期时等到期再试，不提前判定耗尽', async () => {
     let at = 0
     const sleeps: number[] = []
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, sleep: async (ms) => { sleeps.push(ms); at += ms } })
+    const registry = createRouteEngine(undefined, undefined, { now: () => at, sleep: async (ms) => { sleeps.push(ms); at += ms } })
     registry.AddChild(child.id, { chain: [astra, flash], role: 'zhu_jian', logicalRequestId: 'D-recover' })
     registry.BeginRequestStep(child.id, 1, 1)
     registry.getRequestOverride(child, astra, undefined, config)
@@ -1629,7 +1637,7 @@ describe('准入等待与等待期间的用户选择', () => {
   const setup = (onSleep?: (ms: number) => void, agents: Partial<typeof config.agents> = {}) => {
     let at = 0
     const sleeps: number[] = []
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, sleep: async (ms) => { sleeps.push(ms); at += ms; onSleep?.(ms) } })
+    const registry = createRouteEngine(undefined, undefined, { now: () => at, sleep: async (ms) => { sleeps.push(ms); at += ms; onSleep?.(ms) } })
     return { registry, sleeps, cfg: getSwarmConfig({ agents: { ...config.agents, ...agents } }), setNow: (value: number) => { at = value } }
   }
 
@@ -1709,7 +1717,7 @@ describe('准入等待与等待期间的用户选择', () => {
   it.each(['root', 'child'] as const)('准入预取消信号不探测、不取得半开许可、不消耗尝试（%s）', async (scope) => {
     let at = 0
     const probe = vi.fn(async () => ({ ok: true as const, vision: true }))
-    const registry = intRouteStateRegistry(undefined, probe, { now: () => at })
+    const registry = createRouteEngine(undefined, probe, { now: () => at })
     const agent = scope === 'root' ? root : child
     const role = scope === 'root' ? 'tian_shu' as const : undefined
     if (scope === 'child') registry.AddChild(child.id, { chain: [astra], role: 'zhu_jian' })
@@ -1746,7 +1754,7 @@ describe('准入等待与等待期间的用户选择', () => {
     const committed = new Promise<void>((resolve) => { commit = resolve })
     const sleeping = new Promise<void>((resolve) => { slept = resolve })
     const first = expert('half-open-owner')
-    const registry = intRouteStateRegistry(undefined, undefined, { now: () => at,
+    const registry = createRouteEngine(undefined, undefined, { now: () => at,
       onHealthChange: (_snapshot, event) => event.reason === 'success' ? committed : undefined,
       sleep: async (ms) => { at += ms; registry.MarkRequestSucceeded(first.id); slept() } })
     for (const agent of [first, child]) registry.AddChild(agent.id, { chain: [astra], role: 'zhu_jian' })
@@ -1771,7 +1779,7 @@ describe('准入等待与等待期间的用户选择', () => {
   ])('准入候选隔离到期后必须通过 probe 与视觉适用性，不启动不兼容模型（$failure，单路由=$single）', async ({ failure, single }) => {
     let at = 0
     const probe = vi.fn(async () => failure === 'vision' ? { ok: true as const, vision: false } : { ok: false as const, reason: 'provider-not-configured' })
-    const registry = intRouteStateRegistry(undefined, probe, { now: () => at, sleep: async (ms) => { at += ms } })
+    const registry = createRouteEngine(undefined, probe, { now: () => at, sleep: async (ms) => { at += ms } })
     registry.AddChild(child.id, { chain: single ? [flash] : [astra, flash], role: 'guan_xiang', requireVision: true })
     await registry.ObserveRouteFailure(astra, { code: 'QUOTA' }, config)
     await registry.ObserveRouteFailure(flash, { code: 'POOL_EXHAUSTED', providerRetryAfterMs: 60_000 }, config)
@@ -1782,7 +1790,7 @@ describe('准入等待与等待期间的用户选择', () => {
   })
 
   it('准入候选预检不合格时按原链顺序继续，只有合格模型消耗一次尝试', async () => {
-    const registry = intRouteStateRegistry(undefined, async (route) => ({ ok: true, vision: route.model === flash.model }))
+    const registry = createRouteEngine(undefined, async (route) => ({ ok: true, vision: route.model === flash.model }))
     registry.AddChild(child.id, { chain: [astra, kimi, flash], role: 'guan_xiang', requireVision: true })
     await registry.ObserveRouteFailure(astra, { code: 'QUOTA' }, config)
     await expect(registry.AdmitRequest(child, astra, undefined, config)).resolves.toMatchObject(flash)
@@ -1794,7 +1802,7 @@ describe('准入等待与等待期间的用户选择', () => {
     let release!: () => void
     const probing = new Promise<void>((resolve) => { entered = resolve })
     const pending = new Promise<void>((resolve) => { release = resolve })
-    const registry = intRouteStateRegistry(undefined, async (route) => {
+    const registry = createRouteEngine(undefined, async (route) => {
       if (route.model === flash.model) { entered(); await pending }
       return { ok: true, vision: true }
     })
@@ -1821,7 +1829,7 @@ describe('准入等待与等待期间的用户选择', () => {
   })
 
   it('准入保留人工重试已取得的单半开许可，不让全局 probe 拒绝自身许可', async () => {
-    const registry = intRouteStateRegistry(undefined, async (route) => registry.isRouteAvailable(route) ? { ok: true, vision: true } : { ok: false, reason: 'route-isolated' }, { now: () => 0 })
+    const registry = createRouteEngine(undefined, async (route) => registry.isRouteAvailable(route) ? { ok: true, vision: true } : { ok: false, reason: 'route-isolated' }, { now: () => 0 })
     registry.AddChild(child.id, { chain: [astra], role: 'zhu_jian' })
     await registry.ObserveRouteFailure(astra, poolCooling(60_000), config)
     expect(registry.RequestRouteRetry(astra, child.id, { force: true }).ok).toBe(true)
@@ -1833,7 +1841,7 @@ describe('准入等待与等待期间的用户选择', () => {
 
   it.each(['metadata-pending-timeout', 'metadata-capacity-busy', 'llm-service-changed', 'model-unavailable: fetch failed: ENETUNREACH'])('未失败过的当前路由准入不依赖元数据预检（%s）', async (reason) => {
     const probe = vi.fn(async () => ({ ok: false as const, reason }))
-    const registry = intRouteStateRegistry(undefined, probe)
+    const registry = createRouteEngine(undefined, probe)
     registry.AddChild(child.id, { chain: [astra], role: 'zhu_jian', logicalRequestId: 'D-healthy' })
     registry.BeginRequestStep(child.id, 1, 1)
     await expect(registry.AdmitRequest(child, astra, undefined, config)).resolves.toMatchObject(astra)
@@ -1844,7 +1852,7 @@ describe('准入等待与等待期间的用户选择', () => {
 
   it('健康首选路由在元数据暂时故障时跨步保持，不被悄悄降到后备路由', async () => {
     const probe = vi.fn(async (route: RouteInfo) => route.model === astra.model ? { ok: false as const, reason: 'metadata-pending-timeout' } : { ok: true as const, vision: true })
-    const registry = intRouteStateRegistry(undefined, probe)
+    const registry = createRouteEngine(undefined, probe)
     registry.AddChild(child.id, { chain: [astra, flash], role: 'zhu_jian', logicalRequestId: 'D-stay' })
     for (const step of [1, 2]) {
       registry.BeginRequestStep(child.id, 1, step)
@@ -1858,7 +1866,7 @@ describe('准入等待与等待期间的用户选择', () => {
   it.each(['metadata-pending-timeout', 'metadata-capacity-busy', 'llm-service-changed'])('隔离到期重开的路由遇到元数据暂时不可知时放行给真实请求判断，且不立即重探（%s）', async (reason) => {
     let at = 0
     let calls = 0
-    const registry = intRouteStateRegistry(undefined, async () => {
+    const registry = createRouteEngine(undefined, async () => {
       if (++calls > 2) throw new Error('re-probe loop')
       return { ok: false, reason }
     }, { now: () => at })
@@ -1876,7 +1884,7 @@ describe('准入等待与等待期间的用户选择', () => {
     let at = 0
     let calls = 0
     const sleeps: number[] = []
-    const registry = intRouteStateRegistry(undefined, async (route) => {
+    const registry = createRouteEngine(undefined, async (route) => {
       calls += 1
       if (calls > 1) return { ok: true, vision: true }
       await registry.ObserveRouteFailure(route, poolCooling(60_000), config)
@@ -1894,7 +1902,7 @@ describe('准入等待与等待期间的用户选择', () => {
     let at = 0
     let calls = 0
     const sleeps: number[] = []
-    const registry = intRouteStateRegistry(undefined, async (route) => {
+    const registry = createRouteEngine(undefined, async (route) => {
       calls += 1
       if (calls > 1) return { ok: false, reason: 'provider-not-configured' }
       await registry.ObserveRouteFailure(route, poolCooling(60_000), config)
@@ -2028,7 +2036,7 @@ describe('链尾保持的有界性（随机化性质检验）', () => {
     for (let trial = 0; trial < 300; trial++) {
       let at = 0
       let waited = 0
-      const registry = intRouteStateRegistry(undefined, undefined, { now: () => at, sleep: async (ms) => { waited += ms; at += ms } })
+      const registry = createRouteEngine(undefined, undefined, { now: () => at, sleep: async (ms) => { waited += ms; at += ms } })
       const length = 1 + Math.floor(next() * 5)
       const chain = Array.from({ length }, (_, index) => ({ provider: `p${index % 3}`, model: `m${index}` }))
       const id = `prop-${trial}`

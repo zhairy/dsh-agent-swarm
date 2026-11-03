@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { intRouteHealth, MAX_ROUTE_HEALTH_KEYS, validateRouteHealthSnapshot, type RouteHealthSnapshot } from '../../src/route-health.js'
-import { normalizeRouteFailure, type FailureKind } from '../../src/provider-policy.js'
-import type { RouteInfo } from '../../src/routes.js'
+import { intRouteHealth, MAX_ROUTE_HEALTH_KEYS, validateRouteHealthSnapshot, type RouteHealthSnapshot } from '../../src/domain/routing/health.js'
+import { normalizeRouteFailure, type FailureKind } from '../../src/domain/routing/provider-policy.js'
+import type { RouteInfo } from '../../src/domain/routing/routes.js'
 import { validatePersistedRouteHealth } from '../../src/feature-session.js'
 
 const codex: RouteInfo = { provider: 'codex', model: 'gpt-6.1-sol' }

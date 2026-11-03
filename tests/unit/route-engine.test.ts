@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateRouteEligibility, selectEligibleRoutes, toFailureFact } from '../../src/route-engine.js'
+import { evaluateRouteEligibility, selectEligibleRoutes, toFailureFact } from '../../src/domain/routing/eligibility.js'
 
 const snapshot = { configuredProviders: ['codex', 'dsh-opencode-go'], models: {
   'codex/gpt': { reasoning: ['high'], inputModalities: ['text', 'image'] },

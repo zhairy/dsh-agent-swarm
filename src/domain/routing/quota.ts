@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { getRouteResourcePolicy } from './provider-policy.js'
-import { getQuotaAccountId, getQuotaRouteId, parseQuotaAccountModel, SUBSCRIPTION_QUOTA_PROVIDERS, type QuotaAccount, type QuotaRouteInput, type QuotaView, type QuotaWindow } from './quota.js'
+import { getQuotaAccountId, getQuotaRouteId, parseQuotaAccountModel, SUBSCRIPTION_QUOTA_PROVIDERS, type QuotaAccount, type QuotaRouteInput, type QuotaView, type QuotaWindow } from './resources.js'
 
 /** Only the active subscription entry's public pool projection belongs here. */
 export interface QuotaPoolConfiguration {
