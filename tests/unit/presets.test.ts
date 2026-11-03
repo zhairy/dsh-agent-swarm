@@ -47,6 +47,13 @@ describe('预设构建器', () => {
     expect(ids(getPresetPlugins('tian_shu', standard))).toContain('time-context')
   })
 
+  it('保留标准预设中的原生授权、计划、任务、作业、指令和时钟能力', () => {
+    const rows = ids(getPresetPlugins('tian_shu', standard))
+    for (const id of ['tool-ask-user', 'tool-todo', 'tool-goal', 'tool-jobs', 'agent-instructions', 'time-context', 'planning']) {
+      expect(rows).toContain(id)
+    }
+  })
+
   it('御史：无 shell、无 web、无编排工具，保留受绑定约束的专家工具', () => {
     const rows = ids(getPresetPlugins('yu_shi', standard))
     for (const id of ['tool-bash', 'tool-pwsh', 'tool-jobs', 'tool-web', 'swarm-tools', 'tool-plugin-manager', 'delegation']) expect(rows).not.toContain(id)

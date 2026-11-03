@@ -51,6 +51,70 @@ const makeService = (options: { config?: Record<string, unknown>; env?: Partial<
   return { service: intSwarmService(deps), fetchMock, subagents, dshHome, config }
 }
 
+describe('模型上下文档位准入', () => {
+  it('串联 tokenMeter、模型上下文元数据和回退链，在发请求前跳过超窗模型', async () => {
+    const primary = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
+    const fallback = { provider: 'context-wide', model: 'window-1m', reasoningEffort: 'max' }
+    const measure = vi.fn(() => ({ totalTokens: 368003 }))
+    const resolveModelInfo = vi.fn(async (provider: string) => ({
+      inputModalities: ['text'],
+      context: { contextWindow: provider === 'openai' ? 272000 : 1000000 },
+      defaultMaxTokens: provider === 'openai' ? 128000 : 65536,
+      reasoning: { efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((id) => ({ id, name: id })) }
+    }))
+    const llm = {
+      listProviders: () => [{ id: primary.provider }, { id: fallback.provider }],
+      resolveModelInfo
+    }
+    const { service } = makeService({
+      config: {
+        persistence: { enabled: false },
+        jev: { enabled: false },
+        routes: { tian_shu: { chain: [primary, fallback] } }
+      },
+      env: { getLlm: () => llm, getTokenMeter: () => ({ measure }) }
+    })
+    service.routeState.BeginRequestStep(root.id, 0, 0)
+    const controller = new AbortController()
+
+    await expect(service.routeState.AdmitRequest(root, { ...primary, maxTokens: 128000 }, 'tian_shu', service.getConfig(), true, controller.signal))
+      .resolves.toMatchObject(fallback)
+    expect(measure).toHaveBeenCalledTimes(1)
+    expect(resolveModelInfo).toHaveBeenCalledWith(primary.provider, primary.model, controller.signal)
+    expect(resolveModelInfo).toHaveBeenCalledWith(fallback.provider, fallback.model, controller.signal)
+    expect(service.routeState.getRecovery(root.id)).toMatchObject({ attemptedRoutes: ['context-wide/window-1m'] })
+  })
+
+  it('token 测量失败时保持旧路由行为，不阻断第三方 provider', async () => {
+    const route = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
+    const llm = {
+      listProviders: () => [{ id: route.provider }],
+      resolveModelInfo: async () => ({
+        inputModalities: ['text'],
+        context: { contextWindow: 272000 },
+        defaultMaxTokens: 128000,
+        reasoning: { efforts: [{ id: 'max', name: 'Max' }] }
+      })
+    }
+    const { service } = makeService({
+      config: {
+        persistence: { enabled: false },
+        jev: { enabled: false },
+        routes: { tian_shu: { chain: [route] } }
+      },
+      env: {
+        getLlm: () => llm,
+        getTokenMeter: () => ({ measure: () => { throw new Error('fixture measurement failure') } })
+      }
+    })
+    service.routeState.BeginRequestStep(root.id, 0, 0)
+    const controller = new AbortController()
+
+    await expect(service.routeState.AdmitRequest(root, { ...route, maxTokens: 128000 }, 'tian_shu', service.getConfig(), true, controller.signal))
+      .resolves.toMatchObject(route)
+  })
+})
+
 describe('默认预检的短网络元数据恢复', () => {
   const route = { provider: 'codex', model: 'gpt-6-astra' }
   const child = { id: 'metadata-child', session: { header: { parentSession: root.id } } }

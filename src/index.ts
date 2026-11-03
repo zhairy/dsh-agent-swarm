@@ -36,7 +36,7 @@ import { getHostApprovalPolicy, getToolApprovalDecision } from './approval-polic
 import { inspectChildRecovery, inspectRootPreference } from './host-recovery.js'
 import { getToolRecoveryResult } from './tool-recovery.js'
 import type { RouteInfo } from './routes.js'
-import type { GoalsLike, UserQuestionsLike } from './host-contract.js'
+import type { GoalsLike, TokenMeterLike, UserQuestionsLike } from './host-contract.js'
 import { getValueDigest } from './workflow.js'
 
 /** 宿主行：提供 agentSwarm 服务、注册写操作守卫与设置页 RPC，本身不向模型注册工具 */
@@ -129,6 +129,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     orderQuotaRoutes: quotaSource.orderQuotaRoutes, onQuotaRouteSuccess: quotaSource.succeeded, quotaDiagnostics: quotaSource.diagnostics,
     getConfig,
     getLlm: () => ctx.get('llm') as LlmLike | undefined,
+    getTokenMeter: () => ctx.get('tokenMeter') as TokenMeterLike | undefined,
     getSubagents: () => ctx.get('subagents') as SubagentsLike | undefined,
     getTools: () => ctx.get('tools') as ToolsLike | undefined,
     getAttachments: () => ctx.get('attachments') as AttachmentsLike | undefined,

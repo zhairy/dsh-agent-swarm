@@ -102,6 +102,8 @@ describe('角色注册表', () => {
     const tianShu = getPresetPersona('tian_shu')
     expect(tianShu).toContain('swarm_task_card')
     expect(tianShu).toContain('swarm_accept')
+    expect(tianShu).toContain('todo_write')
+    expect(tianShu).toContain('不是任务、证据、门禁或验收真源')
     expect(tianShu).toContain('fu_he 复核')
     expect(getPresetPersona('miao_bi')).toContain('「妙笔」')
     for (const role of ROLE_INFO_LIST) {

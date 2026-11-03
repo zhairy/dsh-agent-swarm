@@ -208,9 +208,19 @@ export type PreStepDecisionLike = { kind: 'reject' } | { kind: 'enter'; messages
 /** ctx.llm 的最小形状 */
 export interface LlmLike {
   listProviders: () => Array<{ id: string }>
-  resolveModelInfo: (provider: string, model: string, signal?: AbortSignal) => Promise<{ inputModalities?: readonly string[]; reasoning?: { efforts: readonly { id: string; name?: string }[]; defaultEffort?: string } }>
+  resolveModelInfo: (provider: string, model: string, signal?: AbortSignal) => Promise<{
+    inputModalities?: readonly string[]
+    reasoning?: { efforts: readonly { id: string; name?: string }[]; defaultEffort?: string }
+    context?: { contextWindow?: number }
+    defaultMaxTokens?: number
+  }>
   resolveCallConfig?: (config: Pick<CallConfigLike, 'provider' | 'model' | 'reasoningEffort'>, signal?: AbortSignal) => Promise<CallConfigLike>
   stream?: (options: { provider: string; model: string; reasoningEffort?: string; system?: string; messages: Array<{ role: 'user'; content: ContentBlockLike[] }>; signal?: AbortSignal }) => AsyncIterable<Record<string, unknown>>
+}
+
+/** DSH token-meter seam used only for bounded route admission. */
+export interface TokenMeterLike {
+  measure: (session: unknown) => { totalTokens: number }
 }
 
 /** 工具守卫看到的执行信息 */

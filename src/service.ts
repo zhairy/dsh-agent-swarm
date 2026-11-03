@@ -36,6 +36,7 @@ import {
   type SessionProjectionsLike,
   type SubagentEndInfoLike,
   type SubagentsLike,
+  type TokenMeterLike,
   type ToolExecutionLike,
   type ToolsLike
 } from './host-contract.js'
@@ -80,6 +81,7 @@ import { createWorkspaceLeaseManager, type WorkspaceLease } from './util/workspa
 import type { ToolExecLike } from './tool-shape.js'
 import { getPlanningRecovery } from './planning-recovery.js'
 import { ParseCreatedWorktree, WORKTREE_TOOL, intWorktreeRegistry, type WorktreeBindingInfo, type WorktreeRegistry } from './worktree-binding.js'
+import { getContextAdmission } from './context-admission.js'
 import { discoverProjectFiles } from './project-discovery.js'
 import { createAgentControl, type AgentControl } from './agent-control.js'
 import type { AgentControlRpcInput } from './rpc.js'
@@ -120,6 +122,8 @@ export interface PlanningRunView {
 export interface SwarmServiceDepsInfo {
   getConfig: () => SwarmConfigInfo
   getLlm: () => LlmLike | undefined
+  /** Optional DSH token meter; absence keeps older-host routing behavior unchanged. */
+  getTokenMeter?: () => TokenMeterLike | undefined
   getSubagents: () => SubagentsLike | undefined
   getTools: () => ToolsLike | undefined
   getAttachments: () => AttachmentsLike | undefined
@@ -748,6 +752,28 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
 
   const sleep = deps.sleep ?? SleepWithSignal
   const metadataCache = createRouteMetadataCache({ now })
+  const contextMeasurements = new WeakMap<AbortSignal, Map<string, { totalTokens: number }>>()
+  const measureRouteContext = (agent: AgentLike, signal?: AbortSignal): { totalTokens: number } | undefined => {
+    const meter = deps.getTokenMeter?.()
+    if (meter === undefined || agent.session === undefined) return undefined
+    if (signal !== undefined) {
+      const cached = contextMeasurements.get(signal)?.get(agent.id)
+      if (cached !== undefined) return cached
+    }
+    try {
+      const measured = meter.measure(agent.session)
+      const value = { totalTokens: measured.totalTokens }
+      if (signal !== undefined) {
+        const group = contextMeasurements.get(signal) ?? new Map<string, { totalTokens: number }>()
+        group.set(agent.id, value)
+        contextMeasurements.set(signal, group)
+      }
+      return value
+    } catch (error) {
+      deps.logger?.warn(`上下文准入测量失败，保留宿主路由行为：agent=${agent.id} reason=${getErrorText(error)}`)
+      return undefined
+    }
+  }
   const observeProbeFailure = createRouteFailureObserver((route, failure) => routeState.ObserveRouteFailure(route, failure, deps.getConfig()))
   const probe = deps.probe ?? intRouteProbe(deps.getLlm, {
     now, metadataCache, isRouteAvailable: (route) => routeState.isRouteAvailable(route),
@@ -758,6 +784,25 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     getSession(event.agentId).ledger.AddLedgerEvent({ type: 'route/fallback', data: { scope: 'root', from: getRouteLabel(event.from), to: getRouteLabel(event.to), failure: event.failure } })
   }, probe, {
     now, orderQuotaRoutes: deps.orderQuotaRoutes, onRouteSuccess: deps.onQuotaRouteSuccess,
+    admitContext: async (agent, route, resolved, signal) => {
+      const llm = deps.getLlm()
+      const measurement = measureRouteContext(agent, signal)
+      if (llm === undefined || measurement === undefined) return { ok: true }
+      try {
+        const modelInfo = await llm.resolveModelInfo(route.provider, route.model, signal)
+        return getContextAdmission({ route, call: resolved, measurement, modelInfo })
+      } catch (error) {
+        deps.logger?.warn(`上下文准入元数据不可用，保留宿主请求：${getRouteLabel(route)} reason=${getErrorText(error)}`)
+        return { ok: true }
+      }
+    },
+    onContextRejected: (event) => {
+      const owner = childOwners.get(event.agentId) ?? event.agentId
+      const taskId = agentControl.get(event.agentId)?.taskId
+      getSession(owner).ledger.AddLedgerEvent({ type: 'route/skipped', ...(taskId === undefined ? {} : { taskId }),
+        data: { scope: event.scope, agentId: event.agentId, route: getRouteLabel(event.route), reason: 'context-window-insufficient', ...event.journal } })
+      deps.logger?.info(`模型 ${getRouteLabel(event.route)} 未准入：会话 ${event.journal.measuredTokens} tokens > 安全输入 ${event.journal.safeInputTokens}`)
+    },
     onPreferredRecovery: (event) => {
       const parentId = childOwners.get(event.agentId) ?? event.agentId
       const taskId = agentControl.get(event.agentId)?.taskId

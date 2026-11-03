@@ -295,6 +295,42 @@ describe('automatic source quota routing', () => {
   })
 })
 
+describe('context-aware route admission', () => {
+  const primary = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
+  const fallback = { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' }
+  const selected = getSwarmConfig({ routes: { tian_shu: { chain: [primary, fallback] } } })
+
+  it('skips an otherwise healthy route that cannot hold the measured session and selects the next safe route', async () => {
+    const rejected: Array<{ route: RouteInfo; journal: any }> = []
+    const registry = intRouteStateRegistry(undefined, undefined, {
+      admitContext: async (_agent, route) => route.provider === 'openai'
+        ? { ok: false, reason: 'context-window-insufficient', measuredTokens: 368003, contextWindow: 272000, reservedOutputTokens: 128000, safetyMarginTokens: 4096, safeInputTokens: 139904 }
+        : { ok: true, measuredTokens: 368003, contextWindow: 1000000, reservedOutputTokens: 32768, safetyMarginTokens: 4096, safeInputTokens: 963136 },
+      onContextRejected: (event) => rejected.push({ route: event.route, journal: event.journal })
+    })
+    registry.BeginRequestStep(root.id, 0, 0)
+    await expect(registry.AdmitRequest(root, { ...primary, maxTokens: 128000 }, 'tian_shu', selected, true)).resolves.toMatchObject(fallback)
+    expect(rejected).toEqual([expect.objectContaining({ route: primary, journal: expect.objectContaining({ measuredTokens: 368003, reason: 'context-window-insufficient' }) })])
+    expect(registry.getRecovery(root.id)).toMatchObject({ attempts: 1, attemptedRoutes: ['deepseek-official/deepseek-flash'] })
+  })
+
+  it('fails before dispatch with a context recovery error when every route is too small', async () => {
+    const registry = intRouteStateRegistry(undefined, undefined, {
+      admitContext: async () => ({ ok: false, reason: 'context-window-insufficient', measuredTokens: 368003, contextWindow: 272000, reservedOutputTokens: 128000, safetyMarginTokens: 4096, safeInputTokens: 139904 })
+    })
+    registry.BeginRequestStep(root.id, 0, 0)
+    await expect(registry.AdmitRequest(root, { ...primary, maxTokens: 128000 }, 'tian_shu', selected, true))
+      .rejects.toMatchObject({ code: 'CONTEXT_RECOVERY_REQUIRED', message: expect.stringContaining('未调用模型') })
+    expect(registry.getRecovery(root.id)?.terminal).toBeUndefined()
+  })
+
+  it('keeps legacy admission unchanged when token measurement is unavailable', async () => {
+    const registry = intRouteStateRegistry()
+    registry.BeginRequestStep(root.id, 0, 0)
+    await expect(registry.AdmitRequest(root, { ...fallback, maxTokens: 32768 }, 'tian_shu', selected, true)).resolves.toMatchObject(fallback)
+  })
+})
+
 describe('request recovery lifetime', () => {
   const route = { provider: 'fixture', model: 'fixture' }
   const cfg = getSwarmConfig({ routes: { tian_shu: { chain: [route] } } })
