@@ -11,6 +11,13 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 适配 DSH **0.2.0 / 0.2.1**（`>=0.2.0-rc.2 <0.2.2-0`，推荐 0.2.1-rc.3）与 Node.js 22.12 及以上
 - 新建会话选「百工模式」即可使用；Jev 可选择 TypeSafe 官方接口，或从 DSH 当前模型目录选择第三方 Jev 兼容模型
 
+### 3.2.1 的变化
+
+- 修复超大会话切换到上下文较小模型后只输出 reasoning 并显示“已达到输出 token 上限”。模型派发前现在使用 DSH 原生 `ctx.tokenMeter` 测量会话，并从 `ctx.llm.resolveModelInfo` 读取候选路由的 `contextWindow` 与 `defaultMaxTokens`；超窗路由会被跳过，整条链都不足时明确返回“未调用模型”。
+- 官方 OpenAI `gpt-6.1-sol` 的 `272000` 上下文声明保持原样，不会误用 `openai-codex` 的另一条模型目录。旧 DSH、未声明上下文或没有 token meter 的第三方模型继续采用原行为。
+- 明确 3.2.0 是增量重构：Ticket、RouteEngine、Router/Worker、EventJournal V2 和 Watchdog 模块已建立，但全量运行时迁移尚未完成。3.2.1 完成上下文准入和原生 seam 硬化，不虚假宣称全量重构结束。
+- 保留宿主对 `ask_user_question`、`todo_write`、`time-context`、`AGENTS.md`、jobs、goal、计划模式和 Git worktree 的所有权；Swarm 只在路由、授权、租约、证据和工作树绑定边界消费其公开接口。
+
 ### 3.2.0 的变化
 
 - 模型路由中的专家卡默认全部收起；卡片可独立展开/收起主备链与升级链，错误卡会自动展开。
@@ -166,6 +173,12 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 
 - Works with DSH **0.2.0 / 0.2.1** (`>=0.2.0-rc.2 <0.2.2-0`, 0.2.1-rc.3 recommended) on Node.js 22.12 or newer
 - Start a session in the "百工模式" (Agent Swarm) preset. Jev can use the official TypeSafe API or a third-party Jev-compatible model selected from the live DSH catalog.
+
+### What's new in 3.2.1
+
+- Fixed large sessions that switched to a smaller-context model and then returned only reasoning with a length stop. Route admission now uses DSH's native `ctx.tokenMeter`, `contextWindow`, and `defaultMaxTokens`, skips unsafe routes, and fails before dispatch when no candidate can hold the session.
+- Official OpenAI `gpt-6.1-sol` keeps its `272000` context declaration and is never confused with the separate `openai-codex` catalog entry. Older hosts and models without context metadata retain legacy behavior.
+- The release states the real 3.2.0 boundary: its core modules exist, but the full runtime migration is not complete. Native ask-user, todo, time context, workspace instructions, jobs, goal, plan mode, and Git worktree remain host-owned.
 
 ### What's new in 3.2.0
 

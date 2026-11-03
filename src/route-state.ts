@@ -16,6 +16,7 @@ import { SwarmError } from './util/errors.js'
 import { getFailureClass, getRouteKey, getRouteLabel, isSameRoute, type FailureClass, type RouteInfo, type RouteProbe } from './routes.js'
 import { getUpgradedChain } from './upgrade.js'
 import { getCanonicalJson } from './workflow.js'
+import { formatContextAdmissionError } from './context-admission.js'
 
 /** 一次路由回退 */
 export interface FallbackEventInfo {
@@ -110,6 +111,10 @@ export interface RouteStateOptionsInfo {
   /** Source-reported quota may change preference only; health and actual failures remain authoritative. */
   orderQuotaRoutes?: (routes: readonly RouteInfo[], signal?: AbortSignal, protectedRoutes?: readonly RouteInfo[]) => Promise<readonly RouteInfo[]>
   onRouteSuccess?: (route: RouteInfo) => void
+  /** Preflight a candidate against the current session's measured context. */
+  admitContext?: (agent: AgentLike, route: RouteInfo, resolved: CallConfigLike, signal?: AbortSignal) => Promise<import('./context-admission.js').ContextAdmissionInfo>
+  /** Advisory fact for diagnostics; rejection itself still occurs before provider dispatch. */
+  onContextRejected?: (event: { agentId: string; scope: 'child' | 'root'; route: RouteInfo; journal: import('./context-admission.js').ContextAdmissionInfo }) => void
 }
 
 export interface RequestRecoveryState {
@@ -527,13 +532,15 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
    * 准入时链上暂时没有能立即使用的路由（被其他专家的失败隔离，或正由其他请求半开探测）：返回在本请求等待预算内
    * 等到最早可能恢复的一条所需的时长；没有可等的路由或超出预算时判定链耗尽
    */
-  const getAdmissionWait = (agentId: string, chain: readonly RouteInfo[], current: RouteInfo, tried: ReadonlySet<string>, config: SwarmConfigInfo | undefined, checks?: ReadonlyMap<string, boolean>): AdmissionWait => {
+  const getAdmissionWait = (agentId: string, chain: readonly RouteInfo[], current: RouteInfo, tried: ReadonlySet<string>, config: SwarmConfigInfo | undefined,
+    checks?: ReadonlyMap<string, boolean>, contextChecks?: ReadonlyMap<string, boolean>): AdmissionWait => {
     const recovery = recoveryOf(agentId)
     const at = now()
     const poll = Math.min(60_000, 5_000 * 2 ** Math.min(recovery.holdRetries ?? 0, 4))
     let best: AdmissionWait | undefined
     for (const route of [current, ...chain]) {
-      if (!canServe(route) || checks?.get(admissionKey(route)) === false || (!isSameRoute(route, current) && tried.has(getRouteLabel(route)) && health.getRelatedEntries(route).length === 0)) continue
+      if (!canServe(route) || checks?.get(admissionKey(route)) === false || contextChecks?.get(admissionKey(route)) === false
+        || (!isSameRoute(route, current) && tried.has(getRouteLabel(route)) && health.getRelatedEntries(route).length === 0)) continue
       const due = health.getDueAt(route)
       // 已试路由只有仍有隔离记录才可等待重探；半开探测由另一请求持有时按退避间隔复查。
       const waitMs = due > at ? due - at : poll
@@ -673,7 +680,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
   }
 
   /** 准入；canWait 时链上暂无可用路由但等待预算允许，抛出 AdmissionWait，交给 AdmitRequest 等待后重新准入 */
-  const requestOverride = (agent: AgentLike, resolved: CallConfigLike, _presetRole: RoleId | undefined, config: SwarmConfigInfo | undefined, explicitSelectionAvailable: boolean, canWait: boolean, checks?: ReadonlyMap<string, boolean>): CallConfigLike => {
+  const requestOverride = (agent: AgentLike, resolved: CallConfigLike, _presetRole: RoleId | undefined, config: SwarmConfigInfo | undefined, explicitSelectionAvailable: boolean, canWait: boolean,
+    checks?: ReadonlyMap<string, boolean>, contextChecks?: ReadonlyMap<string, boolean>): CallConfigLike => {
     if (!managed(agent, _presetRole)) return resolved
     if (pendingHealthCommit !== undefined) throw new SwarmError('RECOVERY_REQUIRED', '健康状态持久提交仍未完成；请在请求边界等待，未启动模型请求')
     if (failedHealthCommit) throw new SwarmError('SERVICE_UNAVAILABLE', 'route_health_persist_failed')
@@ -719,25 +727,34 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       if (!permitted.ok) throw new SwarmError('RECOVERY_REQUIRED', `受控模型重试暂不可用：${permitted.reason}`)
     }
     const accepts = (candidate: RouteInfo): boolean => {
-      if (checks === undefined) return true
-      const checked = checks.get(admissionKey(candidate))
-      if (checked === undefined) throw new AdmissionProbe(candidate)
-      return checked
+      const key = admissionKey(candidate)
+      const checked = checks?.get(key)
+      const context = contextChecks?.get(key)
+      if (checks !== undefined && checked === undefined) throw new AdmissionProbe(candidate)
+      if (contextChecks !== undefined && context === undefined) throw new AdmissionProbe(candidate)
+      return checked !== false && context !== false
     }
     // 只有从隔离恢复的当前路由才预检；未失败过的健康路由与 2.9.3 一致不依赖元数据。
     // 已由本请求持有的半开/人工许可不能再走全局 probe（它会把自己的 claim 当作隔离）。
     const returning = route !== undefined && health.getRelatedEntries(route).length > 0
-    if (route === undefined || !canServe(route) || (returning && health.isAvailable(route) && !accepts(route)) || !health.claim(route, agent.id)) {
+    const routeCheck = route === undefined || contextChecks === undefined ? undefined : contextChecks.get(admissionKey(route))
+    if (route === undefined || !canServe(route) || (contextChecks !== undefined && routeCheck !== true)
+      || (returning && health.isAvailable(route) && !accepts(route)) || !health.claim(route, agent.id)) {
       if (child === undefined && config?.rootFallback === false) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'root-fallback-disabled: route_chain_exhausted') }
       const baseChain = config === undefined || _presetRole === undefined ? [] : getRoleRoute(config, getRouteKey(_presetRole)).chain
-      const chain = effectiveChain(agent.id, child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain)))
+      const declaredChain = effectiveChain(agent.id, child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain)))
+      // 用户可在对话框选择未列入角色备用链的模型。启用上下文准入时，
+      // 先把当前选择作为本次候选验证；安全则尊重选择，超窗才进入原备用链。
+      const chain = contextChecks !== undefined && route !== undefined && !declaredChain.some((candidate) => sameSelection(candidate, route))
+        ? [route, ...declaredChain]
+        : declaredChain
       const tried = child?.tried ?? roots.get(agent.id)?.tried ?? new Set<string>()
       // 与错误回退一致：先向后找，再环查此前被跳过、现已恢复的路由。
       const index = FindNextIndex(chain, child === undefined || quotaOrders.has(agent.id) ? 0 : child.index + 1, tried, route ?? resolved, 'other', health, accepts)
         ?? FindNextIndex(chain, 0, tried, route ?? resolved, 'other', health, accepts)
       const candidate = index === undefined ? undefined : chain[index] as RouteInfo
       if (candidate === undefined || !health.claim(candidate, agent.id)) {
-        if (canWait) throw getAdmissionWait(agent.id, chain, route ?? resolved, tried, config, checks)
+        if (canWait) throw getAdmissionWait(agent.id, chain, route ?? resolved, tried, config, checks, contextChecks)
         recovery.terminalDetail = getChainDetail(chain, tried)
         terminal(agent.id, 'route_chain_exhausted')
         throw new SwarmError('SERVICE_UNAVAILABLE', 'route_chain_exhausted')
@@ -1076,6 +1093,8 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
     getRequestOverride: (agent, resolved, presetRole, config, explicitSelectionAvailable = false) => requestOverride(agent, resolved, presetRole, config, explicitSelectionAvailable, false),
     AdmitRequest: async (agent, resolved, presetRole, config, explicitSelectionAvailable = false, signal) => {
       const checks = probe === undefined ? undefined : new Map<string, boolean>()
+      const contextChecks = options.admitContext === undefined ? undefined : new Map<string, boolean>()
+      const contextRejected = new Map<string, import('./context-admission.js').ContextAdmissionInfo>()
       for (;;) {
         if (signal?.aborted === true) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
         if (managed(agent, presetRole)) {
@@ -1085,12 +1104,12 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
           await waitHealthReady(agent.id, signal)
           if (Boolean(signal?.aborted)) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
           if (recoveries.get(agent.id) !== recovery || (child !== undefined && !children.has(agent.id))) throw new SwarmError('RECOVERY_REQUIRED', '路由准入所属请求已结束或变更')
-          if (children.get(agent.id) !== child) checks?.clear()
+          if (children.get(agent.id) !== child) { checks?.clear(); contextChecks?.clear() }
           if (pendingHealthCommit !== undefined) continue
         }
         let wait: AdmissionWait
         try {
-          const result = requestOverride(agent, resolved, presetRole, config, explicitSelectionAvailable, true, checks)
+          const result = requestOverride(agent, resolved, presetRole, config, explicitSelectionAvailable, true, checks, contextChecks)
           const observation = requestObservations.get(agent.id)
           if (signal !== undefined && observation !== undefined) {
             let observed = signalObservations.get(signal)
@@ -1106,17 +1125,36 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
             const preference = rootPreferences.get(agent.id)
             const upgrade = upgrades.get(agent.id)
             const order = quotaOrders.get(agent.id)
-            const checked = await (signal === undefined ? probe!(error.route) : probe!(error.route, signal))
+            const checked: { ok: boolean; vision?: boolean; reason?: string } = probe === undefined
+              ? { ok: true, vision: true }
+              : await (signal === undefined ? probe(error.route) : probe(error.route, signal))
             if (Boolean(signal?.aborted)) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
             if (recoveries.get(agent.id) !== recovery || (child !== undefined && !children.has(agent.id))) throw new SwarmError('RECOVERY_REQUIRED', '路由准入所属请求已结束或变更')
-            if (children.get(agent.id) !== child || roots.get(agent.id) !== root || rootPreferences.get(agent.id) !== preference || upgrades.get(agent.id) !== upgrade || quotaOrders.get(agent.id) !== order) { checks!.clear(); continue }
+            if (children.get(agent.id) !== child || roots.get(agent.id) !== root || rootPreferences.get(agent.id) !== preference || upgrades.get(agent.id) !== upgrade || quotaOrders.get(agent.id) !== order) { checks?.clear(); contextChecks?.clear(); continue }
+            const context = options.admitContext === undefined ? { ok: true } : await options.admitContext(agent, error.route, resolved, signal)
+            if (Boolean(signal?.aborted)) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+            if (!context.ok) {
+              checks?.set(admissionKey(error.route), false)
+              contextChecks?.set(admissionKey(error.route), false)
+              contextRejected.set(admissionKey(error.route), context)
+              options.onContextRejected?.({ agentId: agent.id, scope: children.has(agent.id) ? 'child' : 'root', route: error.route, journal: context })
+              continue
+            }
+            contextChecks?.set(admissionKey(error.route), true)
             // probe 期间被其他请求隔离时重新等待健康状态，不把它当作永久能力不符。
             // 元数据暂时不可知不是否定证据：放行给真实请求判断（失败走常规错误恢复），并记下结果避免立即重探。
-            const unknown = !checked.ok && ['metadata-pending-timeout', 'metadata-capacity-busy', 'llm-service-changed'].includes(checked.reason)
-            if (checked.ok || checked.reason !== 'route-isolated') checks!.set(admissionKey(error.route), unknown || (checked.ok && (child?.requireVision !== true || checked.vision)))
+            const unknown = !checked.ok && checked.reason !== undefined && ['metadata-pending-timeout', 'metadata-capacity-busy', 'llm-service-changed'].includes(checked.reason)
+            if (checked.ok || checked.reason !== 'route-isolated') checks?.set(admissionKey(error.route), unknown || (checked.ok && (child?.requireVision !== true || checked.vision === true)))
             continue
           }
-          if (!(error instanceof AdmissionWait)) throw error
+          if (!(error instanceof AdmissionWait)) {
+            if (contextRejected.size > 0 && error instanceof SwarmError && error.code === 'SERVICE_UNAVAILABLE') {
+              const recovery = recoveries.get(agent.id)
+              if (recovery?.terminal === 'route_chain_exhausted') { delete recovery.terminal; delete recovery.terminalDetail }
+              throw new SwarmError('CONTEXT_RECOVERY_REQUIRED', formatContextAdmissionError([...contextRejected.values()]))
+            }
+            throw error
+          }
           wait = error
         }
         const recovery = recoveryOf(agent.id)
