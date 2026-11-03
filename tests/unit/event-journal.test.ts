@@ -79,4 +79,55 @@ describe('v3.2.0 event journal', () => {
       expect(replay.project()).toMatchObject({ sequence: 100_000, tickets: { 'T-1': { stage: 'stage-100000' } } })
     } finally { rmSync(join(dir, '..'), { recursive: true, force: true }) }
   })
+  it.each(['null', 'false', '0', '"not an event"', '[]', '{}'])('recovers a non-event JSON tail: %s', (tail) => {
+    const dir = directory()
+    const journal = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-a' })
+    const first = journal.append(event('e1'))!
+    const prefix = readFileSync(journal.path, 'utf8')
+    writeFileSync(journal.path, `${prefix}${tail}\n`, 'utf8')
+
+    const reopened = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-a' })
+    expect(reopened.read()).toEqual({ events: [first], issues: [{ line: 2, reason: 'invalid-shape' }] })
+    expect(readFileSync(journal.path, 'utf8')).toBe(prefix)
+    expect(reopened.project().sequence).toBe(1)
+    const second = reopened.append(event('e2'))!
+    expect(second.seq).toBe(2)
+    expect(second.previousDigest).toBe(first.digest)
+    expect(createSwarmEventJournal({ directory: dir, rootSessionId: 'session-a' }).read()).toEqual({ events: [first, second], issues: [] })
+  })
+
+  it('recovers an active non-event tail after a sealed segment', () => {
+    const dir = directory()
+    const options = { directory: dir, rootSessionId: 'session-sealed-tail', sealAfterBytes: 1024 }
+    const journal = createSwarmEventJournal(options)
+    const first = journal.append({ ...event('e1'), payload: { body: 'x'.repeat(700) } })!
+    const second = journal.append(event('e2'))!
+    expect(journal.segments()).toHaveLength(2)
+    const prefix = readFileSync(journal.path, 'utf8')
+    writeFileSync(journal.path, `${prefix}null\n`, 'utf8')
+    const reopened = createSwarmEventJournal(options)
+    expect(reopened.read()).toEqual({ events: [first, second], issues: [{ line: 2, reason: 'invalid-shape' }] })
+    expect(readFileSync(journal.path, 'utf8')).toBe(prefix)
+    const third = reopened.append(event('e3'))!
+    expect(third.seq).toBe(3)
+    expect(third.previousDigest).toBe(second.digest)
+    expect(createSwarmEventJournal(options).read()).toEqual({ events: [first, second, third], issues: [] })
+  })
+
+  it('keeps a corrupt sealed segment immutable and rejects appends', () => {
+    const dir = directory()
+    const options = { directory: dir, rootSessionId: 'session-corrupt-seal', sealAfterBytes: 1024 }
+    const journal = createSwarmEventJournal(options)
+    journal.append({ ...event('e1'), payload: { body: 'x'.repeat(700) } })
+    journal.append(event('e2'))
+    const sealed = journal.segments()[0]!
+    expect(sealed).not.toBe(journal.path)
+    const corrupted = `${readFileSync(sealed, 'utf8')}null\n`
+    writeFileSync(sealed, corrupted, 'utf8')
+    const reopened = createSwarmEventJournal(options)
+    expect(reopened.read().issues).toEqual([{ line: 2, reason: 'invalid-shape' }])
+    expect(() => reopened.append(event('e3'))).toThrow(/Sealed event journal segment is corrupt/)
+    expect(readFileSync(sealed, 'utf8')).toBe(corrupted)
+  })
+
 })
