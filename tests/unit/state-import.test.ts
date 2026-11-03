@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -19,14 +19,19 @@ describe('legacy committed-state importer', () => {
     const directory = await mkdtemp(join(tmpdir(), 'swarm-state-import-'))
     try {
       const store = intTaskStore(); store.AddTask(task)
+      const source = join(directory, 'state.bin'); await writeFile(source, 'committed-state', { mode: 0o600 })
       const journal = createSwarmEventJournal({ directory: join(directory, 'events'), rootSessionId: 'root', now: () => new Date(10) })
-      const input = { journal, store, rootSessionId: 'root', workspaceId: 'workspace', sourcePath: join(directory, 'state'), schemaVersion: 2, now: () => new Date(20) }
+      const input = { journal, store, rootSessionId: 'root', workspaceId: 'workspace', sourcePath: source, schemaVersion: 2, now: () => new Date(20), backupPaths: [source] }
       const first = importFeatureStateToJournal(input)
       expect(first).toMatchObject({ imported: 1, skipped: 0, unrecoverable: [], projectionMismatches: [] })
       expect(journal.project().tickets['T-1']?.stage).toBe('ended:accepted')
       expect(journal.read().events).toHaveLength(1)
       const manifest = JSON.parse(await readFile(first.manifestPath, 'utf8')) as Record<string, unknown>
       expect(manifest).toMatchObject({ kind: 'legacy-state-import', rootSessionId: 'root', workspaceId: 'workspace', taskCount: 1, imported: 1, projectionMismatches: [] })
+      const backups = manifest.backups as Array<{ destination: string; status: string }>
+      expect(backups[0]).toMatchObject({ status: 'copied' })
+      expect(await readFile(backups[0]!.destination, 'utf8')).toBe('committed-state')
+      expect((await stat(backups[0]!.destination)).size).toBe(Buffer.byteLength('committed-state'))
       expect(JSON.stringify(manifest)).not.toContain('导入历史状态')
       expect(JSON.stringify(manifest)).not.toContain('保留事实')
 

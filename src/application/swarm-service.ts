@@ -3,18 +3,16 @@ import { getLanguageInstruction } from '../language.js'
 import { getOrchestrationQuestions, getRuleOrchestration, ParseOrchestrationPlan, type OrchestrationPlan } from '../orchestration.js'
 import { createDelegationScheduler } from '../scheduler.js'
 import { formatMemoryReferences } from '../memory.js'
-import { ValidateToolCandidate, type ToolCandidateMetadata } from '../tool-candidate.js'
-import type { ContextPageInfo } from '../context-store.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { realpathSync } from 'node:fs'
-import { resolve, relative, isAbsolute, sep, dirname } from 'node:path'
+import { resolve, sep } from 'node:path'
 import { getRoleRoute } from '../config.js'
 import { DispatchAdmissionError, intDelegator, getToolFilter, type ChildScopeRequest, type DelegateExecInfo, type DelegateSessionInfo, type PlanSessionInput } from '../delegate.js'
 import type { ChildPromptInfo } from '../runtime.js'
-import { startChild } from '../subagent-compat.js'
+import { startChild } from '../adapters/dsh-host/subagent.js'
 import { getLedgerEvents, intLedger, intTaskStore, type AcceptanceRecord, type AssessmentInfo, type DelegationRecord, type TaskRecord, type TriageRecord } from '../evidence.js'
 import { createSwarmEventJournal, type SwarmEventJournal } from '../event-journal.js'
 import { importLegacyLedgerFile } from '../event-import.js'
@@ -27,9 +25,8 @@ import {
   type SessionHeaderLike,
   type InboxMessageLike,
   type SubagentsLike,
-  type ToolExecutionLike,
 } from '../host-contract.js'
-import { getJevFailureKind, getJevState, getRedactedText, isJevAvailabilityFailure, type JevOutcome } from '../jev.js'
+import { getJevFailureKind, getJevState, isJevAvailabilityFailure, type JevOutcome } from '../jev.js'
 import { intJevHub } from '../jev-hub.js'
 import { SleepWithSignal } from '../network.js'
 import {
@@ -43,7 +40,7 @@ import {
   type TaskCard
 } from '../policy.js'
 import { createRouteEngine } from './routing/engine.js'
-import { FindRoleByPresetId, getPermissionLabel, getRoleInfo, isWriteAllowed, ROLE_INFO_LIST, type DelegableRoleId, type RoleId } from '../role-registry.js'
+import { FindRoleByPresetId, getRoleInfo, ROLE_INFO_LIST, type DelegableRoleId, type RoleId } from '../role-registry.js'
 import { getRouteKey, getRouteLabel, createRouteMetadataCache, createRouteFailureObserver, intRouteProbe, type RouteInfo } from '../domain/routing/routes.js'
 import { ParseSessionPlan, getRuleSessionPlan, getSessionQuestions, getSessionState, intChildEndHub, intThreadRegistry, type SessionPlan } from '../threads.js'
 import { getUpgradeReasons, getUpgradedChain } from '../domain/routing/upgrade.js'
@@ -56,21 +53,17 @@ import { MERMAID_PARSER_VERSION, getDefaultWorkflow, getLenientWorkflow, getWork
 import { RunPlanningReview, getReviewSnapshot, getPlanningReviewState, getPlanningReviewQuestions, isPlanningReviewCurrent, isPlanningReviewReusable, getPlanningReviewDiagnostics, type PlanningAgentAssessmentInfo, type ReviewSnapshot } from '../planning-review.js'
 import { waitForPlanning } from '../planning-wait.js'
 import { getArtifactSnapshot } from '../artifacts.js'
-import { getToolApprovalDenial, getHostApprovalPolicy, getApprovalPolicyDiagnostics } from '../approval-policy.js'
+import { getHostApprovalPolicy, getApprovalPolicyDiagnostics } from '../approval-policy.js'
 import { getCheckpoint } from '../checkpoint.js'
 import { createFeatureSession, type FeatureSession } from '../feature-session.js'
 import { StateStoreError } from '../state-store.js'
-import { calculate } from '../math/operators.js'
-import { getCalculateOptions, getMathAvailability } from '../math/config.js'
 import { createWorkspaceLeaseManager, type WorkspaceLease } from '../util/workspace-lease.js'
 import type { ToolExecLike } from '../tool-shape.js'
 import { getPlanningRecovery } from '../planning-recovery.js'
 import { ParseCreatedWorktree, WORKTREE_TOOL, intWorktreeRegistry, type WorktreeRegistry } from '../worktree-binding.js'
 import { getContextAdmission } from '../context-admission.js'
-import { getRouterToolDenial } from '../router-worker.js'
-import { discoverProjectFiles } from '../project-discovery.js'
 import { createAgentControl } from '../agent-control.js'
-import { assessExplorationEvidence, revalidateEvidenceAssessment, type EvidenceAssessmentBinding } from '../evidence-assessment.js'
+import { assessExplorationEvidence, type EvidenceAssessmentBinding } from '../evidence-assessment.js'
 import { createPublicEvidenceSourceResolver } from '../evidence-source.js'
 import { IssueVerificationReceipt, IsVerificationReceiptCurrent, getTaskVerificationBinding, getVerificationDecisionDigest, getVerificationProducers } from '../verification-receipt.js'
 import { getProgressProjection, getWorkflowStructure, type ProgressAction, type ProgressWaitHandle } from '../progress-guard.js'
@@ -81,6 +74,11 @@ import { intTicketRepository, type TicketRepository } from '../domain/tickets/re
 import { createSwarmWatchdog, type WatchdogAlert } from '../watchdog.js'
 import type { PlanningRunView, RootUpgradeView } from './api.js'
 import type { SwarmService, SwarmServiceDepsInfo } from './service-api.js'
+import { createHostGuardUseCases } from './host-guards.js'
+import { createQueryToolUseCases } from './query-tools.js'
+import { createMathToolUseCase } from './math-tool.js'
+import { createExperienceToolUseCase } from './experience-tool.js'
+import { createContextQueryToolUseCase } from './context-query-tool.js'
 import { ValidateAcceptInput, type AcceptResultInfo } from './validation.js'
 import { describeUnknownTask, getStatusResult, getTaskCardResult, getTaskView } from './views.js'
 
@@ -133,7 +131,6 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const sessions = new Map<string, SessionStateInfo>()
   const watchdogAlerts = new Map<string, WatchdogAlert>()
   const quarantinedTasks = new Set<string>()
-  let watchdogPaused = false
   let watchdogTimer: ReturnType<typeof setTimeout> | undefined
   let watchdogDisposed = false
   const watchdog = createSwarmWatchdog({ config: deps.getConfig().watchdog })
@@ -194,7 +191,6 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     sessions.set(sessionId, created)
     const persistedProjection = journal.project()
     for (const [taskId, ticket] of Object.entries(persistedProjection.tickets)) if (ticket.quarantined) quarantinedTasks.add(taskId)
-    if (quarantinedTasks.size > 0) watchdogPaused = true
     return created
   }
 
@@ -238,7 +234,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       routeState.RestoreHealth((await features.readRouteHealth()) ?? [])
       const importCommittedState = (writeManifest: boolean) => importFeatureStateToJournal({ journal: session.journal, store: session.store,
         rootSessionId: session.sessionId, workspaceId: features.workspaceId, sourcePath: features.store.directory,
-        schemaVersion: features.store.read().schemaVersion, now: () => new Date(now()), writeManifest })
+        schemaVersion: features.store.read().schemaVersion, authorizationDecisions: features.store.read().authorizationDecisions,
+        now: () => new Date(now()), writeManifest,
+        ...(writeManifest ? { backupPaths: [features.store.directory, session.ledger.path] } : {}) })
       const stateImport = importCommittedState(true)
       if (stateImport.unrecoverable.length > 0 || stateImport.projectionMismatches.length > 0) {
         throw new SwarmError('RECOVERY_REQUIRED', `旧状态事件导入未通过核对：unrecoverable=${stateImport.unrecoverable.length} projectionMismatch=${stateImport.projectionMismatches.length} ${JSON.stringify(stateImport.projectionMismatches.slice(0, 3))}；manifest=${stateImport.manifestPath}`)
@@ -690,13 +688,14 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (watchdogDisposed) return false
     const config = deps.getConfig().watchdog
     watchdog.updateConfig(config)
-    if (!config.enabled) { watchdogPaused = false; return false }
+    if (!config.enabled) return false
     const assignments: import('../watchdog.js').WatchdogAssignment[] = []
     const tickets: import('../watchdog.js').WatchdogTicket[] = []
     const sessionByTask = new Map<string, SessionStateInfo>()
     for (const session of sessions.values()) {
       const cwd = session.rootAgent === undefined ? process.cwd() : getAgentHeader(session.rootAgent).cwd ?? process.cwd()
-      const mutationUnknown = leases.peekStatus(cwd)?.mutationUnknown === true
+      const leaseStatus = leases.peekStatus(cwd)
+      const mutationUnknown = leaseStatus?.mutationUnknown === true
       for (const task of session.store.getTasks()) {
         sessionByTask.set(task.taskId, session)
         const records = session.store.getTaskDelegations(task.taskId)
@@ -704,13 +703,14 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         tickets.push({ id: task.taskId, ...(active === undefined ? {} : { activeAssignmentId: active.delegationId }), pendingInputs: [], quarantined: quarantinedTasks.has(task.taskId) })
         for (const record of records) {
           if (record.status !== 'running' && record.status !== 'queued') continue
+          const ownsUnknownLease = mutationUnknown && record.status === 'running' && record.attemptId !== undefined
+            && (leaseStatus?.owner === undefined || leaseStatus.owner.endsWith(`:${record.attemptId}`))
           assignments.push({ id: record.delegationId, ticketId: task.taskId, state: record.status, startedAt: record.startedAt,
-            ...(record.lastHeartbeatAt === undefined ? {} : { lastHeartbeatAt: record.lastHeartbeatAt }), ...(mutationUnknown ? { unknownSideEffect: true } : {}) })
+            ...(record.lastHeartbeatAt === undefined ? {} : { lastHeartbeatAt: record.lastHeartbeatAt }), ...(ownsUnknownLease ? { unknownSideEffect: true } : {}) })
         }
       }
     }
     const result = watchdog.evaluate({ now: now(), assignments, tickets })
-    watchdogPaused = result.alerts.some((alert) => alert.severity === 'warning' || alert.severity === 'critical')
     for (const taskId of result.quarantineTicketIds) quarantinedTasks.add(taskId)
     for (const alert of result.alerts) {
       if (watchdogAlerts.has(alert.id)) continue
@@ -1529,84 +1529,17 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   }
   const ReviewPlan: SwarmService['ReviewPlan'] = (raw, exec) => runReviewPlan(raw, exec, false)
 
-  const Calculate: SwarmService['Calculate'] = async (raw, exec) => {
-    if (exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '计算已取消，未预占预算或发布证据')
-    if (!deps.getConfig().math.enabled) throw new SwarmError('SERVICE_UNAVAILABLE', '数学算子已关闭')
-    const { session, features, task: found, binding } = await getToolTask(raw, exec)
-    return session.taskLock.run(async () => {
-      if (exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '等待期间计算已取消，未预占预算或发布证据')
-      const task = reconcileTask(session, refreshIntent(session, getTaskOrThrow(session, found.taskId), session.rootAgent ?? exec.agent!))
-      if (binding !== undefined) {
-        features.bindings.requireActive(binding.agentId, 'pure-calc')
-        if (!isTaskVersionCurrent(task, binding)) throw new SwarmError('STALE_EVIDENCE', '计算绑定的是旧任务版本')
-      }
-      const math = deps.getConfig().math
-      if (!math.enabled) throw new SwarmError('SERVICE_UNAVAILABLE', '数学算子已关闭')
-      const { task_id: _task, ...request } = (raw ?? {}) as Record<string, unknown>
-      const denied = getMathAvailability(request, math)
-      if (denied !== undefined) return { ...denied, task_id: task.taskId }
-      const budget = features.budgetFor(task)
-      const remaining = budget.remainingMathWork()
-      if (remaining !== undefined && remaining <= 0) throw new SwarmError('BUDGET_EXHAUSTED', '本任务数学计算工作量已用尽')
-      const options = getCalculateOptions(math, remaining)
-      const id = exec.callId ?? `calc-${randomUUID()}`
-      const snapshot = budget.getReservation(id)
-      if (snapshot !== undefined) throw new SwarmError('INVALID_ARGS', '计算请求ID已使用，读取原有计算证据后再决定')
-      // Reserve the hard work ceiling before the pure synchronous kernel; settle actual units afterwards.
-      budget.reserve({ id, source: 'math', estimatedWorkUnits: options.limits.maxWorkUnits }); budget.start(id)
-      const result = calculate(request, options)
-      budget.settle(id, { workUnits: result.workUnits })
-      const artifact = features.addContext({
-        binding: getTaskContextBinding(task, features.workspaceId),
-        layer: 'L2', kind: 'evidence', text: JSON.stringify(result.ok ? { input: request, result } : { input: { op: request.op, mode: request.mode }, inputOmitted: 'Rejected input is not persisted; no replay digest is claimed', result })
-      })
-      session.store.UpdateTask(task.taskId, { contextRefs: [...(task.contextRefs ?? []), { ref: artifact.ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind }] })
-      session.ledger.AddLedgerEvent({ type: 'math/computed', taskId: task.taskId, data: { evidenceKind: 'computed', ref: artifact.ref, ok: result.ok, workUnits: result.workUnits } })
-      await features.persist('math/computed', session.store, session.threads)
-      return { ...result, artifactRef: artifact.ref, task_id: task.taskId }
-    })
-  }
+  const { Calculate } = createMathToolUseCase({
+    getConfig: deps.getConfig,
+    getToolTask,
+    getTask: (session, taskId) => getTaskOrThrow(session as SessionStateInfo, taskId),
+    refreshTask: (context, taskId) => {
+      const session = context.session as SessionStateInfo
+      return reconcileTask(session, refreshIntent(session, getTaskOrThrow(session, taskId), session.rootAgent ?? context.agent))
+    }
+  })
 
-  const ReadContext: SwarmService['ReadContext'] = async (raw, exec) => {
-    const { session, features, task, projectedTask, binding } = await getToolTask(raw, exec)
-    const stateRefreshRequired = projectedTask !== task
-    const args = raw as { ref?: string; cursor?: string; limit?: number; expectedDigest?: string }
-    if (binding !== undefined) features.bindings.requireActive(binding.agentId, 'context-read')
-    if (args.ref === undefined) {
-      const current = binding?.blindReview ? [] : getCurrentDelegations(task, session.store.getTaskDelegations(task.taskId))
-      return { task_id: task.taskId, stateRefreshRequired, publishedRevisions: getTaskBinding(task), projectedRevisions: getTaskBinding(projectedTask), materials: features.contexts.List(binding ?? getTaskContextBinding(task, features.workspaceId)),
-        executionSummary: binding?.blindReview ? { omitted: '独立盲审不披露作者执行过程或历史评分' } : {
-          total: current.length, truncated: current.length > 12,
-          delegations: current.slice(-12).map((record) => ({ delegationId: record.delegationId, role: record.role, status: record.status,
-            summary: getRedactedText(record.summary, 500), ...(record.error === undefined ? {} : { error: getRedactedText(record.error, 500) }) }))
-        }, nextAction: stateRefreshRequired ? '状态是只读投影，需求或流程需同步；通过 swarm_review_plan 显式同步审核，现有材料不能当作新版本已批准证据。' : '使用返回的 ref 和 digest 分页读取；本工具已提供当前授权执行摘要，不通过文件路径读取私有状态。' }
-    }
-    if (typeof args.ref !== 'string') throw new SwarmError('INVALID_ARGS', '上下文 ref 必须为字符串；不传 ref 可列出当前授权材料')
-    if (stateRefreshRequired) throw new SwarmError('STALE_EVIDENCE', `材料绑定旧需求或流程（已发布 ${task.requestRevision ?? 1}/${task.cardRevision ?? 1}/${task.workflowRevision ?? 1}，当前需求 ${projectedTask.requestRevision ?? 1}/${projectedTask.cardRevision ?? 1}/${projectedTask.workflowRevision ?? 1}）；先调用 swarm_review_plan 同步当前版本，再不传 ref 重新获取材料引用与 digest。旧 ref 不会自动升级，也不代表当前审核已通过。`)
-    let page: ContextPageInfo
-    try {
-      page = features.contexts.Read(binding ?? getTaskContextBinding(task, features.workspaceId), args.ref, args)
-    } catch (error) {
-      // Missing historical refs are a recoverable lookup failure, never an alias
-      // for a new contract. Existing refs still fail closed on every permission,
-      // revision and digest check, including independent blind-review isolation.
-      if (!(error instanceof SwarmError) || error.code !== 'CONTEXT_REFERENCE_UNAVAILABLE') throw error
-      return { ok: false, code: error.code, task_id: task.taskId, ref: args.ref,
-        stateRefreshRequired: false, publishedRevisions: getTaskBinding(task),
-        materials: features.contexts.List(binding ?? getTaskContextBinding(task, features.workspaceId)),
-        mayUseForImplementation: false, recovery: 'relist_current_materials',
-        reason: '该引用在当前授权材料中不存在，可能来自旧版本或其他会话；这不证明状态损坏，也不代表旧材料已取得当前授权。',
-        nextAction: '从 materials 中重新选择当前 ref 和 digest，省略旧 cursor 后重新读取；本次没有返回材料正文、批准或执行凭证。' }
-    }
-    const delegationId = task.contextDelegations?.[args.ref]
-    if (delegationId === undefined) return { ...page, stateRefreshRequired, ...(stateRefreshRequired ? { text: `[历史材料：需求或流程尚未同步，不是新版本已批准证据。]\n${page.text}` } : {}) }
-    const record = session.store.getDelegation(delegationId)
-    const notice = await revalidateEvidenceAssessment(getBoundEvidenceAssessment(record), {
-      cwd: getAgentHeader(session.rootAgent ?? exec.agent!).cwd ?? process.cwd(), binding: evidenceBinding(projectedTask, features)
-    }, { now, privatePaths: evidencePrivatePaths() })
-    return { ...page, stateRefreshRequired, evidenceAssessment: notice,
-      ...(notice.mayUseForImplementation ? {} : { text: `[探索材料：${notice.disposition}；需要核对，不能作为已证实实现依据。]\n${page.text}` }) }
-  }
+
   const evidenceBinding = (task: TaskRecord, features: FeatureSession): EvidenceAssessmentBinding => ({
     ...getTaskContextBinding(task, features.workspaceId), artifactDigest: task.artifactSnapshot?.digest ?? getValueDigest([])
   })
@@ -1618,73 +1551,35 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       || (assessment.binding.requestRevision ?? 1) !== (record.requestRevision ?? 1) || assessment.binding.artifactDigest !== record.artifactAfter) return undefined
     return assessment
   }
-  const ProjectFiles: SwarmService['ProjectFiles'] = async (raw, exec) => {
-    const { session, binding, features } = await getToolTask(raw, exec)
-    if (binding !== undefined) features.bindings.requireActive(binding.agentId, 'context-read')
-    return discoverProjectFiles(getAgentHeader(session.rootAgent ?? exec.agent).cwd ?? process.cwd(), raw as Parameters<typeof discoverProjectFiles>[1], {
-      privateRoots: privateStateRoots(), signal: exec.signal
-    })
-  }
+  const { ReadContext } = createContextQueryToolUseCase({
+    getToolTask,
+    getBoundEvidenceAssessment,
+    evidenceBinding,
+    evidencePrivatePaths,
+    now
+  })
 
-  const requireMailbox = async (raw: unknown, exec: ToolExecLike) => {
-    const context = await getToolTask(raw, exec)
-    if (!deps.getConfig().messageBus.enabled || !context.features.store.durable || context.features.bus === undefined) throw new SwarmError('SERVICE_UNAVAILABLE', '专家邮箱需要启用持久化与 messageBus')
-    if (context.binding === undefined) throw new SwarmError('PERMISSION_DENIED', '文件邮箱仅服务已绑定的专家，天枢不转述消息正文')
-    return { ...context, bus: context.features.bus }
-  }
-  const MessageSend: SwarmService['MessageSend'] = async (raw, exec) => {
-    const { bus, agent } = await requireMailbox(raw, exec)
-    return bus.send(agent.id, raw as Parameters<typeof bus.send>[1])
-  }
-  const MessageRead: SwarmService['MessageRead'] = async (raw, exec) => {
-    const { bus, agent, session, task, features } = await requireMailbox(raw, exec)
-    const result = await bus.pull(agent.id, raw as Parameters<typeof bus.pull>[1])
-    const notices = new Map<string, ReturnType<typeof revalidateEvidenceAssessment>>()
-    const evidenceNotices = await Promise.all(result.messages.map(async (message) => ({ messageId: message.id,
-      artifacts: await Promise.all(message.artifactRefs.map(async (ref) => {
-        const delegationId = task.contextDelegations?.[ref]
-        const record = delegationId === undefined ? undefined : session.store.getDelegation(delegationId)
-        const key = delegationId ?? `unassessed:${ref}`
-        let pending = notices.get(key)
-        if (pending === undefined) {
-          pending = revalidateEvidenceAssessment(getBoundEvidenceAssessment(record), {
-            cwd: getAgentHeader(session.rootAgent ?? agent).cwd ?? process.cwd(), binding: evidenceBinding(task, features)
-          }, { now, privatePaths: evidencePrivatePaths() })
-          notices.set(key, pending)
-        }
-        return { ref, ...await pending }
-      })),
-      summaryEvidence: 'unknown', requiresVerification: true,
-      reason: '材料评分只适用于原始已评估主张，不为新消息摘要背书；先核对实际材料，不能把消息当作门禁或实现依据。'
-    })))
-    return { ...result, evidenceNotices }
-  }
-  const MessageAck: SwarmService['MessageAck'] = async (raw, exec) => {
-    const { bus, agent } = await requireMailbox(raw, exec)
-    return bus.ack(agent.id, raw as Parameters<typeof bus.ack>[1])
-  }
-  const Experience: SwarmService['Experience'] = async (raw, exec) => {
-    const { features, binding, session, task, agent } = await getToolTask(raw, exec)
-    if (!deps.getConfig().experience.enabled || binding?.blindReview) throw new SwarmError('PERMISSION_DENIED', '经验检索已关闭或当前为独立盲审')
-    const args = raw as { action?: string; problemClass?: string; includeCandidates?: boolean; conclusion?: string; appliesWhen?: string[]; doesNotApplyWhen?: string[]; toolCandidate?: ToolCandidateMetadata }
-    if (args.action === 'record_tool_candidate') {
-      if (!isRootTianShu(agent) || binding !== undefined) throw new SwarmError('PERMISSION_DENIED', '只有天枢根会话可登记工具候选')
-      if (!ValidateToolCandidate(args.toolCandidate) || typeof args.conclusion !== 'string' || !Array.isArray(args.appliesWhen) || args.appliesWhen.length === 0 || !Array.isArray(args.doesNotApplyWhen)) throw new SwarmError('INVALID_ARGS', '候选需要有界来源、适用/排除条件、回滚和禁用执行标记')
-      return session.taskLock.run(async () => {
-        if (closing || exec.signal.aborted) throw new SwarmError('RECOVERY_REQUIRED', '候选登记已取消或宿主正在停止')
-        const current = deriveReconciledTask(session, deriveIntentRefresh(getTaskOrThrow(session, task.taskId), agent))
-        if (!isTaskVersionCurrent(current, getTaskBinding(task))) throw new SwarmError('STALE_EVIDENCE', '候选来源任务已变更，请刷新后登记')
-        const source = await getArtifactSnapshot(getAgentHeader(agent).cwd ?? process.cwd(), current.card.scope)
-        if (!source.complete) throw new SwarmError('STALE_EVIDENCE', '候选来源产物不完整，未登记')
-        if (exec.signal.aborted || closing) throw new SwarmError('RECOVERY_REQUIRED', '候选登记已取消或宿主正在停止')
-        return features.experiences.addCandidate({ problemClass: 'tool-candidate', conclusion: args.conclusion!, appliesWhen: args.appliesWhen!, doesNotApplyWhen: args.doesNotApplyWhen!,
-          source: { taskId: task.taskId, cardRevision: current.cardRevision ?? 1, workflowRevision: current.workflowRevision ?? 1, artifactDigest: source.digest, authorId: agent.id },
-          verification: [], counterexamples: [], operatorVersions: [args.toolCandidate!.version], toolCandidate: args.toolCandidate!, expiresAt: now() + 7 * 86400000 })
-      })
-    }
-    if (args.action !== undefined && args.action !== 'list') throw new SwarmError('INVALID_ARGS', '未知经验操作')
-    return features.experiences.list(args.problemClass, args.includeCandidates === true).slice(0, 3)
-  }
+  const { ProjectFiles, MessageSend, MessageRead, MessageAck } = createQueryToolUseCases({
+    getToolTask,
+    privateStateRoots,
+    evidencePrivatePaths,
+    getBoundEvidenceAssessment,
+    evidenceBinding,
+    now,
+    isMessageBusEnabled: () => deps.getConfig().messageBus.enabled
+  })
+
+  const { Experience } = createExperienceToolUseCase({
+    getConfigEnabled: () => deps.getConfig().experience.enabled,
+    getToolTask,
+    isRootTianShu,
+    currentTask: (context) => {
+      const session = context.session as SessionStateInfo
+      return deriveReconciledTask(session, deriveIntentRefresh(getTaskOrThrow(session, context.task.taskId), context.agent))
+    },
+    isClosing: () => closing,
+    now
+  })
 
   const getDiagnostics = (agent?: AgentLike): string[] => {
     const out: string[] = getApprovalPolicyDiagnostics(deps.getConfig().approvals, getHostApprovalPolicy(deps.getApproval?.(), agent))
@@ -1734,10 +1629,11 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     })
     const capabilityRequest = raw as { capability_tags?: string[]; allow_write_roles?: boolean }
     const visibleTaskIds = new Set(tasks.map((task) => task.taskId))
+    const visibleAlerts = [...watchdogAlerts.values()].filter((alert) => alert.ticketId !== undefined && visibleTaskIds.has(alert.ticketId))
+    const quarantinedTaskIds = [...quarantinedTasks].filter((taskId) => visibleTaskIds.has(taskId))
     return { ...getStatusResult(views, session, getDiagnostics(exec.agent)),
-      watchdog: { paused: watchdogPaused,
-        alerts: [...watchdogAlerts.values()].filter((alert) => alert.ticketId === undefined || visibleTaskIds.has(alert.ticketId)),
-        quarantinedTaskIds: [...quarantinedTasks].filter((taskId) => visibleTaskIds.has(taskId)) },
+      watchdog: { paused: quarantinedTaskIds.length > 0 || visibleAlerts.some((alert) => alert.severity === 'warning' || alert.severity === 'critical'),
+        alerts: visibleAlerts, quarantinedTaskIds },
       planningRuns: [...reviewProgress.values()].filter(({ rootSessionId, view }) => rootSessionId === session.sessionId && tasks.some((task) => task.taskId === view.task_id))
         .map(({ view }) => {
           const actual = view.reviewerId === undefined ? undefined : agentControl.get(view.reviewerId)?.actual
@@ -1914,114 +1810,31 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     return getAgentHeader(agent).parentSession === undefined && FindRoleByPresetId(getPresetId(agent)) !== undefined
   }
 
-  /** 天枢根会话自己的写操作：记下时刻，使之前的验证与审查失效（shell 写文件无法识别，属已知限制） */
-  const AddRootEdit = (agent: AgentLike | undefined, role: RoleId | undefined): void => {
-    if (agent === undefined || role !== 'tian_shu' || getAgentHeader(agent).parentSession !== undefined) return
-    getSession(agent.id).rootEditAt = now()
-  }
-
-  const getGuardReason = (execution: ToolExecutionLike): string | undefined => {
-    if (execution.agent !== undefined && isRootTianShu(execution.agent) && execution.name === 'update_goal'
-      && (execution.arguments as { action?: unknown } | undefined)?.action === 'complete') return goalCompletionReason(execution.agent)
-    if (execution.signal?.aborted === true) return '专家请求已经取消，迟到工具调用被拒绝'
-    const writer = WRITE_TOOL_NAMES.includes(execution.name) || execution.name === WORKTREE_TOOL || ['bash', 'pwsh'].includes(execution.name)
-    const oneShot = execution.agent === undefined ? undefined : agentControl.get(execution.agent.id)
-    if (execution.agent !== undefined && hasManagedChildPreset(execution.agent)
-      && !childOwners.has(execution.agent.id) && !startingChildIds.has(execution.agent.id))
-      return '专家执行授权已结束；迟到工具调用已被拒绝'
-    if (oneShot?.persistent === false && oneShot.oneShotSettled === true) {
-      return oneShot.reason === 'one-shot-cancelled'
-        ? '专家已经取消，延迟工具调用被拒绝'
-        : '一次性专家已经结束，延迟工具调用被拒绝'
-    }
-    if (closing && execution.agent !== undefined && isManagedAgent(execution.agent) && writer) return '百工正在停止，拒绝新增写入、工作树或命令执行'
-    const role = getRoleForAgent(execution.agent)
-    if (role === 'tian_shu' && writer && deps.getConfig().router.workspaceWrites === 'deny') {
-      const denial = getRouterToolDenial(execution.name, execution.arguments)
-      return denial === undefined
-        ? '天枢是 Router，只负责规划、授权、路由与派发；当前配置禁止它直接写入、运行命令或创建可写工作树。请委派铸剑、行舟或疾风执行。'
-        : '天枢是 Router，不能执行该操作；请委派 Worker 执行。'
-    }
-    if (role === 'tian_shu' && execution.name === WORKTREE_TOOL) return '天枢是路由与会话主持者，不能直接创建可写工作树；请委派铸剑或疾风执行'
-    if (isManagedAgent(execution.agent)) {
-      const denied = getToolApprovalDenial(execution, deps.getConfig().approvals)
-      if (denied !== undefined) return denied
-    }
-    const owner = execution.agent === undefined ? undefined : childOwners.get(execution.agent.id)
-    if (owner !== undefined && execution.agent !== undefined) {
-      const session = getSession(owner)
-      const binding = session.features?.bindings.get(execution.agent.id)
-      if (binding === undefined) return '当前专家的身份绑定尚未就绪，不能执行工具'
-      if (execution.signal?.aborted || childSignals.get(execution.agent.id)?.aborted) return '专家已经取消，延迟工具调用被拒绝'
-      {
-        if (binding.state !== 'active') return '专家执行身份已经撤销，请重新委派'
-        if (quarantinedTasks.has(binding.taskId) && writer) return 'Ticket 已隔离：存在未知外部副作用，只允许只读核对与恢复读取，禁止写入、工作树或命令执行'
-        const currentTask = session.store.getTask(binding.taskId)
-        const task = currentTask === undefined ? undefined : deriveReconciledTask(session, deriveIntentRefresh(currentTask, session.rootAgent ?? execution.agent))
-        if (task === undefined || !isTaskVersionCurrent(task, binding)) return '专家绑定的是旧任务版本，不能继续执行工具'
-      }
-      const workspaceEditor = role !== undefined && getRoleInfo(role).permission === 'workspace-edit'
-      if (execution.name === WORKTREE_TOOL) {
-        if (!workspaceEditor) return '只有可编辑工作区的专家能够创建可写工作树'
-        const denied = session.worktrees.canCreate({ agentId: execution.agent.id, taskId: binding.taskId })
-        if (denied !== undefined) return denied
-      } else if (writer && workspaceEditor) {
-        const worktreeToolLoaded = deps.getTools()?.schemas(execution.agent).some((tool) => tool.name === WORKTREE_TOOL) === true
-        if (worktreeToolLoaded) {
-          const bound = session.worktrees.findByAgent(execution.agent.id)
-          if (bound === undefined) return '可编辑专家尚未创建隔离工作树；请先调用 create_worktree，再修改文件或运行命令'
-          if (bound.taskId !== binding.taskId) return '当前专家仍绑定其它任务的工作树，不能在新任务中写入'
-        }
-      }
-      if (['read', 'read_image', 'glob', 'grep', 'write', 'edit'].includes(execution.name)) {
-        const canonical = (path: string): string => {
-          const absolute = isAbsolute(path) ? path : `${process.cwd()}${sep}${path}`
-          try { return realpathSync.native(absolute) } catch {
-            let parent = dirname(absolute)
-            for (let n = 0; n < 64; n++) {
-              try {
-                const suffix = absolute.slice(parent.length).replace(/^[\\/]+/, '')
-                return resolve(realpathSync.native(parent), suffix)
-              } catch {
-                const next = dirname(parent); if (next === parent) break; parent = next
-              }
-            }
-            return absolute
-          }
-        }
-        const within = (base: string, target: string): boolean => {
-          const rel = relative(base, target)
-          return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))
-        }
-        const config = deps.getConfig()
-        const privateRoots = privateStateRoots().map(canonical)
-        const cwd = getAgentHeader(execution.agent).cwd ?? getAgentHeader(session.rootAgent ?? execution.agent).cwd ?? process.cwd()
-        const args = execution.arguments as Record<string, unknown> | undefined
-        const targets = Object.entries(args ?? {}).filter(([key, value]) => /path|file|directory|root|cwd/i.test(key) && typeof value === 'string')
-          .map(([, value]) => canonical(isAbsolute(value as string) ? value as string : `${cwd}${sep}${value as string}`))
-        if (['glob', 'grep'].includes(execution.name) && targets.length === 0) targets.push(canonical(cwd))
-        if (targets.some((target) => privateRoots.some((root) => within(root, target) || (['glob', 'grep'].includes(execution.name) && within(target, root))))) {
-          return `私有状态与账本不能通过通用文件工具读取；调用 swarm_context_read({"task_id":${JSON.stringify(binding.taskId)}}) 列出当前授权材料与执行摘要，再按 ref 分页读取。`
-        }
-        if (WRITE_TOOL_NAMES.includes(execution.name) && targets.length > 0) {
-          const task = session.store.getTask(binding.taskId)!
-          if (task.card.scope.length > 0) {
-            const allowed = task.card.scope.map((path) => canonical(isAbsolute(path) ? path : `${cwd}${sep}${path}`))
-            if (targets.some((target) => !allowed.some((path) => within(path, target)))) return '写入路径超出当前任务允许的 scope'
-          } else if (config.workflow.mode === 'enforced') return '写任务必须先明确允许修改的 scope'
-        }
-      }
-    }
-    if (!writer) return undefined
-    if (execution.agent !== undefined && leases.peekStatus(getAgentHeader(execution.agent).cwd ?? process.cwd())?.mutationUnknown) return '工作区存在未确认副作用，必须完成恢复核对后才能再次写入或运行命令'
-    if (role === 'tian_shu' && execution.agent !== undefined && deps.getConfig().workflow.mode === 'enforced'
-      && getSession(execution.agent.id).store.getTasks().some((task) => task.acceptance?.status !== 'accepted' && task.acceptance?.decision !== 'incomplete')) {
-      return '强制任务流程中，写入与通用命令需通过受工作区租约管理的专家执行'
-    }
-    if (['bash', 'pwsh'].includes(execution.name) && role !== undefined && getRoleInfo(role).capabilities.includes('shell')) return undefined
-    if (role === undefined || isWriteAllowed(role)) return undefined
-    return `dsh-agent-swarm 守卫：「${getRoleInfo(role).name}」是${getPermissionLabel(role)}角色，不能调用 ${execution.name} 修改文件。请在结果中写明需要的改动，由天枢交给铸剑或疾风处理。`
-  }
+  const { AddRootEdit, getGuardReason } = createHostGuardUseCases({
+    getConfig: deps.getConfig,
+    now,
+    isRootTianShu,
+    getGoalCompletionReason: goalCompletionReason,
+    getAgentControl: (agentId) => agentControl.get(agentId),
+    hasManagedChildPreset,
+    hasChildOwner: (agentId) => childOwners.has(agentId),
+    isStartingChild: (agentId) => startingChildIds.has(agentId),
+    isClosing: () => closing,
+    isManagedAgent,
+    getRoleForAgent,
+    getSession,
+    getChildOwner: (agentId) => childOwners.get(agentId),
+    getChildSignal: (agentId) => childSignals.get(agentId),
+    getTaskSchemaNames: (agent) => deps.getTools()?.schemas(agent) ?? [],
+    isQuarantined: (taskId) => quarantinedTasks.has(taskId),
+    isBindingCurrent: (guardSession, binding, agent, _task) => {
+      const session = guardSession as SessionStateInfo
+      const task = deriveReconciledTask(session, deriveIntentRefresh(getTaskOrThrow(session, binding.taskId), session.rootAgent ?? agent))
+      return isTaskVersionCurrent(task, binding)
+    },
+    privateStateRoots,
+    isWorkspaceMutationUnknown: (cwd) => leases.peekStatus(cwd)?.mutationUnknown === true
+  })
 
   const service: SwarmService = {
     getConfig: deps.getConfig,

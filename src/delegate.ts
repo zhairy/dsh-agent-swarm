@@ -20,7 +20,7 @@ import { getPromptStyle, getStyledTaskPrompt, type PromptStyle } from './model-f
 import { isNetworkSuspect, type NetworkMonitorInfo } from './network.js'
 import { GATE_IDS, GATE_ROLE, ValidateDelegationBudget, type GateId } from './policy.js'
 import { getValidatedQuotaOrder, type FallbackEventInfo, type RouteEngine } from './application/routing/engine.js'
-import { startChild, supportsContinuableSessions } from './subagent-compat.js'
+import { startChild, supportsContinuableSessions } from './adapters/dsh-host/subagent.js'
 import {
   getChildPersona,
   getRoleInfo,

@@ -27,7 +27,7 @@ describe('strangler architecture guards', () => {
   })
 
   it('has removed the route and ticket compatibility shims', () => {
-    for (const name of ['route-state.ts', 'route-engine.ts', 'routes.ts', 'route-health.ts', 'provider-policy.ts', 'quota-routing.ts', 'quota.ts', 'quota-routing-source.ts', 'ticket-lifecycle.ts']) {
+    for (const name of ['route-state.ts', 'route-engine.ts', 'routes.ts', 'route-health.ts', 'provider-policy.ts', 'quota-routing.ts', 'quota.ts', 'quota-routing-source.ts', 'ticket-lifecycle.ts', 'subagent-compat.ts']) {
       expect(() => statSync(join(root, 'src', name))).toThrow()
     }
   })
