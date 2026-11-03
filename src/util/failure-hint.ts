@@ -10,6 +10,8 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
     '当前会话的 thinking 消息格式与该模型不兼容：停止在同一路由重试，切换到兼容的备用模型；百工会隔离该故障路由并保留任务状态'],
   [/CONTEXT_WINDOW_EXCEEDED|maximum context (?:length|window)|exceeded (?:the )?model token limit|prompt (?:is )?too long/i,
     '请求上下文超过模型容量：需要先压缩或缩减材料，再开始新的请求；这不表示订阅额度耗尽或模型下线'],
+  [/MAX_TOKENS|max-tokens|max_output_tokens|已达到输出 token 上限|回答被截断/i,
+    '模型以输出长度结束：1M context 是输入与历史的总容量，不等于 1M 输出；reasoning tokens 和可见回答共享 128K 输出预算。请发送“继续”、降低推理强度，或把长结果拆成多段；若可见输出远低于 128K 仍反复发生，应核对 usage、request/context 与供应商 incomplete_details，不能只归因于输出上限'],
   [/IMAGE_UNSUPPORTED/i, '当前请求的图像输入不被该模型支持：请选择有视觉能力的模型；这不表示该模型的纯文本请求不可用'],
   [/pool\s+["'][^"']+["']\s+exhausted[^\n]*every member is cooling down[^\n]*\b(?:AUTH|INVALID_CREDENTIAL|MISSING_CREDENTIAL)\b/i, '订阅池成员因认证或权限错误冷却：请在「设置 → 订阅」检查登录与账号权限；刷新额度不能修复无效凭据或服务商拒绝的权限'],
   [/pool\s+["'][^"']+["']\s+exhausted[^\n]*every member is cooling down/i, '订阅池仍保留本地成员冷却记录；它不等于当前服务端额度。可在「设置 → 订阅」刷新该账号额度再重试；若服务端仍返回额度或限流错误，应按新的响应等待恢复'],

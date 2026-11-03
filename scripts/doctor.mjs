@@ -88,6 +88,21 @@ if (dump !== undefined) {
   add('读取组合配置', false, '无法运行 --dump-config', '先修复上面的 DSH 版本或 profile 问题')
 }
 
+const profilePatch = join(profileDir, 'cordis.patch.yml')
+if (existsSync(profilePatch)) {
+  try {
+    const { inspectOpenAIProfileText } = await import('./repair-openai-metadata.mjs')
+    const inspected = inspectOpenAIProfileText(readFileSync(profilePatch, 'utf8'))
+    const mismatch = inspected.mismatches.map((item) => `${item.id}: ${item.actual ?? '缺失'}→${item.expected}`).join(', ')
+    add('OpenAI API 上下文元数据', inspected.mismatches.length === 0,
+      inspected.mismatches.length === 0 ? `${inspected.models.length} 个直接 OpenAI 模型配置正确` : `发现错误：${mismatch}`,
+      `运行 node scripts/repair-openai-metadata.mjs --profile-dir ${profileDir} 检查；确认后加 --apply 备份并修复`)
+  } catch (error) {
+    add('OpenAI API 上下文元数据', false, `无法检查 profile：${error instanceof Error ? error.message : String(error)}`,
+      '确认插件已构建且 profile cordis.patch.yml 为有效 YAML')
+  }
+}
+
 const credentialsText = existsSync(join(dshHome, '.credentials.yaml')) ? readFileSync(join(dshHome, '.credentials.yaml'), 'utf8') : ''
 for (const ref of ['QWEN_TOKEN_PLAN_CN_API_KEY', 'OPENCODE_GO_API_KEY', 'DEEPSEEK_API_KEY', 'TYPESAFE_API_KEY']) {
   const fromEnv = (process.env[ref] ?? '') !== ''
