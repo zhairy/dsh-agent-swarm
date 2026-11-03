@@ -14,7 +14,7 @@ import {
 } from './host-contract.js'
 import { LANGUAGE_NAMES, LANGUAGE_PLACEHOLDER, RELAXED_LANGUAGE_INSTRUCTION, getLanguageInstruction, type OutputLanguage } from './language.js'
 import { getPromptStyle, type PromptStylePolicy } from './model-family.js'
-import { ROLE_IDS, getChildPersona, isDelegableRoleId, isRoleId, type DelegableRoleId, type SuanHengMode } from './role-registry.js'
+import { ROLE_IDS, getChildPersona, isDelegableRoleId, isRoleId, type DelegableRoleId, type RoleId, type SuanHengMode } from './role-registry.js'
 import type { SwarmService } from './service.js'
 import { readLive } from './util/live.js'
 
@@ -72,8 +72,20 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   const systemPrompt = ctx.get('systemPrompt') as SystemPromptLike | undefined
   const dynamicLanguage = typeof systemPrompt?.context === 'function' && typeof systemPrompt.refreshContext === 'function'
   const admittedProviders = new Map<string, string>()
-  const childOf = (agent: AgentLike | undefined): ChildPromptInfo | undefined => agent === undefined || getAgentHeader(agent).parentSession === undefined ? undefined
-    : service.getChildPrompt(agent.id) ?? (isDelegableRoleId(presetRole) ? { role: presetRole } : undefined)
+  const currentRole = (agent: AgentLike | undefined): RoleId | undefined => {
+    const projected = service.getRoleForAgent?.(agent)
+    if (projected !== undefined) return projected
+    if (agent === undefined || getAgentHeader(agent).agentPreset !== undefined) return undefined
+    const managed = service.isManagedAgent?.(agent)
+    return managed === false ? undefined : presetRole
+  }
+  const childOf = (agent: AgentLike | undefined): ChildPromptInfo | undefined => {
+    if (agent === undefined || getAgentHeader(agent).parentSession === undefined) return undefined
+    const role = currentRole(agent)
+    if (!isDelegableRoleId(role)) return undefined
+    const remembered = service.getChildPrompt(agent.id)
+    return remembered?.role === role ? remembered : { role }
+  }
   if (dynamicLanguage) systemPrompt.context({
     name: OUTPUT_LANGUAGE_SECTION, order: 130, required: true, interpolate: false,
     text: ({ agent }) => {
@@ -85,7 +97,8 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
       return getLanguageInstruction(child.explicitLanguage === true ? child.language ?? policy.language : policy.language, child.explicitLanguage === true)
     }
   })
-  const isTracked = (agent: AgentLike): boolean => service.routeState.getChildRole(agent.id) !== undefined || (presetRole !== undefined && getAgentHeader(agent).parentSession === undefined)
+  const isTracked = (agent: AgentLike): boolean => isRoleId(currentRole(agent))
+    || getAgentHeader(agent).agentPreset === undefined && service.routeState.getChildRole(agent.id) !== undefined
   ctx.on('system-prompt/assemble', async (_assembly: unknown, context: { agent?: AgentLike } | undefined, next: () => Promise<PromptAssemblyLike>) => {
     const assembled = await next()
     const agent = context?.agent
@@ -97,7 +110,13 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   // Only the Host's explicit selection event means the user changed the picker.
   // Automatic request/header updates are observations, not selection intent.
   ctx.on('session/event', (session: { id: string; header?: { parentSession?: string } }, event: { type: string; seq?: number; data?: { provider?: unknown; model?: unknown; reasoningEffort?: unknown } }) => {
-    if (event.type !== 'model/selection' || (service.routeState.getChildRole(session.id) === undefined && !(presetRole !== undefined && session.header?.parentSession === undefined))) return
+    const managedRole = currentRole({ id: session.id, session } as unknown as AgentLike)
+    // Never create Source journal/session state for unrelated DSH sessions.
+    if (!isRoleId(managedRole)) return
+    try { service.ObserveSessionEvent?.(session.id, event) } catch (error) {
+      ctx.logger?.('dsh-agent-swarm-runtime').warn(`Source event observation failed without blocking the Host turn: ${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)}`)
+    }
+    if (event.type !== 'model/selection' || !isRoleId(managedRole)) return
     const data = event.data
     if (typeof data?.provider !== 'string' || typeof data.model !== 'string') return
     const selected = { provider: data.provider, model: data.model, ...(typeof data.reasoningEffort === 'string' ? { reasoningEffort: data.reasoningEffort } : {}) }
@@ -105,12 +124,14 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     service.agentControl?.ObserveSelection(session.id, selected)
   })
   ctx.on('agent/request', async (payload: { agent: AgentLike; turn?: number; step?: number; signal?: AbortSignal }, next: () => Promise<CallConfigLike>) => {
+    if (service.isManagedAgent?.(payload.agent) === false) return next()
     await service.WaitAgentReady(payload.agent)
     await service.BeforeManagedRequest(payload.agent)
     // 0.2.1-alpha 起宿主不再接受启动期 toolFilter：子智能体的第一次请求在这里按角色限制继承工具面，
     // 发生在工具清单装配之前；旧宿主该方法为空实现，启动期 toolFilter 仍然生效。
-    if (presetRole !== undefined && presetRole !== 'tian_shu' && getAgentHeader(payload.agent).parentSession !== undefined) {
-      service.ApplyChildToolScope(payload.agent, presetRole, service.ChildAllowWebFor(payload.agent.id))
+    const role = currentRole(payload.agent)
+    if (isDelegableRoleId(role) && getAgentHeader(payload.agent).parentSession !== undefined) {
+      service.ApplyChildToolScope(payload.agent, role, service.ChildAllowWebFor(payload.agent.id))
     }
     if (isTracked(payload.agent)) await service.routeState.WaitHealthReady(payload.agent.id, payload.signal)
     if (isTracked(payload.agent) && payload.turn !== undefined && payload.step !== undefined) service.routeState.BeginRequestStep(payload.agent.id, payload.turn, payload.step)
@@ -129,6 +150,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   })
   // prepend 在真实 Cordis waterfall 中先运行；没有调用 next 就截断宿主 retry 的 sleep。
   ctx.on('agent/request-error', async (payload: RequestErrorPayloadLike, next: () => Promise<RequestErrorActionLike>) => {
+    if (service.isManagedAgent?.(payload.agent) === false) return next()
     const result = await service.routeState.recover(payload, next, presetRole, service.getConfig(), ctx.get('compaction') as ContextCompactionLike | undefined)
     if (service.routeState.getTerminal(payload.agent.id) === 'context_recovery_required') service.agentControl?.MarkBlocked(payload.agent.id, 'context-recovery-required')
     return result

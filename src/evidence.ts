@@ -133,6 +133,8 @@ export interface AcceptanceRecord {
 export interface TaskRecord {
   /** Stable Host goal owner; revisions remain separately bound by receipts. */
   runtimeGoalId?: string
+  /** Immutable idempotency key for a Source/Outbox materialized Ticket. */
+  sourceEffectId?: string
   taskId: string
   sessionId: string
   card: TaskCard

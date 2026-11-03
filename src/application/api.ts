@@ -25,4 +25,6 @@ export interface RootUpgradeView {
   reasons: string[]
   chain: string[]
   cancelledByUser?: boolean
+  suppressedByUserSelection?: boolean
+  selectedModel?: string
 }

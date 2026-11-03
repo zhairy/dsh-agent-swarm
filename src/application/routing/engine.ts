@@ -208,6 +208,8 @@ export interface RouteEngine {
   /** 初始化持久根会话的真实用户偏好；不会覆盖本进程已观测到的显式选择。 */
   RestoreRootPreference: (agentId: string, route: RouteInfo) => void
   getRootPreference: (agentId: string) => RouteInfo | undefined
+  /** True only for a durable/host-observed picker choice, never for an automatic request header. */
+  hasUserSelection: (agentId: string) => boolean
   RecordUserSelection: (agentId: string, route: RouteInfo, seq?: number) => void
   PreparePreferredRecovery: (agent: AgentLike, resolved: CallConfigLike, presetRole: RoleId | undefined, config: SwarmConfigInfo) => Promise<void>
   PrepareQuotaRouting: (agent: AgentLike, resolved: CallConfigLike, presetRole: RoleId | undefined, config: SwarmConfigInfo, signal?: AbortSignal) => Promise<void>
@@ -447,6 +449,7 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
   const lastRoutes = new Map<string, RouteInfo>()
   const requestObservations = new Map<string, RequestRouteObservation>()
   const requestPositions = new Map<string, { turn: number; step: number }>()
+  const explicitSelections = new Set<string>()
   // The Host retains the same turn signal through request-error. Old turns
   // cannot borrow a later turn's route after a manual continuation.
   const signalObservations = new WeakMap<AbortSignal, Map<string, RequestRouteObservation>>()
@@ -915,11 +918,18 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     SetManualPause: (agentId, paused) => { if (paused) manualPauses.add(agentId); else manualPauses.delete(agentId) },
     isManualPaused: (agentId) => manualPauses.has(agentId),
     getLastRoute: (agentId) => { const value = lastRoutes.get(agentId); return value === undefined ? undefined : { ...value, ...(getWireReasoningEffort(value) === undefined ? {} : { reasoningEffort: getWireReasoningEffort(value) }) } },
-    RestoreRootPreference: (agentId, route) => { if (!rootPreferences.has(agentId)) rootPreferences.set(agentId, { ...route }) },
+    RestoreRootPreference: (agentId, route) => {
+      // A request-only observation may have populated the in-memory default
+      // before history inspection. The persisted picker selection is stronger
+      // unless this process has already observed an explicit user choice.
+      if (!explicitSelections.has(agentId)) { rootPreferences.set(agentId, { ...route }); explicitSelections.add(agentId) }
+    },
     getRootPreference: (agentId) => { const value = rootPreferences.get(agentId); return value === undefined ? undefined : { ...value } },
+    hasUserSelection: (agentId) => explicitSelections.has(agentId),
     RecordUserSelection: (agentId, route, seq) => {
       if (seq !== undefined && (userSelectionSeqs.get(agentId) ?? -1) >= seq) return
       if (seq !== undefined) userSelectionSeqs.set(agentId, seq)
+      explicitSelections.add(agentId)
       if (children.has(agentId)) api.SetChildOverride(agentId, route)
       else { rootPreferences.set(agentId, { ...route }); roots.delete(agentId); upgrades.delete(agentId); quotaManualSelections.add(agentId) }
       quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
@@ -1078,7 +1088,7 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
       childOverrides.delete(agentId)
       manualPauses.delete(agentId)
       manualRetries.delete(agentId)
-      rootPreferences.delete(agentId); userSelectionSeqs.delete(agentId); recoveryBoundaries.delete(agentId); preferredRecoveryWaits.delete(agentId); preferredTrials.delete(agentId)
+      rootPreferences.delete(agentId); userSelectionSeqs.delete(agentId); explicitSelections.delete(agentId); recoveryBoundaries.delete(agentId); preferredRecoveryWaits.delete(agentId); preferredTrials.delete(agentId)
       upgrades.delete(agentId)
       roots.delete(agentId)
       lastRoutes.delete(agentId)
@@ -1097,7 +1107,7 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
       childOverrides.delete(agentId)
       manualPauses.delete(agentId)
       manualRetries.delete(agentId)
-      rootPreferences.delete(agentId); userSelectionSeqs.delete(agentId); recoveryBoundaries.delete(agentId); preferredRecoveryWaits.delete(agentId); preferredTrials.delete(agentId)
+      rootPreferences.delete(agentId); userSelectionSeqs.delete(agentId); explicitSelections.delete(agentId); recoveryBoundaries.delete(agentId); preferredRecoveryWaits.delete(agentId); preferredTrials.delete(agentId)
       upgrades.delete(agentId)
       roots.delete(agentId)
       lastRoutes.delete(agentId)

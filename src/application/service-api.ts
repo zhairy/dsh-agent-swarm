@@ -22,6 +22,9 @@ import type { ToolExecLike } from '../tool-shape.js'
 import type { WatchdogAlert } from '../watchdog.js'
 import type { AcceptResultInfo } from './validation.js'
 import type { LoggerLike, PlanningRunView } from './api.js'
+import type { OutboxHandler, OutboxDispatchResult } from '../outbox.js'
+import type { SourceAdapter, SourceIngestResult, SourceTriggerStatus } from '../domain/sources/runtime.js'
+import type { SourceInstance, SourceSubscription, TriggerInput } from '../domain/sources/model.js'
 
 /** 服务依赖：宿主服务一律用 getter 延迟读取，适配服务晚于插件就绪的情况 */
 export interface SwarmServiceDepsInfo {
@@ -95,6 +98,17 @@ export interface SwarmService {
   ObserveManagedToolResult: (execution: ToolExecutionLike, result: unknown) => void
   BeforeManagedRequest: (agent: AgentLike) => Promise<void>
   ObserveManagedMessage: (sessionId: string, event: { type: string; data?: unknown }) => void
+  /** Feed a Host Session event into the canonical Source/Trigger path; plugin-originated messages are filtered. */
+  ObserveSessionEvent: (sessionId: string, event: { type: string; seq?: number; data?: unknown }) => SourceIngestResult | { filtered: string } | undefined
+  ConfigureSource: (sessionId: string, source: SourceInstance) => SourceInstance
+  IngestSourceTrigger: (sessionId: string, sourceId: string, trigger: TriggerInput, options?: { hasActiveTicket?: boolean }) => SourceIngestResult
+  RegisterSourceAdapter: (sessionId: string, adapter: SourceAdapter) => () => void
+  IngestSourceEvent: (sessionId: string, sourceId: string, raw: unknown, options?: { hasActiveTicket?: boolean }) => SourceIngestResult
+  SubscribeSourceThread: (sessionId: string, input: { sourceId: string; threadId: string; ticketId: string; contextOnly?: boolean }) => SourceSubscription
+  UnsubscribeSourceThread: (sessionId: string, subscriptionId: string) => boolean
+  GetEventDrivenStatusForRpc: (sessionId: string) => SourceTriggerStatus
+  RegisterOutboxHandler: (sessionId: string, kind: string, handler: OutboxHandler) => () => void
+  DispatchOutbox: (sessionId: string, limit?: number) => Promise<OutboxDispatchResult>
   getDiagnostics: (agent?: AgentLike) => string[]
   ReviewPlan: (raw: unknown, exec: DelegateExecInfo) => Promise<unknown>
   Calculate: (raw: unknown, exec: ToolExecLike) => Promise<unknown>

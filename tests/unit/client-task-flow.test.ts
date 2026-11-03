@@ -128,6 +128,19 @@ describe('真实任务流程客户端投影', () => {
     expect(text).toContain('nativeAskUser nativeAvailable')
   })
 
+  it('renders source, observation and outbox counts without exposing event payloads', () => {
+    const { EventDrivenStatus } = loadModule().__test__
+    const node = EventDrivenStatus({ view: { eventDriven: { sources: [], counts: { received: 3, accepted: 1, observed: 1, filtered: 1 }, threads: 2, subscriptions: 1, outboxPending: 2, outboxFailed: 1 } }, t: (key: string) => key })
+    const text = textOf(node)
+    expect(text).toContain('eventReceived 3')
+    expect(text).toContain('eventObserved 1')
+    expect(text).toContain('eventThreads 2')
+    expect(text).toContain('eventSubscriptions 1')
+    expect(text).toContain('eventOutbox 2')
+    expect(text).toContain('eventOutboxFailed 1')
+    expect(text).not.toContain('preview')
+  })
+
   it('注册标准聊天节点并为当前任务注入共享Store，而不是每行独立RPC', async () => {
     const module = loadModule()
     let registration: any

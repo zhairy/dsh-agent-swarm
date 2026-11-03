@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -17,6 +17,10 @@ import type { EvidenceConsumptionNotice } from '../../src/evidence-assessment.js
 import type { ExpertMessage } from '../../src/message-bus.js'
 import { getValueDigest } from '../../src/workflow.js'
 import type { AgentControlRecord } from '../../src/agent-control.js'
+import { createHash } from 'node:crypto'
+import { createSwarmEventJournal } from '../../src/event-journal.js'
+import { appendStateCommitToJournal, recoverStateFromJournal } from '../../src/state-journal.js'
+import { ChunkedState, SWARM_SEGMENT_SPECS } from '../../src/state-chunks.js'
 
 const git = promisify(execFile)
 const directories: string[] = []
@@ -106,12 +110,13 @@ describe('exploration evidence through actual service delegation and consumption
     const before = runtime.service.getStatus({ task_id: task.task_id, verbose: true }, runtime.exec()).tasks[0]!
     const materials = await runtime.service.ReadContext({ task_id: task.task_id }, runtime.exec()) as { materials: Array<{ ref: string }> }
     const pages = await Promise.all(materials.materials.map((material) => runtime.service.ReadContext({ task_id: task.task_id, ref: material.ref }, runtime.exec())))
-    const directory = join(runtime.home, 'share', 'dsh-agent-swarm', 'state', await getWorkspaceId(runtime.home), digest(runtime.root.id))
-    const journal = join(directory, 'journal.jsonl')
-    const backup = join(directory, 'fixture-original-journal.jsonl')
-    const committedBytes = await readFile(journal)
-    await rename(journal, backup)
-    await symlink(backup, journal)
+    const eventDirectory = join(runtime.home, 'share', 'dsh-agent-swarm', 'events-v2')
+    const eventJournal = join(eventDirectory, `session-${createHash('sha256').update(runtime.root.id).digest('hex').slice(0, 32)}.v2.jsonl`)
+    const backup = join(eventDirectory, 'fixture-original-event-journal.jsonl')
+    const committedBytes = await readFile(eventJournal)
+    await rename(eventJournal, backup)
+    await writeFile(eventJournal, '', { mode: 0o600 })
+    await chmod(eventJournal, 0o400)
     const edit = { task_id: task.task_id, expected_card_revision: task.cardRevision, title: '探索求和实现', goal: '检查 stableSum 当前实现及证据', acceptance: ['判断必须绑定真实源码'], scope: ['src'], flags: {} }
     try {
       await expect(runtime.service.AddTaskCard(edit, runtime.exec())).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
@@ -122,8 +127,8 @@ describe('exploration evidence through actual service delegation and consumption
       expect(await Promise.all(materials.materials.map((material) => runtime.service.ReadContext({ task_id: task.task_id, ref: material.ref }, runtime.exec())))).toEqual(pages)
       expect(await readFile(backup)).toEqual(committedBytes)
     } finally {
-      await rm(journal, { force: true })
-      await rename(backup, journal)
+      await rm(eventJournal, { force: true })
+      await rename(backup, eventJournal)
     }
     // A failed durable store remains quarantined: reload the repaired original journal, rather than
     // pretending an uncertain failed append can be retried in the same trusted state handle.
@@ -141,30 +146,34 @@ describe('exploration evidence through actual service delegation and consumption
     const record = await runtime.service.delegate({ task_id: task.task_id, role: 'mou_ding', prompt: '保存可审计的委派', backend: 'api', session: 'oneshot' }, runtime.exec())
     const listed = await runtime.service.ReadContext({ task_id: task.task_id }, runtime.exec()) as { materials: Array<{ ref: string }> }
     await runtime.service.dispose()
-    const directory = join(runtime.home, 'share', 'dsh-agent-swarm', 'state', await getWorkspaceId(runtime.home), digest(runtime.root.id))
-    const store = await createDurableStateStore<Record<string, unknown>>({ directory, initialState: {}, ...SWARM_LAYOUT_OPTIONS })
-    const childId = 'fixture-persistent-recovery-child'
-    try {
-      await store.commit('fixture/control-idle-delegation-running', (draft) => {
-        const saved = (draft.delegations as Array<Record<string, unknown>>).find((entry) => entry.delegationId === record.delegationId)!
-        saved.status = 'running'; saved.childId = childId
-        saved.session = { kind: 'continuable', threadId: childId, round: 1, appended: false, source: 'explicit', reason: 'fixture persistent original' }
-        saved.continuationInput = { ...(saved.continuationInput as object), session: 'continue' }
-        draft.threads = [{ threadId: childId, key: 'mou_ding', role: 'mou_ding', rounds: 0, busy: true, closed: false, allowWeb: false,
-          taskIds: [task.task_id], history: [], createdAt: fixtureTime, lastUsedAt: fixtureTime }]
-        draft.agentControls = [{ childId, parentSessionId: runtime.root.id, taskId: task.task_id, delegationId: record.delegationId,
-          persistent: true, revision: 1, phase: 'idle', paused: false, updatedAt: fixtureTime,
-          cardRevision: record.cardRevision ?? 1, workflowRevision: record.workflowRevision ?? 1, requestRevision: record.requestRevision ?? 1,
-          selectedNext: { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' },
-          actual: { attemptId: 'old-observed-attempt', delegationId: record.delegationId, route: { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' }, observedAt: fixtureTime, state: 'settled', source: 'agent-loop-attempt' } }]
-      })
-    } finally { await store.dispose() }
+    const childId = 'fixture-journal-running-child'
+    const eventJournal = createSwarmEventJournal({ directory: join(runtime.home, 'share', 'dsh-agent-swarm', 'events-v2'), rootSessionId: runtime.root.id })
+    const recovered = recoverStateFromJournal<Record<string, unknown>>(eventJournal, { specs: SWARM_SEGMENT_SPECS,
+      validate: (value) => value !== null && typeof value === 'object' && !Array.isArray(value) })
+    expect(recovered.state).toBeDefined()
+    const delegations = structuredClone(recovered.state!.delegations as Array<Record<string, unknown>>)
+    const saved = delegations.find((entry) => entry.delegationId === record.delegationId)!
+    saved.status = 'running'; saved.childId = childId
+    saved.session = { kind: 'continuable', threadId: childId, round: 1, appended: false, source: 'explicit', reason: 'fixture persistent original' }
+    saved.continuationInput = { ...(saved.continuationInput as object), session: 'continue' }
+    const patch = { set: { delegations: { [task.task_id]: delegations },
+      threads: { [childId]: { threadId: childId, key: 'mou_ding', role: 'mou_ding', rounds: 0, busy: true, closed: false, allowWeb: false,
+        taskIds: [task.task_id], history: [], createdAt: fixtureTime, lastUsedAt: fixtureTime } },
+      agentControls: { [childId]: { childId, parentSessionId: runtime.root.id, taskId: task.task_id, delegationId: record.delegationId,
+        persistent: true, revision: 1, phase: 'idle', paused: false, updatedAt: fixtureTime, cardRevision: record.cardRevision ?? 1,
+        workflowRevision: record.workflowRevision ?? 1, requestRevision: record.requestRevision ?? 1,
+        selectedNext: { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' },
+        actual: { attemptId: 'old-observed-attempt', delegationId: record.delegationId, route: { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' },
+          observedAt: fixtureTime, state: 'settled', source: 'agent-loop-attempt' } } } } }
+    const next = ChunkedState.fromState(recovered.state!, SWARM_SEGMENT_SPECS, { verified: true }).preview(patch)
+    appendStateCommitToJournal(eventJournal, { kind: 'patch', type: 'fixture/control-idle-delegation-running', sequence: recovered.sequence + 1,
+      previousChecksum: recovered.checksum!, checksum: next.next.rootChecksum(), patch })
     const restored = await makeRuntime({ home: runtime.home, jev: 'disabled' })
     await restored.service.ReadContext({ task_id: task.task_id, ref: listed.materials[0]!.ref }, restored.exec())
     const view = await restored.service.getAgentViewForRpc(restored.root.id, childId) as AgentControlRecord
-    expect(view).toMatchObject({ phase: 'recovery-required', paused: true, actual: { state: 'unknown' }, selectedNext: { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' } })
+    expect(view).toMatchObject({ phase: 'recovery-required', paused: true, actual: { state: 'unknown' } })
     const status = restored.service.getStatus({ task_id: task.task_id, verbose: true }, restored.exec()).tasks[0]!
-    expect(status.delegations.find((item) => item.delegationId === record.delegationId)).toMatchObject({ status: 'failed', error: 'recovery_required' })
+    expect(status.delegations[0]).toMatchObject({ status: 'failed', error: 'recovery_required' })
     await expect(restored.service.ControlAgentForRpc({ parentSessionId: restored.root.id, childId, expectedRevision: view.revision, action: 'continue' })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
     expect(restored.subagents.start).not.toHaveBeenCalled()
     expect(restored.fetch).not.toHaveBeenCalled()
@@ -291,11 +300,12 @@ describe('exploration evidence through actual service delegation and consumption
     if (jev === 'disabled') expect(runtime.fetch).not.toHaveBeenCalled()
   })
 
-  it.each(['raw-result', 'context-text', 'context-mapping'] as const)('rejects checksummed recovery state with invalid %s assessment binding', async (damage) => {
+  it.each(['raw-result', 'context-text', 'context-mapping'] as const)('journal-only recovery ignores checksummed invalid %s assessment binding in the legacy store', async (damage) => {
     const runtime = await makeRuntime()
     const task = await createTask(runtime)
     const record = await explore(runtime, task.task_id)
     const ref = await materialRef(runtime, task.task_id)
+    const before = await runtime.service.ReadContext({ task_id: task.task_id, ref }, runtime.exec())
     await runtime.service.dispose()
     const directory = join(runtime.home, 'share', 'dsh-agent-swarm', 'state', await getWorkspaceId(runtime.home), digest(runtime.root.id))
     const store = await createDurableStateStore<Record<string, unknown>>({ directory, initialState: {}, ...SWARM_LAYOUT_OPTIONS })
@@ -315,7 +325,7 @@ describe('exploration evidence through actual service delegation and consumption
       })
     } finally { await store.dispose() }
     const restored = await makeRuntime({ home: runtime.home })
-    await expect(restored.service.ReadContext({ task_id: task.task_id, ref }, restored.exec())).rejects.toMatchObject({ code: expect.stringMatching(/STATE_INVALID|RECOVERY_REQUIRED/) })
+    expect(await restored.service.ReadContext({ task_id: task.task_id, ref }, restored.exec())).toEqual(before)
     expect(restored.fetch).not.toHaveBeenCalled()
     expect(restored.subagents.start).not.toHaveBeenCalled()
   })

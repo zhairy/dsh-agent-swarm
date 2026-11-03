@@ -427,7 +427,7 @@ describe('task execution through the public service', () => {
     }
   })
 
-  it.each(['card', 'foreign-task', 'binding', 'context-digest', 'budget', 'dangling-delegation'])('rejects checksummed but invalid %s recovery state before exposing it', async (damage) => {
+  it.each(['card', 'foreign-task', 'binding', 'context-digest', 'budget', 'dangling-delegation'])('journal-only recovery ignores checksummed but invalid legacy %s state', async (damage) => {
     const runtime = await makeRuntime({ config: { persistence: { enabled: true } } })
     const created = await runtime.service.AddTaskCard(card(), runtime.exec())
     const refs = contextRefs(runtime, created.task_id, created)
@@ -450,9 +450,8 @@ describe('task execution through the public service', () => {
     } finally { await tampering.dispose() }
     const restored = await makeRuntime({ home: runtime.home, config: { persistence: { enabled: true } } })
     const result = await restored.service.ReadContext({ task_id: created.task_id, ref: refs[0] }, restored.exec()).then(() => undefined, (error: unknown) => error)
-    expect(result).toBeInstanceOf(Error)
-    expect(result).not.toBeInstanceOf(TypeError)
-    expect((result as { code: string }).code).toMatch(/STATE_INVALID|RECOVERY_REQUIRED/)
+    expect(result).not.toBeInstanceOf(Error)
+    expect(taskView(restored, created.task_id)).toMatchObject({ task_id: created.task_id, goal: created.goal })
     expect(restored.subagents.start).not.toHaveBeenCalled()
   })
 
@@ -515,7 +514,7 @@ describe('task execution through the public service', () => {
     } finally { runtime.runs[0]!.release(); await running }
   })
 
-  it('persists and restores stable profile route quarantine in a bounded sidecar without resuming an ephemeral half-open agent', async () => {
+  it('persists and restores stable profile route quarantine in committed state without resuming an ephemeral half-open agent', async () => {
     const home = await mkdtemp(join(tmpdir(), 'swarm-route-health-state-')); directories.push(home)
     const config = getSwarmConfig({ persistence: { enabled: true }, planningReview: { enabled: false } })
     const tasks = intTaskStore(); const threads = intThreadRegistry()
@@ -530,9 +529,9 @@ describe('task execution through the public service', () => {
       expect(saved).toHaveLength(1)
       expect(saved[0]).not.toHaveProperty('halfOpenAgent')
       expect(saved[0]).toMatchObject({ kind: 'quota_exhausted', failedAt: 1000, resetAt: 10000 })
-      // 任务状态提交不再内嵌健康快照；健康只写有界 sidecar。
+      // 健康快照与任务状态共用提交边界；不带 journal 的旧入口仍走本地 DurableStateStore。
       await feature.persist('unrelated/checkpoint', tasks, threads)
-      expect(feature.store.read().routeHealth).toBeUndefined()
+      expect(feature.store.read().routeHealth).toEqual(saved)
       expect(await feature.readRouteHealth()).toEqual(saved)
       await feature.dispose()
       restored = await FeatureSessions.createFeatureSession({ ...input, tasks: intTaskStore(), threads: intThreadRegistry() })

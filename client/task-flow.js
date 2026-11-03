@@ -264,8 +264,8 @@ function TaskProgressSummary ({ bundle, t }) {
     h('small', null, t('progressBoundary')))
 }
 
-Object.assign(zh, { runtimeGuard: '运行守卫', runtimeActive: '可继续核对', runtimeStalled: '检测到重复轨迹', runtimeExhausted: '当前轨迹已耗尽', pendingDecision: '待用户答复', legacyAcceptance: '旧政策历史验收；不代表当前目标完成凭证', nativeIntegrations: 'DSH 原生集成', nativeTodo: '待办', nativePlanActive: '计划模式', nativePlanInactive: '常规模式', nativeGoal: '目标', nativeJobs: '后台作业', nativeAskUser: '用户问答', nativeTime: '时间上下文', nativeAvailable: '可用', nativeUnavailable: '未挂载', nativeNone: '无活动项' })
-Object.assign(en, { runtimeGuard: 'Runtime guard', runtimeActive: 'Active', runtimeStalled: 'Repeated trajectory detected', runtimeExhausted: 'Trajectory exhausted', pendingDecision: 'Awaiting user decision', legacyAcceptance: 'Historical acceptance under an earlier policy; not a current goal receipt', nativeIntegrations: 'Native DSH integrations', nativeTodo: 'Todos', nativePlanActive: 'Plan mode', nativePlanInactive: 'Normal mode', nativeGoal: 'Goal', nativeJobs: 'Background jobs', nativeAskUser: 'User questions', nativeTime: 'Time context', nativeAvailable: 'available', nativeUnavailable: 'not mounted', nativeNone: 'none active' })
+Object.assign(zh, { runtimeGuard: '运行守卫', runtimeActive: '可继续核对', runtimeStalled: '检测到重复轨迹', runtimeExhausted: '当前轨迹已耗尽', pendingDecision: '待用户答复', legacyAcceptance: '旧政策历史验收；不代表当前目标完成凭证', nativeIntegrations: 'DSH 原生集成', nativeTodo: '待办', nativePlanActive: '计划模式', nativePlanInactive: '常规模式', nativeGoal: '目标', nativeJobs: '后台作业', nativeAskUser: '用户问答', nativeTime: '时间上下文', nativeAvailable: '可用', nativeUnavailable: '未挂载', nativeNone: '无活动项', eventDriven: '事件来源', eventReceived: '已接收', eventObserved: '仅观察', eventOutbox: '待投递', eventOutboxFailed: '投递失败', eventThreads: '线程', eventSubscriptions: '订阅' })
+Object.assign(en, { runtimeGuard: 'Runtime guard', runtimeActive: 'Active', runtimeStalled: 'Repeated trajectory detected', runtimeExhausted: 'Trajectory exhausted', pendingDecision: 'Awaiting user decision', legacyAcceptance: 'Historical acceptance under an earlier policy; not a current goal receipt', nativeIntegrations: 'Native DSH integrations', nativeTodo: 'Todos', nativePlanActive: 'Plan mode', nativePlanInactive: 'Normal mode', nativeGoal: 'Goal', nativeJobs: 'Background jobs', nativeAskUser: 'User questions', nativeTime: 'Time context', nativeAvailable: 'available', nativeUnavailable: 'not mounted', nativeNone: 'none active', eventDriven: 'Event sources', eventReceived: 'received', eventObserved: 'observed', eventOutbox: 'outbox pending', eventOutboxFailed: 'delivery failed', eventThreads: 'threads', eventSubscriptions: 'subscriptions' })
 function RuntimeGuardStatus ({ view, t }) {
   const runtime = view?.runtimeGuard
   if (runtime === undefined) return null
@@ -289,6 +289,14 @@ function NativeHostStatus ({ view, t }) {
     ` · ${t('nativeJobs')} ${jobs === undefined ? t('nativeUnavailable') : jobs.running + jobs.stopping}`,
     ` · ${t('nativeAskUser')} ${t(native.availability.askUser ? 'nativeAvailable' : 'nativeUnavailable')}`,
     ` · ${t('nativeTime')} ${t(native.availability.timeContext ? 'nativeAvailable' : 'nativeUnavailable')}`)
+}
+
+function EventDrivenStatus ({ view, t }) {
+  const event = view?.eventDriven
+  if (event === undefined) return null
+  return h('div', { role: 'status', 'data-swarm-event-driven': '', style: { ...styles.status, margin: '6px 0' } },
+    h('strong', null, `${t('eventDriven')} · `),
+    `${t('eventReceived')} ${event.counts.received} · ${t('eventObserved')} ${event.counts.observed} · ${t('eventThreads')} ${event.threads ?? 0} · ${t('eventSubscriptions')} ${event.subscriptions ?? 0} · ${t('eventOutbox')} ${event.outboxPending}${event.outboxFailed > 0 ? ` · ${t('eventOutboxFailed')} ${event.outboxFailed}` : ''}`)
 }
 
 function Freshness ({ snapshot, t }) {
@@ -374,7 +382,7 @@ function TaskFlowContent ({ taskId, fallback = '', historicalSource, snapshot = 
   return h('section', { style: styles.card, 'data-swarm-task-flow': taskId, 'aria-label': translate('title') },
     h('div', { style: styles.header }, h('strong', null, `${translate('title')} · ${taskId}`), h('span', { style: styles.status, 'data-planning-status': headerStatus }, translate(headerStatus === 'unavailable' && view !== null ? 'reviewUnavailable' : headerStatus)), typeof onRefresh !== 'function' ? null : h('button', { type: 'button', style: styles.button, onClick: onRefresh }, translate('refresh'))),
     h(Freshness, { snapshot, t: translate }),
-    ...(progressPage ? [progress, h(RuntimeGuardStatus, { view, t: translate }), h(NativeHostStatus, { view, t: translate }), blocker, pending, canvas, h('details', { 'data-swarm-contract-details': '' }, h('summary', null, translate('contractDetails')), ...contract)] : [...contract, progress, h(NativeHostStatus, { view, t: translate }), blocker, pending, canvas]))
+    ...(progressPage ? [progress, h(RuntimeGuardStatus, { view, t: translate }), h(NativeHostStatus, { view, t: translate }), h(EventDrivenStatus, { view, t: translate }), blocker, pending, canvas, h('details', { 'data-swarm-contract-details': '' }, h('summary', null, translate('contractDetails')), ...contract)] : [...contract, progress, h(NativeHostStatus, { view, t: translate }), h(EventDrivenStatus, { view, t: translate }), blocker, pending, canvas]))
 }
 
 function TaskFlowRow (props) {
@@ -404,4 +412,4 @@ exports.validateTaskView = validateTaskView
 exports.TaskFlowContent = TaskFlowContent
 exports.useTaskSnapshot = useTaskSnapshot
 exports.dictionaries = { zh, en }
-exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, TaskFlowRow, TaskFlowContent, TaskDiagramPanel, TaskProgressSummary, Freshness, NativeHostStatus, validateTaskView, useTaskSnapshot, zh, en, styles, DIAGRAM_KINDS }
+exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, TaskFlowRow, TaskFlowContent, TaskDiagramPanel, TaskProgressSummary, Freshness, NativeHostStatus, EventDrivenStatus, validateTaskView, useTaskSnapshot, zh, en, styles, DIAGRAM_KINDS }

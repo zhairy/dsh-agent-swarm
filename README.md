@@ -11,6 +11,13 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 适配 DSH **0.2.0 / 0.2.1**（`>=0.2.0-rc.2 <0.2.2-0`，推荐 0.2.1-rc.5）与 Node.js 22.19 及以上
 - 新建会话选「百工模式」即可使用；Jev 可选择 TypeSafe 官方接口，或从 DSH 当前模型目录选择第三方 Jev 兼容模型
 
+### 3.3.3 的变化
+
+- 人工在 DSH 模型选择器中选定的模型优先于任务卡风险升级；真实调用失败时仍保留额度、认证、协议和网络 fallback，但自动 fallback 不覆盖人工偏好。
+- 旧会话恢复以当前 `agentPreset` projection 重建角色、persona 和工具 scope；角色变化会撤销旧 scope，Router 写入、Worker 权限和 worktree 边界继续由宿主与插件双重限制。
+- EventJournal 分块保存 state snapshot/patch/commit，`journalOnly` 模式把 StateStore 当作可删除物化缓存；启用 `events.journal` 后即使本地 `persistence` 缓存关闭，task、delegation、binding、control、context、budget、route health 和 runtime 仍从 Journal 恢复。
+- 增加统一 Source adapter、不可变 Trigger、`off/observe/auto` 主动模式决定、Thread 订阅和 durable Outbox。Auto 必须有有效 Mandate；人工 follow-up 绑定为 Ticket 上下文且不重复 Eval；intent 与 enabling fact 同行、经 fsync 落盘并支持有界重试和幂等恢复。
+
 ### 3.3.2 的变化
 
 - Windows 状态目录不再因 Node 对目录 `fsync` 返回 `EPERM` 而阻断初始化；文件 fsync 与同卷 rename 保持严格，目录项 durability 明确标记为 Windows best-effort。
@@ -195,6 +202,19 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 
 - Works with DSH **0.2.0 / 0.2.1** (`>=0.2.0-rc.2 <0.2.2-0`, 0.2.1-rc.5 recommended) on Node.js 22.19 or newer
 - Start a session in the "百工模式" (Agent Swarm) preset. Jev can use the official TypeSafe API or a third-party Jev-compatible model selected from the live DSH catalog.
+
+### What's new in 3.3.3
+
+- A model selected explicitly in the DSH picker now outranks task-card risk upgrades. Real quota, authentication, protocol and network failures still use the bounded fallback chain, without replacing the durable human preference.
+- Restored sessions rebind prompts, personas and tool restrictions from the current `agentPreset` projection. A stale child scope is revoked and rebuilt, while Router write denial and Worker/worktree boundaries remain enforced.
+- EventJournal state transactions now hold chunked snapshots, encoded changes and commit markers. With `events.journal` enabled, task, delegation, binding, control, context, budget, route-health and runtime state survive even when the local `persistence` cache is disabled or deleted.
+- Adds unified Source adapters, immutable Triggers, proactive `off/observe/auto` decisions, Thread subscriptions and a durable Outbox. Auto mode requires a valid Mandate; manual follow-ups become Ticket context without a duplicate Eval; fsynced intents resume through bounded, effect-idempotent handlers.
+
+### What's new in 3.3.2
+
+- Oversized legacy ledger data is migrated as a bounded, redacted, hash-bound summary; non-event journal tails recover without rewriting sealed corruption.
+- Windows uses explicit best-effort directory-entry durability while file sync, rename and other permission failures remain strict.
+- Read-only task projections expose native DSH todos, time context, plan mode, goals, jobs, ask-user and worktree availability.
 
 ### What's new in 3.3.1
 

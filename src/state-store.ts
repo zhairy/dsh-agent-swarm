@@ -10,7 +10,11 @@ export { StateStoreError, canonicalStateJson } from './state-core.js'
 
 export interface DurableStateStore<T> {
   readonly directory: string
+  /** Local StateStore snapshots/journal are enabled. */
   readonly durable: boolean
+  /** State has at least one durable recovery authority (local StateStore or EventJournal). */
+  readonly recoveryDurable: boolean
+  readonly journalOnly: boolean
   /** Strict durable mode fsyncs directory entries; Windows uses the explicit best-effort fallback described below. */
   readonly directoryDurability: DirectoryDurability
   /** 完整状态的编码字节上限；内存态与持久化态取值不同，由调用方按模式决定。 */
@@ -72,6 +76,26 @@ export interface DurableStateOptions<T> {
   maxStateBytes?: number
   maxJournalBytes?: number
   snapshotEvery?: number
+  /** Journal-only stores keep this value as a disposable materialization and never read or write their own snapshot/log. */
+  journalOnly?: boolean
+  /** Initial materialized sequence when a journal-only store is hydrated from an external event stream. */
+  initialSequence?: number
+  /**
+   * Called inside the commit mutex after the next state is validated and before it becomes observable.
+   * A rejecting observer aborts the commit, which lets the EventJournal remain the authoritative source.
+   */
+  beforeCommit?: (observation: StateCommitObservation<T>) => void | Promise<void>
+}
+
+export interface StateCommitObservation<T> {
+  kind: 'snapshot' | 'patch'
+  type: string
+  sequence: number
+  previousChecksum: string
+  checksum: string
+  state?: T
+  patch?: StatePatch
+  changes?: Record<string, unknown>
 }
 
 /** Validators return structural locations and fixed rule codes, never state values. */
@@ -173,6 +197,8 @@ const journalShape = (value: unknown): value is JournalEntry => {
 
 /** Complete committed states form the journal. Auditing/redacted ledgers are never recovery inputs. */
 export const createDurableStateStore = async <T>(options: DurableStateOptions<T>): Promise<DurableStateStore<T>> => {
+  const localDurable = options.enabled !== false
+  const journalDurable = options.beforeCommit !== undefined
   const maxStateBytes = options.maxStateBytes ?? 4 * 1024 * 1024
   const maxJournalBytes = options.maxJournalBytes ?? 64 * 1024 * 1024
   // 增量日志下 journal 增长缓慢：较大周期只会摊薄整份快照成本，不改变恢复正确性。
@@ -215,7 +241,7 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
   let state = deepFreeze(chunked.materialize()) as T
   let stateBytes = chunked.getStateBytes()
   let stateChecksum = chunked.rootChecksum()
-  let sequence = 0
+  let sequence = options.journalOnly === true ? options.initialSequence ?? 0 : 0
   let journalBytes = 0
   let closed = false
   let failed = false
@@ -333,6 +359,15 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
         await owner.writeFile(JSON.stringify({ schemaVersion: 1, pid: process.pid, host: hostname(), ownerId: randomUUID() })); await owner.sync()
       } finally { await owner.close() }
       await syncDirectory(directory)
+      if (options.journalOnly === true) {
+        const validated = validateFull(initial.value)
+        chunked = ChunkedState.fromState(validated.value, segmentSpecs, { verified: true })
+        chunkedLayout = currentLayout
+        needsLayoutCommit = false
+        state = deepFreeze(chunked.materialize()) as T
+        stateBytes = chunked.getStateBytes()
+        stateChecksum = chunked.rootChecksum()
+      } else {
       let snapshot: Snapshot<T> | undefined
       try {
         // 优先按段快照；没有才回退旧整份快照。两条路径都会在读取后按声明布局重建分片。
@@ -463,6 +498,7 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       if (tornTail) await atomicStateFile(directory, 'journal.jsonl', journal)
       // The first journal directory entry must be durable before any committed append is acknowledged.
       if (!journalPresent) await clearJournal()
+      }
     } catch (error) {
       await clearOwnOwner().catch(() => undefined)
       if (error instanceof StateStoreError) throw error
@@ -486,8 +522,15 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       journalBytes += lineBytes
     } catch (error) { failed = true; throw new StateStoreError('RECOVERY_REQUIRED', 'Durable commit failed: ' + (error instanceof Error ? error.message : String(error))) }
   }
+  const observeJournalCommit = async (observation: StateCommitObservation<T>): Promise<void> => {
+    if (options.beforeCommit === undefined) return
+    try { await options.beforeCommit(observation) } catch (error) {
+      failed = true
+      throw new StateStoreError('RECOVERY_REQUIRED', 'Authoritative event commit failed: ' + (error instanceof Error ? error.message : String(error)))
+    }
+  }
   const compactIfDue = async (): Promise<void> => {
-    if (!store.durable || sequence % snapshotEvery !== 0) return
+    if (!localDurable || options.journalOnly === true || sequence % snapshotEvery !== 0) return
     try {
       await writeSnapshot(sequence)
       await clearJournal()
@@ -500,7 +543,9 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
   const migrateLayout = async (): Promise<void> => {
     const nextChunked = ChunkedState.fromState(state, segmentSpecs, { verified: true })
     const nextChecksum = nextChunked.rootChecksum()
-    if (options.enabled !== false) {
+    if (journalDurable) await observeJournalCommit({ kind: 'snapshot', type: 'state/layout-migrated', sequence: sequence + 1,
+      previousChecksum: stateChecksum, checksum: nextChecksum, state: copy(state) })
+    if (localDurable && options.journalOnly !== true) {
       await appendJournal({ schemaVersion: 2, layout: currentLayout, layoutFingerprint: currentFingerprint, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type: 'state/layout-migrated', state })
     }
     chunked = nextChunked
@@ -533,7 +578,8 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
     return changes
   }
   const store: DurableStateStore<T> = {
-    directory, durable: options.enabled !== false, directoryDurability: getDirectoryDurability(), maxStateBytes,
+    directory, durable: localDurable, recoveryDurable: localDurable || journalDurable, journalOnly: options.journalOnly === true,
+    directoryDurability: getDirectoryDurability(), maxStateBytes,
     getStateBytes: () => stateBytes,
     getRootChecksum: () => stateChecksum,
     read: () => { if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed'); return copy(state) },
@@ -572,7 +618,9 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       const next = validateFull(returned === undefined ? draft : returned)
       const nextChunked = ChunkedState.fromState(next.value, segmentSpecs, { verified: true })
       const nextChecksum = nextChunked.rootChecksum()
-      if (store.durable) await appendJournal({ schemaVersion: 2, layout: currentLayout, layoutFingerprint: currentFingerprint, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, state: next.value })
+      if (journalDurable) await observeJournalCommit({ kind: 'snapshot', type, sequence: sequence + 1,
+        previousChecksum: stateChecksum, checksum: nextChecksum, state: copy(next.value) })
+      if (localDurable && options.journalOnly !== true) await appendJournal({ schemaVersion: 2, layout: currentLayout, layoutFingerprint: currentFingerprint, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, state: next.value })
       chunked = nextChunked
       state = deepFreeze(chunked.materialize()) as T
       stateBytes = chunked.getStateBytes()
@@ -600,7 +648,10 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
       if (options.validateIncremental !== undefined) assertValidation(options.validateIncremental(view, changed))
       else if (options.validate !== undefined) assertValidation(options.validate(view))
       const nextChecksum = preview.next.rootChecksum()
-      if (store.durable) await appendJournal({ schemaVersion: 2, layout: currentLayout, layoutFingerprint: currentFingerprint, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, changes: buildChanges(normalized, preview) })
+      const changes = buildChanges(normalized, preview)
+      if (journalDurable) await observeJournalCommit({ kind: 'patch', type, sequence: sequence + 1,
+        previousChecksum: stateChecksum, checksum: nextChecksum, changes: copy(changes) })
+      if (localDurable && options.journalOnly !== true) await appendJournal({ schemaVersion: 2, layout: currentLayout, layoutFingerprint: currentFingerprint, sequence: sequence + 1, checksum: nextChecksum, previousChecksum: stateChecksum, type, changes })
       chunked = preview.next
       state = view
       stateBytes = nextBytes

@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeSync, type Stats } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { getRedactedValue } from './evidence.js'
@@ -26,6 +26,18 @@ export type SwarmEventType =
   | 'acceptance/recorded'
   | 'worktree/bound'
   | 'watchdog/alert'
+  | 'state/journal-begin'
+  | 'state/journal-chunk'
+  | 'state/journal-commit'
+  | 'source/configured'
+  | 'source/trigger-received'
+  | 'source/trigger-filtered'
+  | 'source/trigger-evaluated'
+  | 'thread/opened'
+  | 'subscription/created'
+  | 'subscription/ended'
+  | 'outbox/delivered'
+  | 'outbox/failed'
 
 export interface EventRevision { request: number; card: number; workflow: number; leaseEpoch: number }
 export interface SwarmEventInput {
@@ -66,6 +78,54 @@ const redactPayload = (value: unknown, depth = 0): unknown => {
 }
 
 const safeSessionFile = (sessionId: string): string => `session-${sha256(sessionId).slice(0, 32)}.v2.jsonl`
+const journalOpenFlags = (mode: 'read' | 'write' | 'append'): number => {
+  const noFollow = process.platform === 'win32' ? 0 : constants.O_NOFOLLOW
+  return mode === 'read' ? constants.O_RDONLY | noFollow
+    : constants.O_WRONLY | constants.O_CREAT | noFollow | (mode === 'append' ? constants.O_APPEND : constants.O_TRUNC)
+}
+const assertPrivateFile = (metadata: Stats): void => {
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error('Event journal path must be a regular file')
+  if (process.platform !== 'win32' && (metadata.mode & 0o077) !== 0) throw new Error('Event journal file permissions must be 0600')
+  const getuid = process.getuid
+  if (typeof getuid === 'function' && BigInt(metadata.uid) !== BigInt(getuid())) throw new Error('Event journal file owner mismatch')
+}
+const readDurableText = (path: string): string => {
+  const before = lstatSync(path)
+  assertPrivateFile(before)
+  const descriptor = openSync(path, journalOpenFlags('read'))
+  try {
+    const opened = fstatSync(descriptor)
+    assertPrivateFile(opened)
+    if (opened.dev !== before.dev || opened.ino !== before.ino) throw new Error('Event journal file changed while opening')
+    return readFileSync(descriptor, 'utf8')
+  } finally { closeSync(descriptor) }
+}
+const writeDurableText = (path: string, text: string, flag: 'w' | 'a'): void => {
+  const descriptor = openSync(path, journalOpenFlags(flag === 'a' ? 'append' : 'write'), 0o600)
+  try {
+    const bytes = Buffer.from(text, 'utf8')
+    let offset = 0
+    while (offset < bytes.length) {
+      const written = writeSync(descriptor, bytes, offset, bytes.length - offset)
+      if (written <= 0) throw new Error('Event journal write made no progress')
+      offset += written
+    }
+    fsyncSync(descriptor)
+  } finally { closeSync(descriptor) }
+}
+/** Directory entries need their own sync when a journal is created, sealed or repaired. */
+const syncDirectory = (directory: string): void => {
+  let descriptor: number | undefined
+  try {
+    descriptor = openSync(directory, 'r')
+    fsyncSync(descriptor)
+  } catch (error) {
+    // Windows does not support fsync on directory handles. Regular file fsync
+    // still protects committed bytes; the directory rename is atomic.
+    const code = (error as NodeJS.ErrnoException).code
+    if (process.platform !== 'win32' || !['EPERM', 'EINVAL', 'ENOTSUP', 'EBADF'].includes(code ?? '')) throw error
+  } finally { if (descriptor !== undefined) closeSync(descriptor) }
+}
 
 const parseAndValidate = (text: string, rootSessionId: string, initialSeq = 1, initialDigest = 'GENESIS', seen = new Set<string>()): { events: SwarmEvent[]; issues: JournalIssue[]; validBytes: number } => {
   const events: SwarmEvent[] = [], issues: JournalIssue[] = []
@@ -133,8 +193,15 @@ export const reduceSwarmEvents = (events: readonly SwarmEvent[], initial: SwarmP
 
 export interface SwarmEventJournal {
   readonly path: string
+  readonly maxLineBytes: number
+  /** Set when an immutable sealed segment is corrupt; active-tail repair does not set it. */
+  readonly fatalError?: string
   append: (input: SwarmEventInput) => SwarmEvent | undefined
   read: () => { events: SwarmEvent[]; issues: JournalIssue[] }
+  query: (predicate: (event: Readonly<SwarmEvent>) => boolean) => SwarmEvent[]
+  queryTypes: (types: readonly SwarmEventType[]) => SwarmEvent[]
+  queryOutbox: () => SwarmEvent[]
+  summary: () => { sequence: number; issues: number }
   project: () => SwarmProjection
   segments: () => readonly string[]
 }
@@ -149,6 +216,8 @@ export const createSwarmEventJournal = (input: { directory: string; rootSessionI
   if (!Number.isSafeInteger(sealAfterBytes) || sealAfterBytes < 1024) throw new Error('Event journal seal size is too small')
   if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes < 1024 || maxLineBytes > EVENT_JOURNAL_MAX_LINE_BYTES) throw new Error('Event journal line limit is invalid')
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  const directoryMetadata = lstatSync(input.directory)
+  if (!directoryMetadata.isDirectory() || directoryMetadata.isSymbolicLink()) throw new Error('Event journal directory must be a real directory')
   const escapedStem = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const sealPattern = new RegExp(`^${escapedStem}\\.segment-(\\d+)-(\\d+)\\.jsonl$`)
   const sealedPaths = (): string[] => readdirSync(input.directory)
@@ -157,12 +226,19 @@ export const createSwarmEventJournal = (input: { directory: string; rootSessionI
     .sort((left, right) => Number(left.match[1]) - Number(right.match[1]))
     .map((item) => join(input.directory, item.name))
   const allEvents: SwarmEvent[] = [], allIssues: JournalIssue[] = []
+  const eventsByType = new Map<string, SwarmEvent[]>()
+  const outboxEvents: SwarmEvent[] = []
   const seen = new Set<string>()
   let previousDigest = 'GENESIS', nextSeq = 1, activeStartSeq = 1, sealedFailure: string | undefined
   for (const segment of [...sealedPaths(), path]) {
     if (!existsSync(segment)) continue
-    const parsed = parseAndValidate(readFileSync(segment, 'utf8'), input.rootSessionId, nextSeq, previousDigest, seen)
-    for (const event of parsed.events) { allEvents.push(event); seen.add(event.eventId); seen.add(event.idempotencyKey) }
+    const parsed = parseAndValidate(readDurableText(segment), input.rootSessionId, nextSeq, previousDigest, seen)
+    for (const event of parsed.events) {
+      allEvents.push(event); seen.add(event.eventId); seen.add(event.idempotencyKey)
+      const typed = eventsByType.get(event.type) ?? []
+      typed.push(event); eventsByType.set(event.type, typed)
+      if (event.payload.outbox !== undefined || event.type === 'outbox/delivered' || event.type === 'outbox/failed') outboxEvents.push(event)
+    }
     if (parsed.events.length > 0) previousDigest = parsed.events.at(-1)!.digest
     allIssues.push(...parsed.issues)
     nextSeq += parsed.events.length
@@ -171,12 +247,13 @@ export const createSwarmEventJournal = (input: { directory: string; rootSessionI
       // The active tail is repairable; sealed segments are immutable and fail closed.
       if (parsed.issues.length > 0) {
         const prefix = parsed.events.map((event) => JSON.stringify(event)).join('\n')
-        writeFileSync(path, prefix === '' ? '' : `${prefix}\n`, { encoding: 'utf8', mode: 0o600 })
+        writeDurableText(path, prefix === '' ? '' : `${prefix}\n`, 'w')
+        syncDirectory(input.directory)
       }
     } else if (parsed.issues.length > 0) sealedFailure = `Sealed event journal segment is corrupt: ${segment}`
   }
-  if (!existsSync(path)) writeFileSync(path, '', { encoding: 'utf8', mode: 0o600 })
-  let activeBytes = statSync(path).size
+  if (!existsSync(path)) { writeDurableText(path, '', 'w'); syncDirectory(input.directory) }
+  let activeBytes = lstatSync(path).size
   let projection = reduceSwarmEvents(allEvents)
   const sealActive = (): void => {
     if (activeBytes <= 0 || allEvents.length === 0) return
@@ -184,17 +261,24 @@ export const createSwarmEventJournal = (input: { directory: string; rootSessionI
     const target = join(input.directory, `${stem}.segment-${String(activeStartSeq).padStart(12, '0')}-${String(endSeq).padStart(12, '0')}.jsonl`)
     if (existsSync(target)) throw new Error('Event journal seal target already exists')
     renameSync(path, target)
-    writeFileSync(path, '', { encoding: 'utf8', mode: 0o600 })
+    writeDurableText(path, '', 'w')
+    syncDirectory(input.directory)
     activeStartSeq = endSeq + 1
     activeBytes = 0
   }
   return {
     path,
+    maxLineBytes,
+    ...(sealedFailure === undefined ? {} : { fatalError: sealedFailure }),
     append: (value) => {
       if (sealedFailure !== undefined) throw new Error(sealedFailure)
       if (seen.has(value.eventId) || seen.has(value.idempotencyKey)) return undefined
-      if (typeof value.eventId !== 'string' || value.eventId.length > 128 || typeof value.idempotencyKey !== 'string' || value.idempotencyKey.length > 512) throw new Error('Invalid event identity')
-      const payload = redactPayload(value.payload ?? {}) as Record<string, unknown>
+      if (typeof value.eventId !== 'string' || value.eventId.length < 1 || value.eventId.length > 128
+        || typeof value.idempotencyKey !== 'string' || value.idempotencyKey.length < 1 || value.idempotencyKey.length > 512) throw new Error('Invalid event identity')
+      // State journal fragments are canonical StateStore bytes. Redacting or truncating them
+      // would make recovery silently lossy; the private state validator still rejects credential
+      // field names before any fragment reaches this append boundary.
+      const payload = (value.type.startsWith('state/journal-') ? value.payload ?? {} : redactPayload(value.payload ?? {})) as Record<string, unknown>
       const withoutDigest: Omit<SwarmEvent, 'digest'> = {
         ...value, schema: EVENT_JOURNAL_SCHEMA, rootSessionId: input.rootSessionId,
         seq: nextSeq, at: now().toISOString(),
@@ -205,14 +289,23 @@ export const createSwarmEventJournal = (input: { directory: string; rootSessionI
       const lineBytes = Buffer.byteLength(line)
       if (lineBytes > maxLineBytes) throw new Error('Event exceeds journal line limit')
       if (activeBytes + lineBytes > sealAfterBytes) sealActive()
-      appendFileSync(path, line, { encoding: 'utf8', mode: 0o600 })
+      // A durable outbox/state fact is not committed until its exact line is on
+      // stable storage. Node's appendFileSync does not guarantee fsync by itself.
+      writeDurableText(path, line, 'a')
       activeBytes += lineBytes
       nextSeq++
       allEvents.push(event); seen.add(event.eventId); seen.add(event.idempotencyKey)
+      const typed = eventsByType.get(event.type) ?? []
+      typed.push(event); eventsByType.set(event.type, typed)
+      if (event.payload.outbox !== undefined || event.type === 'outbox/delivered' || event.type === 'outbox/failed') outboxEvents.push(event)
       projection = reduceSwarmEvents([event], projection)
-      return event
+      return structuredClone(event)
     },
     read: () => ({ events: structuredClone(allEvents), issues: structuredClone(allIssues) }),
+    query: (predicate) => structuredClone(allEvents.filter(predicate)),
+    queryTypes: (types) => structuredClone(types.flatMap((type) => eventsByType.get(type) ?? []).sort((left, right) => left.seq - right.seq)),
+    queryOutbox: () => structuredClone(outboxEvents),
+    summary: () => ({ sequence: projection.sequence, issues: allIssues.length }),
     project: () => structuredClone(projection),
     segments: () => [...sealedPaths(), path]
   }

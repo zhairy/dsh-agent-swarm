@@ -132,7 +132,7 @@ describe('memory handoff through the actual service cold initialization boundary
     await restored.service.dispose()
     const later = runtime(fixture)
     await later.service.WaitAgentReady(fixture.root)
-    expect(later.service.getStatus({}, later.exec()).tasks).toEqual([])
+    expect(later.service.getStatus({}, later.exec()).tasks.map((task) => task.task_id)).toEqual(['T-1', 'T-8'])
     expect(await readdir(fixture.directory)).toEqual(consumed)
     expect(later.start).not.toHaveBeenCalled(); expect(later.fetch).not.toHaveBeenCalled()
   })

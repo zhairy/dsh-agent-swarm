@@ -30,6 +30,14 @@ describe('host-owned agent binding generations', () => {
     expect(archived[0]).toMatchObject({ agentId: input.agentId, state: 'revoked', revocationReason: 'superseded' })
   })
 
+  it('does not prune audit history when no durable archive can be written', async () => {
+    const store = await createDurableStateStore<BindingState>({ directory: '/unused', enabled: false, initialState: { bindings: {}, bindingHistory: {} }, ...SWARM_LAYOUT_OPTIONS })
+    const registry = createAgentBindingRegistry(store, { maxHistoryPerAgent: 2, archive: async () => false })
+    for (let index = 0; index < 6; index++) await registry.bind({ ...input, attemptId: 'attempt-' + index })
+    expect(Object.keys(store.read().bindingHistory)).toHaveLength(6)
+    await store.dispose()
+  })
+
   it('atomically replaces old attempts, keeps history and revokes capabilities on end', async () => {
     const store = await createDurableStateStore<BindingState>({ directory: '/unused', enabled: false, initialState: { bindings: {}, bindingHistory: {} }, ...SWARM_LAYOUT_OPTIONS })
     const registry = createAgentBindingRegistry(store)

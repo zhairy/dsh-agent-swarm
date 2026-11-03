@@ -54,7 +54,8 @@ export const MAX_BINDING_HISTORY_PER_AGENT = 4
 /** 归档回调：先落盘成功再提交状态删除，避免崩溃窗口里出现「已从状态移除但未归档」。 */
 export interface AgentBindingRegistryOptions {
   maxHistoryPerAgent?: number
-  archive?: (entries: readonly AgentBinding[]) => Promise<void>
+  /** Returning false keeps history in the authoritative state instead of pruning it. */
+  archive?: (entries: readonly AgentBinding[]) => Promise<void | boolean>
 }
 
 /** Only host/service lifecycle code calls bind; tool parameters never create identities. */
@@ -73,7 +74,7 @@ export const createAgentBindingRegistry = <T extends BindingState>(store: Durabl
     const keep = new Set(ranked.slice(0, maxHistoryPerAgent).map(([key]) => key))
     const prunable = Object.keys(history).filter((key) => history[key]!.agentId === agentId && !keep.has(key))
     if (prunable.length === 0) return []
-    if (options.archive !== undefined) await options.archive(prunable.map((key) => history[key]!))
+    if (options.archive !== undefined && (await options.archive(prunable.map((key) => history[key]!))) === false) return []
     return prunable
   }
   const get = (agentId: string) => store.readPath === undefined ? store.read().bindings[agentId] : store.readPath<AgentBinding>(['bindings', agentId])
