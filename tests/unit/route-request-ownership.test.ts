@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { getSwarmConfig } from '../../src/config.js'
-import { intRouteStateRegistry, type FallbackEventInfo } from '../../src/route-state.js'
-import { normalizeRouteFailure } from '../../src/provider-policy.js'
+import { createRouteEngine, type FallbackEventInfo } from '../../src/application/routing/engine.js'
+import { normalizeRouteFailure } from '../../src/domain/routing/provider-policy.js'
 
 const primary = { provider: 'claude', model: 'claude-opus-5-5' }
 const backup = { provider: 'codex', model: 'fixture-backup' }
@@ -16,7 +16,7 @@ describe('actual request ownership across model changes', () => {
   it('a picker change during fallback metadata I/O retries admission instead of ending the Host turn', async () => {
     const entered = deferred(), probe = deferred()
     const sleep = vi.fn(async () => undefined)
-    const registry = intRouteStateRegistry(undefined, async route => {
+    const registry = createRouteEngine(undefined, async route => {
       if (route.provider === backup.provider) { entered.resolve(); await probe.promise }
       return { ok: true as const, vision: false }
     }, { sleep })
@@ -33,7 +33,7 @@ describe('actual request ownership across model changes', () => {
   })
 
   it('an explicit model outside the configured fallback chain remains the next admitted choice', async () => {
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true as const, vision: false }))
+    const registry = createRouteEngine(undefined, async () => ({ ok: true as const, vision: false }))
     registry.BeginRequestStep(root.id, 1, 0)
     registry.getRequestOverride(root, primary, 'tian_shu', config, true)
     registry.RecordUserSelection(root.id, chosen, 1)
@@ -43,7 +43,7 @@ describe('actual request ownership across model changes', () => {
 
   it('health persistence cannot change the failure route to a later actual header', async () => {
     const committed = deferred(), events: FallbackEventInfo[] = []
-    const registry = intRouteStateRegistry(event => events.push(event), async () => ({ ok: true as const, vision: false }), { onHealthChange: () => committed.promise })
+    const registry = createRouteEngine(event => events.push(event), async () => ({ ok: true as const, vision: false }), { onHealthChange: () => committed.promise })
     registry.BeginRequestStep(root.id, 1, 0)
     registry.getRequestOverride(root, primary, 'tian_shu', config, true)
     const action = registry.getErrorAction({ agent: root, provider: primary.provider, failure: poolFailure }, undefined, 'tian_shu', config)
@@ -57,7 +57,7 @@ describe('actual request ownership across model changes', () => {
   })
 
   it('a late failure from an earlier turn signal cannot quarantine or terminate its replacement turn', async () => {
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true as const, vision: false }))
+    const registry = createRouteEngine(undefined, async () => ({ ok: true as const, vision: false }))
     const oldTurn = new AbortController(), newTurn = new AbortController()
     registry.BeginRequestStep(root.id, 1, 0)
     await registry.AdmitRequest(root, primary, 'tian_shu', config, true, oldTurn.signal)
@@ -72,7 +72,7 @@ describe('actual request ownership across model changes', () => {
   })
 
   it('a turn signal reused for another tool step still rejects an old step failure', async () => {
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true as const, vision: false }))
+    const registry = createRouteEngine(undefined, async () => ({ ok: true as const, vision: false }))
     const turn = new AbortController()
     registry.BeginRequestStep(root.id, 1, 0)
     await registry.AdmitRequest(root, primary, 'tian_shu', config, true, turn.signal)
@@ -86,7 +86,7 @@ describe('actual request ownership across model changes', () => {
   })
 
   it('a duplicate old-provider failure at the same step cannot poison an admitted backup', async () => {
-    const registry = intRouteStateRegistry(undefined, async () => ({ ok: true as const, vision: false }))
+    const registry = createRouteEngine(undefined, async () => ({ ok: true as const, vision: false }))
     const turn = new AbortController()
     registry.BeginRequestStep(root.id, 1, 0)
     await registry.AdmitRequest(root, primary, 'tian_shu', config, true, turn.signal)
@@ -99,7 +99,7 @@ describe('actual request ownership across model changes', () => {
   })
 
   it('a disposed request signal cannot compact a replacement context or recreate recovery state', async () => {
-    const registry = intRouteStateRegistry()
+    const registry = createRouteEngine()
     const turn = new AbortController()
     registry.BeginRequestStep(root.id, 1, 0)
     await registry.AdmitRequest(root, primary, 'tian_shu', config, true, turn.signal)
@@ -114,7 +114,7 @@ describe('actual request ownership across model changes', () => {
     { code: 'RATE_LIMIT', status: 429, providerRetryAfterMs: 51_840_000, message: 'requests per minute exceeded' }]) {
     it(`immediately falls back for ${failure.code} without sleeping on an exhausted resource`, async () => {
       const sleep = vi.fn(async () => undefined)
-      const registry = intRouteStateRegistry(undefined, undefined, { sleep, now: () => 1000 })
+      const registry = createRouteEngine(undefined, undefined, { sleep, now: () => 1000 })
       registry.BeginRequestStep(root.id, 1, 0)
       registry.getRequestOverride(root, primary, 'tian_shu', config, true)
       expect(await registry.getErrorAction({ agent: root, provider: primary.provider, failure }, undefined, 'tian_shu', config)).toEqual({ kind: 'retry' })
@@ -127,7 +127,7 @@ describe('actual request ownership across model changes', () => {
 
   it('retains one short retry for a genuine transient 429 without marking quota exhaustion', async () => {
     const sleep = vi.fn(async () => undefined)
-    const registry = intRouteStateRegistry(undefined, undefined, { sleep })
+    const registry = createRouteEngine(undefined, undefined, { sleep })
     registry.BeginRequestStep(root.id, 1, 0)
     registry.getRequestOverride(root, primary, 'tian_shu', config, true)
     expect(await registry.getErrorAction({ agent: root, provider: primary.provider, failure: { code: 'RATE_LIMIT', status: 429, message: 'requests per minute exceeded' } }, undefined, 'tian_shu', config)).toEqual({ kind: 'retry' })

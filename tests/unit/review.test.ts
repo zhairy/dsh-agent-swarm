@@ -10,7 +10,7 @@ import {
   getReviewQuestions,
   getReviewState
 } from '../../src/review.js'
-import { getUpgradeReasons, type UpgradeInfo } from '../../src/upgrade.js'
+import { getUpgradeReasons, type UpgradeInfo } from '../../src/domain/routing/upgrade.js'
 
 const card = ValidateTaskCard({ title: 't', goal: '证明 A 成立', acceptance: ['给出证明', '给出反例检查'], flags: {} }).card as TaskCard
 const task: TaskRecord = { taskId: 'T-1', sessionId: 's', card, gates: [], triage: { source: 'rules', rulesApplied: [] }, delegationIds: [], rounds: 0, createdAt: 1, updatedAt: 1 }

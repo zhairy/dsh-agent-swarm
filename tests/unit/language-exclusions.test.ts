@@ -4,7 +4,7 @@ import { getLanguageExclusions, LANGUAGE_PLACEHOLDER } from '../../src/language.
 import { getRuntimeAssembly, OUTPUT_LANGUAGE_SECTION, PERSONA_PREFIX_SECTION } from '../../src/runtime.js'
 import { getPresetPersona } from '../../src/role-registry.js'
 import { getFailureHint } from '../../src/util/failure-hint.js'
-import { getRouteResourcePolicy, normalizeRouteFailure } from '../../src/provider-policy.js'
+import { getRouteResourcePolicy, normalizeRouteFailure } from '../../src/domain/routing/provider-policy.js'
 
 const assembly = (provider: string) => ({ sections: [
   { name: PERSONA_PREFIX_SECTION, text: getPresetPersona('zhu_jian') },

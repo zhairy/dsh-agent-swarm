@@ -1,4 +1,4 @@
-import type { LlmFailureLike } from './host-contract.js'
+import type { LlmFailureLike } from '../../host-contract.js'
 import { getRouteResourcePolicy, normalizeRouteFailure, type FailureKind, type RouteResourcePolicy } from './provider-policy.js'
 import type { RouteInfo } from './routes.js'
 

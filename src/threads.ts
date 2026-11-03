@@ -1,7 +1,7 @@
 import type { SubagentEndInfoLike } from './host-contract.js'
 import { getRedactedText, isJevProbability } from './jev.js'
 import type { DelegableRoleId, SuanHengMode } from './role-registry.js'
-import type { RouteKey } from './routes.js'
+import type { RouteKey } from './domain/routing/routes.js'
 import type { PromptStyle } from './model-family.js'
 
 /**

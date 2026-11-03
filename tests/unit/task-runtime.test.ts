@@ -17,7 +17,7 @@ import { digest } from '../../src/task-model.js'
 import type { ExperienceEntry } from '../../src/experience.js'
 import { intTaskStore } from '../../src/evidence.js'
 import { intThreadRegistry } from '../../src/threads.js'
-import type { RouteHealthEntry } from '../../src/route-health.js'
+import type { RouteHealthEntry } from '../../src/domain/routing/health.js'
 
 const directories: string[] = []
 const services: SwarmService[] = []

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getRouteFailure, getRouteRecoveryPolicy, getRouteResourcePolicy, getWireReasoningEffort, isTerminalRouteFailure, normalizeRouteFailure, type FailureKind } from '../../src/provider-policy.js'
+import { getRouteFailure, getRouteRecoveryPolicy, getRouteResourcePolicy, getWireReasoningEffort, isTerminalRouteFailure, normalizeRouteFailure, type FailureKind } from '../../src/domain/routing/provider-policy.js'
 import { getFailureHint } from '../../src/util/failure-hint.js'
 
 const route = { provider: 'codex', model: 'gpt-6.1-sol' }

@@ -1,5 +1,5 @@
 import type { LlmFailureLike } from './host-contract.js'
-import { isTerminalRouteFailure, normalizeRouteFailure } from './provider-policy.js'
+import { isTerminalRouteFailure, normalizeRouteFailure } from './domain/routing/provider-policy.js'
 
 /**
  * 联网探测：模型请求因传输失败、超时或订阅令牌刷新失败而出错时，先判断是整机断网还是单个供应商故障。

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createQuotaRoutingSource } from '../../src/quota-routing-source.js'
-import { getQuotaAccountId, normalizeSubscriptionUsage, type QuotaProvider, type QuotaView } from '../../src/quota.js'
-import type { QuotaPoolConfiguration } from '../../src/quota-routing.js'
+import { createQuotaRoutingSource } from '../../src/adapters/quota/routing-source.js'
+import { getQuotaAccountId, normalizeSubscriptionUsage, type QuotaProvider, type QuotaView } from '../../src/domain/routing/resources.js'
+import type { QuotaPoolConfiguration } from '../../src/domain/routing/quota.js'
 const a = { provider: 'codex', model: 'gpt-a' }, b = { provider: 'claude', model: 'claude-b' }, api = { provider: 'deepseek-official', model: 'ds' }
 const fixture = () => {
   let time = 1000

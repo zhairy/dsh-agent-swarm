@@ -19,7 +19,7 @@ import {
 import { getPromptStyle, getStyledTaskPrompt, type PromptStyle } from './model-family.js'
 import { isNetworkSuspect, type NetworkMonitorInfo } from './network.js'
 import { GATE_IDS, GATE_ROLE, ValidateDelegationBudget, type GateId } from './policy.js'
-import { getValidatedQuotaOrder, type FallbackEventInfo, type RouteStateRegistry } from './route-state.js'
+import { getValidatedQuotaOrder, type FallbackEventInfo, type RouteEngine } from './application/routing/engine.js'
 import { startChild, supportsContinuableSessions } from './subagent-compat.js'
 import {
   getChildPersona,
@@ -30,9 +30,9 @@ import {
   type DelegableRoleId,
   type SuanHengMode
 } from './role-registry.js'
-import { FindUsableRoutes, getModelFamily, getRouteKey, getRouteLabel, type EscalationKind, type ModelFamily, type RouteInfo, type RouteProbe } from './routes.js'
+import { FindUsableRoutes, getModelFamily, getRouteKey, getRouteLabel, type EscalationKind, type ModelFamily, type RouteInfo, type RouteProbe } from './domain/routing/routes.js'
 import { SESSION_CHOICES, getRuleSessionPlan, type ChildEndHub, type SessionChoice, type SessionPlan, type ThreadInfo, type ThreadRegistry } from './threads.js'
-import { getUpgradeReasons, getUpgradedChain } from './upgrade.js'
+import { getUpgradeReasons, getUpgradedChain } from './domain/routing/upgrade.js'
 import { SwarmError, getErrorText } from './util/errors.js'
 import { getExplainedError } from './util/failure-hint.js'
 import { getChangedFiles, type GitStatusInfo } from './util/git.js'
@@ -350,7 +350,7 @@ export interface DelegateDepsInfo {
   probe: RouteProbe
   probeForChild?: (childId: string, route: RouteInfo, signal?: AbortSignal) => ReturnType<RouteProbe>
   orderQuotaRoutes?: (routes: readonly RouteInfo[], signal?: AbortSignal, protectedRoutes?: readonly RouteInfo[]) => Promise<readonly RouteInfo[]>
-  routeState: RouteStateRegistry
+  routeState: RouteEngine
   readFile: (path: string) => Promise<Uint8Array>
   gitStatus: (cwd: string) => Promise<GitStatusInfo | undefined>
   now: () => number

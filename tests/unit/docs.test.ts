@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ROLE_INFO_LIST } from '../../src/role-registry.js'
-import { DEFAULT_ROUTE_CHAINS, getRouteLabel } from '../../src/routes.js'
+import { DEFAULT_ROUTE_CHAINS, getRouteLabel } from '../../src/domain/routing/routes.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const read = (file: string) => readFileSync(join(ROOT, file), 'utf8')

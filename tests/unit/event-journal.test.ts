@@ -35,4 +35,19 @@ describe('v3.2.0 event journal', () => {
     expect(reopened.read()).toMatchObject({ issues: [{ reason: 'invalid-json' }] })
     expect(readFileSync(reopened.path, 'utf8').endsWith('\n')).toBe(true)
   })
+
+  it('seals at the byte threshold and reopens a valid cross-segment digest chain', () => {
+    const dir = directory()
+    const journal = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-sealed', sealAfterBytes: 16_384 })
+    const bulk = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => [`k${index}`, index]))
+    for (let index = 1; index <= 6; index++) journal.append({ ...event(`e${index}`), payload: { stage: 'running', ...bulk } })
+    expect(journal.segments().length).toBeGreaterThanOrEqual(2)
+    const reopened = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-sealed', sealAfterBytes: 16_384 })
+    const events = reopened.read().events
+    expect(events.map((item) => item.seq)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(events[0]?.previousDigest).toBe('GENESIS')
+    expect(events[1]?.previousDigest).toBe(events[0]?.digest)
+    expect(events[5]?.previousDigest).toBe(events[4]?.digest)
+    expect(reopened.read().issues).toEqual([])
+  })
 })

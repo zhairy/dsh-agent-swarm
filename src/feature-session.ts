@@ -17,7 +17,7 @@ import { GATE_IDS, GATE_ROLE, ValidateTaskCard, getAcceptanceCheck, getEffective
 import { ValidateStructuredOutput } from './contracts.js'
 import { isDelegableRoleId } from './role-registry.js'
 import { createWorkspaceLeaseManager } from './util/workspace-lease.js'
-import { validateRouteHealthSnapshot, type RouteHealthEntry, type RouteHealthSnapshot } from './route-health.js'
+import { validateRouteHealthSnapshot, type RouteHealthEntry, type RouteHealthSnapshot } from './domain/routing/health.js'
 import { partitionLegacyPlanningBudget } from './planning-recovery.js'
 import { ValidateAgentControlRecords, type AgentControlRecord } from './agent-control.js'
 import { validateEvidenceAssessment } from './evidence-assessment.js'

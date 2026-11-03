@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Config, DEFAULT_NATIVE_CONFIG, ROUTE_KEYS, getRoleRoute, getSwarmConfig } from '../../src/config.js'
 import { DEFAULT_BUDGETS, DEFAULT_TRIAGE_THRESHOLDS } from '../../src/policy.js'
 import { DEFAULT_JEV_CONFIG } from '../../src/jev.js'
-import { DEFAULT_ROUTE_CHAINS } from '../../src/routes.js'
+import { DEFAULT_ROUTE_CHAINS } from '../../src/domain/routing/routes.js'
 
 describe('Config schema', () => {
   it('空配置解析出 volatile 引用，合并后等于默认值', () => {

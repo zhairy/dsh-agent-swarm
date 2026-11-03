@@ -1,7 +1,7 @@
-import { getQuotaRouteId, mapQuotaRoutes, SUBSCRIPTION_QUOTA_PROVIDERS, type QuotaReader, type QuotaRpcInvoke } from './quota.js'
-import { createQuotaRouteEvaluator, stableOrderQuotaRoutes, type QuotaPoolConfiguration, type QuotaRouteDecision, type QuotaRoutingInput } from './quota-routing.js'
-import type { RouteInfo } from './routes.js'
-import { getValueDigest } from './workflow.js'
+import { getQuotaRouteId, mapQuotaRoutes, SUBSCRIPTION_QUOTA_PROVIDERS, type QuotaReader, type QuotaRpcInvoke } from '../../domain/routing/resources.js'
+import { createQuotaRouteEvaluator, stableOrderQuotaRoutes, type QuotaPoolConfiguration, type QuotaRouteDecision, type QuotaRoutingInput } from '../../domain/routing/quota.js'
+import type { RouteInfo } from '../../domain/routing/routes.js'
+import { getValueDigest } from '../../workflow.js'
 
 const cancelled = () => new DOMException('Quota routing cancelled', 'AbortError')
 /** End one bounded wait, never claim the underlying upstream operation was cancelled. */

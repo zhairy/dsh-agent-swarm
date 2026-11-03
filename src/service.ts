@@ -18,6 +18,7 @@ import type { ChildPromptInfo } from './runtime.js'
 import { startChild } from './subagent-compat.js'
 import { getLedgerEvents, intLedger, intTaskStore, type AcceptanceRecord, type AssessmentInfo, type DelegationRecord, type TaskRecord, type TriageRecord } from './evidence.js'
 import { createSwarmEventJournal, type SwarmEventJournal } from './event-journal.js'
+import { importLegacyLedgerFile } from './event-import.js'
 import { appendLegacyEventToJournal } from './ledger-event-bridge.js'
 import {
   SPAWN_PROVIDER,
@@ -56,11 +57,11 @@ import {
   type GateRequirement,
   type TaskCard
 } from './policy.js'
-import { intRouteStateRegistry, type RequestRecoveryState, type RouteStateRegistry } from './route-state.js'
+import { createRouteEngine, type RequestRecoveryState, type RouteEngine } from './application/routing/engine.js'
 import { FindRoleByPresetId, getPermissionLabel, getRoleInfo, isWriteAllowed, ROLE_INFO_LIST, type DelegableRoleId, type RoleId } from './role-registry.js'
-import { getRouteKey, getRouteLabel, createRouteMetadataCache, createRouteFailureObserver, intRouteProbe, type RouteInfo, type RouteProbe } from './routes.js'
+import { getRouteKey, getRouteLabel, createRouteMetadataCache, createRouteFailureObserver, intRouteProbe, type RouteInfo, type RouteProbe } from './domain/routing/routes.js'
 import { ParseSessionPlan, getRuleSessionPlan, getSessionQuestions, getSessionState, intChildEndHub, intThreadRegistry, type SessionPlan, type ThreadInfo } from './threads.js'
-import { getUpgradeReasons, getUpgradedChain } from './upgrade.js'
+import { getUpgradeReasons, getUpgradedChain } from './domain/routing/upgrade.js'
 import { ACCEPTANCE_QUESTIONS, ParseAssessment, getAcceptanceState, getReviewQuestions, getReviewState } from './review.js'
 import { getErrorText, SwarmError } from './util/errors.js'
 import { getGitStatus, type GitStatusInfo } from './util/git.js'
@@ -150,7 +151,7 @@ export interface SwarmServiceDepsInfo {
   gitStatus?: (cwd: string) => Promise<GitStatusInfo | undefined>
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
   probe?: RouteProbe
-  orderQuotaRoutes?: import('./route-state.js').RouteStateOptionsInfo['orderQuotaRoutes']
+  orderQuotaRoutes?: import('./application/routing/engine.js').RouteEngineOptions['orderQuotaRoutes']
   onQuotaRouteSuccess?: (route: RouteInfo) => void
   quotaDiagnostics?: () => unknown
   /** 联网探测；提供时，断网引起的模型请求失败会等待网络恢复后在原路由重试 */
@@ -257,7 +258,7 @@ const getExternalEditAt = (task: TaskRecord, session: SessionStateInfo): number 
 /** 天枢工具与运行时行共用的服务 */
 export interface SwarmService {
   getConfig: () => SwarmConfigInfo
-  routeState: RouteStateRegistry
+  routeState: RouteEngine
   agentControl?: AgentControl
   /** Jev 接入点：衡鉴与 jev_* 工具共用的客户端、密钥状态与健康检查 */
   jev: JevHub
@@ -506,12 +507,14 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (existing !== undefined) return existing
     const legacyLedger = intLedger(getLedgerDir(), sessionId, (error) => deps.logger?.warn(`账本写入失败：${String(error)}`))
     const journal = createSwarmEventJournal({ directory: join(deps.dshHome, 'share', 'dsh-agent-swarm', 'events-v2'), rootSessionId: sessionId, now: () => new Date(now()) })
+    const imported = importLegacyLedgerFile({ ledgerPath: legacyLedger.path, journal, rootSessionId: sessionId, now: () => new Date(now()) })
+    if (imported.invalidLines > 0 || imported.rejectedLines > 0) deps.logger?.warn(`旧账本迁移存在未导入记录：invalid=${imported.invalidLines} cross-session=${imported.rejectedLines}`)
     const ledger: ReturnType<typeof intLedger> = {
       path: legacyLedger.path,
       AddLedgerEvent: (event) => {
+        // The V2 journal is authoritative; legacy ledger is best-effort read compatibility.
+        appendLegacyEventToJournal(journal, { ts: new Date(now()).toISOString(), sessionId, ...event })
         legacyLedger.AddLedgerEvent(event)
-        try { appendLegacyEventToJournal(journal, { ts: new Date(now()).toISOString(), sessionId, ...event }) }
-        catch (error) { deps.logger?.warn(`V2 事件账本镜像失败：${String(error)}`) }
       }
     }
     const worktrees = intWorktreeRegistry({ now })
@@ -779,7 +782,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     now, metadataCache, isRouteAvailable: (route) => routeState.isRouteAvailable(route),
     onFailure: observeProbeFailure
   })
-  const routeState = intRouteStateRegistry((event) => {
+  const routeState = createRouteEngine((event) => {
     deps.logger?.warn(`主会话 ${event.agentId} 路由 ${getRouteLabel(event.from)} 失败（${event.failure.code ?? event.failure.status ?? 'error'}），回退到 ${getRouteLabel(event.to)}`)
     getSession(event.agentId).ledger.AddLedgerEvent({ type: 'route/fallback', data: { scope: 'root', from: getRouteLabel(event.from), to: getRouteLabel(event.to), failure: event.failure } })
   }, probe, {

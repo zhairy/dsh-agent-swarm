@@ -1,7 +1,8 @@
-import type { LlmFailureLike, LlmLike } from './host-contract.js'
-import type { RoleId, SuanHengMode } from './role-registry.js'
-import { getErrorText } from './util/errors.js'
+import type { LlmFailureLike, LlmLike } from '../../host-contract.js'
+import type { RoleId, SuanHengMode } from '../../role-registry.js'
+import { getErrorText } from '../../util/errors.js'
 import { normalizeRouteFailure, getRouteFailure, getRouteResourcePolicy, getWireReasoningEffort, type RouteResourcePolicy } from './provider-policy.js'
+import { evaluateRouteEligibility } from './eligibility.js'
 
 export const PROVIDER_QWEN = 'qwen-token-plan-cn'
 export const PROVIDER_GO = 'opencode-go'
@@ -428,6 +429,18 @@ export const createRouteMetadataCache = (options: { now?: () => number; maxEntri
       if (resource.accessMode === 'judgment_api' || resource.capabilities?.generation === false || resource.capabilities?.tools === false) return { ok: false, reason: 'capability-incompatible: generation-tools-unavailable' }
       const info = await llm.resolveModelInfo(route.provider, route.model)
       const effort = getWireReasoningEffort(route)
+      const eligibility = evaluateRouteEligibility(route, {
+        configuredProviders: llm.listProviders().map((provider) => provider.id),
+        models: {
+          [`${route.provider}/${route.model}`]: {
+            ...(info.reasoning === undefined ? {} : { reasoning: info.reasoning.efforts.map((item) => item.id) }),
+            ...(info.inputModalities === undefined
+              ? getCatalogVision(route) === undefined ? {} : { inputModalities: ['text', ...(getCatalogVision(route) ? ['image'] : [])] }
+              : { inputModalities: [...info.inputModalities] })
+          }
+        }
+      }, effort === undefined ? {} : { reasoningEffort: effort })
+      if (!eligibility.eligible) return { ok: false, reason: `capability-incompatible: ${eligibility.reason === 'generation-unavailable' ? 'generation-tools-unavailable' : eligibility.reason}` }
       if (llm.resolveCallConfig !== undefined) await llm.resolveCallConfig({ provider: route.provider, model: route.model, ...(effort === undefined ? {} : { reasoningEffort: effort }) })
       else if (effort !== undefined && !info.reasoning?.efforts.some((item) => item.id === effort)) return { ok: false, reason: 'capability-incompatible: unsupported-reasoning-effort' }
       const observedVision = info.inputModalities === undefined ? (getCatalogVision(route) ?? false) : info.inputModalities.includes('image')

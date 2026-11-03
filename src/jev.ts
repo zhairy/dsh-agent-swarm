@@ -1,5 +1,5 @@
 import type { TaskCard, TriageAnswers } from './policy.js'
-import { normalizeRouteFailure, isTerminalRouteFailure } from './provider-policy.js'
+import { normalizeRouteFailure, isTerminalRouteFailure } from './domain/routing/provider-policy.js'
 
 /** Jev 调用配置 */
 export interface JevConfigInfo {

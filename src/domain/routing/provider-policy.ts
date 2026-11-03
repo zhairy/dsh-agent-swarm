@@ -1,4 +1,4 @@
-import type { LlmFailureLike } from './host-contract.js'
+import type { LlmFailureLike } from '../../host-contract.js'
 import type { RouteInfo } from './routes.js'
 
 export type FailureKind = 'quota_exhausted' | 'pool_exhausted' | 'insufficient_balance' | 'auth_invalid'
