@@ -742,7 +742,12 @@ export const intRouteStateRegistry = (onRootFallback?: (event: FallbackEventInfo
       || (returning && health.isAvailable(route) && !accepts(route)) || !health.claim(route, agent.id)) {
       if (child === undefined && config?.rootFallback === false) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'root-fallback-disabled: route_chain_exhausted') }
       const baseChain = config === undefined || _presetRole === undefined ? [] : getRoleRoute(config, getRouteKey(_presetRole)).chain
-      const chain = effectiveChain(agent.id, child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain)))
+      const declaredChain = effectiveChain(agent.id, child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain)))
+      // 用户可在对话框选择未列入角色备用链的模型。启用上下文准入时，
+      // 先把当前选择作为本次候选验证；安全则尊重选择，超窗才进入原备用链。
+      const chain = contextChecks !== undefined && route !== undefined && !declaredChain.some((candidate) => sameSelection(candidate, route))
+        ? [route, ...declaredChain]
+        : declaredChain
       const tried = child?.tried ?? roots.get(agent.id)?.tried ?? new Set<string>()
       // 与错误回退一致：先向后找，再环查此前被跳过、现已恢复的路由。
       const index = FindNextIndex(chain, child === undefined || quotaOrders.has(agent.id) ? 0 : child.index + 1, tried, route ?? resolved, 'other', health, accepts)

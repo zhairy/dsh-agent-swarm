@@ -329,6 +329,35 @@ describe('context-aware route admission', () => {
     registry.BeginRequestStep(root.id, 0, 0)
     await expect(registry.AdmitRequest(root, { ...fallback, maxTokens: 32768 }, 'tian_shu', selected, true)).resolves.toMatchObject(fallback)
   })
+
+  it('checks an explicitly selected route that is outside the declared fallback chain', async () => {
+    const declaredFallback = { provider: 'declared-fallback', model: 'm', reasoningEffort: 'max' }
+    const explicit = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
+    const cfg = getSwarmConfig({ routes: { tian_shu: { chain: [declaredFallback] } } })
+    const admitted: string[] = []
+    const registry = intRouteStateRegistry(undefined, undefined, {
+      admitContext: async (_agent, route) => {
+        admitted.push(route.provider)
+        return route.provider === 'openai'
+          ? { ok: false, reason: 'context-window-insufficient', measuredTokens: 368003, contextWindow: 272000, reservedOutputTokens: 128000, safetyMarginTokens: 4096, safeInputTokens: 139904 }
+          : { ok: true, measuredTokens: 368003, contextWindow: 1000000, reservedOutputTokens: 128000, safetyMarginTokens: 4096, safeInputTokens: 867904 }
+      }
+    })
+    registry.BeginRequestStep(root.id, 0, 0)
+    await expect(registry.AdmitRequest(root, { ...explicit, maxTokens: 128000 }, 'tian_shu', cfg, true)).resolves.toMatchObject(declaredFallback)
+    expect(admitted).toEqual(['openai', 'declared-fallback'])
+  })
+
+  it('keeps an explicitly selected route when it passes context admission outside the fallback chain', async () => {
+    const declaredFallback = { provider: 'declared-fallback', model: 'm', reasoningEffort: 'max' }
+    const explicit = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
+    const cfg = getSwarmConfig({ routes: { tian_shu: { chain: [declaredFallback] } } })
+    const registry = intRouteStateRegistry(undefined, undefined, {
+      admitContext: async () => ({ ok: true, measuredTokens: 63500, contextWindow: 1000000, reservedOutputTokens: 128000, safetyMarginTokens: 4096, safeInputTokens: 867904 })
+    })
+    registry.BeginRequestStep(root.id, 0, 0)
+    await expect(registry.AdmitRequest(root, { ...explicit, maxTokens: 128000 }, 'tian_shu', cfg, true)).resolves.toMatchObject(explicit)
+  })
 })
 
 describe('request recovery lifetime', () => {
