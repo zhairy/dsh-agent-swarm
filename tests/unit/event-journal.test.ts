@@ -35,4 +35,22 @@ describe('v3.2.0 event journal', () => {
     expect(reopened.read()).toMatchObject({ issues: [{ reason: 'invalid-json' }] })
     expect(readFileSync(reopened.path, 'utf8').endsWith('\n')).toBe(true)
   })
+
+  it.each(['null', 'false', '0', '"not an event"', '[]', '{}'])('recovers a non-event JSON tail: %s', (tail) => {
+    const dir = directory()
+    const journal = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-a' })
+    const first = journal.append(event('e1'))!
+    const prefix = readFileSync(journal.path, 'utf8')
+    writeFileSync(journal.path, `${prefix}${tail}\n`, 'utf8')
+
+    const reopened = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-a' })
+    expect(reopened.read()).toEqual({ events: [first], issues: [{ line: 2, reason: 'invalid-shape' }] })
+    expect(readFileSync(journal.path, 'utf8')).toBe(prefix)
+    expect(reopened.project().sequence).toBe(1)
+    const second = reopened.append(event('e2'))!
+    expect(second.seq).toBe(2)
+    expect(second.previousDigest).toBe(first.digest)
+    expect(createSwarmEventJournal({ directory: dir, rootSessionId: 'session-a' }).read()).toEqual({ events: [first, second], issues: [] })
+  })
+
 })
