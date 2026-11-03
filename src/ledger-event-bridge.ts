@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { LedgerEvent, LedgerEventType } from './evidence.js'
+import { getRedactedValue } from './evidence.js'
 import type { SwarmEvent, SwarmEventJournal, SwarmEventType } from './event-journal.js'
 
 const EVENT_TYPES: Readonly<Partial<Record<LedgerEventType, SwarmEventType>>> = {
@@ -53,6 +54,32 @@ export type LegacyImportSummary = { imported: number; skipped: number; unsupport
 export const getLegacyEventType = (type: LedgerEventType): SwarmEventType | undefined => EVENT_TYPES[type]
 
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex')
+export const LEGACY_JOURNAL_PAYLOAD_MAX_BYTES = 32 * 1024
+const LEGACY_SUMMARY_KEY_LIMIT = 32
+const LEGACY_SUMMARY_KEY_CHARS = 96
+
+const summarizeKey = (key: string): string => String(getRedactedValue(key)).slice(0, LEGACY_SUMMARY_KEY_CHARS)
+
+const summarizeShape = (event: LedgerEvent): Array<{ key: string; kind: string; size?: number }> =>
+  Object.entries(event.data).slice(0, LEGACY_SUMMARY_KEY_LIMIT).map(([key, value]) => ({
+    key: summarizeKey(key),
+    kind: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value,
+    ...(Array.isArray(value) ? { size: value.length } : {})
+  }))
+
+const legacyPayload = (event: LedgerEvent): Record<string, unknown> => {
+  const encoded = JSON.stringify(event.data)
+  const originalBytes = Buffer.byteLength(encoded)
+  if (originalBytes <= LEGACY_JOURNAL_PAYLOAD_MAX_BYTES) return { legacyType: event.type, legacyData: event.data }
+  return {
+    legacyType: event.type,
+    legacyDataTruncated: true,
+    legacyDataBytes: originalBytes,
+    legacyDataSha256: sha256(encoded),
+    legacyDataKeyCount: Object.keys(event.data).length,
+    legacyDataSample: summarizeShape(event)
+  }
+}
 
 /** Deterministic identity makes restart/reimport exactly-once at the journal boundary. */
 const legacyIdentity = (event: LedgerEvent): string => sha256(JSON.stringify([
@@ -71,7 +98,7 @@ export const appendLegacyEventToJournal = (journal: SwarmEventJournal, event: Le
     ...(event.delegationId === undefined ? {} : { assignmentId: event.delegationId }),
     type,
     actor: { kind: ACTORS[type] ?? 'host', id: event.delegationId ?? event.taskId ?? event.sessionId },
-    payload: { legacyType: event.type, legacyData: event.data }
+    payload: legacyPayload(event)
   })
 }
 

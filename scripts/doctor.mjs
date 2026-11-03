@@ -77,6 +77,20 @@ const getLegacySettings = () => ['settings.yaml', 'settings.yaml.imported']
 const dump = version !== undefined ? run(`${dsh} --profile ${profile} --dump-config`) : undefined
 if (dump !== undefined) {
   add('百工模式与 12 个角色预设已组合', ['tian-shu', 'fu-he', 'miao-bi'].every((id) => dump.includes(`preset-${id}`)), dump.includes('preset-tian-shu') ? (process.env.DSH_SWARM_ROLE_PRESETS === '1' ? '已组合（角色预设可见）' : '已组合（模式列表只显示百工模式）') : '未找到 preset-tian-shu')
+  const nativeSeams = [
+    ['@deepseek-ai/dsh-tool-ask-user', 'ask-user'],
+    ['@deepseek-ai/dsh-tool-todo', 'todo'],
+    ['@deepseek-ai/dsh-time-context', 'time-context'],
+    ['@deepseek-ai/dsh-agent-instructions', 'agent-instructions'],
+    ['@deepseek-ai/dsh-tool-goal', 'goal'],
+    ['@deepseek-ai/dsh-tool-jobs', 'jobs'],
+    ['@deepseek-ai/dsh-plan-mode', 'plan-mode'],
+    ['@deepseek-ai/dsh-experimental-tool-worktree', 'worktree']
+  ]
+  const missingNative = nativeSeams.filter(([name]) => !dump.includes(name)).map(([, label]) => label)
+  add('DSH 原生协作 seam', missingNative.length === 0,
+    missingNative.length === 0 ? nativeSeams.map(([, label]) => label).join('、') : `缺少：${missingNative.join('、')}`,
+    '升级或修复 DSH profile；Swarm 只读取这些公开 seam，不以自有实现替代')
   const legacy = getLegacySettings()
   for (const provider of ['qwen-token-plan-cn', 'opencode-go']) {
     const inProfile = dump.includes(provider)
@@ -87,6 +101,10 @@ if (dump !== undefined) {
 } else {
   add('读取组合配置', false, '无法运行 --dump-config', '先修复上面的 DSH 版本或 profile 问题')
 }
+
+add('状态目录 durability', true,
+  process.platform === 'win32' ? '文件 fsync + rename 严格；目录 fsync 使用 Windows best-effort 回退' : '文件与目录 fsync 严格',
+  process.platform === 'win32' ? 'NTFS 不支持 Node 目录 fsync；源码和状态文件仍执行 fsync，目录项在掉电时可能回退到最后一次成功快照' : '')
 
 const profilePatch = join(profileDir, 'cordis.patch.yml')
 if (existsSync(profilePatch)) {

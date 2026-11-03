@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, readFile, writeFile, mkdir, symlink, cp, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { canonicalStateJson, createDurableStateStore, type DurableStateStore } from '../../src/state-store.js'
+import { canonicalStateJson, createDurableStateStore, getDirectoryDurability, syncDirectory, type DurableStateStore } from '../../src/state-store.js'
 import { ChunkedState } from '../../src/state-chunks.js'
 
 const directories: string[] = []
@@ -13,6 +13,26 @@ const track = <T>(store: DurableStateStore<T>) => { stores.push(store as Durable
 afterEach(async () => { await Promise.all(stores.splice(0).map((store) => store.dispose().catch(() => undefined))); await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
 
 describe('durable snapshot and committed journal', () => {
+  it('treats Windows directory fsync EPERM as an explicit platform limitation while preserving strict Unix errors', async () => {
+    expect(getDirectoryDurability('win32')).toBe('windows-best-effort')
+    expect(getDirectoryDurability('linux')).toBe('strict')
+    const close = vi.fn(async () => undefined)
+    const windows = await syncDirectory('fixture', { platform: 'win32', openDirectory: async () => ({
+      sync: async () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM', syscall: 'fsync' }) }, close
+    }) })
+    expect(windows).toEqual({ status: 'unsupported', code: 'EPERM' })
+    expect(close).toHaveBeenCalledOnce()
+    await expect(syncDirectory('fixture', { platform: 'win32', openDirectory: async () => ({
+      sync: async () => { throw Object.assign(new Error('permission denied'), { code: 'EACCES', syscall: 'fsync' }) }, close: async () => undefined
+    }) })).rejects.toMatchObject({ code: 'EACCES' })
+    await expect(syncDirectory('fixture', { platform: 'win32', openDirectory: async () => {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM', syscall: 'open' })
+    } })).rejects.toMatchObject({ code: 'EPERM' })
+    await expect(syncDirectory('fixture', { platform: 'linux', openDirectory: async () => ({
+      sync: async () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM', syscall: 'fsync' }) }, close: async () => undefined
+    }) })).rejects.toMatchObject({ code: 'EPERM' })
+  })
+
   it('serializes concurrent updates and restores full state rather than audit summaries', async () => {
     const path = await directory()
     const store = track(await createDurableStateStore({ directory: path, initialState: { count: 0, unresolved: ['important'], fullText: 'complete non-redacted proof context' } }))

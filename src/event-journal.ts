@@ -74,7 +74,8 @@ const parseAndValidate = (text: string, rootSessionId: string, initialSeq = 1, i
     if (raw === '') continue
     let event: SwarmEvent
     try { event = JSON.parse(raw) as SwarmEvent } catch { issues.push({ line: index + 1, reason: 'invalid-json' }); break }
-    if (event.schema !== EVENT_JOURNAL_SCHEMA || event.rootSessionId !== rootSessionId || event.seq !== initialSeq + events.length
+    if (event === null || typeof event !== 'object' || Array.isArray(event)
+      || event.schema !== EVENT_JOURNAL_SCHEMA || event.rootSessionId !== rootSessionId || event.seq !== initialSeq + events.length
       || typeof event.eventId !== 'string' || typeof event.idempotencyKey !== 'string' || typeof event.type !== 'string'
       || typeof event.previousDigest !== 'string' || typeof event.digest !== 'string') {
       issues.push({ line: index + 1, reason: 'invalid-shape' }); break

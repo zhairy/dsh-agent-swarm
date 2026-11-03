@@ -113,6 +113,21 @@ describe('真实任务流程客户端投影', () => {
     expect(node.children.some((child: any) => child?.type === 'MarkdownText' && child.props.text === '真实工具内容')).toBe(true)
   })
 
+  it('renders native todo, plan, goal, job and clock projections as read-only host state', () => {
+    const { NativeHostStatus } = loadModule().__test__
+    const node = NativeHostStatus({ view: { native: {
+      availability: { askUser: true, todo: true, timeContext: true, planMode: true, goal: true, jobs: true, worktree: true },
+      todos: { total: 4, scanned: 4, pending: 1, inProgress: 1, completed: 2, items: [] },
+      planMode: { active: true, pending: false }, goal: { id: 'G-1', revision: 1, phase: 'active', activation: 'armed', roundsStarted: 1, maxGoalRounds: 8 },
+      jobs: { total: 3, running: 1, stopping: 0, completed: 1, failedOrKilled: 1 }
+    } }, t: (key: string) => key })
+    const text = textOf(node)
+    expect(text).toContain('nativeTodo 2/4')
+    expect(text).toContain('nativeGoal active/armed')
+    expect(text).toContain('nativeJobs 1')
+    expect(text).toContain('nativeAskUser nativeAvailable')
+  })
+
   it('注册标准聊天节点并为当前任务注入共享Store，而不是每行独立RPC', async () => {
     const module = loadModule()
     let registration: any

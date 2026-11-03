@@ -11,6 +11,13 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 适配 DSH **0.2.0 / 0.2.1**（`>=0.2.0-rc.2 <0.2.2-0`，推荐 0.2.1-rc.5）与 Node.js 22.19 及以上
 - 新建会话选「百工模式」即可使用；Jev 可选择 TypeSafe 官方接口，或从 DSH 当前模型目录选择第三方 Jev 兼容模型
 
+### 3.3.2 的变化
+
+- Windows 状态目录不再因 Node 对目录 `fsync` 返回 `EPERM` 而阻断初始化；文件 fsync 与同卷 rename 保持严格，目录项 durability 明确标记为 Windows best-effort。
+- 旧账本中的超大 checkpoint 以字节数、SHA-256 和形状摘要迁入 EventJournal V2，既有 ledger 原始文件不被修改，日志行长限制也不再穿透为模型调用失败。
+- 合并 non-event JSON 尾部恢复：`null`、标量、数组和空对象活动尾按无效形状截断，损坏封片保持不可变。
+- 任务页和 doctor 增加 DSH 原生 ask-user、todo、time-context、plan-mode、goal、jobs、agent-instructions 和 worktree 集成状态；Swarm 仍只读取宿主权威投影。
+
 ### 3.3.1 的变化
 
 - 修正直接 OpenAI API 的 GPT-6 元数据：Astra、Sol、6.1 Sol、Luna 和 6.1 Terra 使用官方 1.05M context，不再把 272K 长上下文计价分界当成容量上限。
