@@ -269,6 +269,39 @@ describe('天枢容灾升级', () => {
     expect(service.getStatus({}, exec()).rootUpgrade).toBeNull()
   })
 
+  it('人工选择的根模型不会被任务卡风险规则自动覆盖', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false } }, env: okProbe })
+    service.routeState.RecordUserSelection(root.id, { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }, 1)
+    const card = await service.AddTaskCard(cardInput({ changesCode: true, crossModuleArchitecture: true }), exec())
+    expect(card.rootUpgrade).toMatchObject({ taskIds: ['T-1'], chain: [], cancelledByUser: true,
+      suppressedByUserSelection: true, selectedModel: 'openai/gpt-6.1-sol' })
+    expect(service.routeState.getRootPreference(root.id)).toMatchObject({ provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' })
+    expect(service.routeState.getRootUpgrade(root.id)).toBeUndefined()
+  })
+
+  it('旧会话恢复出的持久人工选择同样阻止任务卡自动升级', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false } }, env: {
+      inspectRootPreference: async () => ({ provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' })
+    } })
+    await service.WaitAgentReady(root as never)
+    expect(service.routeState.hasUserSelection(root.id)).toBe(true)
+    const card = await service.AddTaskCard(cardInput({ changesCode: true, crossModuleArchitecture: true }), exec())
+    expect(card.rootUpgrade).toMatchObject({ suppressedByUserSelection: true, selectedModel: 'openai/gpt-6.1-sol' })
+    expect(service.routeState.getRootUpgrade(root.id)).toBeUndefined()
+  })
+
+  it('restores a persisted picker over an earlier request-only default exactly once', async () => {
+    const inspect = vi.fn(async () => ({ provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }))
+    const { service } = makeService({ config: { jev: { enabled: false } }, env: { inspectRootPreference: inspect } })
+    service.routeState.getRequestOverride(root, { provider: 'codex', model: 'automatic' }, 'tian_shu')
+    expect(service.routeState.hasUserSelection(root.id)).toBe(false)
+    await service.WaitAgentReady(root as never)
+    await service.WaitAgentReady(root as never)
+    expect(inspect).toHaveBeenCalledOnce()
+    expect(service.routeState.getRootPreference(root.id)).toMatchObject({ provider: 'openai', model: 'gpt-6.1-sol' })
+    expect(service.routeState.hasUserSelection(root.id)).toBe(true)
+  })
+
   it('无触发条件时不升级；显式要求可升级、可取消；升级模型不可用时如实报告', async () => {
     const { service } = makeService({ config: { jev: { enabled: false } }, env: okProbe })
     expect((await service.AddTaskCard(cardInput({ changesCode: true }), exec())).rootUpgrade).toBeNull()
@@ -362,6 +395,127 @@ describe('天枢容灾升级', () => {
   })
 })
 
+describe('Source / Trigger 与 durable outbox service wiring', () => {
+  it('records Host human messages once and exposes filtered plugin traffic without affecting the turn', () => {
+    const { service } = makeService({ config: { jev: { enabled: false } } })
+    const event = { type: 'user/message', seq: 10, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '继续实施' }] } }
+    expect(service.ObserveSessionEvent(root.id, event)).toMatchObject({ status: 'accepted', reason: 'explicit-request' })
+    expect(service.ObserveSessionEvent(root.id, event)).toMatchObject({ status: 'duplicate' })
+    expect(service.ObserveSessionEvent(root.id, { ...event, seq: 11, data: { source: { kind: 'plugin:memory' } } })).toEqual({ filtered: 'plugin-message' })
+    expect(service.GetEventDrivenStatusForRpc(root.id)).toMatchObject({ counts: { received: 1, accepted: 1, filtered: 0 } })
+  })
+
+  it('keeps Source and Outbox disabled when events.journal is off', () => {
+    const { service } = makeService({ config: { jev: { enabled: false }, events: { journal: false } } })
+    expect(service.ObserveSessionEvent(root.id, { type: 'user/message', seq: 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] } })).toBeUndefined()
+    expect(() => service.ConfigureSource(root.id, { schemaVersion: 1, id: 'github', kind: 'github', enabled: true, selfActor: 'bot:self', botActors: [], allowedActors: [], ignoredThreads: [], replyChannels: [] })).toThrow(/events\.journal/)
+    expect(() => service.DispatchOutbox(root.id)).toThrow(/events\.journal/)
+  })
+
+  it('persists auto accepted inferred work and dispatches it through a registered idempotent handler', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false }, proactive: { mode: 'auto', rules: ['fix-ci'] } } })
+    service.ConfigureSource(root.id, { schemaVersion: 1, id: 'github', kind: 'github', enabled: true, selfActor: 'bot:self', botActors: ['bot:ci'], allowedActors: [], ignoredThreads: [], replyChannels: [] })
+    const accepted = service.IngestSourceTrigger(root.id, 'github', { sourceId: 'github', externalId: 'evt-1', threadId: 'pr-1', actorId: 'bot:ci',
+      actorKind: 'bot', addressed: true, preview: 'CI failed', topics: ['ci'], ruleIds: ['fix-ci'], mandate: {
+        title: '修复 CI', goal: '定位并修复 CI 失败', acceptance: ['测试通过'], scope: [], flags: {}
+      } })
+    expect(accepted).toMatchObject({ status: 'accepted', outboxId: expect.stringMatching(/^effect-/) })
+    const delivered: string[] = []
+    service.RegisterOutboxHandler(root.id, 'ticket-intent', (record) => { delivered.push(record.id) })
+    await vi.waitFor(() => expect(delivered).toEqual([accepted.outboxId]))
+    expect(await service.DispatchOutbox(root.id)).toMatchObject({ delivered: 0, failed: 0 })
+    expect(delivered).toEqual([accepted.outboxId])
+    expect(service.GetEventDrivenStatusForRpc(root.id).outboxPending).toBe(0)
+  })
+
+  it('materializes a durable Ticket intent into a real task and Thread subscription', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false }, proactive: { mode: 'auto', rules: ['fix-ci'] } } })
+    await service.WaitAgentReady(root)
+    service.ConfigureSource(root.id, { schemaVersion: 1, id: 'github', kind: 'github', enabled: true, selfActor: 'bot:self', botActors: ['bot:ci'], allowedActors: [], ignoredThreads: [], replyChannels: [] })
+    const accepted = service.IngestSourceTrigger(root.id, 'github', { sourceId: 'github', externalId: 'evt-auto-1', threadId: 'pr-42', actorId: 'bot:ci',
+      actorKind: 'bot', addressed: true, preview: 'CI failed', topics: ['ci'], ruleIds: ['fix-ci'], mandate: {
+        title: '修复 CI', goal: '定位并修复 CI 失败', acceptance: ['测试通过'], scope: [], flags: {}
+      } })
+    expect(accepted).toMatchObject({ status: 'accepted', reason: 'proactive-rule', outboxId: expect.any(String) })
+    await vi.waitFor(() => expect(service.getStatus({}, exec()).tasks).toHaveLength(1))
+    await vi.waitFor(() => expect(service.GetEventDrivenStatusForRpc(root.id)).toMatchObject({ threads: 1, subscriptions: 1, outboxPending: 0 }))
+    expect(service.getStatus({}, exec()).tasks[0]).toMatchObject({ goal: '定位并修复 CI 失败', title: '修复 CI' })
+    expect(service.IngestSourceTrigger(root.id, 'github', { sourceId: 'github', externalId: 'human-follow-up', threadId: 'pr-42', actorId: 'human:alice',
+      actorKind: 'human', addressed: true, preview: '补充：不要修改生成文件', topics: [], ruleIds: [] }))
+      .toMatchObject({ status: 'accepted', reason: 'ticket-follow-up', evalRequired: false })
+    await vi.waitFor(() => expect(service.GetEventDrivenStatusForRpc(root.id).outboxPending).toBe(0))
+    const materials = await service.ReadContext({ task_id: service.getStatus({}, exec()).tasks[0]!.task_id }, exec()) as { materials: Array<{ kind: string }> }
+    expect(materials.materials).toContainEqual(expect.objectContaining({ kind: 'source' }))
+    const sourceMaterialCount = materials.materials.filter((material) => material.kind === 'source').length
+    expect(service.IngestSourceTrigger(root.id, 'github', { sourceId: 'github', externalId: 'bot-update', threadId: 'pr-42', actorId: 'bot:ci',
+      actorKind: 'bot', addressed: true, preview: '新增测试日志', topics: ['ci'], ruleIds: ['fix-ci'], mandate: {
+        title: '不应新建', goal: '只向活动 Ticket 追加来源上下文', acceptance: ['不重复建卡'], scope: [], flags: {}
+      } })).toMatchObject({ status: 'ignored', reason: 'thread-already-active', fanoutTicketIds: [service.getStatus({}, exec()).tasks[0]!.task_id] })
+    await vi.waitFor(() => expect(service.GetEventDrivenStatusForRpc(root.id).outboxPending).toBe(0))
+    expect((await service.ReadContext({ task_id: service.getStatus({}, exec()).tasks[0]!.task_id }, exec()) as { materials: Array<{ kind: string }> }).materials
+      .filter((material) => material.kind === 'source')).toHaveLength(sourceMaterialCount + 1)
+    expect(service.getStatus({}, exec()).tasks).toHaveLength(1)
+    await service.AcceptTask({ task_id: service.getStatus({}, exec()).tasks[0]!.task_id, decision: 'incomplete', summary: '本轮停止', stopReason: '测试停止' }, exec())
+    expect(service.GetEventDrivenStatusForRpc(root.id).subscriptions).toBe(0)
+  })
+
+  it('resumes a pending Ticket intent after the root agent becomes available', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false }, proactive: { mode: 'auto', rules: ['fix-ci'] } } })
+    service.ConfigureSource(root.id, { schemaVersion: 1, id: 'github', kind: 'github', enabled: true, selfActor: 'bot:self', botActors: ['bot:ci'], allowedActors: [], ignoredThreads: [], replyChannels: [] })
+    expect(service.IngestSourceTrigger(root.id, 'github', { sourceId: 'github', externalId: 'evt-cold', threadId: 'pr-cold', actorId: 'bot:ci',
+      actorKind: 'bot', addressed: true, preview: 'CI failed', topics: ['ci'], ruleIds: ['fix-ci'], mandate: {
+        title: '恢复 CI', goal: '冷启动后恢复 Ticket', acceptance: ['测试通过'], scope: [], flags: {}
+      } })).toMatchObject({ status: 'accepted' })
+    expect(service.GetEventDrivenStatusForRpc(root.id).outboxPending).toBe(1)
+    await service.WaitAgentReady(root)
+    await vi.waitFor(() => expect(service.GetEventDrivenStatusForRpc(root.id)).toMatchObject({ subscriptions: 1, outboxPending: 0 }))
+    expect(service.getStatus({}, exec()).tasks).toEqual([expect.objectContaining({ title: '恢复 CI' })])
+  })
+
+  it('automatically wakes a due retry without requiring another Source event', async () => {
+    vi.useFakeTimers()
+    try {
+      const { service } = makeService({ config: { jev: { enabled: false }, proactive: { mode: 'auto', rules: ['fix-ci'] } }, env: { now: () => Date.now() } })
+      await service.WaitAgentReady(root)
+      service.ConfigureSource(root.id, { schemaVersion: 1, id: 'github', kind: 'github', enabled: true, selfActor: 'bot:self', botActors: ['bot:ci'], allowedActors: [], ignoredThreads: [], replyChannels: [] })
+      const handler = vi.fn().mockRejectedValueOnce(new Error('retry')).mockResolvedValue(undefined)
+      service.RegisterOutboxHandler(root.id, 'ticket-intent', handler)
+      service.IngestSourceTrigger(root.id, 'github', { sourceId: 'github', externalId: 'evt-retry', threadId: 'pr-retry', actorId: 'bot:ci',
+        actorKind: 'bot', addressed: true, preview: 'CI failed', topics: ['ci'], ruleIds: ['fix-ci'], mandate: {
+          title: '重试 CI', goal: '验证自动重试', acceptance: ['测试通过'], scope: [], flags: {}
+        } })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(handler).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(handler).toHaveBeenCalledTimes(2)
+      expect(service.GetEventDrivenStatusForRpc(root.id)).toMatchObject({ outboxPending: 0, outboxFailed: 0 })
+    } finally { vi.useRealTimers() }
+  })
+
+  it('restores the materialized Ticket, Thread and delivered Outbox from EventJournal after deleting StateStore', async () => {
+    const first = makeService({ config: { persistence: { enabled: false }, jev: { enabled: false }, proactive: { mode: 'auto', rules: ['fix-ci'] } } })
+    await first.service.WaitAgentReady(root)
+    first.service.ConfigureSource(root.id, { schemaVersion: 1, id: 'github', kind: 'github', enabled: true, selfActor: 'bot:self', botActors: ['bot:ci'], allowedActors: [], ignoredThreads: [], replyChannels: [] })
+    first.service.IngestSourceTrigger(root.id, 'github', { sourceId: 'github', externalId: 'evt-restart', threadId: 'pr-restart', actorId: 'bot:ci',
+      actorKind: 'bot', addressed: true, preview: 'CI failed', topics: ['ci'], ruleIds: ['fix-ci'], mandate: {
+        title: '持久化 CI', goal: '从 Journal 恢复 Ticket', acceptance: ['测试通过'], scope: [], flags: {}
+      } })
+    await vi.waitFor(() => expect(first.service.GetEventDrivenStatusForRpc(root.id)).toMatchObject({ subscriptions: 1, outboxPending: 0 }))
+    await first.service.dispose()
+    rmSync(join(first.dshHome, 'share', 'dsh-agent-swarm', 'state'), { recursive: true, force: true })
+
+    const second = makeService({ config: { persistence: { enabled: false }, jev: { enabled: false }, proactive: { mode: 'auto', rules: ['fix-ci'] } },
+      env: { dshHome: first.dshHome } })
+    try {
+      await second.service.WaitAgentReady(root)
+      await vi.waitFor(() => expect(second.service.GetEventDrivenStatusForRpc(root.id)).toMatchObject({ threads: 1, subscriptions: 1, outboxPending: 0 }))
+      expect(second.service.getStatus({}, exec()).tasks).toEqual([expect.objectContaining({ title: '持久化 CI', goal: '从 Journal 恢复 Ticket' })])
+      expect(await second.service.DispatchOutbox(root.id)).toMatchObject({ delivered: 0, failed: 0 })
+      expect(second.service.getStatus({}, exec()).tasks).toHaveLength(1)
+    } finally { await second.service.dispose() }
+  })
+})
+
 describe('AddTaskCard', () => {
   it('规则门禁 + Jev 追加门禁，写账本', async () => {
     const { service, fetchMock, dshHome } = makeService()
@@ -416,6 +570,16 @@ describe('AddTaskCard', () => {
     expect(updated.requiredGates.map((g) => g.gate).sort()).toEqual(['G_VERIFY', 'G_VISION'])
     await expect(service.AddTaskCard(cardInput({}, { task_id: 'T-9' }), exec())).rejects.toThrow('未知任务')
     await expect(service.AddTaskCard({ title: '' }, exec())).rejects.toThrow('title')
+  })
+
+  it('uses the Source effect id as a durable at-least-once materialization key', async () => {
+    const { service } = makeService({ config: { jev: { enabled: false } } })
+    const effect = `effect-${'a'.repeat(40)}`
+    const first = await service.AddTaskCard(cardInput({}, { source_effect_id: effect, title: '第一次' }), exec())
+    const replay = await service.AddTaskCard(cardInput({}, { source_effect_id: effect, title: '不得覆盖' }), exec())
+    expect(replay.task_id).toBe(first.task_id)
+    expect(service.getStatus({}, exec()).tasks).toEqual([expect.objectContaining({ task_id: first.task_id, title: '第一次' })])
+    await expect(service.AddTaskCard(cardInput({}, { source_effect_id: 'not-an-effect' }), exec())).rejects.toThrow('source_effect_id')
   })
 })
 
@@ -660,8 +824,10 @@ describe('守卫与诊断', () => {
     expect(service.getGuardReason({ name: 'write', agent: { id: 'x', session: { header: { agentPreset: 'standard' } } } })).toBeUndefined()
     expect(service.getGuardReason({ name: 'write' })).toBeUndefined()
     service.routeState.AddChild('kid', { chain: [], role: 'fu_he' })
-    expect(service.getGuardReason({ name: 'write', agent: { id: 'kid', session: { header: { agentPreset: 'tian-shu' } } } })).toContain('「复核」')
+    expect(service.getGuardReason({ name: 'write', agent: { id: 'kid', session: { header: { agentPreset: 'tian-shu' } } } })).toBeUndefined()
+    expect(service.getGuardReason({ name: 'write', agent: { id: 'kid' } })).toContain('「复核」')
     expect(service.getRoleForAgent({ id: 'kid' })).toBe('fu_he')
+    expect(service.getRoleForAgent({ id: 'kid', session: { header: { agentPreset: 'standard' } } })).toBeUndefined()
   })
 
   it('默认禁止天枢 Router 直接写入或运行命令', () => {
@@ -740,5 +906,35 @@ describe('任务卡流程草稿', () => {
     const { service } = makeService({ config: { jev: { enabled: false } } })
     const nodes = Array.from({ length: 40 }, (_, index) => ({ id: `n${index}`, role: 'tan_wei', dependsOn: index === 0 ? [] : [`n${index - 1}`] }))
     await expect(service.AddTaskCard(cardInput({ changesCode: true }, { workflow: { nodes } }), exec())).rejects.toThrow('流程草稿超过配置的上限（32 个节点、64 条依赖边）')
+  })
+})
+
+describe('旧会话角色恢复', () => {
+  it('reapplies the projected role instead of retaining a stale preset tool scope', () => {
+    const restrict = vi.fn(() => vi.fn())
+    const child = { id: 'restore-child', session: { header: { parentSession: root.id, agentPreset: 'zhu-jian' } }, ctx: { get: (name: string) => name === 'tools' ? { restrict } : undefined } }
+    const { service } = makeService({ env: {
+      getSubagents: () => ({ list: () => ['spawn'], getProvider: () => ({ capabilities: { agentPreset: true } }), startActivation: vi.fn() } as never),
+      getSessionProjections: () => ({ stateOf: (_session: unknown, key: string) => key === 'agentPreset' ? 'yu-shi' : undefined })
+    } })
+    service.routeState.AddChild(child.id, { chain: [getRoleRoute(service.getConfig(), 'zhu_jian').chain[0]!], role: 'zhu_jian' })
+    expect(service.getRoleForAgent(child as never)).toBe('yu_shi')
+    service.OnAgentCreated(child as never)
+    expect(restrict).toHaveBeenCalledOnce()
+  })
+
+  it('disposes a stale role scope before applying the current role even when the new host cannot restrict', () => {
+    const dispose = vi.fn()
+    const restrict = vi.fn(() => dispose)
+    let canRestrict = true
+    const child = { id: 'role-change-child', session: { header: { parentSession: root.id, agentPreset: 'zhu-jian' } }, ctx: { get: () => canRestrict ? { restrict } : undefined } }
+    const { service } = makeService({ env: {
+      getSubagents: () => ({ list: () => ['spawn'], getProvider: () => ({ capabilities: { agentPreset: true } }), startActivation: vi.fn() } as never)
+    } })
+    service.ApplyChildToolScope(child as never, 'zhu_jian', true)
+    canRestrict = false
+    service.ApplyChildToolScope(child as never, 'yu_shi', false)
+    expect(dispose).toHaveBeenCalledOnce()
+    expect(restrict).toHaveBeenCalledOnce()
   })
 })

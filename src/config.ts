@@ -49,12 +49,12 @@ export const Config = Schema.object({
   proactive: Schema.object({
     mode: Schema.union(['off', 'observe', 'auto']).default('observe'),
     rules: Schema.array(Schema.string()).default([])
-  }).default({}).description('推断型主动工作授权；默认 observe，只记录 would-accept，不启动 Worker').volatile(),
+  }).default({}).description('推断型主动工作授权；off 过滤、observe 只记录 would-accept、auto 在规则与宿主权限全部通过后产生 durable ticket intent').volatile(),
   events: Schema.object({
     journal: Schema.boolean().default(true),
     sealAfterBytes: Schema.natural().min(65536).max(268435456).default(67108864),
     maxLineBytes: Schema.natural().min(1024).max(65536).default(65536)
-  }).default({}).description('V2 事件日志封片与单行上限').volatile(),
+  }).default({}).description('V2 事件日志封片与单行上限；启用时 StateStore 是可删除物化缓存，状态、Source/Trigger 与 Outbox 从 EventJournal 恢复').volatile(),
   watchdog: Schema.object({
     enabled: Schema.boolean().default(true),
     heartbeatMs: Schema.natural().min(1000).max(3600000).default(15000),
@@ -156,7 +156,7 @@ export const Config = Schema.object({
     enabled: Schema.boolean().default(false),
     directory: Schema.string().default(''),
     maxStateBytes: Schema.natural().default(0)
-  }).default({}).description('完整状态快照与恢复；maxStateBytes=0 按模式自动（持久化 4MiB / 内存 16MiB）；不以脱敏账本作为恢复真源').volatile(),
+  }).default({}).description('本地 StateStore 物化缓存与旧兼容恢复；events.journal=true 时 FeatureState 以 EventJournal 为权威真源。maxStateBytes=0 按模式自动（持久化 4MiB / 内存 16MiB）').volatile(),
   messageBus: Schema.object({
     enabled: Schema.boolean().default(false),
     maxPending: Schema.natural().default(128)

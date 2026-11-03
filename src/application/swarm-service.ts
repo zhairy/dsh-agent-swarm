@@ -84,6 +84,9 @@ import { createExperienceToolUseCase } from './experience-tool.js'
 import { createContextQueryToolUseCase } from './context-query-tool.js'
 import { ValidateAcceptInput, type AcceptResultInfo } from './validation.js'
 import { describeUnknownTask, getStatusResult, getTaskCardResult, getTaskView } from './views.js'
+import { createSourceTriggerRuntime, sourceTriggerFromSessionEvent } from '../domain/sources/runtime.js'
+import { createSourceInstance } from '../domain/sources/model.js'
+import { dispatchOutbox, getOutboxRecords, type OutboxHandler, type OutboxRecord } from '../outbox.js'
 
 export type { LoggerLike, PlanningRunView, RootUpgradeView } from './api.js'
 export type { SwarmService, SwarmServiceDepsInfo } from './service-api.js'
@@ -93,12 +96,17 @@ export type { AcceptInputInfo, AcceptResultInfo } from './validation.js'
 interface SessionStateInfo extends DelegateSessionInfo {
   store: TicketRepository
   journal: SwarmEventJournal
+  sources: ReturnType<typeof createSourceTriggerRuntime>
+  outboxHandlers: Map<string, OutboxHandler>
+  outboxDispatch?: Promise<void>
+  outboxRetryTimer?: ReturnType<typeof setTimeout>
   worktrees: WorktreeRegistry
   counters: { native: number; jev: number; review: number; session: number }
   /** 天枢根会话最近一次调用 write/edit 的时刻；0 表示没有 */
   rootEditAt: number
   rootUpgrade?: RootUpgradeView
   rootUpgradeExplicit: Set<string>
+  rootPreferenceChecked?: boolean
   features?: FeatureSession
   featuresPromise?: Promise<FeatureSession>
   rootAgent?: AgentLike
@@ -136,7 +144,44 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const quarantinedTasks = new Set<string>()
   let watchdogTimer: ReturnType<typeof setTimeout> | undefined
   let watchdogDisposed = false
+  let closing = false
+  const now = deps.now ?? Date.now
   const watchdog = createSwarmWatchdog({ config: deps.getConfig().watchdog })
+  const requireEventJournal = (): void => {
+    if (!deps.getConfig().events.journal) throw new SwarmError('SERVICE_UNAVAILABLE', 'Source、Trigger 与 durable Outbox 需要启用 events.journal')
+  }
+  const scheduleOutboxRetry = (session: SessionStateInfo): void => {
+    if (session.outboxRetryTimer !== undefined) { clearTimeout(session.outboxRetryTimer); session.outboxRetryTimer = undefined }
+    if (closing) return
+    const nextAt = getOutboxRecords(session.journal)
+      .filter((record) => record.status !== 'delivered' && session.outboxHandlers.has(record.kind) && record.nextAt < Number.MAX_SAFE_INTEGER)
+      .reduce<number | undefined>((earliest, record) => earliest === undefined || record.nextAt < earliest ? record.nextAt : earliest, undefined)
+    if (nextAt === undefined) return
+    const delay = Math.max(0, Math.min(60_000, nextAt - now()))
+    session.outboxRetryTimer = setTimeout(() => {
+      session.outboxRetryTimer = undefined
+      if (closing) return
+      void dispatchSessionOutbox(session).catch((error) => deps.logger?.warn(`Outbox retry failed: ${String(error)}`))
+    }, delay)
+    session.outboxRetryTimer.unref?.()
+  }
+  /**
+   * Serialize all dispatch triggers per session. Outbox handlers are still
+   * required to be idempotent for crash recovery, while this lock prevents a
+   * normal wake-up and a new trigger from racing the same pending effect.
+   */
+  const dispatchSessionOutbox = (session: SessionStateInfo, limit?: number, includeBlocked = false) => {
+    if (session.outboxRetryTimer !== undefined) { clearTimeout(session.outboxRetryTimer); session.outboxRetryTimer = undefined }
+    const previous = session.outboxDispatch ?? Promise.resolve()
+    const run = previous.catch(() => undefined).then(() => dispatchOutbox(session.journal, session.outboxHandlers,
+      { ...(limit === undefined ? {} : { limit }), ...(includeBlocked ? { includeBlocked: true } : {}) }))
+    session.outboxDispatch = run.then(() => { scheduleOutboxRetry(session) }, () => { scheduleOutboxRetry(session) })
+    return run
+  }
+  const hasLiveRoot = (session: SessionStateInfo): boolean => {
+    const root = session.rootAgent ?? deps.getAgent?.(session.sessionId)
+    return root !== undefined && isRootTianShu(root)
+  }
   /** subagent/end 不带错误正文；从子会话 turn/end 暂存本轮失败，交给连续会话恢复分类。 */
   const childTurnErrors = new Map<string, string>()
   const rememberChildTurnError = (sessionId: string, message: string | undefined): void => {
@@ -145,7 +190,6 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     childTurnErrors.set(sessionId, message.slice(0, 4000))
     if (childTurnErrors.size > 256) childTurnErrors.delete(childTurnErrors.keys().next().value!)
   }
-  let closing = false
   let disposal: Promise<void> | undefined
   const schedulers = new Map<string, ReturnType<typeof createDelegationScheduler>>()
   const schedulerFor = (sessionId: string) => {
@@ -153,7 +197,6 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (scheduler === undefined) { scheduler = createDelegationScheduler({ getOptions: () => deps.getConfig().scheduling }); schedulers.set(sessionId, scheduler) }
     return scheduler
   }
-  const now = deps.now ?? Date.now
   let sequence = 0
   const newId = (prefix: string): string => `${prefix}-${++sequence}`
 
@@ -179,11 +222,16 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     }
     const worktrees = intWorktreeRegistry({ now })
     worktrees.hydrate(getLedgerEvents(ledger.path))
+    const sources = createSourceTriggerRuntime({ journal, config: deps.getConfig, now })
+    if (deps.getConfig().events.journal) sources.configure(createSourceInstance({ id: 'session', kind: 'dsh-session', enabled: true, ignoredThreads: [] }))
+    const outboxHandlers = new Map<string, OutboxHandler>()
     const created: SessionStateInfo = {
       sessionId,
       store: intTicketRepository(intTaskStore()),
       ledger,
       journal,
+      sources,
+      outboxHandlers,
       worktrees,
       editLock: intMutex(),
       counters: { native: 0, jev: 0, review: 0, session: 0 },
@@ -191,7 +239,81 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       rootEditAt: 0, taskLock: intMutex(), taskSequence: 0,
       rootUpgradeExplicit: new Set()
     }
+    const materializeSourceContext = async (record: OutboxRecord, ticketIdsValue: unknown): Promise<void> => {
+      const ticketIds = ticketIdsValue
+      const sourceId = record.payload.sourceId
+      const threadId = record.payload.threadId
+      const triggerId = record.payload.triggerId
+      const preview = record.payload.preview
+      const actorId = record.payload.actorId
+      if (!Array.isArray(ticketIds) || ticketIds.length === 0 || ticketIds.length > 64
+        || ticketIds.some((ticketId) => typeof ticketId !== 'string' || ticketId.length < 1 || ticketId.length > 128)
+        || typeof sourceId !== 'string' || typeof threadId !== 'string' || typeof triggerId !== 'string'
+        || typeof preview !== 'string' || typeof actorId !== 'string') throw new Error('ticket context requires bounded Ticket and source identities')
+      const rootAgent = created.rootAgent ?? deps.getAgent?.(sessionId)
+      if (rootAgent === undefined || !isRootTianShu(rootAgent)) throw new SwarmError('RECOVERY_REQUIRED', 'ticket context owner is not a loaded TianShu root')
+      const features = await ensureFeatures(created, rootAgent)
+      await created.taskLock.run(async () => {
+        let materialized = false
+        let activeTickets = 0
+        let knownTickets = 0
+        for (const ticketId of [...new Set(ticketIds as string[])]) {
+          const task = created.store.getTask(ticketId)
+          if (task !== undefined) knownTickets++
+          // A terminal Ticket never receives a follow-up capability. This is a
+          // durable no-op for stale subscriptions, not permission to reopen it.
+          if (task === undefined || task.acceptance?.status === 'accepted' || task.acceptance?.decision === 'incomplete') {
+            sources.unsubscribeTicket(ticketId)
+            continue
+          }
+          activeTickets++
+          const text = JSON.stringify({ schemaVersion: 1, effectId: record.id, triggerId, sourceId, threadId, actorId, preview: preview.slice(0, 2000) })
+          const binding = getTaskContextBinding(task, features.workspaceId)
+          const digest = getValueDigest(text)
+          const existing = features.contexts.List(binding).find((artifact) => artifact.kind === 'source' && artifact.digest === digest)
+          const artifact = existing === undefined ? features.addContext({ binding, layer: 'L1', kind: 'source', text }) : existing
+          if (!(task.contextRefs ?? []).some((reference) => reference.ref === artifact.ref)) {
+            created.store.UpdateTask(task.taskId, { contextRefs: [...(task.contextRefs ?? []),
+              { ref: artifact.ref, digest: artifact.digest, layer: artifact.layer, kind: artifact.kind }] })
+            materialized = true
+          }
+        }
+        if (knownTickets === 0) throw new Error('ticket context has no known Ticket')
+        if (activeTickets === 0) return
+        // Even a replay performs the no-op persist so the wrapper re-validates
+        // the committed StateJournal against the derived V2 projection.
+        await features.persist(materialized ? 'source/context' : 'source/context-replay', created.store, created.threads)
+      })
+    }
+    outboxHandlers.set('ticket-intent', async (record) => {
+      const card = record.payload.card
+      const sourceId = record.payload.sourceId
+      const threadId = record.payload.threadId
+      if (card === null || typeof card !== 'object' || Array.isArray(card)
+        || typeof (card as Record<string, unknown>).title !== 'string' || typeof (card as Record<string, unknown>).goal !== 'string'
+        || !Array.isArray((card as Record<string, unknown>).acceptance) || typeof sourceId !== 'string' || typeof threadId !== 'string') {
+        throw new Error('ticket-intent requires a bounded card, sourceId and threadId')
+      }
+      const rootAgent = created.rootAgent ?? deps.getAgent?.(sessionId)
+      if (rootAgent === undefined || !isRootTianShu(rootAgent)) throw new SwarmError('RECOVERY_REQUIRED', 'ticket-intent owner is not a loaded TianShu root')
+      const row = card as Record<string, unknown>
+      const result = await AddTaskCard({ source_effect_id: record.id, title: row.title, goal: row.goal, acceptance: row.acceptance,
+        scope: Array.isArray(row.scope) ? row.scope : [], flags: row.flags !== null && typeof row.flags === 'object' && !Array.isArray(row.flags) ? row.flags : {} },
+      { agent: rootAgent, signal: new AbortController().signal })
+      sources.subscribe({ sourceId, threadId, ticketId: result.task_id })
+      const fanoutTicketIds = record.payload.fanoutTicketIds
+      if (Array.isArray(fanoutTicketIds) && fanoutTicketIds.length > 0) await materializeSourceContext(record, fanoutTicketIds)
+    })
+    outboxHandlers.set('ticket-follow-up', async (record) => materializeSourceContext(record, record.payload.ticketIds))
+    outboxHandlers.set('ticket-context', async (record) => materializeSourceContext(record, record.payload.ticketIds))
     sessions.set(sessionId, created)
+    // A process restart can leave an intent whose enabling event committed but
+    // whose receipt did not. The registered handler is safe to resume because
+    // every effect is keyed by record.id and materialization persists that key.
+    const startupRoot = created.rootAgent ?? deps.getAgent?.(sessionId)
+    if (startupRoot !== undefined && isRootTianShu(startupRoot)) {
+      void dispatchSessionOutbox(created, undefined, true).catch((error) => deps.logger?.warn(`Outbox recovery dispatch failed: ${String(error)}`))
+    }
     const persistedProjection = journal.project()
     for (const [taskId, ticket] of Object.entries(persistedProjection.tickets)) if (ticket.quarantined) quarantinedTasks.add(taskId)
     return created
@@ -223,6 +345,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     session.featuresPromise ??= createFeatureSession({
       rootSessionId: session.sessionId, cwd: (session.rootAgent === undefined ? coldHeader?.cwd : getAgentHeader(session.rootAgent).cwd) ?? process.cwd(),
       dshHome: deps.dshHome, config: deps.getConfig(), getConfig: deps.getConfig,
+      ...(deps.getConfig().events.journal ? { journal: session.journal } : {}),
       tasks: session.store, threads: session.threads, now,
       getAgentControls: () => agentControl.Export(session.sessionId).filter((record) => record.persistent),
       getRuntime: () => ({ rootEditAt: session.rootEditAt, taskSequence: session.taskSequence,
@@ -234,7 +357,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     }).then(async (features) => {
       let mutated = false
       try {
-      routeState.RestoreHealth((await features.readRouteHealth()) ?? [])
+      const restoredHealth = await features.readRouteHealth()
+      routeState.RestoreHealth(restoredHealth ?? [])
+      if (restoredHealth !== undefined) await features.persistRouteHealth(restoredHealth)
       appendRouteHealthEvents(session, routeState.getHealthSnapshot())
       const importCommittedState = (writeManifest: boolean) => importFeatureStateToJournal({ journal: session.journal, store: session.store,
         rootSessionId: session.sessionId, workspaceId: features.workspaceId, sourcePath: features.store.directory,
@@ -323,6 +448,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       }
       await features.commitRecovery()
       session.features = features
+      for (const task of session.store.getTasks()) if (task.acceptance?.status === 'accepted' || task.acceptance?.decision === 'incomplete') session.sources.unsubscribeTicket(task.taskId)
+      // A cold-restored root can now safely consume pending ticket intents. The
+      // per-session queue keeps this behind any dispatch already in progress.
+      void dispatchSessionOutbox(session, undefined, true).catch((error) => deps.logger?.warn(`Outbox recovery dispatch failed: ${String(error)}`))
       return features
       } catch (error) {
         await features.dispose().catch(() => undefined)
@@ -517,8 +646,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     },
     onHealthPersistenceFailure: (event) => deps.logger?.warn(`路由健康状态曾提交失败；后续请求以当前共享持久提交状态为准：${event.agentId}（${event.reason}）`),
     onHealthChange: (entries) => {
-      // 故障域只写有界健康 sidecar；内存态没有落盘故障域，健康快照只留在进程内，不能把任务状态容量事故放大成逐请求失败。
-      const durable = [...sessions.values()].filter((session) => session.features?.store.durable === true)
+      // Route health shares the bounded journal/local-state transaction boundary.
+      // Purely in-memory sessions keep it in-process and never imply durability.
+      const durable = [...sessions.values()].filter((session) => session.features?.store.recoveryDurable === true)
       if (durable.length === 0) return undefined
       return Promise.all(durable.map((session) => session.features!.persistRouteHealth(entries).catch((error: unknown) => {
         const code = error instanceof StateStoreError ? error.code : 'PERSISTENCE_FAILURE'
@@ -547,7 +677,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
    * allow_web 由 onChildStart 登记；同一子智能体只在更宽（获准 web）时重设一次，限制不会叠加残留。
    */
   const childAllowWeb = new Map<string, boolean>()
-  const childToolScopes = new Map<string, { dispose: () => void; allowWeb: boolean }>()
+  const childToolScopes = new Map<string, { dispose: () => void; allowWeb: boolean; role: DelegableRoleId }>()
   /** 子智能体创建前登记的 composition 意图：agent/created 早于 onChildStart，用它给首次装配正确的 allow_web。 */
   const pendingChildScopes: ChildScopeRequest[] = []
   const childPrompts = new Map<string, ChildPromptInfo>()
@@ -560,9 +690,13 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const ApplyChildToolScope = (agent: AgentLike, role: DelegableRoleId, allowWeb?: boolean): void => {
     const subagents = deps.getSubagents()
     if (subagents === undefined || typeof subagents.startActivation !== 'function') return
-    const effective = childAllowWeb.get(agent.id) === true || allowWeb === true
     const existing = childToolScopes.get(agent.id)
-    if (existing !== undefined && (existing.allowWeb === effective || (existing.allowWeb && !effective))) return
+    const effective = allowWeb === true || existing?.role === role && childAllowWeb.get(agent.id) === true
+    if (existing !== undefined && existing.role === role && (existing.allowWeb === effective || (existing.allowWeb && !effective))) return
+    if (existing !== undefined && existing.role !== role) {
+      existing.dispose()
+      childToolScopes.delete(agent.id)
+    }
     const scoped = agent as AgentLike & { ctx?: { get?: (name: string) => unknown } }
     const tools = scoped.ctx?.get?.('tools') as { restrict?: (filter: { allow?: string[]; deny?: string[] }) => () => void } | undefined
     if (tools?.restrict === undefined) return
@@ -571,8 +705,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (filter === undefined) return
     try {
       const dispose = tools.restrict(filter)
-      existing?.dispose()
-      childToolScopes.set(agent.id, { dispose, allowWeb: effective })
+      if (existing?.role === role) existing.dispose()
+      childToolScopes.set(agent.id, { dispose, allowWeb: effective, role })
     } catch (error) { deps.logger?.warn(`子智能体工具范围限制失败：${getErrorText(error)}`) }
   }
   const ChildAllowWebFor = (agentId: string): boolean | undefined => childAllowWeb.get(agentId)
@@ -603,7 +737,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (typeof deps.getSubagents()?.startActivation !== 'function') return
     const header = getAgentHeader(agent)
     if (header.parentSession === undefined) return
-    const presetId = typeof (header as { agentPreset?: unknown }).agentPreset === 'string' ? (header as { agentPreset: string }).agentPreset : undefined
+    const presetId = getPresetId(agent)
     const role = FindRoleByPresetId(presetId)?.id
     if (role === undefined || role === 'tian_shu') return
     const index = pendingChildScopes.findIndex((entry) => entry.role === role)
@@ -648,7 +782,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       for (const parentId of new Set([...records.map((record) => record.parentSessionId), ...parentSessionIds])) {
         const session = sessions.get(parentId)
         // 内存态没有跨重启恢复，控制记录只留在进程内；持久化态保持故障域语义。
-        if (session?.features !== undefined && session.features.store.durable) await session.features.persist('agent/control', session.store, session.threads)
+        if (session?.features !== undefined && session.features.store.recoveryDurable) await session.features.persist('agent/control', session.store, session.threads)
       }
     },
     resume: async (binding, options) => {
@@ -1114,6 +1248,21 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (upgrade === undefined || reasons.length === 0) { ClearRootUpgrade(agent, session, task.taskId); return session.rootUpgrade }
     const current = session.rootUpgrade
     const labeled = reasons.map((reason) => `${task.taskId}：${reason}`)
+    // A task-card risk heuristic is not permission to override the model that a person selected in
+    // the Host picker. Real request failures may still use the RouteEngine fallback chain.
+    const selected = routeState.getRootPreference(agent.id)
+    if (routeState.hasUserSelection(agent.id) && selected !== undefined) {
+      const wasSuppressed = current?.suppressedByUserSelection === true && current.taskIds.includes(task.taskId)
+      session.rootUpgrade = {
+        taskIds: [...new Set([...(current?.taskIds ?? []), task.taskId])],
+        reasons: [...(current?.reasons ?? []).filter((reason) => !reason.startsWith(`${task.taskId}：`)), ...labeled],
+        chain: [], cancelledByUser: true, suppressedByUserSelection: true, selectedModel: getRouteLabel(selected)
+      }
+      routeState.SetRootUpgrade(agent.id, undefined)
+      if (!wasSuppressed) session.ledger.AddLedgerEvent({ type: 'route/upgrade', taskId: task.taskId, data: {
+        scope: 'root', active: false, suppressedByUserSelection: true, selected: getRouteLabel(selected), reasons } })
+      return session.rootUpgrade
+    }
     // upgrade 是模型工具参数，不能撤销用户在对话框中的明确选模。
     if (current?.cancelledByUser === true) {
       session.rootUpgrade = {
@@ -1142,10 +1291,25 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     if (card === undefined) throw new SwarmError('INVALID_ARGS', errors.join('；'))
     const session = getSession(exec.agent.id)
     const features = await ensureFeatures(session, exec.agent)
+    const requestedEffectId = (raw as { source_effect_id?: unknown }).source_effect_id
+    if (requestedEffectId !== undefined && (typeof requestedEffectId !== 'string' || !/^effect-[a-f0-9]{40}$/.test(requestedEffectId))) {
+      throw new SwarmError('INVALID_ARGS', 'source_effect_id 必须来自 durable outbox')
+    }
+    let sourceReplay = false
     const task = await session.taskLock.run(async () => {
       const requestedId = (raw as { task_id?: unknown }).task_id
-      const existing = typeof requestedId === 'string' ? session.store.getTask(requestedId) : undefined
+      if (typeof requestedId === 'string' && typeof requestedEffectId === 'string') {
+        throw new SwarmError('INVALID_ARGS', 'source_effect_id 任务不能同时指定 task_id')
+      }
+      const effectExisting = typeof requestedEffectId === 'string'
+        ? session.store.getTasks().find((candidate) => candidate.sourceEffectId === requestedEffectId)
+        : undefined
+      const existing = typeof requestedId === 'string' ? session.store.getTask(requestedId) : effectExisting
       if (typeof requestedId === 'string' && existing === undefined) throw new SwarmError('UNKNOWN_TASK', describeUnknownTask(session, requestedId))
+      if (effectExisting !== undefined) {
+        sourceReplay = true
+        return effectExisting
+      }
       if (existing !== undefined && quarantinedTasks.has(existing.taskId)) throw new SwarmError('RECOVERY_REQUIRED', 'Ticket 已隔离；完成只读核对并从“模型与恢复”显式解除前不能修改合同')
       const goalId = deps.getGoals?.()?.get(exec.agent)?.id
       if (existing?.runtimeGoalId !== undefined && goalId !== undefined && existing.runtimeGoalId !== goalId) throw new SwarmError('STALE_EVIDENCE', '该任务属于另一个历史目标；请为当前目标新建任务卡，不复用旧目标的执行身份')
@@ -1172,6 +1336,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const intentRefs = existing !== undefined && !intentChanged ? getTaskIntentRefs(existing) : mergeTaskIntentRefs(existing, intent)
       const record: TaskRecord = {
         ...(existing ?? { taskId: `T-${++session.taskSequence}`, sessionId: session.sessionId, delegationIds: [], rounds: 0, createdAt: now() }),
+        ...(typeof requestedEffectId === 'string' ? { sourceEffectId: requestedEffectId } : {}),
         card, gates, triage, updatedAt: now(), workspaceId: features.workspaceId,
         ...((existing?.runtimeGoalId ?? goalId) === undefined ? {} : { runtimeGoalId: existing?.runtimeGoalId ?? goalId }),
         cardRevision: (existing?.cardRevision ?? 1) + (semanticChanged ? 1 : 0),
@@ -1210,7 +1375,12 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       return session.store.getTask(record.taskId)!
     })
     // 只有强制模式需要审核结论才能执行；观察模式自动审核的耗时与执行相当、几乎从不通过，改为按需调用 swarm_review_plan
-    if (deps.getConfig().planningReview.enabled && deps.getConfig().workflow.mode === 'enforced') await runReviewPlan({ task_id: task.taskId }, exec, true)
+    const existingUpgrade = session.rootUpgrade
+    if (!sourceReplay && deps.getConfig().planningReview.enabled && deps.getConfig().workflow.mode === 'enforced') await runReviewPlan({ task_id: task.taskId }, exec, true)
+    if (sourceReplay) {
+      await features.persist('task/card-replay', session.store, session.threads)
+      return getTaskCardResult(task, task.card, deps.getConfig(), session.ledger.path, existingUpgrade)
+    }
     const explicit = (raw as { upgrade?: unknown }).upgrade
     const latest = session.store.getTask(task.taskId)!
     const rootUpgrade = await UpdateRootUpgrade(exec.agent, session, latest, typeof explicit === 'boolean' ? explicit : undefined)
@@ -1682,6 +1852,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           return { ...view, ...(actual === undefined ? {} : { route: getRouteLabel(actual.route), routeSource: 'agent-loop-attempt' as const, actualRoute: actual.route }), elapsedMs: Math.max(0, now() - view.startedAt) }
         }),
       scheduling: schedulerFor(session.sessionId).status(),
+      eventDriven: session.sources.status(),
       roleSuggestions: capabilityRequest.capability_tags === undefined ? [] : suggestRolesByCapabilities(capabilityRequest.capability_tags, { allowWrite: capabilityRequest.allow_write_roles === true }),
       recovery: { quotaEvidence: deps.quotaDiagnostics?.() ?? null, isolatedRoutes: routeState.getHealth(), current: routeState.getRecovery(exec.agent.id) ?? null, nativeInternalRetryCoverage: 'unverified' },
       executionBudgets: session.features === undefined ? [] : tasks.map((task) => ({ task_id: task.taskId, ...session.features!.budgetFor(task).getSnapshot() }))
@@ -1816,6 +1987,12 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         } })
         session.store.UpdateTask(input.task_id, next)
         session.ledger.AddLedgerEvent({ type: 'accept/decision', taskId: input.task_id, data: { ...acceptance } })
+        if (status === 'accepted' || input.decision === 'incomplete') {
+          try { session.sources.unsubscribeTicket(input.task_id) } catch (error) {
+            // A stale Subscription is reconciled from terminal Ticket state on restart.
+            deps.logger?.warn(`Source subscription close failed: ${String(error)}`)
+          }
+        }
         if (status === 'accepted' || input.decision === 'incomplete') ClearRootUpgrade(exec.agent, session, input.task_id)
         if (assessment !== undefined) session.ledger.AddLedgerEvent({ type: 'review/assessment', taskId: input.task_id, data: { scope: 'acceptance', ...assessment } })
         return next
@@ -1843,13 +2020,23 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
 
   const getRoleForAgent = (agent: AgentLike | undefined): RoleId | undefined => {
     if (agent === undefined) return undefined
-    return routeState.getChildRole(agent.id) ?? FindRoleByPresetId(getPresetId(agent))?.id
+    // The Host projection is current truth after a restart or preset change.
+    // Route-state remains the fallback for older Hosts that omit agentPreset.
+    const presetId = getPresetId(agent)
+    const role = presetId === undefined ? routeState.getChildRole(agent.id) : FindRoleByPresetId(presetId)?.id
+    return role === 'tian_shu' && getAgentHeader(agent).parentSession !== undefined ? undefined : role
   }
 
   const isManagedAgent = (agent: AgentLike | undefined): boolean => {
     if (agent === undefined) return false
-    if (routeState.getChildRole(agent.id) !== undefined) return true
-    return getAgentHeader(agent).parentSession === undefined && FindRoleByPresetId(getPresetId(agent)) !== undefined
+    const presetId = getPresetId(agent)
+    if (presetId !== undefined) {
+      const role = FindRoleByPresetId(presetId)?.id
+      return role !== undefined && !(role === 'tian_shu' && getAgentHeader(agent).parentSession !== undefined)
+    }
+    const legacyChildRole = routeState.getChildRole(agent.id)
+    if (legacyChildRole !== undefined) return legacyChildRole !== 'tian_shu'
+    return false
   }
 
   const { AddRootEdit, getGuardReason } = createHostGuardUseCases({
@@ -2334,25 +2521,70 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session), routeState.getRecovery(sessionId) ?? null, stored, true, session.worktrees.project(taskId))
       const native = getNativeIntegrationView({ projections: deps.getSessionProjections?.(), goals: deps.getGoals?.(), jobs: deps.getJobs?.(),
         tools: deps.getTools(), session: session.rootAgent.session, agent: session.rootAgent })
-      const journal = session.journal.read()
+      const journalSummary = session.journal.summary()
       const projection = session.journal.project()
       return { ...view,
         native,
+        eventDriven: session.sources.status(),
         rootSessionId: sessionId,
-        eventJournal: { schemaVersion: 2, sequence: projection.sequence, issues: journal.issues.length, projection },
+        eventJournal: { schemaVersion: 2, sequence: projection.sequence, issues: journalSummary.issues, projection },
         runtimeGuard: getRuntimeView(session, taskId),
         acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
         diagrams: { ...view.diagrams, stateRefreshRequired: task !== stored },
         scheduling: schedulerFor(sessionId).status(),
         stateRefreshRequired: task !== stored, publishedRevisions: getTaskBinding(stored),
-        ...(session.features === undefined ? {} : { capacity: { durable: session.features.store.durable,
+        ...(session.features === undefined ? {} : { capacity: { durable: session.features.store.recoveryDurable,
           stateBytes: session.features.store.getStateBytes(), stateLimitBytes: session.features.store.maxStateBytes,
           contextBytes: session.features.contexts.getTotalEncodedBytes() } }) }
     }
+    ,ObserveSessionEvent: (sessionId, event) => {
+      if (!deps.getConfig().events.journal) return undefined
+      const input = sourceTriggerFromSessionEvent({ sessionId, event, sourceId: 'session' })
+      if ('filtered' in input) return input
+      const session = getSession(sessionId)
+      const result = session.sources.ingest('session', input)
+      if (result.outboxId !== undefined && hasLiveRoot(session)) {
+        void dispatchSessionOutbox(session).catch((error) => deps.logger?.warn(`Outbox dispatch failed: ${String(error)}`))
+      }
+      return result
+    }
+    ,ConfigureSource: (sessionId, source) => { requireEventJournal(); return getSession(sessionId).sources.configure(source) }
+    ,IngestSourceTrigger: (sessionId, sourceId, trigger, options) => {
+      requireEventJournal()
+      const session = getSession(sessionId)
+      const result = session.sources.ingest(sourceId, trigger, options)
+      if (result.outboxId !== undefined && hasLiveRoot(session)) {
+        void dispatchSessionOutbox(session).catch((error) => deps.logger?.warn(`Outbox dispatch failed: ${String(error)}`))
+      }
+      return result
+    }
+    ,RegisterSourceAdapter: (sessionId, adapter) => { requireEventJournal(); return getSession(sessionId).sources.registerAdapter(adapter) }
+    ,IngestSourceEvent: (sessionId, sourceId, raw, options) => {
+      requireEventJournal()
+      const session = getSession(sessionId)
+      const result = session.sources.ingestRaw(sourceId, raw, options)
+      if (result.outboxId !== undefined && hasLiveRoot(session)) {
+        void dispatchSessionOutbox(session).catch((error) => deps.logger?.warn(`Outbox dispatch failed: ${String(error)}`))
+      }
+      return result
+    }
+    ,SubscribeSourceThread: (sessionId, input) => { requireEventJournal(); return getSession(sessionId).sources.subscribe(input) }
+    ,UnsubscribeSourceThread: (sessionId, subscriptionId) => { requireEventJournal(); return getSession(sessionId).sources.unsubscribe(subscriptionId) }
+    ,GetEventDrivenStatusForRpc: (sessionId) => getSession(sessionId).sources.status()
+    ,RegisterOutboxHandler: (sessionId, kind, handler) => {
+      requireEventJournal()
+      if (!/^[a-z][a-z0-9._-]{0,63}$/.test(kind)) throw new SwarmError('INVALID_ARGS', '无效的 outbox effect kind')
+      const session = getSession(sessionId), handlers = session.outboxHandlers
+      handlers.set(kind, handler)
+      void dispatchSessionOutbox(session, undefined, true).catch((error) => deps.logger?.warn(`Outbox dispatch failed: ${String(error)}`))
+      return () => { if (handlers.get(kind) === handler) handlers.delete(kind) }
+    }
+    ,DispatchOutbox: (sessionId, limit) => { requireEventJournal(); return dispatchSessionOutbox(getSession(sessionId), limit, true) }
     ,dispose: () => disposal ??= (async () => {
       closing = true
       watchdogDisposed = true
       if (watchdogTimer !== undefined) { clearTimeout(watchdogTimer); watchdogTimer = undefined }
+      for (const session of sessions.values()) if (session.outboxRetryTimer !== undefined) { clearTimeout(session.outboxRetryTimer); session.outboxRetryTimer = undefined }
       for (const scheduler of schedulers.values()) scheduler.dispose()
       for (const controller of reviewControllers.values()) controller.abort(new SwarmError('RECOVERY_REQUIRED', '宿主正在停止规划审核'))
       await Promise.allSettled([...reviewRuns.values()])
@@ -2368,7 +2600,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           // Persist a complete checkpoint; started work stays charged and never replays.
           await session.taskLock.run(() => features!.persist('lifecycle/dispose', session.store, session.threads))
         } catch (error) { errors.push(error) }
-        finally { if (features !== undefined) try { await features.dispose() } catch (error) { errors.push(error) } }
+        finally {
+          session.sources.dispose()
+          if (features !== undefined) try { await features.dispose() } catch (error) { errors.push(error) }
+        }
       }
       if (errors.length > 0) throw new AggregateError(errors, 'Swarm shutdown checkpoint failed; storage cleanup attempted, reconcile last valid state before recovery')
     })()
@@ -2388,9 +2623,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       else if (isRootTianShu(agent)) {
         const session = getSession(agent.id)
         await ensureFeatures(session, agent)
-        if (routeState.getRootPreference(agent.id) === undefined) {
+        if (!routeState.hasUserSelection(agent.id) && session.rootPreferenceChecked !== true) {
           const preference = await deps.inspectRootPreference?.(agent.id)
           if (preference !== undefined) routeState.RestoreRootPreference(agent.id, preference)
+          session.rootPreferenceChecked = true
         }
         PruneRootUpgrade(agent, session)
       }
@@ -2403,6 +2639,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         // Native followup does not enter delegateEntry and cannot mint an
         // execution capability. Fail before another model can loop on denied skills.
         if (binding === undefined || binding.state !== 'active') throw new SwarmError('RECOVERY_REQUIRED', resumeHint())
+        const projectedRole = getRoleForAgent(agent)
+        if (projectedRole === undefined || projectedRole !== binding.role) {
+          throw new SwarmError('STALE_EVIDENCE', '子会话当前 Host 角色与该执行授权的角色不一致；请在父天枢重新审核并委派，不能沿用旧工具或执行能力。')
+        }
         const stored = session?.store.getTask(binding.taskId)
         const task = stored === undefined ? undefined : deriveReconciledTask(session!, deriveIntentRefresh(stored, session!.rootAgent ?? agent))
         // 历史可读性只是来源告警；子会话已持有自包含 prompt 和冻结任务版本。

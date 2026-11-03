@@ -274,4 +274,57 @@ describe('运行时插件', () => {
     expect(await onError({ agent: { id: 'root', session: { header: {} } }, provider: 'a', failure: { code: 'QUOTA' } }, async () => undefined)).toBeUndefined()
     expect(runtime.Config({ role: 'fu_he' })).toBeDefined()
   })
+
+  it('按当前 Host 投影角色识别人工选模，并重新限制旧子会话的工具面', async () => {
+    const hostHarness = makeHost()
+    const service = hostHarness.provided.get('agentSwarm') as SwarmService
+    const context = makeContext({ agentSwarm: service })
+    vi.spyOn(service, 'getRoleForAgent').mockReturnValue('fu_he')
+    const record = vi.spyOn(service.routeState, 'RecordUserSelection')
+    const scope = vi.spyOn(service, 'ApplyChildToolScope').mockImplementation(() => undefined)
+    vi.spyOn(service, 'WaitAgentReady').mockResolvedValue(undefined)
+    vi.spyOn(service, 'BeforeManagedRequest').mockResolvedValue(undefined)
+    vi.spyOn(service, 'ChildAllowWebFor').mockReturnValue(false)
+    vi.spyOn(service.routeState, 'WaitHealthReady').mockResolvedValue(undefined)
+    vi.spyOn(service.routeState, 'BeginRequestStep').mockImplementation(() => undefined)
+    vi.spyOn(service.routeState, 'PreparePreferredRecovery').mockResolvedValue(undefined)
+    vi.spyOn(service.routeState, 'PrepareQuotaRouting').mockResolvedValue(undefined)
+    vi.spyOn(service.routeState, 'AdmitRequest').mockResolvedValue({ provider: 'a', model: 'm1' })
+    vi.spyOn(service.routeState, 'getChildOverride').mockReturnValue(undefined)
+    runtime.apply(context.ctx, { role: 'zhu_jian' })
+    const onEvent = context.listeners.get('session/event') as unknown as (session: unknown, event: unknown) => void
+    const onRequest = context.listeners.get('agent/request') as unknown as (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>
+    onEvent({ id: 'root', header: {} }, { type: 'model/selection', seq: 7, data: { provider: 'a', model: 'm1' } })
+    expect(record).toHaveBeenCalledWith('root', { provider: 'a', model: 'm1' }, 7)
+    const child = { id: 'kid', session: { header: { parentSession: 'root', agentPreset: 'zhu-jian' } } }
+    await onRequest({ agent: child }, async () => ({ provider: 'a', model: 'm1' }))
+    expect(scope).toHaveBeenCalledWith(child, 'fu_he', false)
+  })
+
+  it('feeds Source events only for managed sessions and leaves unrelated DSH sessions untouched', () => {
+    const hostHarness = makeHost()
+    const service = hostHarness.provided.get('agentSwarm') as SwarmService
+    const context = makeContext({ agentSwarm: service })
+    const observe = vi.spyOn(service, 'ObserveSessionEvent')
+    runtime.apply(context.ctx, { role: 'zhu_jian' })
+    const onEvent = context.listeners.get('session/event') as unknown as (session: unknown, event: unknown) => void
+    const message = { type: 'user/message', seq: 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] } }
+    onEvent({ id: 'unrelated', header: { agentPreset: 'standard' } }, message)
+    expect(observe).not.toHaveBeenCalled()
+    onEvent({ id: 'managed', header: { agentPreset: 'tian-shu' } }, message)
+    expect(observe).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a Host turn alive when optional Source journaling fails', () => {
+    const hostHarness = makeHost()
+    const service = hostHarness.provided.get('agentSwarm') as SwarmService
+    const context = makeContext({ agentSwarm: service })
+    const record = vi.spyOn(service.routeState, 'RecordUserSelection')
+    vi.spyOn(service, 'ObserveSessionEvent').mockImplementation(() => { throw new Error('disk full') })
+    runtime.apply(context.ctx, { role: 'zhu_jian' })
+    const onEvent = context.listeners.get('session/event') as unknown as (session: unknown, event: unknown) => void
+    expect(() => onEvent({ id: 'managed', header: { agentPreset: 'tian-shu' } }, { type: 'model/selection', seq: 2, data: { provider: 'a', model: 'b' } })).not.toThrow()
+    expect(record).toHaveBeenCalledOnce()
+    expect(context.warn).toHaveBeenCalledWith(expect.stringContaining('Source event observation failed'))
+  })
 })

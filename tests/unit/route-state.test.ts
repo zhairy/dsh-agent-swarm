@@ -803,6 +803,16 @@ describe('long-running preferred route recovery', () => {
     expect(registry.getRootPreference(root.id)).toEqual(primary)
   })
 
+  it('restores a persisted picker selection over an earlier request-only default and marks it as explicit', () => {
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }))
+    registry.getRequestOverride(root, backup, 'tian_shu', undefined, false)
+    expect(registry.getRootPreference(root.id)).toMatchObject(backup)
+    expect(registry.hasUserSelection(root.id)).toBe(false)
+    registry.RestoreRootPreference(root.id, primary)
+    expect(registry.getRootPreference(root.id)).toEqual(primary)
+    expect(registry.hasUserSelection(root.id)).toBe(true)
+  })
+
   it('ending an upgrade clears its automatic fallback even outside the old upgrade chain; explicit user choices survive', async () => {
     const upgraded = { provider: 'strong', model: 'expert' }
     const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }))

@@ -156,7 +156,7 @@ export const getStatusResult = (tasks: ReturnType<typeof getTaskView>[], session
   ledgerPath: session.ledger.path,
   usage: { nativeCalls: session.counters.native, jevCalls: session.counters.jev, reviewCalls: session.counters.review, sessionCalls: session.counters.session },
   diagnostics,
-  persistence: { durable: session.features?.store.durable ?? false,
+  persistence: { durable: session.features?.store.recoveryDurable ?? false,
     ...(session.features === undefined ? {} : { stateBytes: session.features.store.getStateBytes(), stateLimitBytes: session.features.store.maxStateBytes,
       contextBytes: session.features.contexts.getTotalEncodedBytes() }),
     recovery: '已审计状态可恢复；不自动恢复旧 live thread' }

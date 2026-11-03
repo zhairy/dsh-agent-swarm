@@ -48,6 +48,12 @@ describe('文档与代码一致', () => {
     for (const keyword of ['windows-best-effort', '64 KiB', 'null', 'tool-todo', 'time-context', 'Outbox', '尚未完成']) expect(release).toContain(keyword)
   })
 
+  it('3.3.3 文档说明人工选模、角色恢复、Outbox、Source/Trigger 与 journal-only recovery', () => {
+    const release = read('docs/3.3.3-人工选模-角色恢复-事件溯源.md')
+    for (const keyword of ['suppressedByUserSelection', 'agentPreset', '工具 scope', 'state/journal-commit', 'off', 'observe', 'auto',
+      'Mandate', 'contextOnly', 'ticket-intent', 'ticket-follow-up', 'fsync', 'journal-only', 'persistence.enabled']) expect(release).toContain(keyword)
+  })
+
   it('评测样例包含 4 个必测案例', () => {
     const tasks = JSON.parse(read('tests/fixtures/eval-tasks.example.json')) as Array<{ id: string; mandatory?: boolean }>
     expect(tasks.filter((task) => task.mandatory === true).map((task) => task.id).sort()).toEqual(['command-exec', 'fu-he-finds-failure', 'screenshot', 'ui-copy'])

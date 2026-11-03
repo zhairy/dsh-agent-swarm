@@ -1,5 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { createSwarmEventJournal, EVENT_JOURNAL_MAX_LINE_BYTES, reduceSwarmEvents } from '../../src/event-journal.js'
@@ -19,6 +19,9 @@ describe('v3.2.0 event journal', () => {
     expect(second.previousDigest).toBe(first.digest)
     expect(second.seq).toBe(2)
     expect(journal.append(event('e1'))).toBeUndefined()
+    second.payload.stage = 'mutated-return-value'
+    expect(journal.read().events[1]?.payload.stage).toBe('running')
+    expect(() => journal.append({ ...event('empty'), eventId: '' })).toThrow(/identity/)
   })
 
   it('redacts secrets, reduces the same view, and truncates an invalid tail', () => {
@@ -126,8 +129,26 @@ describe('v3.2.0 event journal', () => {
     writeFileSync(sealed, corrupted, 'utf8')
     const reopened = createSwarmEventJournal(options)
     expect(reopened.read().issues).toEqual([{ line: 2, reason: 'invalid-shape' }])
+    expect(reopened.fatalError).toContain('Sealed event journal segment is corrupt')
     expect(() => reopened.append(event('e3'))).toThrow(/Sealed event journal segment is corrupt/)
     expect(readFileSync(sealed, 'utf8')).toBe(corrupted)
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects symlinked or non-private journal files before replaying state', () => {
+    const dir = directory()
+    const journal = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-private' })
+    journal.append(event('e1'))
+    const target = join(dirname(dir), 'copied-journal.jsonl')
+    writeFileSync(target, readFileSync(journal.path), { mode: 0o600 })
+    rmSync(journal.path)
+    symlinkSync(target, journal.path)
+    expect(() => createSwarmEventJournal({ directory: dir, rootSessionId: 'session-private' })).toThrow(/regular file/)
+
+    const secondDir = directory()
+    const second = createSwarmEventJournal({ directory: secondDir, rootSessionId: 'session-mode' })
+    second.append(event('e2'))
+    chmodSync(second.path, 0o644)
+    expect(() => createSwarmEventJournal({ directory: secondDir, rootSessionId: 'session-mode' })).toThrow(/0600/)
   })
 
 })

@@ -3,8 +3,8 @@ import { lstat, mkdir, open, readFile } from 'node:fs/promises'
 import type { SwarmConfigInfo } from './config.js'
 import type { DelegationRecord, TaskRecord, TaskStore } from './evidence.js'
 import type { ThreadInfo, ThreadRegistry } from './threads.js'
-import { atomicStateFile, canonicalStateJson, createDurableStateStore, StateStoreError, type DurableStateStore, type StateValidationReport } from './state-store.js'
-import { SWARM_LAYOUT_OPTIONS, type StatePatch } from './state-chunks.js'
+import { canonicalStateJson, createDurableStateStore, StateStoreError, type DurableStateStore, type StateValidationReport } from './state-store.js'
+import { SWARM_LAYOUT_OPTIONS, SWARM_SEGMENT_SPECS, type StatePatch } from './state-chunks.js'
 import { createAgentBindingRegistry, validateBinding, bindingKey, type AgentBinding, type AgentBindingRegistry } from './agent-binding.js'
 import { createMessageBus, type MessageBus, type MessageState } from './message-bus.js'
 import { createExperienceRepository, ExperienceError, type ExperienceEntry, type ExperienceReview, type ExperienceState } from './experience.js'
@@ -33,9 +33,12 @@ import { createAuthorizationRepository, ValidateAuthorizationDecision, type Auth
 import { createProgressGuard, ValidateProgressControl, ValidateProgressPage, type ProgressGuardState, type ProgressPage } from './progress-guard.js'
 import { ValidateVerificationReceipt } from './verification-receipt.js'
 import { ValidateAssignmentEnvelope } from './router-worker.js'
+import type { SwarmEventJournal } from './event-journal.js'
+import { appendStateCommitToJournal, initializeStateJournal, recoverStateFromJournal } from './state-journal.js'
 
 /**
- * 内存态（persistence.enabled=false）不写日志与快照，持久化的 4MiB 上限不适用；
+ * 本地 StateStore 关闭（persistence.enabled=false）时不写本地日志与快照；
+ * 若 events.journal 提供权威状态，则使用内存模式容量上限写入分块 EventJournal。
  * 这里给出更大的确定上界，既避免长会话合法增长把状态顶死，也保证每次提交仍然有界。
  */
 const MEMORY_MODE_MAX_STATE_BYTES = 16 * 1024 * 1024
@@ -79,9 +82,9 @@ export interface FeatureSession {
   /** Existing attempts and exempt Jev observations keep their original accounting handle during hot changes. */
   finishBudgetFor: (task: TaskRecord) => ExecutionBudget
   persist: (type: string, tasks: TaskStore, threads: ThreadRegistry) => Promise<void>
-  /** 路由健康是独立的故障域快照：持久化模式下写有界 sidecar，不再随整份任务状态提交；内存模式为纯进程内状态。 */
+  /** Route health uses the same durable authority as FeatureState; legacy local sidecars are read only during migration. */
   persistRouteHealth: (snapshot: RouteHealthEntry[] | RouteHealthSnapshot) => Promise<void>
-  /** 优先读 sidecar；旧持久化状态把健康快照内嵌在完整状态里，作为一次性兼容回退。 */
+  /** Read committed state first, with a legacy local sidecar as one-time migration fallback. */
   readRouteHealth: () => Promise<RouteHealthEntry[] | RouteHealthSnapshot | undefined>
   addContext: (input: Parameters<ContextStore['Add']>[0]) => ContextArtifactInfo
   prepareTaskContexts: (...args: Parameters<ContextStore['PrepareTaskReplace']>) => PreparedTaskContextReplacement
@@ -206,9 +209,11 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
     at('$.routeHealth', 'ROUTE_HEALTH_FORMAT')
     if (state.routeHealth !== undefined && !validatePersistedRouteHealth(state.routeHealth)) return invalid()
     const tasks = new Map<string, TaskRecord>()
+    const sourceEffectIds = new Set<string>()
     for (const [index, task] of state.tasks.entries()) {
       at(`$.tasks[${index}]`, 'TASK_FORMAT')
-      if (!object(task) || !identifier(task.taskId) || tasks.has(task.taskId) || task.sessionId !== expected.rootSessionId || (task.workspaceId !== undefined && task.workspaceId !== expected.workspaceId) || ValidateTaskCard(task.card).card === undefined || !strings(task.delegationIds) || new Set(task.delegationIds).size !== task.delegationIds.length || !Number.isSafeInteger(task.rounds) || task.rounds < 0 || !Number.isFinite(task.createdAt) || !Number.isFinite(task.updatedAt) || ![task.cardRevision, task.workflowRevision, task.requestRevision].every(optionalRevision) || (task.intentLastDigest !== undefined && !/^[a-f0-9]{64}$/.test(task.intentLastDigest))) return invalid()
+      if (!object(task) || !identifier(task.taskId) || tasks.has(task.taskId) || task.sessionId !== expected.rootSessionId || (task.workspaceId !== undefined && task.workspaceId !== expected.workspaceId) || ValidateTaskCard(task.card).card === undefined || !strings(task.delegationIds) || new Set(task.delegationIds).size !== task.delegationIds.length || !Number.isSafeInteger(task.rounds) || task.rounds < 0 || !Number.isFinite(task.createdAt) || !Number.isFinite(task.updatedAt) || ![task.cardRevision, task.workflowRevision, task.requestRevision].every(optionalRevision) || (task.intentLastDigest !== undefined && !/^[a-f0-9]{64}$/.test(task.intentLastDigest)) || (task.sourceEffectId !== undefined && (!/^effect-[a-f0-9]{40}$/.test(task.sourceEffectId) || sourceEffectIds.has(task.sourceEffectId)))) return invalid()
+      if (task.sourceEffectId !== undefined) sourceEffectIds.add(task.sourceEffectId)
       at(`$.tasks[${index}].intentRefs`, 'INTENT_REFERENCE_FORMAT')
       if (task.runtimeGoalId !== undefined && (state.schemaVersion !== 2 || !identifier(task.runtimeGoalId))) return invalid()
       if (task.intentRefs !== undefined && (!Array.isArray(task.intentRefs) || task.intentRefs.length === 0
@@ -475,6 +480,7 @@ const describeCapacityExceeded = (store: DurableStateStore<FeatureState>, snapsh
 
 export const createFeatureSession = async (input: {
   rootSessionId: string; cwd: string; dshHome: string; config: SwarmConfigInfo;
+  journal?: SwarmEventJournal;
   getConfig?: () => SwarmConfigInfo;
   getAgentControls?: () => AgentControlRecord[];
   getRuntime?: () => FeatureRuntimeSnapshot;
@@ -482,28 +488,58 @@ export const createFeatureSession = async (input: {
   verifyEvolutionRelease?: (entry: ExperienceEntry, release: import('./evolution-governance.js').EvolutionReleaseRef) => boolean | Promise<boolean>;
   tasks: TaskStore; threads: ThreadRegistry; now: () => number
 }): Promise<FeatureSession> => {
+  if (input.journal?.fatalError !== undefined) throw new StateStoreError('RECOVERY_REQUIRED', input.journal.fatalError)
   const workspaceId = await getWorkspaceId(input.cwd)
   const directory = join(input.config.persistence.directory || join(input.dshHome, 'share', 'dsh-agent-swarm', 'state'), workspaceId, digest(input.rootSessionId))
   const initialState: FeatureState = { schemaVersion: 2, tasks: [], delegations: [], threads: [], budgets: {},
     bindings: {}, bindingHistory: {}, messages: {}, messageAcks: {}, experiences: {}, contexts: [],
     runtimeControls: {}, progressHistory: {}, authorizationDecisions: {} }
-  const handoff = await loadMemoryHandoff<FeatureState>({ dshHome: input.dshHome, rootSessionId: input.rootSessionId, workspaceId,
-    persistenceEnabled: input.config.persistence.enabled,
-    validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }) })
+  const configuredLimit = input.config.persistence.maxStateBytes
+  const journalRecovery = input.journal === undefined ? undefined : recoverStateFromJournal<FeatureState>(input.journal, {
+    specs: SWARM_SEGMENT_SPECS,
+    validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId })
+  })
+  if (journalRecovery !== undefined && journalRecovery.issues.length > 0) {
+    throw new StateStoreError('RECOVERY_REQUIRED', `State journal is corrupt: ${journalRecovery.issues.slice(0, 3).map((issue) => `${issue.reason}@${issue.sequence ?? '?'}`).join(', ')}`)
+  }
+  // A complete state journal is the authoritative recovery source. Do not let a
+  // stale/corrupt one-shot handoff or StateStore snapshot veto journal-only boot.
+  const handoff = journalRecovery?.state === undefined
+    ? await loadMemoryHandoff<FeatureState>({ dshHome: input.dshHome, rootSessionId: input.rootSessionId, workspaceId,
+      persistenceEnabled: input.config.persistence.enabled,
+      validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }) })
+    : undefined
   // A current-version export cannot legitimately omit its security history.
   // Only real legacy producers may enter the schema-1 migration path.
   if ((handoff?.sourceVersion === '3.1.3' || handoff?.sourceVersion === '3.1.4') && handoff.state.schemaVersion !== 2) throw new StateStoreError('RECOVERY_REQUIRED', 'Memory handoff rejected: current producer omitted runtime guard schema; pending record retained')
-  const configuredLimit = input.config.persistence.maxStateBytes
-  const store = await createDurableStateStore({ directory, initialState: handoff === undefined ? initialState : recover(handoff.state), enabled: input.config.persistence.enabled,
+  let journalReady = journalRecovery?.state !== undefined
+  const store = await createDurableStateStore<FeatureState>({ directory,
+    initialState: journalRecovery?.state ?? (handoff === undefined ? initialState : recover(handoff.state)), enabled: input.config.persistence.enabled,
+    journalOnly: journalRecovery?.state !== undefined,
+    ...(journalRecovery?.state === undefined ? {} : { initialSequence: journalRecovery.sequence }),
+    ...(input.journal === undefined ? {} : { beforeCommit: (fact) => {
+      if (!journalReady) return
+      appendStateCommitToJournal(input.journal!, fact)
+    } }),
     ...(configuredLimit > 0 ? { maxStateBytes: configuredLimit } : input.config.persistence.enabled ? {} : { maxStateBytes: MEMORY_MODE_MAX_STATE_BYTES }),
     validate: (raw) => inspectFeatureState(raw, { rootSessionId: input.rootSessionId, workspaceId }),
     ...SWARM_LAYOUT_OPTIONS, recover })
+  let saved = store.read()
+  if (input.journal !== undefined && !journalReady) {
+    try {
+      initializeStateJournal(input.journal, saved, store.getSequence(), SWARM_SEGMENT_SPECS)
+      journalReady = true
+    } catch (error) {
+      await store.dispose().catch(() => undefined)
+      throw error
+    }
+  }
   // A legacy sequence-zero snapshot does not invoke the store's recovery callback.
   // Publish the schema fence before exposing any new guard repository to callers.
   try {
     if (store.readFields?.(['schemaVersion']).schemaVersion === 1) await store.commit('state/guard-schema-migrated', draft => recover(draft))
   } catch (error) { await store.dispose(); throw error }
-  const saved = store.read()
+  saved = store.read()
   // Older versions charged planning review reservations against implementation calls.
   // Preserve sent work and observation records, but classify these known reservations correctly.
   saved.planningBudgets ??= {}
@@ -533,7 +569,8 @@ export const createFeatureSession = async (input: {
   committedContextBytes = contexts.getTotalEncodedBytes()
   // 装载的材料来自已提交状态，不需要在首次增量提交时重写一遍。
   if (contexts.takeDirty !== undefined) contexts.takeDirty()
-  // 路由健康 sidecar：与任务状态容量解耦；写失败仍然是 fail-closed（由 route-state 的故障域契约决定是否拦截请求）。
+  // Legacy route-health sidecars remain read-only migration input. New writes enter FeatureState,
+  // which the EventJournal materializes, so journal-only recovery includes routing health.
   const healthDirectory = join(directory, 'route-health')
   const healthPath = join(healthDirectory, 'snapshot.json')
   const stableHealthSnapshot = (raw: RouteHealthEntry[] | RouteHealthSnapshot): RouteHealthEntry[] | RouteHealthSnapshot =>
@@ -543,14 +580,13 @@ export const createFeatureSession = async (input: {
   const persistRouteHealth = async (snapshot: RouteHealthEntry[] | RouteHealthSnapshot): Promise<void> => {
     const stable = stableHealthSnapshot(snapshot)
     if (!validatePersistedRouteHealth(stable)) throw new StateStoreError('STATE_INVALID', 'Invalid durable route health snapshot')
-    if (!store.durable) return
-    await mkdir(healthDirectory, { recursive: true, mode: 0o700 })
-    const metadata = await lstat(healthDirectory)
-    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new StateStoreError('STATE_INVALID', 'Route health directory is invalid')
-    await atomicStateFile(healthDirectory, 'snapshot.json', canonicalStateJson(stable))
+    if (!store.recoveryDurable) return
+    await store.update('route/health', { patch: { whole: { routeHealth: stable } } })
   }
   const readRouteHealth = async (): Promise<RouteHealthEntry[] | RouteHealthSnapshot | undefined> => {
-    if (store.durable) {
+    const embedded = store.read().routeHealth
+    if (embedded !== undefined && validatePersistedRouteHealth(embedded)) return structuredClone(embedded)
+    if (store.durable && !store.journalOnly) {
       let raw: string | undefined
       try { raw = await readFile(healthPath, 'utf8') } catch (error) {
         if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') return undefined
@@ -564,14 +600,13 @@ export const createFeatureSession = async (input: {
         return undefined
       }
     }
-    // 无 sidecar 时兼容旧持久化状态的内嵌健康快照（只读一次，后续健康只写 sidecar）。
-    return store.read().routeHealth
+    return undefined
   }
   // 绑定历史 sidecar：主状态只保留每个 agentId 最近若干条，更老的先落盘再移出状态，
   // 段内分片数因此不随委派历史线性增长；归档文件只用于审计，不参与恢复与消息校验。
   const historyDirectory = join(directory, 'history')
-  const archiveBindingHistory = async (entries: readonly AgentBinding[]): Promise<void> => {
-    if (!store.durable) return
+  const archiveBindingHistory = async (entries: readonly AgentBinding[]): Promise<boolean> => {
+    if (!store.durable) return false
     await mkdir(historyDirectory, { recursive: true, mode: 0o700 })
     const metadata = await lstat(historyDirectory)
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new StateStoreError('STATE_INVALID', 'Binding history directory is invalid')
@@ -580,6 +615,7 @@ export const createFeatureSession = async (input: {
       await handle.writeFile(entries.map((entry) => canonicalStateJson(entry)).join('\n') + '\n', 'utf8')
       await handle.sync()
     } finally { await handle.close() }
+    return true
   }
   const bindings = createAgentBindingRegistry(store, { archive: archiveBindingHistory })
   const bus = !input.config.messageBus.enabled ? undefined : createMessageBus({ store, bindings, now: input.now, maxPendingPerTask: input.config.messageBus.maxPending,
