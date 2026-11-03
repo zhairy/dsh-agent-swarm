@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { open, mkdir, readFile, readdir, rename, unlink, lstat, realpath } from 'node:fs/promises'
+import { open, mkdir, readFile, readdir, rename, unlink, lstat, realpath, type FileHandle } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { hostname } from 'node:os'
 import { intMutex } from './util/mutex.js'
@@ -11,6 +11,8 @@ export { StateStoreError, canonicalStateJson } from './state-core.js'
 export interface DurableStateStore<T> {
   readonly directory: string
   readonly durable: boolean
+  /** Strict durable mode fsyncs directory entries; Windows uses the explicit best-effort fallback described below. */
+  readonly directoryDurability: DirectoryDurability
   /** 完整状态的编码字节上限；内存态与持久化态取值不同，由调用方按模式决定。 */
   readonly maxStateBytes: number
   /** 最近一次成功提交（或恢复装载）状态的编码字节数；提交失败不改变该读数。 */
@@ -32,6 +34,12 @@ export interface DurableStateStore<T> {
   update: (type: string, write: StateWrite<T>) => Promise<{ readonly sequence: number; readonly changed: boolean }>
   dispose: () => Promise<void>
 }
+
+export type DirectoryDurability = 'strict' | 'windows-best-effort'
+export interface DirectorySyncResult { status: 'synced' | 'unsupported'; code?: string }
+
+export const getDirectoryDurability = (platform: NodeJS.Platform = process.platform): DirectoryDurability =>
+  platform === 'win32' ? 'windows-best-effort' : 'strict'
 /**
  * 增量写入的两种形式：直接给补丁，或在互斥区内按冻结基线求值补丁。
  * `build` 形式让“读取-判断-写补丁”与提交同处一个事务，避免读-改-写竞态。
@@ -81,9 +89,29 @@ const validationFailureMessage = (result: StateValidationResult): string => {
 // Only already-validated private state reaches this copier. Validation remains at every commit boundary.
 const copy = <T>(value: T): T => structuredClone(value)
 const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.code === 'ENOENT'
-const syncDirectory = async (directory: string): Promise<void> => {
-  const handle = await open(directory, 'r')
-  try { await handle.sync() } finally { await handle.close() }
+/**
+ * Persist a directory entry after rename. Windows rejects fsync on a directory
+ * handle with EPERM even though the already-fsynced file and same-volume rename
+ * succeeded. Report that known Node platform limitation explicitly instead of
+ * hiding every permission error or claiming Linux-style directory durability.
+ */
+export const syncDirectory = async (
+  directory: string,
+  options: { platform?: NodeJS.Platform; openDirectory?: (path: string, flags: string) => Promise<Pick<FileHandle, 'sync' | 'close'>> } = {}
+): Promise<DirectorySyncResult> => {
+  const platform = options.platform ?? process.platform
+  const handle = await (options.openDirectory ?? open)(directory, 'r')
+  try {
+    await handle.sync()
+    return { status: 'synced' }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code
+    const syscall = (error as NodeJS.ErrnoException)?.syscall
+    if (platform === 'win32' && ['EPERM', 'EINVAL', 'ENOTSUP'].includes(code ?? '') && (syscall === undefined || syscall === 'fsync')) {
+      return { status: 'unsupported', ...(code === undefined ? {} : { code }) }
+    }
+    throw error
+  } finally { await handle.close() }
 }
 
 export const atomicStateFile = async (directory: string, name: string, content: string): Promise<void> => {
@@ -505,7 +533,7 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
     return changes
   }
   const store: DurableStateStore<T> = {
-    directory, durable: options.enabled !== false, maxStateBytes,
+    directory, durable: options.enabled !== false, directoryDurability: getDirectoryDurability(), maxStateBytes,
     getStateBytes: () => stateBytes,
     getRootChecksum: () => stateChecksum,
     read: () => { if (closed) throw new StateStoreError('STORE_CLOSED', 'State store is closed'); return copy(state) },

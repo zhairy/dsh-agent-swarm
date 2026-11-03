@@ -43,6 +43,11 @@ describe('文档与代码一致', () => {
     for (const keyword of ['1,050,000', '272,000', '128,000', 'Codex', 'reasoning tokens', 'repair-openai-metadata.mjs']) expect(release).toContain(keyword)
   })
 
+  it('3.3.2 文档说明 Windows durability、legacy journal 边界和原生集成完成度', () => {
+    const release = read('docs/3.3.2-运行时完整性与原生集成.md')
+    for (const keyword of ['windows-best-effort', '64 KiB', 'null', 'tool-todo', 'time-context', 'Outbox', '尚未完成']) expect(release).toContain(keyword)
+  })
+
   it('评测样例包含 4 个必测案例', () => {
     const tasks = JSON.parse(read('tests/fixtures/eval-tasks.example.json')) as Array<{ id: string; mandatory?: boolean }>
     expect(tasks.filter((task) => task.mandatory === true).map((task) => task.id).sort()).toEqual(['command-exec', 'fu-he-finds-failure', 'screenshot', 'ui-copy'])

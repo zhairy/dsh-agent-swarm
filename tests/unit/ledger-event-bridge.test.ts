@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { createSwarmEventJournal } from '../../src/event-journal.js'
-import { appendLegacyEventToJournal, importLegacyLedgerEvents } from '../../src/ledger-event-bridge.js'
+import { appendLegacyEventToJournal, importLegacyLedgerEvents, LEGACY_JOURNAL_PAYLOAD_MAX_BYTES } from '../../src/ledger-event-bridge.js'
 import { importLegacyLedgerFile } from '../../src/event-import.js'
 
 describe('legacy ledger to event journal bridge', () => {
@@ -50,5 +50,30 @@ describe('legacy ledger to event journal bridge', () => {
     expect(manifest).toContain('sourceDigest')
     expect(manifest).not.toContain('secret-token-value')
     expect(manifest).not.toContain('"title"')
+  })
+
+  it('replaces an oversized legacy payload with a digest-bound summary instead of failing the session', () => {
+    const journal = createSwarmEventJournal({ directory: join(mkdtempSync(join(tmpdir(), 'swarm-bridge-large-')), 'events'), rootSessionId: 'session-large' })
+    const large = Array.from({ length: 300 }, (_, index) => `evidence-${index}-${'x'.repeat(160)}`)
+    const event = { ts: '2026-01-01T00:00:00.000Z', sessionId: 'session-large', type: 'workflow/checkpoint' as const,
+      taskId: 'T-1', delegationId: 'D-1', data: { evidenceRefs: large, nested: { summary: 'kept metadata only' } } }
+    expect(Buffer.byteLength(JSON.stringify(event.data))).toBeGreaterThan(LEGACY_JOURNAL_PAYLOAD_MAX_BYTES)
+    expect(() => appendLegacyEventToJournal(journal, event)).not.toThrow()
+    expect(journal.read()).toMatchObject({ issues: [], events: [{ ticketId: 'T-1', assignmentId: 'D-1', payload: {
+      legacyType: 'workflow/checkpoint', legacyDataTruncated: true, legacyDataBytes: expect.any(Number), legacyDataSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      legacyDataKeyCount: 2, legacyDataSample: [{ key: 'evidenceRefs', kind: 'array', size: 300 }, { key: 'nested', kind: 'object' }]
+    } }] })
+    expect(JSON.stringify(journal.read().events[0]!.payload)).not.toContain('x'.repeat(100))
+  })
+
+  it('bounds oversized key names so the recovery summary itself cannot exceed the journal line limit', () => {
+    const journal = createSwarmEventJournal({ directory: join(mkdtempSync(join(tmpdir(), 'swarm-bridge-key-')), 'events'), rootSessionId: 'session-key' })
+    const hugeKey = `secret-${'k'.repeat(70 * 1024)}`
+    const event = { ts: '2026-01-01T00:00:00.000Z', sessionId: 'session-key', type: 'workflow/checkpoint' as const,
+      taskId: 'T-1', data: { [hugeKey]: true } }
+    expect(() => appendLegacyEventToJournal(journal, event)).not.toThrow()
+    const appended = journal.read().events[0]!
+    expect(Buffer.byteLength(`${JSON.stringify(appended)}\n`)).toBeLessThan(64 * 1024)
+    expect(JSON.stringify(appended.payload)).not.toContain('k'.repeat(200))
   })
 })

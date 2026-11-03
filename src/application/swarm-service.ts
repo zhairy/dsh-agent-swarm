@@ -63,6 +63,7 @@ import type { ToolExecLike } from '../tool-shape.js'
 import { getPlanningRecovery } from '../planning-recovery.js'
 import { ParseCreatedWorktree, WORKTREE_TOOL, intWorktreeRegistry, type WorktreeRegistry } from '../worktree-binding.js'
 import { getContextAdmission } from '../context-admission.js'
+import { getNativeIntegrationView } from '../native-integrations.js'
 import { createAgentControl } from '../agent-control.js'
 import { assessExplorationEvidence, type EvidenceAssessmentBinding } from '../evidence-assessment.js'
 import { createPublicEvidenceSourceResolver } from '../evidence-source.js'
@@ -1657,9 +1658,12 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     SyncRootUpgrade(exec.agent, session)
     const tasks = (typeof input.task_id === 'string' ? [getTaskOrThrow(session, input.task_id)] : session.store.getTasks())
       .map((task) => deriveReconciledTask(session, deriveIntentRefresh(task, exec.agent)))
+    const native = getNativeIntegrationView({ projections: deps.getSessionProjections?.(), goals: deps.getGoals?.(), jobs: deps.getJobs?.(),
+      tools: deps.getTools(), session: exec.agent.session, agent: exec.agent })
     const views = tasks.map((task) => {
       return {
         ...getTaskView(task, session.store.getTaskDelegations(task.taskId), config, input.verbose === true, getExternalEditAt(task, session), routeState.getRecovery(exec.agent.id) ?? null, getTaskOrThrow(session, task.taskId), input.compact !== true, session.worktrees.project(task.taskId)),
+        native,
         runtimeGuard: getRuntimeView(session, task.taskId),
         acceptancePolicy: task.acceptance?.status !== 'accepted' ? 'pending' : task.acceptance.verificationReceipt === undefined ? 'legacy-historical' : 'receipt-bound',
         stateRefreshRequired: !isTaskVersionCurrent(task, getTaskOrThrow(session, task.taskId)), publishedRevisions: getTaskBinding(getTaskOrThrow(session, task.taskId))
@@ -2328,9 +2332,12 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const stored = getTaskOrThrow(session, taskId)
       const task = deriveReconciledTask(session, deriveIntentRefresh(stored, session.rootAgent))
       const view = getTaskView(task, session.store.getTaskDelegations(taskId), deps.getConfig(), false, getExternalEditAt(task, session), routeState.getRecovery(sessionId) ?? null, stored, true, session.worktrees.project(taskId))
+      const native = getNativeIntegrationView({ projections: deps.getSessionProjections?.(), goals: deps.getGoals?.(), jobs: deps.getJobs?.(),
+        tools: deps.getTools(), session: session.rootAgent.session, agent: session.rootAgent })
       const journal = session.journal.read()
       const projection = session.journal.project()
       return { ...view,
+        native,
         rootSessionId: sessionId,
         eventJournal: { schemaVersion: 2, sequence: projection.sequence, issues: journal.issues.length, projection },
         runtimeGuard: getRuntimeView(session, taskId),
