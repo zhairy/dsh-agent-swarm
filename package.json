@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "description": "DSH 多智能体插件：天枢统御 12 位专家，任务卡 + Mermaid 流程 + 证据门禁验收；多层模型链即时回退与链尾等待恢复、按配置语言输出、内嵌 Jev 判断 / DSH multi-agent swarm plugin with evidence-gated delegation, resilient model routing, language control and embedded Jev judgments",
   "keywords": [
     "dsh",
@@ -49,6 +49,7 @@
     "docs/依赖与宿主兼容.md",
     "docs/3.3.0-strangler完成与宿主升级.md",
     "docs/3.2.0-架构演进.md",
+    "docs/3.3.1-OpenAI元数据与输出上限.md",
     "lib",
     "!lib/preset-builder.*",
     "locale",
@@ -57,6 +58,7 @@
     "scripts/evolution-evaluate.mjs",
     "scripts/export-task-diagrams.mjs",
     "scripts/install-profile.mjs",
+    "scripts/repair-openai-metadata.mjs",
     "scripts/repair-state.mjs",
     "skills"
   ],
@@ -75,7 +77,8 @@
     "@deepseek-ai/cosmokit": "~1.8.5",
     "@deepseek-ai/schemastery": "~3.18.4",
     "jsdom": "26.1.0",
-    "mermaid": "12.2.0"
+    "mermaid": "12.2.0",
+    "yaml": "2.9.1"
   },
   "dsh": {
     "minVersion": "0.2.0-rc.2",
@@ -119,7 +122,6 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
-    "typescript": "^7.0.2",
-    "yaml": "^2.9.1"
+    "typescript": "^7.0.2"
   }
 }

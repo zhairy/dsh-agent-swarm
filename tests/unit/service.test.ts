@@ -53,13 +53,13 @@ const makeService = (options: { config?: Record<string, unknown>; env?: Partial<
 
 describe('模型上下文档位准入', () => {
   it('串联 tokenMeter、模型上下文元数据和回退链，在发请求前跳过超窗模型', async () => {
-    const primary = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
+    const primary = { provider: 'custom-openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
     const fallback = { provider: 'context-wide', model: 'window-1m', reasoningEffort: 'max' }
     const measure = vi.fn(() => ({ totalTokens: 368003 }))
     const resolveModelInfo = vi.fn(async (provider: string) => ({
       inputModalities: ['text'],
-      context: { contextWindow: provider === 'openai' ? 272000 : 1000000 },
-      defaultMaxTokens: provider === 'openai' ? 128000 : 65536,
+      context: { contextWindow: provider === 'custom-openai' ? 272000 : 1000000 },
+      defaultMaxTokens: provider === 'custom-openai' ? 128000 : 65536,
       reasoning: { efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((id) => ({ id, name: id })) }
     }))
     const llm = {
@@ -86,7 +86,7 @@ describe('模型上下文档位准入', () => {
   })
 
   it('token 测量失败时保持旧路由行为，不阻断第三方 provider', async () => {
-    const route = { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
+    const route = { provider: 'custom-openai', model: 'gpt-6.1-sol', reasoningEffort: 'max' }
     const llm = {
       listProviders: () => [{ id: route.provider }],
       resolveModelInfo: async () => ({

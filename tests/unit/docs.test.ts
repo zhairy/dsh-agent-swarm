@@ -38,6 +38,11 @@ describe('文档与代码一致', () => {
     for (const keyword of ['@earendil-works/pi-ai', 'openai', '@anthropic-ai/sdk', 'zod', '不能']) expect(dependencies).toContain(keyword)
   })
 
+  it('3.3.1 文档说明 OpenAI API 容量、provider 边界和输出预算', () => {
+    const release = read('docs/3.3.1-OpenAI元数据与输出上限.md')
+    for (const keyword of ['1,050,000', '272,000', '128,000', 'Codex', 'reasoning tokens', 'repair-openai-metadata.mjs']) expect(release).toContain(keyword)
+  })
+
   it('评测样例包含 4 个必测案例', () => {
     const tasks = JSON.parse(read('tests/fixtures/eval-tasks.example.json')) as Array<{ id: string; mandatory?: boolean }>
     expect(tasks.filter((task) => task.mandatory === true).map((task) => task.id).sort()).toEqual(['command-exec', 'fu-he-finds-failure', 'screenshot', 'ui-copy'])
