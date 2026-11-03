@@ -24,10 +24,11 @@ describe('v3.2.0 event journal', () => {
   it('redacts secrets, reduces the same view, and truncates an invalid tail', () => {
     const dir = directory()
     const journal = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-a' })
-    journal.append({ ...event('e1'), payload: { stage: 'running', apiKey: 'secret-value' } })
+    journal.append({ ...event('e1'), payload: { stage: 'running', apiKey: 'secret-value', measuredTokens: 249_748, safeInputTokens: 139_904 } })
     journal.append({ ...event('e2', 'route/fallback'), payload: { route: 'codex/gpt', reason: 'quota' } })
     expect(readFileSync(journal.path, 'utf8')).not.toContain('secret-value')
     const events = journal.read().events
+    expect(events[0]?.payload).toMatchObject({ measuredTokens: 249_748, safeInputTokens: 139_904 })
     expect(reduceSwarmEvents(events)).toMatchObject({ sequence: 2, tickets: { 'T-1': { stage: 'running' } }, routes: { 'codex/gpt': { failures: 1 } } })
     writeFileSync(journal.path, `${readFileSync(journal.path, 'utf8')}{"broken":`, 'utf8')
     const reopened = createSwarmEventJournal({ directory: dir, rootSessionId: 'session-a' })

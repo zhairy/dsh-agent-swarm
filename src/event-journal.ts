@@ -54,12 +54,13 @@ export interface JournalIssue { line: number; reason: 'invalid-json' | 'invalid-
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex')
 const eventDigest = (event: Omit<SwarmEvent, 'digest'>): string => sha256(JSON.stringify(event))
 const SENSITIVE_KEY = /(?:api[_-]?key|token|secret|password|authorization|credentials?|private[_-]?key)/i
+const SAFE_TOKEN_METRIC_KEYS = new Set(['measuredTokens', 'reservedOutputTokens', 'safetyMarginTokens', 'safeInputTokens', 'surfaceTokens', 'totalTokens', 'inputTokens', 'outputTokens'])
 const redactPayload = (value: unknown, depth = 0): unknown => {
   if (depth > 16) throw new Error('Event payload nested too deeply')
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value
   if (typeof value === 'string') return getRedactedValue(value)
   if (Array.isArray(value)) return value.slice(0, 4096).map((item) => redactPayload(item, depth + 1))
-  if (typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 512).map(([key, item]) => [key, SENSITIVE_KEY.test(key) ? '[REDACTED]' : redactPayload(item, depth + 1)]))
+  if (typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 512).map(([key, item]) => [key, SENSITIVE_KEY.test(key) && !SAFE_TOKEN_METRIC_KEYS.has(key) ? '[REDACTED]' : redactPayload(item, depth + 1)]))
   return String(value)
 }
 
