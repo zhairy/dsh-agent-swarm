@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "3.2.1",
+  "version": "3.3.0",
   "description": "DSH 多智能体插件：天枢统御 12 位专家，任务卡 + Mermaid 流程 + 证据门禁验收；多层模型链即时回退与链尾等待恢复、按配置语言输出、内嵌 Jev 判断 / DSH multi-agent swarm plugin with evidence-gated delegation, resilient model routing, language control and embedded Jev judgments",
   "keywords": [
     "dsh",
@@ -22,7 +22,7 @@
   },
   "engines": {
     "dsh": ">=0.2.0-rc.2 <0.2.2-0",
-    "node": ">=22.12.0"
+    "node": ">=22.19.0"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -46,6 +46,8 @@
     "docs/升级与回退.md",
     "docs/路线图.md",
     "docs/3.2.1-上下文准入与原生集成.md",
+    "docs/依赖与宿主兼容.md",
+    "docs/3.3.0-strangler完成与宿主升级.md",
     "docs/3.2.0-架构演进.md",
     "lib",
     "!lib/preset-builder.*",
@@ -59,7 +61,7 @@
     "skills"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
+    "build": "node scripts/clean-lib.mjs && tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "doctor": "node scripts/doctor.mjs",
     "gen:presets": "node scripts/gen-presets.mjs",
     "install:profile": "node scripts/install-profile.mjs",
@@ -78,6 +80,7 @@
   "dsh": {
     "minVersion": "0.2.0-rc.2",
     "testedVersions": [
+      "0.2.1-rc.5",
       "0.2.1-rc.3",
       "0.2.1-rc.2",
       "0.2.1-alpha.4",

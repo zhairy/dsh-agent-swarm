@@ -19,7 +19,7 @@ describe('文档与代码一致', () => {
 
   it('安装.md 覆盖升级、模型、凭据、可选后端与 doctor', () => {
     const doc = read('docs/安装.md')
-    for (const keyword of ['0.2.0-rc.2', 'QWEN_TOKEN_PLAN_CN_API_KEY', 'OPENCODE_GO_API_KEY', 'TYPESAFE_API_KEY', '@deepseek-ai/dsh-subagent-codex', '@deepseek-ai/dsh-subagent-claude-code', 'dsh-web-search-free', 'doctor', '天枢']) {
+    for (const keyword of ['0.2.1-rc.5', 'pi-ai@1.5.0', 'QWEN_TOKEN_PLAN_CN_API_KEY', 'OPENCODE_GO_API_KEY', 'TYPESAFE_API_KEY', '@deepseek-ai/dsh-subagent-codex', '@deepseek-ai/dsh-subagent-claude-code', 'dsh-web-search-free', 'doctor', '天枢']) {
       expect(doc).toContain(keyword)
     }
   })
@@ -29,6 +29,13 @@ describe('文档与代码一致', () => {
     const keys = [...example.matchAll(/^ {6}([a-z_:]+):$/gm)].map((m) => m[1])
     expect(keys.length).toBeGreaterThan(0)
     for (const key of keys) expect(Object.keys(DEFAULT_ROUTE_CHAINS)).toContain(key)
+  })
+
+  it('3.3.0 文档说明 strangler、依赖矩阵和宿主升级边界', () => {
+    const release = read('docs/3.3.0-strangler完成与宿主升级.md')
+    const dependencies = read('docs/依赖与宿主兼容.md')
+    for (const keyword of ['StateStore', 'EventJournal V2', 'workspaceWrites', '0.2.1-rc.5', 'pi-ai', '1.5.0']) expect(release).toContain(keyword)
+    for (const keyword of ['@earendil-works/pi-ai', 'openai', '@anthropic-ai/sdk', 'zod', '不能']) expect(dependencies).toContain(keyword)
   })
 
   it('评测样例包含 4 个必测案例', () => {

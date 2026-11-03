@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { TaskStore } from './evidence.js'
 import type { SwarmEventJournal, SwarmEventType } from './event-journal.js'
 import { canonicalStateJson } from './state-core.js'
-import { projectTicketLifecycle } from './domain/tickets/lifecycle.js'
+import { getTicketStageKey, projectTicketLifecycle } from './domain/tickets/lifecycle.js'
 import type { AuthorizationDecision } from './authorization-wait.js'
 
 export interface StateImportInput {
@@ -34,10 +34,6 @@ export interface StateImportReport {
 }
 
 const sha256 = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex')
-const stageKey = (stage: ReturnType<typeof projectTicketLifecycle>['stage']): string => stage.stage === 'working' || stage.stage === 'person'
-  ? `${stage.stage}:${stage.action}`
-  : stage.stage === 'ended' ? `ended:${stage.outcome}` : stage.stage
-
 const safeId = (prefix: string, identity: string): string => `${prefix}-${sha256(identity).slice(0, 40)}`
 
 /**
@@ -78,7 +74,7 @@ export const importFeatureStateToJournal = (input: StateImportInput): StateImpor
     }
     const delegations = input.store.getTaskDelegations(task.taskId)
     const projection = projectTicketLifecycle(task, delegations)
-    const expected = stageKey(projection.stage)
+    const expected = getTicketStageKey(projection.stage)
     const fact = {
       schemaVersion: input.schemaVersion,
       workspaceId: input.workspaceId,

@@ -51,6 +51,14 @@ describe('v3.2.0 event journal', () => {
     expect(reopened.read().issues).toEqual([])
   })
 
+  it('allows a person to clear a durable quarantine without erasing prior audit events', () => {
+    const journal = createSwarmEventJournal({ directory: directory(), rootSessionId: 'session-unquarantine' })
+    journal.append({ ...event('quarantine'), type: 'ticket/quarantined', actor: { kind: 'watchdog', id: 'watchdog' }, payload: { stage: 'quarantined' } })
+    expect(journal.project().tickets['T-1']?.quarantined).toBe(true)
+    journal.append({ ...event('clear'), type: 'ticket/state-changed', actor: { kind: 'person', id: 'root' }, payload: { stage: 'person:failed', quarantined: false } })
+    expect(journal.project().tickets['T-1']).toMatchObject({ stage: 'person:failed', quarantined: false })
+  })
+
   it('enforces the configured line ceiling without creating a partial event', () => {
     const journal = createSwarmEventJournal({ directory: directory(), rootSessionId: 'session-line', maxLineBytes: 2048 })
     expect(() => journal.append({ ...event('too-large'), payload: { body: 'x'.repeat(EVENT_JOURNAL_MAX_LINE_BYTES) } })).toThrow(/line limit/i)

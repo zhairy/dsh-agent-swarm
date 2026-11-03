@@ -44,6 +44,7 @@ import { FindRoleByPresetId, getRoleInfo, ROLE_INFO_LIST, type DelegableRoleId, 
 import { getRouteKey, getRouteLabel, createRouteMetadataCache, createRouteFailureObserver, intRouteProbe, type RouteInfo } from '../domain/routing/routes.js'
 import { ParseSessionPlan, getRuleSessionPlan, getSessionQuestions, getSessionState, intChildEndHub, intThreadRegistry, type SessionPlan } from '../threads.js'
 import { getUpgradeReasons, getUpgradedChain } from '../domain/routing/upgrade.js'
+import type { RouteHealthSnapshot } from '../domain/routing/health.js'
 import { ACCEPTANCE_QUESTIONS, ParseAssessment, getAcceptanceState, getReviewQuestions, getReviewState } from '../review.js'
 import { getErrorText, SwarmError } from '../util/errors.js'
 import { getGitStatus } from '../util/git.js'
@@ -71,6 +72,7 @@ import { createAuthorizationRuntime, type AuthorizationRuntimeContext } from '..
 import { getTaskRuntimeLineage } from '../feature-session.js'
 import { isAuthorizationWaiting } from '../authorization-wait.js'
 import { intTicketRepository, type TicketRepository } from '../domain/tickets/repository.js'
+import { getTicketStageKey } from '../domain/tickets/lifecycle.js'
 import { createSwarmWatchdog, type WatchdogAlert } from '../watchdog.js'
 import type { PlanningRunView, RootUpgradeView } from './api.js'
 import type { SwarmService, SwarmServiceDepsInfo } from './service-api.js'
@@ -232,6 +234,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       let mutated = false
       try {
       routeState.RestoreHealth((await features.readRouteHealth()) ?? [])
+      appendRouteHealthEvents(session, routeState.getHealthSnapshot())
       const importCommittedState = (writeManifest: boolean) => importFeatureStateToJournal({ journal: session.journal, store: session.store,
         rootSessionId: session.sessionId, workspaceId: features.workspaceId, sourcePath: features.store.directory,
         schemaVersion: features.store.read().schemaVersion, authorizationDecisions: features.store.read().authorizationDecisions,
@@ -429,6 +432,25 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     return next === task ? task : publishTaskRefresh(session, task, next)
   }
 
+  const appendRouteHealthEvents = (session: SessionStateInfo, snapshot: RouteHealthSnapshot): void => {
+    const digestId = (value: string): string => createHash('sha256').update(value).digest('hex').slice(0, 40)
+    for (const entry of snapshot.entries) {
+      const route = getRouteLabel(entry.route)
+      const identity = digestId(`failure\0${entry.key}\0${entry.failedAt}\0${entry.failureId ?? ''}`)
+      session.journal.append({ eventId: `evt-route-failure-${identity}`, idempotencyKey: `route-health:${identity}`,
+        type: 'route/skipped', actor: { kind: 'router', id: 'route-health' },
+        payload: { route, failure: entry.kind, failedAt: entry.failedAt, ...(entry.resetAt === undefined ? {} : { resetAt: entry.resetAt }),
+          ...(entry.retryAt === undefined ? {} : { retryAt: entry.retryAt }) } })
+    }
+    for (const clear of snapshot.cleared) {
+      const route = routeState.getHealth().find((entry) => entry.key === clear.key)?.route
+      const identity = digestId(`clear\0${clear.key}\0${clear.failedAt}\0${clear.clearedAt}\0${clear.failureId ?? ''}`)
+      session.journal.append({ eventId: `evt-route-recovered-${identity}`, idempotencyKey: `route-health-recovered:${identity}`,
+        type: 'route/recovered', actor: { kind: 'router', id: 'route-health' },
+        payload: { ...(route === undefined ? { route: clear.key } : { route: getRouteLabel(route) }), clearedAt: clear.clearedAt } })
+    }
+  }
+
   const sleep = deps.sleep ?? SleepWithSignal
   const metadataCache = createRouteMetadataCache({ now })
   const contextMeasurements = new WeakMap<AbortSignal, Map<string, { totalTokens: number }>>()
@@ -501,7 +523,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         const code = error instanceof StateStoreError ? error.code : 'PERSISTENCE_FAILURE'
         deps.logger?.warn(`路由健康快照提交失败：根会话 ${session.sessionId}，${code}；原始状态未输出`)
         throw error
-      }))).then(() => undefined)
+      }))).then(() => { for (const session of durable) appendRouteHealthEvents(session, entries) })
     },
     ...(deps.network === undefined ? {} : { network: deps.network }),
     onNetworkWait: (event) => {
@@ -711,6 +733,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       }
     }
     const result = watchdog.evaluate({ now: now(), assignments, tickets })
+    const currentAlertIds = new Set(result.alerts.map((alert) => alert.id))
+    for (const alertId of watchdogAlerts.keys()) if (!currentAlertIds.has(alertId)) watchdogAlerts.delete(alertId)
     for (const taskId of result.quarantineTicketIds) quarantinedTasks.add(taskId)
     for (const alert of result.alerts) {
       if (watchdogAlerts.has(alert.id)) continue
@@ -839,6 +863,19 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     await ensureFeatures(getSession(input.parentSessionId), parent)
     if (input.action === 'select') return agentControl.Select({ ...input, route: input.route! })
     if (input.action === 'stop') return agentControl.Stop(input)
+    if (input.action === 'continue') {
+      const session = getSession(input.parentSessionId)
+      const control = agentControl.get(input.childId)
+      const workspace = getAgentHeader(parent).cwd ?? process.cwd()
+      if (control !== undefined && quarantinedTasks.has(control.taskId) && leases.peekStatus(workspace)?.mutationUnknown !== true) {
+        quarantinedTasks.delete(control.taskId)
+        const task = session.store.getTask(control.taskId)
+        const projection = task === undefined ? undefined : session.store.projection(task.taskId)
+        const eventId = `evt-manual-unquarantine-${randomUUID()}`
+        session.journal.append({ eventId, idempotencyKey: eventId, ticketId: control.taskId, type: 'ticket/state-changed',
+          actor: { kind: 'person', id: parent.id }, payload: { stage: projection === undefined ? 'idle' : getTicketStageKey(projection.stage), quarantined: false, reason: 'manual-read-only-reconciliation' } })
+      }
+    }
     return agentControl.Continue(input)
   }
   const jev = intJevHub({
@@ -1108,6 +1145,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       const requestedId = (raw as { task_id?: unknown }).task_id
       const existing = typeof requestedId === 'string' ? session.store.getTask(requestedId) : undefined
       if (typeof requestedId === 'string' && existing === undefined) throw new SwarmError('UNKNOWN_TASK', describeUnknownTask(session, requestedId))
+      if (existing !== undefined && quarantinedTasks.has(existing.taskId)) throw new SwarmError('RECOVERY_REQUIRED', 'Ticket 已隔离；完成只读核对并从“模型与恢复”显式解除前不能修改合同')
       const goalId = deps.getGoals?.()?.get(exec.agent)?.id
       if (existing?.runtimeGoalId !== undefined && goalId !== undefined && existing.runtimeGoalId !== goalId) throw new SwarmError('STALE_EVIDENCE', '该任务属于另一个历史目标；请为当前目标新建任务卡，不复用旧目标的执行身份')
       const expected = (raw as { expected_card_revision?: unknown }).expected_card_revision
@@ -1877,6 +1915,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       try {
         await session.taskLock.run(async () => {
           prepared = reconcileTask(session, refreshIntent(session, getTaskOrThrow(session, args.task_id), exec.agent))
+          if (quarantinedTasks.has(prepared.taskId) && MUTATING_ROLES.includes(args.role)) throw new SwarmError('RECOVERY_REQUIRED', 'Ticket 已隔离：未知外部副作用需要人工只读核对，不能启动新的写入 Worker')
           if (!isTaskVersionCurrent(prepared, requestTask)) throw new SwarmError('STALE_EVIDENCE', '等待预约期间任务版本已改变，请读取新合同')
           if (prepared.acceptance?.decision === 'incomplete') throw new SwarmError('RECOVERY_REQUIRED', '任务已标记未完成并停止，请更新任务合同后重新委派')
           if (args.request_id !== undefined) {

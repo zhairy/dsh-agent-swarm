@@ -49,6 +49,11 @@ export interface TicketProjection {
 
 const enabled = (rule: string, rules: readonly string[]): boolean => rules.includes(rule)
 
+/** Stable projection key used by the event journal and migration manifest. */
+export const getTicketStageKey = (stage: TicketProjection['stage']): string => stage.stage === 'working' || stage.stage === 'person'
+  ? `${stage.stage}:${stage.action}`
+  : stage.stage === 'ended' ? `ended:${stage.outcome}` : stage.stage
+
 /** Decide proactive admission without granting any host or workspace permission. */
 export const evaluateProactiveAdmission = (request: AdmissionRequest): AdmissionDecision => {
   if (request.strength === 'explicit') return { kind: 'accept', mandateRequired: true }

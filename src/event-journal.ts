@@ -112,7 +112,9 @@ export const reduceSwarmEvents = (events: readonly SwarmEvent[], initial: SwarmP
       const stage = typeof event.payload.stage === 'string' ? event.payload.stage
         : event.type === 'ticket/admitted' ? 'admitted'
           : event.type === 'ticket/quarantined' ? 'quarantined' : prior.stage
-      projection.tickets[ticketId] = { stage, updatedAt: event.at, quarantined: prior.quarantined || stage === 'quarantined' }
+      const quarantined = typeof event.payload.quarantined === 'boolean'
+        ? event.payload.quarantined : event.type === 'ticket/quarantined' || stage === 'quarantined' ? true : prior.quarantined
+      projection.tickets[ticketId] = { stage, updatedAt: event.at, quarantined }
     }
     if (event.type.startsWith('route/') && typeof event.payload.route === 'string') {
       const route = event.payload.route

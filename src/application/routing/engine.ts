@@ -719,7 +719,10 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     if (recovery.terminal !== undefined) throw new SwarmError('SERVICE_UNAVAILABLE', recovery.terminal)
     if (countedAttempts(recovery) >= policyOf(config).maxLogicalAttempts) { terminal(agent.id, 'recovery_attempts_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'recovery_attempts_exhausted') }
     const declared = config === undefined || _presetRole === undefined ? undefined : getRoleRoute(config, getRouteKey(_presetRole)).chain.find((route) => isSameRoute(route, preferredRoot))
-    let route = child === undefined ? (roots.get(agent.id)?.override ?? (upgrades.get(agent.id) === undefined ? undefined : upgrades.get(agent.id)!.chain[upgrades.get(agent.id)!.index]) ?? { ...preferredRoot, ...(declared?.policy === undefined ? {} : { policy: declared.policy }) }) : child.chain[child.index]
+    const preferredRoute: RouteInfo = { provider: preferredRoot.provider, model: preferredRoot.model,
+      ...(preferredRoot.reasoningEffort === undefined ? {} : { reasoningEffort: preferredRoot.reasoningEffort }),
+      ...(declared?.policy === undefined ? {} : { policy: declared.policy }) }
+    let route = child === undefined ? (roots.get(agent.id)?.override ?? (upgrades.get(agent.id) === undefined ? undefined : upgrades.get(agent.id)!.chain[upgrades.get(agent.id)!.index]) ?? preferredRoute) : child.chain[child.index]
     const pendingRetry = manualRetries.get(agent.id)
     if (route !== undefined && pendingRetry !== undefined && isSameRoute(route, pendingRetry.route)) {
       manualRetries.delete(agent.id)
@@ -738,9 +741,21 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     // 已由本请求持有的半开/人工许可不能再走全局 probe（它会把自己的 claim 当作隔离）。
     const returning = route !== undefined && health.getRelatedEntries(route).length > 0
     const routeCheck = route === undefined || contextChecks === undefined ? undefined : contextChecks.get(admissionKey(route))
-    if (route === undefined || !canServe(route) || (contextChecks !== undefined && routeCheck !== true)
-      || (returning && health.isAvailable(route) && !accepts(route)) || !health.claim(route, agent.id)) {
-      if (child === undefined && config?.rootFallback === false) { terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'root-fallback-disabled: route_chain_exhausted') }
+    // A missing context result means metadata work was invalidated by a live
+    // selection/identity change. It is not a negative eligibility fact: re-enter
+    // admission and fetch the current route instead of exhausting the chain.
+    if (route !== undefined && contextChecks !== undefined && routeCheck === undefined) throw new AdmissionProbe(route)
+    const routeServable = route !== undefined && canServe(route)
+    const routeHealthy = route !== undefined && health.isAvailable(route)
+    const routeAccepted = route === undefined || !returning || !routeHealthy || accepts(route)
+    const canClaimRoute = route !== undefined && routeServable && (contextChecks === undefined || routeCheck === true)
+      && !(returning && routeHealthy && !routeAccepted)
+    const routeClaimed = canClaimRoute && health.claim(route, agent.id)
+    if (!canClaimRoute || !routeClaimed) {
+      if (child === undefined && config?.rootFallback === false) {
+        recovery.terminalDetail = `route=${route === undefined ? 'missing' : getRouteLabel(route)} servable=${routeServable} context=${String(routeCheck)} healthy=${routeHealthy} accepted=${routeAccepted} claimed=${routeClaimed}`
+        terminal(agent.id, 'route_chain_exhausted'); throw new SwarmError('SERVICE_UNAVAILABLE', 'root-fallback-disabled: route_chain_exhausted')
+      }
       const baseChain = config === undefined || _presetRole === undefined ? [] : getRoleRoute(config, getRouteKey(_presetRole)).chain
       const declaredChain = effectiveChain(agent.id, child?.chain ?? (upgrade === undefined ? baseChain : upgrade.completeChain ? upgrade.chain : getUpgradedChain(upgrade.chain, baseChain)))
       // 用户可在对话框选择未列入角色备用链的模型。启用上下文准入时，

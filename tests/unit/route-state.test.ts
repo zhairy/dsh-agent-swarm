@@ -300,6 +300,14 @@ describe('context-aware route admission', () => {
   const fallback = { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' }
   const selected = getSwarmConfig({ routes: { tian_shu: { chain: [primary, fallback] } } })
 
+  it('combines a healthy metadata probe with context admission instead of exhausting the route', async () => {
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }), { admitContext: async () => ({ ok: true }) })
+    registry.BeginRequestStep(root.id, 0, 0)
+    await expect(registry.AdmitRequest(root, { provider: 'fixture', model: 'combined' }, 'tian_shu',
+      getSwarmConfig({ routes: { tian_shu: { chain: [{ provider: 'fixture', model: 'combined' }] } } }), true))
+      .resolves.toMatchObject({ provider: 'fixture', model: 'combined' })
+  })
+
   it('skips an otherwise healthy route that cannot hold the measured session and selects the next safe route', async () => {
     const rejected: Array<{ route: RouteInfo; journal: any }> = []
     const registry = createRouteEngine(undefined, undefined, {

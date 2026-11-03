@@ -668,6 +668,15 @@ describe('task execution through the public service', () => {
     expect(runtime.subagents.start).toHaveBeenCalledTimes(1)
   })
 
+  it('projects committed route health into the V2 event journal', async () => {
+    const runtime = await makeRuntime({ config: { persistence: { enabled: true }, jev: { enabled: false } } })
+    const created = await runtime.service.AddTaskCard(card(), runtime.exec())
+    const route = { provider: 'antigravity', model: 'gemini-4-argon-high', reasoningEffort: 'high' }
+    await runtime.service.routeState.ObserveRouteFailure(route, { code: 'RATE_LIMIT', status: 429, message: 'Individual quota reached' }, runtime.config)
+    const view = runtime.service.getTaskViewForRpc(runtime.root.id, created.task_id) as { eventJournal: { projection: { routes: Record<string, { lastEvent: string }> } } }
+    expect(view.eventJournal.projection.routes['antigravity/gemini-4-argon-high']?.lastEvent).toBe('route/skipped')
+  })
+
   it('fences writer tools, context and peer messaging after same-id user intent edits while card/flow remain unchanged', async () => {
     const runtime = await makeRuntime({ pending: true, config: { persistence: { enabled: true }, messageBus: { enabled: true } } })
     const user = { id: 'same-user-message', role: 'user', content: [{ type: 'text' as const, text: '修改 subject.ts 并核对结果' }] }
