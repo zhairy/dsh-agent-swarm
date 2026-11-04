@@ -17,9 +17,12 @@ import { getPromptStyle, type PromptStylePolicy } from './model-family.js'
 import { ROLE_IDS, getChildPersona, isDelegableRoleId, isRoleId, type DelegableRoleId, type RoleId, type SuanHengMode } from './role-registry.js'
 import type { SwarmService } from './service.js'
 import { readLive } from './util/live.js'
+import { SwarmError } from './util/errors.js'
 
 export const PERSONA_PREFIX_SECTION = 'deployment:persona-prefix'
 export const OUTPUT_LANGUAGE_SECTION = 'dsh-agent-swarm:output-language'
+/** Set only by the locally patched 0.2.2 Host that supports safe step re-preparation. */
+export const STEP_MODEL_BRIDGE = Symbol.for('dsh-agent-swarm/step-model-bridge-v1')
 
 /** 委派出的子会话在系统提示里的身份：角色、算衡模式、语言；规划审核等特殊子会话可给出固定 persona */
 export interface ChildPromptInfo {
@@ -99,6 +102,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   })
   const isTracked = (agent: AgentLike): boolean => isRoleId(currentRole(agent))
     || getAgentHeader(agent).agentPreset === undefined && service.routeState.getChildRole(agent.id) !== undefined
+  const hasStepModelBridge = (agent: AgentLike): boolean => (agent as unknown as Record<symbol, unknown>)[STEP_MODEL_BRIDGE] === true
   ctx.on('system-prompt/assemble', async (_assembly: unknown, context: { agent?: AgentLike } | undefined, next: () => Promise<PromptAssemblyLike>) => {
     const assembled = await next()
     const agent = context?.agent
@@ -123,10 +127,9 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     service.routeState.RecordUserSelection(session.id, selected, event.seq)
     service.agentControl?.ObserveSelection(session.id, selected)
   })
-  ctx.on('agent/request', async (payload: { agent: AgentLike; turn?: number; step?: number; signal?: AbortSignal }, next: () => Promise<CallConfigLike>) => {
-    if (service.isManagedAgent?.(payload.agent) === false) return next()
-    await service.WaitAgentReady(payload.agent)
-    await service.BeforeManagedRequest(payload.agent)
+  const prepareRoute = async (payload: { agent: AgentLike; turn?: number; step?: number; signal?: AbortSignal }, next: () => Promise<CallConfigLike>, beforeStep: boolean): Promise<CallConfigLike> => {
+    await service.WaitAgentReady(payload.agent, payload.signal)
+    if (!beforeStep) await service.BeforeManagedRequest(payload.agent)
     // 0.2.1-alpha 起宿主不再接受启动期 toolFilter：子智能体的第一次请求在这里按角色限制继承工具面，
     // 发生在工具清单装配之前；旧宿主该方法为空实现，启动期 toolFilter 仍然生效。
     const role = currentRole(payload.agent)
@@ -143,6 +146,34 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     if (isTracked(payload.agent)) await service.routeState.WaitHealthReady(payload.agent.id, payload.signal)
     const result = await service.routeState.AdmitRequest(payload.agent, resolved, presetRole, service.getConfig(), explicitSelectionAvailable, payload.signal)
     admittedProviders.set(payload.agent.id, result.provider)
+    return result
+  }
+  // The bridge runs before the Host freezes the step's model, tools and prompt.
+  // It is deliberately inert on stock Hosts and all existing 0.2.1 runtimes.
+  ctx.on('agent/swarm-model-select', async (payload: { agent: AgentLike; turn?: number; step?: number; signal?: AbortSignal }, next: () => Promise<CallConfigLike>) => {
+    if (!hasStepModelBridge(payload.agent) || service.isManagedAgent?.(payload.agent) === false) return next()
+    const selected = await prepareRoute(payload, next, true)
+    return { provider: selected.provider, model: selected.model, ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }) }
+  })
+  ctx.on('agent/request', async (payload: { agent: AgentLike; turn?: number; step?: number; signal?: AbortSignal }, next: () => Promise<CallConfigLike>) => {
+    if (service.isManagedAgent?.(payload.agent) === false) return next()
+    const hostModel = (payload.agent as AgentLike & { model?: { current?: unknown; select?: unknown } }).model
+    if (!hasStepModelBridge(payload.agent) && typeof hostModel?.current === 'function' && typeof hostModel.select === 'function') {
+      throw new SwarmError('SERVICE_UNAVAILABLE', '当前 DSH 在步骤准备后冻结模型，百工需要匹配此版本的模型切换桥接；未发起模型请求')
+    }
+    // On the patched Host routing has already happened before assembly; never
+    // change the selection inside this deprecated waterfall.
+    let result: CallConfigLike
+    if (hasStepModelBridge(payload.agent)) {
+      try {
+        await service.WaitAgentReady(payload.agent, payload.signal)
+        await service.BeforeManagedRequest(payload.agent)
+        result = await next()
+      } catch (error) {
+        service.routeState.ReleaseProbe(payload.agent.id)
+        throw error
+      }
+    } else result = await prepareRoute(payload, next, false)
     service.agentControl?.ObserveRequest(payload.agent.id, result)
     const selected = service.routeState.getChildOverride(payload.agent.id)
     if (selected !== undefined) service.agentControl?.ObserveSelection(payload.agent.id, selected)

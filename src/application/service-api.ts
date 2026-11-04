@@ -123,7 +123,7 @@ export interface SwarmService {
   getAgentViewForRpc: (parentSessionId: string, childId: string) => Promise<unknown>
   ControlAgentForRpc: (input: AgentControlRpcInput) => Promise<unknown>
   dispose: () => Promise<void>
-  WaitAgentReady: (agent: AgentLike) => Promise<void>
+  WaitAgentReady: (agent: AgentLike, signal?: AbortSignal) => Promise<void>
   /** 0.2.1-alpha 起：按角色在子智能体作用域限制继承的工具面；旧宿主是空实现（由启动期 toolFilter 承担）。 */
   ApplyChildToolScope: (agent: AgentLike, role: DelegableRoleId, allowWeb?: boolean) => void
   ChildAllowWebFor: (agentId: string) => boolean | undefined

@@ -553,10 +553,19 @@ export const createFeatureSession = async (input: {
         : { ...previous, reservations: [...previous.reservations, ...partition.planning.reservations.filter((record) => !ids.has(record.id))] }
     }
   }
-  if (input.tasks.getTasks().length === 0) {
-    for (const task of saved.tasks) input.tasks.AddTask({ ...task, delegationIds: [] })
-    for (const record of saved.delegations) input.tasks.AddDelegation(record)
-    for (const thread of saved.threads) input.threads.Add(thread)
+  try {
+    if (input.tasks.getTasks().length === 0) {
+      if (saved.tasks.length > 0 || saved.delegations.length > 0) {
+        if (input.tasks.RestoreSnapshot === undefined) throw new StateStoreError('RECOVERY_REQUIRED', '任务存储不支持原子恢复已校验的持久快照')
+        input.tasks.RestoreSnapshot(saved.tasks, saved.delegations)
+      }
+      for (const thread of saved.threads) input.threads.Add(thread)
+    }
+  } catch (error) {
+    try { await store.dispose() } catch (disposeError) {
+      throw new AggregateError([error, disposeError], '持久状态恢复失败，且状态存储关闭失败')
+    }
+    throw error
   }
   // 材料准入预算 = 状态上限 − 非材料占用 − 预留；只约束净增长，净缩小始终放行（修订任务卡是最直接的收缩救援）。
   let committedContextBytes = 0

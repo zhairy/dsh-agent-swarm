@@ -12,7 +12,7 @@ import type { AgentControlRecord } from '../../src/agent-control.js'
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup() })
-const makeRestored = async (legacy: boolean, wrongChild = false) => {
+const makeRestored = async (legacy: boolean, wrongChild = false, historicalTransition = false) => {
   const home = await mkdtemp(join(tmpdir(), 'swarm-control-restore-'))
   let service: SwarmService | undefined
   cleanups.push(async () => { await service?.dispose().catch(() => undefined); await rm(home, { recursive: true, force: true }) })
@@ -30,6 +30,9 @@ const makeRestored = async (legacy: boolean, wrongChild = false) => {
     cardRevision: 1, workflowRevision: 1, requestRevision: 1, route: { provider: 'old-fallback', model: 'last-used' },
     continuationInput: { task_id: 'T-1', role: 'suan_heng', mode: 'verify', prompt: '核对结果', session: 'continue', backend: 'api' },
     session: { kind: 'continuable', threadId: childId, round: 1, appended: false, source: 'rule', reason: 'fixture' } })
+  if (historicalTransition) tasks.AddDelegation({ delegationId: 'D-2', taskId: 'T-1', role: 'tan_wei', roleName: '探微', status: 'completed',
+    summary: '历史交付', evidence: [], attempts: [], independence: 'n/a', hardIsolation: true, unresolved: [], startedAt: 3, finishedAt: 4,
+    structured: { summary: '历史交付', unresolved: [], findings: [] } })
   threads.Add({ threadId: childId, key: 'suan_heng:verify', role: 'suan_heng', mode: 'verify', rounds: 1, busy: false, closed: false, allowWeb: false,
     taskIds: ['T-1'], history: [{ delegationId: 'D-1', taskId: 'T-1', request: '核对结果', summary: '未完成', status: 'failed' }], createdAt: 1, lastUsedAt: 2 })
   const controls: AgentControlRecord[] = legacy ? [] : [{ childId: wrongChild ? 'unrelated-child' : childId, parentSessionId: rootId, taskId: 'T-1', delegationId: 'D-1',
@@ -67,6 +70,13 @@ describe('restored service child routing fences', () => {
     await expect(service.getAgentViewForRpc(rootId, 'unrelated-child')).rejects.toThrow('身份不一致')
     expect(service.routeState.getChild('unrelated-child')).toBeUndefined()
     await expect(service.getAgentViewForRpc(rootId, 'unrelated-child')).rejects.toThrow('身份不一致')
+    expect(start).not.toHaveBeenCalled()
+    expect(activateParent).not.toHaveBeenCalled()
+  })
+  it('restores a validated historical failed-to-completed snapshot without replaying lifecycle transitions', async () => {
+    const { service, rootId, childId, start, activateParent } = await makeRestored(false, false, true)
+    expect(await service.getAgentViewForRpc(rootId, childId)).toMatchObject({ childId, delegationId: 'D-1', persistent: true, phase: 'paused' })
+    expect(service.routeState.getChildRole(childId)).toBe('suan_heng')
     expect(start).not.toHaveBeenCalled()
     expect(activateParent).not.toHaveBeenCalled()
   })

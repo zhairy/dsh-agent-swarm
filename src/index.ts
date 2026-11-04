@@ -33,7 +33,7 @@ import { getRpcRoutes } from './rpc.js'
 import { ensureRolePresetsForActivationHost } from './preset-registration.js'
 import { intSwarmService, type LoggerLike } from './service.js'
 import { getHostApprovalPolicy, getToolApprovalDecision } from './approval-policy.js'
-import { inspectChildRecovery, inspectRootPreference } from './host-recovery.js'
+import { inspectChildRecovery, inspectRootPreference, readHostInspection } from './host-recovery.js'
 import { getToolRecoveryResult } from './tool-recovery.js'
 import type { RouteInfo } from './domain/routing/routes.js'
 import type { GoalsLike, TokenMeterLike, UserQuestionsLike } from './host-contract.js'
@@ -99,12 +99,13 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     let pending = rootMetadata.get(id)
     if (pending !== undefined) return pending
     pending = (async () => {
-      const controller = ctx.get('sessionController') as { inspect: (id: string) => Promise<{ meta: SessionHeaderLike }> } | undefined
-      if (controller === undefined) return undefined
-      const inspection = await controller.inspect(id)
+      const inspection = await readHostInspection({ sessionId: id,
+        controller: ctx.get('sessionController') as Parameters<typeof readHostInspection>[0]['controller'],
+        query: ctx.get('sessionQuery') as Parameters<typeof readHostInspection>[0]['query'], signal: AbortSignal.timeout(30_000) })
+      if (inspection === undefined || inspection === null || typeof inspection !== 'object' || !('meta' in inspection)) return undefined
       const preference = inspectRootPreference(inspection)
       // Retain only bounded metadata, never an entire inspected conversation.
-      return { header: inspection.meta, ...(preference === undefined ? {} : { preference }) }
+      return { header: inspection.meta as SessionHeaderLike, ...(preference === undefined ? {} : { preference }) }
     })().catch((error) => { rootMetadata.delete(id); throw error })
     rootMetadata.set(id, pending)
     return pending
@@ -152,10 +153,12 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
       return (await controller?.resolveAgent(sessionId))?.agent
     },
     inspectChild: async (parentSessionId, childId, notBefore) => {
-      const controller = ctx.get('sessionController') as { inspect: (id: string) => Promise<unknown> } | undefined
       const subagents = ctx.get('subagents') as SubagentsLike | undefined
-      if (controller === undefined || subagents?.listChildren === undefined) return undefined
-      const [inspection, catalog] = await Promise.all([controller.inspect(childId), subagents.listChildren(parentSessionId)])
+      if (subagents?.listChildren === undefined) return undefined
+      const [inspection, catalog] = await Promise.all([readHostInspection({ sessionId: childId,
+        controller: ctx.get('sessionController') as Parameters<typeof readHostInspection>[0]['controller'],
+        query: ctx.get('sessionQuery') as Parameters<typeof readHostInspection>[0]['query'], signal: AbortSignal.timeout(30_000) }), subagents.listChildren(parentSessionId)])
+      if (inspection === undefined) return undefined
       return inspectChildRecovery({ parentSessionId, childId, inspection, catalog, ...(notBefore === undefined ? {} : { notBefore }) })
     },
     dshHome: getDshHome(ctx),

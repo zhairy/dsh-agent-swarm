@@ -51,6 +51,7 @@ export const intTicketRepository = (store: TaskStore): TicketRepository => {
   return {
     AddTask: (task) => store.AddTask(task),
     getTask: (taskId) => store.getTask(taskId),
+    ...(store.RestoreSnapshot === undefined ? {} : { RestoreSnapshot: (tasks, delegations) => store.RestoreSnapshot!(tasks, delegations) }),
     UpdateTask: (taskId, patch) => {
       const before = store.getTask(taskId)
       if (before === undefined) return store.UpdateTask(taskId, patch)

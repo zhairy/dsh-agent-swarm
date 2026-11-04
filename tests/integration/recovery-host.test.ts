@@ -17,6 +17,11 @@ interface RecoveryRun extends ScenarioRunInfo {
   recoveryTerminal?: string
   agentErrors?: Array<{ message?: string; code?: string }>
   adapterThrows?: number
+  bridgeTools?: Array<{ model: string; tools: string[] }>
+  bridgeToolExecutions?: number
+  bridgeHeaders?: Array<{ provider: string; model: string }>
+  bridgeSelections?: Array<{ provider: string; model: string }>
+  bridgeUserMessages?: number
   planningReviewers?: Array<{ sessionId: string; model: string; tools: string[]; outputSchemaProperties: string[]; snapshotDigest: string; requestText: string; requestRevision: number; requestRefs?: Array<{ source: string; text?: string; textRef?: string }>; mermaid: string; workflow: unknown; planningScope?: { kind: string; deferred: string[] }; seesAgentResult: boolean; seesJevResult: boolean; readResult?: string; mutationResult?: string; mutationIsError?: boolean; missingContextResult?: string; missingContextIsError?: boolean }>
   planningStatus?: { tasks: Array<{ planningReview?: unknown; acceptance?: { status: string } }> }
   hostApis?: { start: boolean; startActivation: boolean }
@@ -70,6 +75,19 @@ beforeAll(() => {
 })
 
 describe('真实 AgentLoop：pool exhausted 9060669ms 与终态恢复', () => {
+  it.skipIf(getTestedVersion() !== '0.2.2-rc.1')('切换备用时重新解析模型条件工具，且执行只发生一次', async () => {
+    const run = await runRecovery('recovery-capability-switch', getRoutesOverlay({ tian_shu: ['fail-pool', 'root'] }), 'normal', 'fail-pool')
+    expect(run.status, run.error ?? run.stderr).toBe('done')
+    expect(run.bridgeTools?.[0]).toMatchObject({ model: 'fail-pool' })
+    expect(run.bridgeTools?.[0]?.tools).not.toContain('bridge_backup_only')
+    expect(run.bridgeTools?.[1]).toMatchObject({ model: 'root' })
+    expect(run.bridgeTools?.[1]?.tools).toContain('bridge_backup_only')
+    expect(run.bridgeToolExecutions).toBe(1)
+    expect(run.bridgeHeaders?.slice(0, 2).map((header) => header.model)).toEqual(['fail-pool', 'root'])
+    expect(run.bridgeSelections).toEqual([])
+    expect(run.bridgeUserMessages).toBe(1)
+    expect(run.results[0]?.isError).toBe(false)
+  })
   it.each(['normal', 'always'])('真实 adapter 抛出14h24m pool/429错误时立即备用而非宿主长退避：%s', async (mode) => {
     const run = await runRecovery('recovery-pool-thrown', getRoutesOverlay({ tian_shu: ['fail-pool-thrown', 'root'] }), mode, 'fail-pool-thrown')
     expect(run.status, run.error ?? run.stderr).toBe('done')

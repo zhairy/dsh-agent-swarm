@@ -14,6 +14,30 @@ export interface ChildRecoveryEvidence {
 const object = (raw: unknown): raw is Record<string, unknown> => raw !== null && typeof raw === 'object' && !Array.isArray(raw)
 const integer = (raw: unknown): raw is number => Number.isSafeInteger(raw) && Number(raw) >= 0
 
+/** Read one exact Host observation without activating a Session or retaining its lease. */
+export const readHostInspection = async (input: {
+  sessionId: string
+  controller?: { inspect?: (id: string) => Promise<unknown> }
+  query?: { observeSession?: (id: string, options: { projectionMode: 'none'; signal: AbortSignal }) => Promise<{
+    header: unknown; inheritedEventCount: number; events: readonly unknown[]; [Symbol.dispose]: () => void
+  }> }
+  signal: AbortSignal
+}): Promise<unknown | undefined> => {
+  if (typeof input.controller?.inspect === 'function') return input.controller.inspect(input.sessionId)
+  if (typeof input.query?.observeSession !== 'function') return undefined
+  const observation = await input.query.observeSession(input.sessionId, { projectionMode: 'none', signal: input.signal })
+  try {
+    input.signal.throwIfAborted()
+    if (!object(observation.header) || observation.header.id !== input.sessionId || !integer(observation.inheritedEventCount)
+      || !Array.isArray(observation.events) || observation.inheritedEventCount > observation.events.length || observation.events.length > 200000) {
+      throw new Error('宿主会话只读快照的身份或事件边界无效')
+    }
+    return { meta: observation.header, inheritedEventCount: observation.inheritedEventCount, events: observation.events }
+  } finally {
+    observation[Symbol.dispose]()
+  }
+}
+
 /** Restore intent, never the SDK's last automatically selected fallback header. */
 export const inspectRootPreference = (inspection: unknown): { provider: string; model: string; reasoningEffort?: string } | undefined => {
   if (!object(inspection) || !object(inspection.meta) || inspection.meta.parentSession !== undefined || !Array.isArray(inspection.events)

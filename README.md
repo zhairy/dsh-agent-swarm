@@ -8,8 +8,14 @@
 
 DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文专家（谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔），用任务卡、门禁和真实证据决定是否验收；模型路由按你的订阅配置多层回退，故障时立即切到可用备用，最后一个可用模型短时故障时在预算内等待恢复。
 
-- 适配 DSH **0.2.0 / 0.2.1**（`>=0.2.0-rc.2 <0.2.2-0`，推荐 0.2.1-rc.5）与 Node.js 22.19 及以上
+- 适配 DSH **0.2.0 / 0.2.1**；`0.2.2-rc.1` 的跨模型回退需要安装[版本绑定的宿主桥接](docs/3.3.5-DSH-0.2.2适配.md)，并要求 Node.js 24.9 或更新版本。未安装桥接时百工会在模型调用前明确拒绝。
 - 新建会话选「百工模式」即可使用；Jev 可选择 TypeSafe 官方接口，或从 DSH 当前模型目录选择第三方 Jev 兼容模型
+
+### 3.3.5 的变化
+
+- 原子恢复已校验的任务和委派快照，避免将历史记录当作实时状态转换；控制、委派与线程身份仍严格核对。
+- 适配新版只读 Session 观察和步骤级工具准入；模型回退桥接在路由变化时重新装配工具和提示词，并保留真实请求记录。
+- 子会话首次模型请求等待任务授权绑定；启动取消或宿主退出时等待会被中止。
 
 ### 3.3.3 的变化
 
@@ -60,7 +66,7 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 子智能体「模型与恢复」改为黄色圆角按钮，失败后可从此入口调整模型并安全继续任务。
 - 修复模型目录的零参数 RPC 被误传取消信号而失败的问题。供应商、模型和推理强度始终使用下拉框；目录加载失败可刷新，目录外选项无法提交。
 - Google Antigravity 的独立模型额度按模型处理并保留实际重置时间。Argon 耗尽不影响仍可用的 Flash，其他模型的 0% 用量不能证明当前模型还有额度。
-- 保留现有自动跨模型回退。DSH `0.2.2-alpha.2` 的真实恢复测试未通过，本版明确排除 `0.2.2`，继续使用已验证宿主。
+- 当时保留了自动跨模型回退；DSH `0.2.2-alpha.2` 的真实恢复测试未通过，该版本排除了 `0.2.2`。3.3.5 对 `0.2.2-rc.1` 使用上述版本绑定桥接。
 - 本机市场的下载源与 scope 目录误报已单独修复；这些主机配置不随插件包自动安装，详见 [升级与回退](docs/升级与回退.md)。
 
 ### 3.1.7 的变化
@@ -200,8 +206,14 @@ MIT，见 [LICENSE](LICENSE)。内嵌的 Jev 工具改编自 jev-mcp 0.2.1（MIT
 
 A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" leads 12 Chinese-named experts (requirements, architecture, math, code exploration, research, vision, complex implementation, command execution, small edits, independent review, verification, copywriting) and accepts work only on evidence: task cards, hard gates and real command results. Each role has a multi-layer model chain built from your subscriptions; failures switch to a usable backup immediately, and a short outage of the last usable model is waited out within a budget.
 
-- Works with DSH **0.2.0 / 0.2.1** (`>=0.2.0-rc.2 <0.2.2-0`, 0.2.1-rc.5 recommended) on Node.js 22.19 or newer
+- Works with DSH **0.2.0 / 0.2.1**. Cross-model fallback on `0.2.2-rc.1` requires the [version-bound Host bridge](docs/3.3.5-DSH-0.2.2适配.md) and Node.js 24.9 or newer; without the bridge, managed requests fail before generation.
 - Start a session in the "百工模式" (Agent Swarm) preset. Jev can use the official TypeSafe API or a third-party Jev-compatible model selected from the live DSH catalog.
+
+### What's new in 3.3.5
+
+- Restores validated task and delegation snapshots atomically while retaining strict control, delegation, and thread identity checks.
+- Adapts cold Session observation and step-scoped tool admission; the model bridge reassembles tools and prompts after a route switch and preserves actual request evidence.
+- Holds a child model request until its task authorization is bound, with cancellation and shutdown handling.
 
 ### What's new in 3.3.3
 
@@ -257,7 +269,7 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 - The subagent model and recovery entry is a rounded yellow button with recovery guidance.
 - Fixed the zero-argument model catalog RPC receiving an abort signal as a business argument. Provider, model and reasoning effort use catalog-backed dropdowns, with retryable catalog errors and validation before submission.
 - Google Antigravity quota failures stay scoped to the affected model and preserve reported reset times. An exhausted Argon route does not block a working Flash route.
-- Existing automatic cross-model fallback is retained. DSH `0.2.2-alpha.2` failed recovery integration tests, so this release explicitly excludes the `0.2.2` line.
+- That release retained automatic cross-model fallback and excluded `0.2.2` after `0.2.2-alpha.2` failed recovery tests. Version 3.3.5 uses the version-bound bridge described above for `0.2.2-rc.1`.
 - Download-source and npm-scope diagnostic repairs were applied separately on the deployment host; installing this plugin does not change another machine's market configuration.
 
 ### What's new in 3.1.7

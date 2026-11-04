@@ -195,6 +195,8 @@ export const ValidateTransition = (from: DelegationStatus, to: DelegationStatus)
 /** 单个根会话内的任务与委派存储 */
 export interface TaskStore {
   AddTask: (task: TaskRecord) => void
+  /** Restore an already validated durable snapshot into an empty store without replaying lifecycle transitions. */
+  RestoreSnapshot?: (tasks: readonly TaskRecord[], delegations: readonly DelegationRecord[]) => void
   getTask: (taskId: string) => TaskRecord | undefined
   UpdateTask: (taskId: string, patch: Partial<TaskRecord>) => TaskRecord
   AddDelegation: (record: DelegationRecord) => void
@@ -276,6 +278,36 @@ export const intTaskStore = (): TaskStore => {
     markDelegation(record.delegationId)
   }
 
+  const RestoreSnapshot: NonNullable<TaskStore['RestoreSnapshot']> = (snapshotTasks, snapshotDelegations) => {
+    if (tasks.size !== 0 || delegations.size !== 0) throw new SwarmError('RECOVERY_REQUIRED', '不能将持久快照覆盖到非空任务存储')
+    const restored = structuredClone({ tasks: snapshotTasks, delegations: snapshotDelegations })
+    const stagedTasks = new Map<string, TaskRecord>()
+    const stagedDelegations = new Map<string, DelegationRecord>()
+    const delegationIdsByTask = new Map<string, Set<string>>()
+    for (const task of restored.tasks) {
+      const ids = new Set(task.delegationIds)
+      if (stagedTasks.has(task.taskId) || ids.size !== task.delegationIds.length) {
+        throw new SwarmError('RECOVERY_REQUIRED', '持久任务快照存在重复身份或委派关联')
+      }
+      stagedTasks.set(task.taskId, task)
+      delegationIdsByTask.set(task.taskId, ids)
+    }
+    for (const record of restored.delegations) {
+      const task = stagedTasks.get(record.taskId)
+      if (stagedDelegations.has(record.delegationId) || task === undefined || !delegationIdsByTask.get(record.taskId)?.has(record.delegationId)) {
+        throw new SwarmError('RECOVERY_REQUIRED', '持久委派快照的身份或任务关联无效')
+      }
+      stagedDelegations.set(record.delegationId, record)
+    }
+    for (const task of stagedTasks.values()) for (const id of task.delegationIds) {
+      if (stagedDelegations.get(id)?.taskId !== task.taskId) throw new SwarmError('RECOVERY_REQUIRED', '持久任务引用缺失或跨任务的委派')
+    }
+    // Snapshot array order is not event order. Replaying its records through
+    // lifecycle transitions invents intermediate states that never occurred.
+    for (const [id, task] of stagedTasks) { tasks.set(id, task); markTask(id) }
+    for (const [id, record] of stagedDelegations) { delegations.set(id, record); markDelegation(id) }
+  }
+
   const UpdateDelegation = (delegationId: string, patch: Partial<DelegationRecord>): DelegationRecord => {
     const current = delegations.get(delegationId)
     if (current === undefined) throw new SwarmError('UNKNOWN_TASK', `未知委派：${delegationId}`)
@@ -297,6 +329,7 @@ export const intTaskStore = (): TaskStore => {
       markTask(task.taskId)
     },
     getTask: (taskId) => tasks.get(taskId),
+    RestoreSnapshot,
     UpdateTask,
     RollbackTask,
     AddDelegation,

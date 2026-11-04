@@ -14,6 +14,7 @@ const candidate = (file: string) => import(pathToFileURL(join(getPluginRoot(), '
 const [{ Context }, { SystemPrompt }, { ToolRuntime }, { HostConnectionService }, swarm, swarmTools, swarmRuntime] = await Promise.all([
   sdk('cordis'), sdk('dsh-system-prompt'), sdk('dsh-tools'), sdk('dsh-client-connection'), candidate('index.js'), candidate('tools.js'), candidate('runtime.js')
 ])
+const nativeExecutor = getTestedVersion() === '0.2.2-rc.1' ? await sdk('dsh-tool-executor-native') : undefined
 const sdkVersions = Object.fromEntries(['dsh', 'cordis', 'dsh-tools', 'dsh-client-connection'].map((name) => [name, JSON.parse(readFileSync(join(sdkModules, '@deepseek-ai', name, 'package.json'), 'utf8')).version]))
 const providers = ['codex', 'claude', 'grok', 'copilot', 'antigravity']
 const cleanups: (() => Promise<void>)[] = []
@@ -41,6 +42,7 @@ const fixture = async (options: { partial?: boolean; holdStatus?: Promise<void>;
     scoped = ctx
     new SystemPrompt(ctx, {})
     new ToolRuntime(ctx, {})
+    if (nativeExecutor !== undefined) ctx.tools.setExecutor(new nativeExecutor.NativeToolExecutor(ctx))
     // The actual admission implementation remains in use; only the private
     // browser-auth store is replaced by an isolated deterministic test owner.
     // 0.2.0-rc.2 只调用 isAuthenticated；0.2.1-alpha 起认证模型改为 authenticateApi + Peer。
@@ -79,7 +81,11 @@ const fixture = async (options: { partial?: boolean; holdStatus?: Promise<void>;
   const tools = scoped.tools
   const service = scoped.get('agentSwarm')
   const exec = () => ({ agent, signal: new AbortController().signal })
-  const tool = (name: string, args: unknown, signal = new AbortController().signal) => tools.execute({ callId: `${name}-${crypto.randomUUID()}`, name, arguments: args, agent, signal })
+  const tool = async (name: string, args: unknown, signal = new AbortController().signal) => {
+    if (nativeExecutor === undefined) return tools.execute({ callId: `${name}-${crypto.randomUUID()}`, name, arguments: args, agent, signal })
+    const result = await tools.execute({ calls: [{ type: 'tool-call', id: `${name}-${crypto.randomUUID()}`, name, arguments: JSON.stringify(args) }], agent, signal })
+    return result.results[0]?.result
+  }
   const rpc = async (payload: unknown = {}, signal = new AbortController().signal, authenticated = true) => {
     const method = 'swarm.quotaView', rpcId = `sdk-${crypto.randomUUID()}`
     const request = new Request(`http://localhost/api/${method}`, { method: 'POST', headers: { host: 'localhost', 'content-type': 'application/json', ...(authenticated ? { 'x-fixture-owner': 'yes' } : {}) }, body: JSON.stringify({ type: 'client-request', rpcId, method, payload }), signal })

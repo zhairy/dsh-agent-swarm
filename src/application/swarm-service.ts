@@ -323,6 +323,21 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const childSignals = new Map<string, AbortSignal>()
   const childReady = new Map<string, Promise<void>>()
   const startingChildIds = new Set<string>()
+  type StartingChildAdmission = { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void }
+  const startingChildAdmissions = new Map<string, StartingChildAdmission>()
+  const getStartingChildAdmission = (id: string): StartingChildAdmission => {
+    let admission = startingChildAdmissions.get(id)
+    if (admission === undefined) {
+      let resolve!: () => void
+      let reject!: (error: unknown) => void
+      const promise = new Promise<void>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
+      admission = { promise, resolve, reject }
+      // A child can be disposed before its first model step starts waiting.
+      void admission.promise.catch(() => undefined)
+      startingChildAdmissions.set(id, admission)
+    }
+    return admission
+  }
   const admissions = new Map<string, { resolve: () => void; reject: (error: unknown) => void }>()
   const manualRuns = new Map<string, { controller: AbortController; run: Promise<DelegationRecord> }>()
   let delegateEntry: SwarmService['delegate']
@@ -683,9 +698,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   const childPrompts = new Map<string, ChildPromptInfo>()
   const getChildPromptInfo = (request: ChildScopeRequest): ChildPromptInfo => ({ role: request.role, ...(request.mode === undefined ? {} : { mode: request.mode }),
     ...(request.language === undefined ? {} : { language: request.language }), ...(request.explicitLanguage === true ? { explicitLanguage: true } : {}) })
-  const NoteChildScope = (request: ChildScopeRequest): void => {
+  const NoteChildScope = (request: ChildScopeRequest): (() => void) => {
     pendingChildScopes.push(request)
     if (pendingChildScopes.length > 64) pendingChildScopes.shift()
+    return () => { const index = pendingChildScopes.indexOf(request); if (index >= 0) pendingChildScopes.splice(index, 1) }
   }
   const ApplyChildToolScope = (agent: AgentLike, role: DelegableRoleId, allowWeb?: boolean): void => {
     const subagents = deps.getSubagents()
@@ -724,6 +740,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     childReady.delete(agentId)
     childOwners.delete(agentId)
     startingChildIds.delete(agentId)
+    startingChildAdmissions.get(agentId)?.reject(new SwarmError('RECOVERY_REQUIRED', '子会话在执行授权完成前已关闭'))
+    startingChildAdmissions.delete(agentId)
   }
   /** One-shot children are host-disposed before this runs; retain only the bounded UI control record. */
   const ReleaseOneShotChild = (agentId: string): void => {
@@ -740,10 +758,16 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const presetId = getPresetId(agent)
     const role = FindRoleByPresetId(presetId)?.id
     if (role === undefined || role === 'tian_shu') return
-    const index = pendingChildScopes.findIndex((entry) => entry.role === role)
+    const index = pendingChildScopes.findIndex((entry) => entry.role === role && (entry.parentSessionId === undefined || entry.parentSessionId === header.parentSession))
     const pending = index < 0 ? undefined : pendingChildScopes.splice(index, 1)[0]
     const allowWeb = pending?.allowWeb ?? getRoleInfo(role).web === 'always'
-    if (pending !== undefined) startingChildIds.add(agent.id)
+    // Continuable children can be fully bound before the Host creates them;
+    // creating a second barrier here would wait forever for an admission that
+    // has already completed.
+    if (pending !== undefined && (!childOwners.has(agent.id) || !childReady.has(agent.id))) {
+      startingChildIds.add(agent.id)
+      getStartingChildAdmission(agent.id)
+    }
     childAllowWeb.set(agent.id, allowWeb)
     if (pending !== undefined && !childPrompts.has(agent.id)) childPrompts.set(agent.id, getChildPromptInfo(pending))
     ApplyChildToolScope(agent, role, allowWeb)
@@ -1077,35 +1101,44 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     planSession,
     sleep,
     onChildStart: async ({ agentId, task, record, role, signal, persistent, input }) => {
-      const pending = record.attemptId === undefined ? undefined : leasedAttempts.get(record.attemptId)
-      if (pending !== undefined && !pending.children.has(agentId)) pending.children.set(agentId, new Map())
-      const session = getSession(task.sessionId)
-      childOwners.set(agentId, task.sessionId)
-      startingChildIds.delete(agentId)
-      childSignals.set(agentId, signal)
-      childPrompts.set(agentId, getChildPromptInfo({ role, allowWeb: input?.allow_web === true, ...(record.mode === undefined ? {} : { mode: record.mode }),
-        ...(input?.language === undefined ? {} : { language: input.language }), explicitLanguage: input?.languageExplicit === true }))
-      // 新宿主没有启动期 toolFilter：登记 allow_web，并尽力在子智能体作用域上限制继承的工具面；
-      // 子智能体首次模型请求仍会经 runtime 的 agent/request 复核一次（那里一定能拿到 agent 作用域）。
-      childAllowWeb.set(agentId, input?.allow_web === true)
-      const liveChild = deps.getAgent?.(agentId)
-      if (liveChild !== undefined) ApplyChildToolScope(liveChild, role, input?.allow_web === true)
-      const features = await ensureFeatures(session, session.rootAgent ?? { id: task.sessionId })
-      if (input !== undefined) session.store.UpdateDelegation(record.delegationId, { continuationInput: structuredClone(input) })
-      agentControl.Register({ childId: agentId, parentSessionId: task.sessionId,
-        delegationId: record.delegationId, persistent: persistent === true, needsSideEffectReview: false, ...getTaskBinding(task) })
-      const ready = features.bindings.bind({
-        agentId, ...getTaskContextBinding(task, features.workspaceId),
-        nodeId: record.nodeId ?? 'legacy', attemptId: record.attemptId ?? record.delegationId, threadId: agentId, role,
-        permissions: [
-          ...(getRoleInfo(role).capabilities.includes('calculate') ? ['pure-calc'] : []),
-          ...(getRoleInfo(role).capabilities.includes('context') ? ['context-read'] : []),
-          ...(getRoleInfo(role).capabilities.includes('message') && features.bus !== undefined && features.store.durable ? ['message-send', 'message-read'] : [])
-        ],
-        blindReview: record.reviewPhase !== 'response' && (role === 'yu_shi' || (role === 'suan_heng' && record.mode === 'verify'))
-      }).then(async () => { await features.persist('delegation/started', session.store, session.threads) })
-      childReady.set(agentId, ready)
-      await ready
+      const startup = getStartingChildAdmission(agentId)
+      try {
+        const pending = record.attemptId === undefined ? undefined : leasedAttempts.get(record.attemptId)
+        if (pending !== undefined && !pending.children.has(agentId)) pending.children.set(agentId, new Map())
+        const session = getSession(task.sessionId)
+        childOwners.set(agentId, task.sessionId)
+        childSignals.set(agentId, signal)
+        childPrompts.set(agentId, getChildPromptInfo({ role, allowWeb: input?.allow_web === true, ...(record.mode === undefined ? {} : { mode: record.mode }),
+          ...(input?.language === undefined ? {} : { language: input.language }), explicitLanguage: input?.languageExplicit === true }))
+        // 新宿主没有启动期 toolFilter：登记 allow_web，并尽力在子智能体作用域上限制继承的工具面；
+        // 子智能体首次模型请求仍会经 runtime 的 agent/request 复核一次（那里一定能拿到 agent 作用域）。
+        childAllowWeb.set(agentId, input?.allow_web === true)
+        const liveChild = deps.getAgent?.(agentId)
+        if (liveChild !== undefined) ApplyChildToolScope(liveChild, role, input?.allow_web === true)
+        const features = await ensureFeatures(session, session.rootAgent ?? { id: task.sessionId })
+        if (input !== undefined) session.store.UpdateDelegation(record.delegationId, { continuationInput: structuredClone(input) })
+        agentControl.Register({ childId: agentId, parentSessionId: task.sessionId,
+          delegationId: record.delegationId, persistent: persistent === true, needsSideEffectReview: false, ...getTaskBinding(task) })
+        const ready = features.bindings.bind({
+          agentId, ...getTaskContextBinding(task, features.workspaceId),
+          nodeId: record.nodeId ?? 'legacy', attemptId: record.attemptId ?? record.delegationId, threadId: agentId, role,
+          permissions: [
+            ...(getRoleInfo(role).capabilities.includes('calculate') ? ['pure-calc'] : []),
+            ...(getRoleInfo(role).capabilities.includes('context') ? ['context-read'] : []),
+            ...(getRoleInfo(role).capabilities.includes('message') && features.bus !== undefined && features.store.durable ? ['message-send', 'message-read'] : [])
+          ],
+          blindReview: record.reviewPhase !== 'response' && (role === 'yu_shi' || (role === 'suan_heng' && record.mode === 'verify'))
+        }).then(async () => { await features.persist('delegation/started', session.store, session.threads) })
+        childReady.set(agentId, ready)
+        await ready
+        startup.resolve()
+      } catch (error) {
+        startup.reject(error)
+        throw error
+      } finally {
+        startingChildIds.delete(agentId)
+        if (startingChildAdmissions.get(agentId) === startup) startingChildAdmissions.delete(agentId)
+      }
     },
     onChildEnd: async (agentId, stopReason, completed) => {
       const current = agentControl.get(agentId)
@@ -1628,6 +1661,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
           const route = candidates[0]!
           const allowed = getToolFilter('yu_shi', visible, false)?.allow?.filter((name) => !name.startsWith('jev_') && !name.startsWith('swarm_message_')) ?? []
           let run: Awaited<ReturnType<typeof startChild>> | undefined
+          const clearPendingScope = NoteChildScope({ role: 'yu_shi', allowWeb: false, parentSessionId: exec.agent.id })
           try {
             progress.agentStage = 'starting'
             const started = startChild(subagents, {
@@ -1649,25 +1683,35 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
               }
             }, () => undefined)
             run = await waitForPlanning(started, reviewSignal)
-            childPrompts.set(run.id, { role: 'yu_shi', persona: PLANNING_REVIEWER_PERSONA })
-            progress.reviewerId = run.id
-            progress.route = getRouteLabel(route)
-            progress.routeSource = 'selected-initial'
-            progress.agentStage = 'reviewing'
-            const liveReviewer = deps.getAgent?.(run.id)
-            if (liveReviewer !== undefined) ApplyChildToolScope(liveReviewer, 'yu_shi', false)
-            childOwners.set(run.id, session.sessionId)
-            childSignals.set(run.id, reviewSignal)
-            routeState.AddChild(run.id, { chain: candidates, role: 'yu_shi', logicalRequestId: reservationId })
-            agentControl.Register({ childId: run.id, parentSessionId: session.sessionId,
-              delegationId: reservationId, persistent: false, ...getTaskBinding(task) })
-            const ready = features.bindings.bind({ agentId: run.id, ...getTaskContextBinding(task, features.workspaceId),
-              nodeId: 'planning-review', attemptId: reservationId, threadId: run.id,
-              role: 'yu_shi',
-              permissions: ['pure-calc', 'context-read'], blindReview: true })
-              .then(async () => { if (!closing && !reviewSignal.aborted) await features.persist('workflow/review-start', session.store, session.threads) })
-            childReady.set(run.id, ready)
-            await waitForPlanning(ready, reviewSignal)
+            const startup = getStartingChildAdmission(run.id)
+            try {
+              childPrompts.set(run.id, { role: 'yu_shi', persona: PLANNING_REVIEWER_PERSONA })
+              progress.reviewerId = run.id
+              progress.route = getRouteLabel(route)
+              progress.routeSource = 'selected-initial'
+              progress.agentStage = 'reviewing'
+              const liveReviewer = deps.getAgent?.(run.id)
+              if (liveReviewer !== undefined) ApplyChildToolScope(liveReviewer, 'yu_shi', false)
+              childOwners.set(run.id, session.sessionId)
+              childSignals.set(run.id, reviewSignal)
+              routeState.AddChild(run.id, { chain: candidates, role: 'yu_shi', logicalRequestId: reservationId })
+              agentControl.Register({ childId: run.id, parentSessionId: session.sessionId,
+                delegationId: reservationId, persistent: false, ...getTaskBinding(task) })
+              const ready = features.bindings.bind({ agentId: run.id, ...getTaskContextBinding(task, features.workspaceId),
+                nodeId: 'planning-review', attemptId: reservationId, threadId: run.id,
+                role: 'yu_shi',
+                permissions: ['pure-calc', 'context-read'], blindReview: true })
+                .then(async () => { if (!closing && !reviewSignal.aborted) await features.persist('workflow/review-start', session.store, session.threads) })
+              childReady.set(run.id, ready)
+              await waitForPlanning(ready, reviewSignal)
+              startup.resolve()
+            } catch (error) {
+              startup.reject(error)
+              throw error
+            } finally {
+              startingChildIds.delete(run.id)
+              if (startingChildAdmissions.get(run.id) === startup) startingChildAdmissions.delete(run.id)
+            }
             const result = await waitForPlanning(run.result, reviewSignal)
             const actualRoute = agentControl.get(run.id)?.actual?.route
             agentControl.MarkRunSettled(run.id, result.stopReason)
@@ -1675,6 +1719,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
               fresh: true, readOnly: true, authorAgentIds: [exec.agent.id, ...session.store.getTaskDelegations(task.taskId).filter((d) => ['ji_feng', 'zhu_jian'].includes(d.role)).flatMap((d) => d.childId ? [d.childId] : [])] } }
           } catch (error) { return { reason: String(error) } }
           finally {
+            clearPendingScope()
             progress.agentStage = 'settled'
             budget.settle(reservationId)
             if (run !== undefined) {
@@ -2471,10 +2516,15 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     OnAgentDisposed: (childId) => {
       childTurnErrors.delete(childId)
       startingChildIds.delete(childId)
+      startingChildAdmissions.get(childId)?.reject(new SwarmError('RECOVERY_REQUIRED', '子会话在执行授权完成前已退出'))
+      startingChildAdmissions.delete(childId)
       retryChildLeases(childId)
     },
     OnJobEvent: (sessionId, event) => {
       if (event.type === 'turn/end') {
+        // A pre-step rejection or cancellation may occur after route admission
+        // but before the Host publishes an actual model attempt.
+        routeState.ReleaseProbe(sessionId)
         if (event.data?.reason?.kind !== 'error') { rememberChildTurnError(sessionId, undefined); return }
         const raw = event.data.reason.error
         const message = typeof raw === 'string' ? raw : raw?.message
@@ -2582,6 +2632,8 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     ,DispatchOutbox: (sessionId, limit) => { requireEventJournal(); return dispatchSessionOutbox(getSession(sessionId), limit, true) }
     ,dispose: () => disposal ??= (async () => {
       closing = true
+      for (const admission of startingChildAdmissions.values()) admission.reject(new SwarmError('RECOVERY_REQUIRED', '宿主正在停止，子会话启动授权已取消'))
+      startingChildAdmissions.clear()
       watchdogDisposed = true
       if (watchdogTimer !== undefined) { clearTimeout(watchdogTimer); watchdogTimer = undefined }
       for (const session of sessions.values()) if (session.outboxRetryTimer !== undefined) { clearTimeout(session.outboxRetryTimer); session.outboxRetryTimer = undefined }
@@ -2607,19 +2659,22 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       }
       if (errors.length > 0) throw new AggregateError(errors, 'Swarm shutdown checkpoint failed; storage cleanup attempted, reconcile last valid state before recovery')
     })()
-    ,WaitAgentReady: async (agent) => {
+    ,WaitAgentReady: async (agent, signal) => {
       const resumeHint = () => agentControl.get(agent.id)?.persistent === true
         ? '该专家上一轮的执行授权已结束；请打开此子会话的“模型与恢复”并选择“安全继续任务”，由父天枢为同一子会话重新预约当前任务和新 attempt。直接使用宿主原生继续不会恢复旧权限，本次未启动模型或重放工具。'
         : '该一次性专家的执行授权已结束；请返回父天枢会话重新审核或委派，不能在此对话沿用旧权限继续。本次未启动模型或重放工具。'
       if (closing) throw new SwarmError('RECOVERY_REQUIRED', '宿主正在停止，延迟模型请求被拒绝')
+      if (signal?.aborted) throw signal.reason ?? new SwarmError('RECOVERY_REQUIRED', '子会话启动等待已取消')
       if (childSignals.get(agent.id)?.aborted) throw new SwarmError('RECOVERY_REQUIRED', `专家已取消；${resumeHint()}`)
       const oneShot = agentControl.get(agent.id)
       if (oneShot?.oneShotSettled === true) throw new SwarmError('RECOVERY_REQUIRED',
         oneShot.reason === 'one-shot-cancelled' ? `专家已取消；${resumeHint()}` : resumeHint())
       if (hasManagedChildPreset(agent) && !childOwners.has(agent.id) && !startingChildIds.has(agent.id))
         throw new SwarmError('RECOVERY_REQUIRED', resumeHint())
+      const starting = startingChildAdmissions.get(agent.id)
+      if (starting !== undefined) await (signal === undefined ? starting.promise : waitForPlanning(starting.promise, signal))
       const pending = childReady.get(agent.id)
-      if (pending !== undefined) await pending
+      if (pending !== undefined) await (signal === undefined ? pending : waitForPlanning(pending, signal))
       else if (isRootTianShu(agent)) {
         const session = getSession(agent.id)
         await ensureFeatures(session, agent)
@@ -2631,6 +2686,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         PruneRootUpgrade(agent, session)
       }
       if (closing) throw new SwarmError('RECOVERY_REQUIRED', '宿主正在停止，延迟模型请求被拒绝')
+      if (signal?.aborted) throw signal.reason ?? new SwarmError('RECOVERY_REQUIRED', '子会话启动等待已取消')
       if (childSignals.get(agent.id)?.aborted) throw new SwarmError('RECOVERY_REQUIRED', `专家已取消；${resumeHint()}`)
       const owner = childOwners.get(agent.id)
       if (owner !== undefined) {

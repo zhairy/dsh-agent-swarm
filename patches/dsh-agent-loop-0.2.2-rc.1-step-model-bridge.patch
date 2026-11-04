@@ -1,0 +1,62 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -543,6 +543,7 @@
+ 		this.scope = createScope(loopCtx, this);
+ 		this.ctx = this.scope.ctx;
+ 		this.model = new AgentModel(projections.modelSelection, session, options);
++		Object.defineProperty(this, Symbol.for("dsh-agent-swarm/step-model-bridge-v1"), { value: true });
+ 		this.inbox = new ReactLoopInbox(projections.inbox, session, this.dispatch);
+ 		this.phase = {
+ 			kind: "idle",
+@@ -663,13 +664,20 @@
+ 			}
+ 		}
+ 	}
++	async swarmSelectModel(selection, position, signal) {
++		const chosen = await this.dispatch.waterfall("agent/swarm-model-select", { ...position, signal }, () => Promise.resolve(selection));
++		signal.throwIfAborted();
++		if (!chosen || typeof chosen.provider !== "string" || !chosen.provider || typeof chosen.model !== "string" || !chosen.model || (chosen.reasoningEffort !== void 0 && typeof chosen.reasoningEffort !== "string")) throw new Error(`agent "${this.id}": invalid swarm model selection`);
++		return Object.freeze({ provider: chosen.provider, model: chosen.model, ...(chosen.reasoningEffort === void 0 ? {} : { reasoningEffort: chosen.reasoningEffort }) });
++	}
+ 	async preStep(target, position) {
+ 		/* v8 ignore next -- private callers establish the running phase before proposing a step */
+ 		if (this.phase.kind !== "running") throw new Error(`agent "${this.id}": pre-step outside running phase`);
+ 		const signal = this.phase.abort.signal;
+ 		const claimed = this.inbox.claim(target, position.turn);
+-		const selection = this.model.current();
+-		if (selection === void 0) throw new Error(`agent "${this.id}" has no provider/model: set AgentOptions.provider and AgentOptions.model or record a model selection`);
++		const initialSelection = this.model.current();
++		if (initialSelection === void 0) throw new Error(`agent "${this.id}" has no provider/model: set AgentOptions.provider and AgentOptions.model or record a model selection`);
++		const selection = await this.swarmSelectModel(initialSelection, position, signal);
+ 		const toolSet = await this.loopCtx.tools.resolve({
+ 			agent: this,
+ 			modelSelection: selection,
+@@ -835,10 +843,26 @@
+ 		if (this.phase.kind !== "running") throw new Error(`agent "${this.id}": step outside running phase`);
+ 		const { turn, step, abort: { signal } } = this.phase;
+ 		signal.throwIfAborted();
+-		const { assembly } = decision;
+-		const renderedPrompt = renderPrompt(assembly);
+ 		let firstAttempt = true;
+ 		while (true) {
++			if (!firstAttempt) {
++				const selection = await this.swarmSelectModel(decision.selection, { turn, step }, signal);
++				if (selection.provider !== decision.selection.provider || selection.model !== decision.selection.model || selection.reasoningEffort !== decision.selection.reasoningEffort) {
++					const toolSet = await this.loopCtx.tools.resolve({ agent: this, modelSelection: selection, signal });
++					let assembly;
++					try {
++						assembly = await this.loopCtx.systemPrompt.assemble({ ...assembleContextFor(this, signal), modelSelection: selection, toolSet });
++						signal.throwIfAborted();
++					} catch (error) { toolSet.dispose(); throw error; }
++					const previousToolSet = decision.toolSet;
++					decision.selection = selection;
++					decision.toolSet = toolSet;
++					decision.assembly = assembly;
++					previousToolSet.dispose();
++				}
++			}
++			const { assembly } = decision;
++			const renderedPrompt = renderPrompt(assembly);
+ 			const { config, preparedCall } = await this.prepareRequest(turn, step, decision.selection, signal);
+ 			const sections = renderContextSections(this.loopCtx.systemPrompt.refreshContext(assembly, {
+ 				...assembleContextFor(this, signal),

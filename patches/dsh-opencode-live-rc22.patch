@@ -1,0 +1,52 @@
+--- a/index.mjs
++++ b/index.mjs
+@@ -6,6 +6,7 @@
+ import { opencodeProvider } from '@earendil-works/pi-ai/providers/opencode';
+ import { opencodeGoProvider } from '@earendil-works/pi-ai/providers/opencode-go';
+ import { LiveCatalog, selectModels } from './catalog.mjs';
++import { createDynamicRegistration } from './registration.mjs';
+ import { homedir } from 'node:os';
+ import { join } from 'node:path';
+ 
+@@ -88,7 +89,8 @@
+     resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(attachments, (path) => ctx.get('fs')?.processPathFromHostPath(path), ref),
+     onReplayDegrade: ({ model, reason }) => ctx.logger.warn(`OpenCode ${model}: replay state degraded (${reason})`)
+   });
+-  registration = ctx.llm.registerAdapter([...profiles().keys()], adapter);
++  registration = createDynamicRegistration((providers) => ctx.llm.registerAdapter(providers, adapter));
++  registration.replace([...profiles().keys()]);
+   const settingsNs = ctx.fiber.entry?.options.id ?? name;
+   ctx.llm.registerConfigurableProviders([...natives.keys()].map((provider) => ({ provider, displayName: provider === 'opencode' ? 'OpenCode Zen' : 'OpenCode Go', settingsNs, settingsPath: ['providers', provider], declared: false })));
+   ctx.llm.registerModelDiscovery(settingsNs, async (request, signal) => {
+@@ -127,6 +129,6 @@
+     void refresh();
+   }, 60000);
+   timer.unref();
+-  ctx.effect(() => () => { active = false; clearInterval(timer); lifetime.abort(); });
++  ctx.effect(() => () => { active = false; clearInterval(timer); lifetime.abort(); registration.dispose(); });
+   void refresh();
+ };
+--- /dev/null
++++ b/registration.mjs
+@@ -0,0 +1,21 @@
++/** Keep no adapter registered while the configured provider set is empty. */
++export const createDynamicRegistration = (register) => {
++  let current
++  let disposed = false
++  const replace = (providers) => {
++    if (disposed) throw new Error('OpenCode adapter registration is disposed')
++    if (!Array.isArray(providers) || providers.some(provider => typeof provider !== 'string' || provider === '')) throw new Error('Invalid OpenCode provider set')
++    if (providers.length === 0) {
++      current?.()
++      current = undefined
++    } else if (current) current.replace(providers)
++    else current = register(providers)
++  }
++  const dispose = () => {
++    if (disposed) return
++    disposed = true
++    current?.()
++    current = undefined
++  }
++  return { replace, dispose }
++}

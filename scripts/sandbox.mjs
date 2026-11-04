@@ -30,6 +30,7 @@ export const getHome = (version = getTestedVersion()) => join(SANDBOX_ROOT, `hom
  * @returns {string} bin.js 路径
  */
 export const ensureDsh = (version = getTestedVersion()) => {
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Invalid sandbox DSH version')
   const dir = getDshDir(version)
   const pkgFile = join(dir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
   const installed = existsSync(pkgFile) && JSON.parse(readFileSync(pkgFile, 'utf8')).version === version
@@ -37,6 +38,10 @@ export const ensureDsh = (version = getTestedVersion()) => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-sandbox', private: true }))
     execSync(`npm install --no-audit --no-fund --ignore-scripts @deepseek-ai/dsh@${version}`, { cwd: dir, stdio: 'inherit' })
+  }
+  if (version === '0.2.2-rc.1' && process.env.SWARM_STOCK_HOST !== '1') {
+    const bridge = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts/apply-dsh-step-bridge.mjs'), '--dsh-root', dir], { encoding: 'utf8' })
+    if (bridge.error || bridge.status !== 0) throw new Error(`沙箱模型桥接准备失败：${bridge.stderr || bridge.error?.message || bridge.status}`)
   }
   return join(dir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 }

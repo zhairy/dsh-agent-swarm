@@ -7,6 +7,36 @@ import { getSwarmConfig } from '../../src/config.js'
 import { VALID_OUTPUTS } from '../fixtures/valid-outputs.js'
 
 describe('settled child model admission', () => {
+  it('waits for the owning child startup and rejects on disposal, without admitting an unrelated parent', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'swarm-child-start-'))
+    const config = getSwarmConfig({ jev: { enabled: false } })
+    const service = intSwarmService({ getConfig: () => config, dshHome: home,
+      getLlm: () => undefined, getAttachments: () => undefined, getCredentials: () => undefined,
+      getTools: () => undefined, getSubagents: () => ({ list: () => [], getProvider: () => undefined, startActivation: async () => { throw new Error('not used') } }),
+      fetch: async () => { throw new Error('network forbidden') } })
+    const child = (id: string, parentSession: string) => ({ id, session: { header: { parentSession, agentPreset: 'tan-wei', cwd: home } } })
+    try {
+      service.NoteChildScope({ role: 'tan_wei', allowWeb: false, parentSessionId: 'root' })
+      const other = child('other', 'different-root')
+      service.OnAgentCreated(other)
+      await expect(service.WaitAgentReady(other)).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+      const owned = child('owned', 'root')
+      service.OnAgentCreated(owned)
+      let settled = false
+      const pending = service.WaitAgentReady(owned).finally(() => { settled = true })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(settled).toBe(false)
+      const cancelled = new AbortController()
+      const cancelledWait = service.WaitAgentReady(owned, cancelled.signal)
+      const cancelledResult = expect(cancelledWait).rejects.toThrow('cancelled waiter')
+      cancelled.abort(new Error('cancelled waiter'))
+      await cancelledResult
+      expect(settled).toBe(false)
+      service.OnAgentDisposed(owned.id)
+      await expect(pending).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    } finally { await service.dispose(); await rm(home, { recursive: true, force: true }) }
+  })
+
   it('a settled one-shot cannot enter another model request and points to an available parent action', async () => {
     const home = await mkdtemp(join(tmpdir(), 'swarm-oneshot-admission-'))
     const config = getSwarmConfig({ planningReview: { enabled: false }, jev: { enabled: false }, review: { enabled: false }, agents: { maxRetries: 0 } })
