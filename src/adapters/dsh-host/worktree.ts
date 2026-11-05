@@ -86,6 +86,9 @@ export const createHostWorktreePort = (ctx: PluginContextLike): WorktreeHostPort
       if (!registered?.includes(`branch refs/heads/${record.branch}`) || registered.some(line => /^(locked|prunable|detached)( |$)/.test(line))) throw new Error('原工作树未正确注册或处于锁定/损坏状态')
       if (!/^[a-f0-9]{40,64}$/i.test(record.baseCommit)) throw new Error('原工作树基线提交无效')
       await git(record.path, ['cat-file', '-e', `${record.baseCommit}^{commit}`])
+      // Existence does not establish lineage. Pin the observed HEAD, allow its
+      // legitimate descendants, and reject unrelated or rewritten histories.
+      await git(record.path, ['merge-base', '--is-ancestor', record.baseCommit, clean(head)])
       const paths = [record.repositoryRoot, record.path, clean(gitDirectory), clean(pathCommon)]
       const identities = JSON.parse(await run(record.repositoryRoot, ['node', '-e', IDENTITY_PROGRAM, ...paths])) as Array<{ path: string; identity: string }>
       if (!Array.isArray(identities) || identities.length !== 4 || identities.some((item, index) => item.path !== paths[index] || typeof item.identity !== 'string')) throw new Error('工作树目录身份核验失败')

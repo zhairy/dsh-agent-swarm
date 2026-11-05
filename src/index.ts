@@ -1,6 +1,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHostWorktreePort } from './adapters/dsh-host/worktree.js'
+import { createExecutionBoundary } from './adapters/dsh-host/execution-boundary.js'
 import { Config, getSwarmConfig, getRoleRoute } from './config.js'
 import {
   MANAGED_AGENTS_KEY,
@@ -93,6 +94,8 @@ export const PublishManagedAgents = (isManaged: (agent: unknown) => boolean): ((
  * @param {unknown} config - swarm-core 行的 Config（volatile）
  */
 export const apply = (ctx: PluginContextLike, config: unknown): void => {
+  let onExecutionSettled = (_agentId: string): void => {}
+  const executionBoundary = createExecutionBoundary(ctx, agentId => onExecutionSettled(agentId))
   const getConfig = () => getSwarmConfig(config)
   const fetchImpl: typeof fetch = (input, init) => globalThis.fetch(input, init)
   const rootMetadata = new Map<string, Promise<{ header: SessionHeaderLike; preference?: RouteInfo } | undefined>>()
@@ -148,6 +151,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     getAgent: (sessionId) => (ctx.get('agents') as { get: (id: string) => AgentLike | undefined } | undefined)?.get(sessionId),
     getJobs: () => ctx.get('jobs') as JobsLike | undefined,
     getWorktreeHost: () => ctx.get('workingDirectory') === undefined ? undefined : createHostWorktreePort(ctx),
+    writerBoundary: executionBoundary,
     inspectParent: async (sessionId) => (await inspectRootMetadata(sessionId))?.header,
     inspectRootPreference: async (sessionId) => (await inspectRootMetadata(sessionId))?.preference,
     activateParent: async (sessionId) => {
@@ -171,6 +175,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   // Adapter refreshes include catalog/reasoning changes, not just auth changes.
   // They invalidate quota data, never erase cooldowns or half-open ownership.
   ctx.on('llm/adapters-updated', () => quotaSource.invalidate())
+  onExecutionSettled = agentId => service.OnExecutionSettled(agentId)
   ctx.effect(() => ctx.provide(SWARM_SERVICE, service))
   ctx.effect(() => () => { quotaSource.dispose(); return service.dispose() })
   ctx.effect(() => PublishManagedAgents((agent) => service.isManagedAgent(agent as AgentLike)))
@@ -195,10 +200,12 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   ctx.on('tools/execute', async (execution: ToolExecutionLike, next: () => Promise<unknown>) => {
     try {
       await service.BeforeManagedTool(execution)
-      service.ObserveToolDispatch(execution)
-      const result = await next()
-      await service.CompleteManagedTool(execution, result)
-      return service.isManagedAgent(execution.agent) ? getToolRecoveryResult(execution.name, result) : result
+      return await executionBoundary.run(await service.GetExecutionBoundary(execution), async () => {
+        service.ObserveToolDispatch(execution)
+        const result = await next()
+        await service.CompleteManagedTool(execution, result)
+        return service.isManagedAgent(execution.agent) ? getToolRecoveryResult(execution.name, result) : result
+      })
     } finally { service.FinishManagedTool(execution) }
   })
   ctx.on('tools/result', (execution: ToolExecutionLike, result: unknown) => service.ObserveManagedToolResult(execution, result))

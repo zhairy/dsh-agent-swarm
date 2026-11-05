@@ -142,7 +142,7 @@ test('worktree recovery: two concurrent takeover requests cannot both acquire ow
   assert.equal(f.registry.findByAgent('C'), undefined)
 })
 
-for (const scenario of ['wrong-task', 'revoked', 'old-writer', 'competing-lease', 'unknown-writer', 'wrong-branch', 'wrong-repository', 'symlink-escape', 'replaced-directory', 'replacement-during-cwd', 'read-only-policy', 'scope-escape']) {
+for (const scenario of ['wrong-task', 'revoked', 'old-writer', 'competing-lease', 'unknown-writer', 'wrong-branch', 'wrong-repository', 'unrelated-history', 'symlink-escape', 'replaced-directory', 'replacement-during-cwd', 'read-only-policy', 'scope-escape']) {
   test(`worktree recovery refuses ${scenario}`, async t => {
     const f = await fixture(t)
     let request = f.input(), competing
@@ -152,6 +152,12 @@ for (const scenario of ['wrong-task', 'revoked', 'old-writer', 'competing-lease'
     if (scenario === 'competing-lease') competing = await f.leases.acquire(f.created.path, 'another-writer', 'write')
     if (scenario === 'unknown-writer') { competing = await f.leases.acquire(f.created.path, 'unknown-writer', 'write'); await competing.release({ confirmedStopped: false }) }
     if (scenario === 'wrong-branch') await git(f.created.path, 'switch', '-c', 'wrong-branch')
+    if (scenario === 'unrelated-history') {
+      const tree = await git(f.created.path, 'rev-parse', 'HEAD^{tree}')
+      const unrelated = await git(f.created.path, 'commit-tree', tree, '-m', 'unrelated root')
+      await git(f.created.path, 'update-ref', 'refs/heads/retained', unrelated)
+      await git(f.created.path, 'cat-file', '-e', `${f.created.baseCommit}^{commit}`)
+    }
     if (scenario === 'wrong-repository') {
       const other = join(f.directory, 'other-repo'), otherTree = join(other, 'checkout')
       await mkdir(other); await git(other, 'init', '-b', 'main'); await git(other, 'commit', '--allow-empty', '-m', 'other repository')
@@ -241,12 +247,15 @@ test('worktree service: a new delegated Worker restores the retained tree; previ
   const root = { id: 'root', status: 'idle', session: { header: { agentPreset: 'tian-shu', cwd: f.created.repositoryRoot } } }
   const live = new Map([[root.id, root]])
   const runs = [], waiting = []
+  const sealed = new Set()
+  let allowQuiescenceProof = false
   const outputs = JSON.parse(await readFile(new URL('./fixtures/valid-outputs.json', import.meta.url), 'utf8'))
   const config = getSwarmConfig({ jev: { enabled: false }, review: { enabled: false }, planningReview: { enabled: false }, workflow: { mode: 'advisory' },
     watchdog: { enabled: false }, agents: { maxRetries: 0 }, routes: { zhu_jian: { chain: [{ provider: 'fixture', model: 'fixture' }] } } })
   const service = intSwarmService({ getConfig: () => config, dshHome: join(f.directory, 'service'), getLlm: () => undefined,
     getCredentials: () => undefined, getAttachments: () => undefined, getAgent: id => live.get(id), getWorktreeHost: () => f.host,
     getJobs: () => ({ list: () => [] }), fetch: async () => { throw new Error('network prohibited') }, probe: async () => ({ ok: true, vision: false }),
+    writerBoundary: { available: () => true, begin: () => {}, seal: (id, attempt) => { sealed.add(`${id}:${attempt}`); return true }, quiescent: (id, attempt) => allowQuiescenceProof && sealed.has(`${id}:${attempt}`) },
     getTools: () => ({ register: () => () => {}, guard: () => () => {}, schemas: () => ['create_worktree', RESTORE_WORKTREE_TOOL, 'read', 'write', 'edit', 'bash', 'swarm_context_read'].map(name => ({ name })) }),
     getSubagents: () => ({ list: () => ['spawn'], getProvider: () => ({ capabilities: { agentOptions: true, outputSchema: true, toolFilter: true, persona: true, depthLimit: true } }),
       start: async () => {
@@ -299,6 +308,8 @@ test('worktree service: a new delegated Worker restores the retained tree; previ
   config.approvals.scope = ['write']
   await assert.rejects(service.RestoreWorktree({ worktree_id: id }, b.exec))
   config.approvals.mode = 'inherit'
+  await assert.rejects(service.RestoreWorktree({ worktree_id: id }, b.exec), /停净证明/)
+  allowQuiescenceProof = true
   const before = await f.snapshot()
   const restored = await service.RestoreWorktree({ worktree_id: id }, b.exec)
   assert.equal(restored.agentId, b.child.id)

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
-import { mkdir, open, realpath, unlink, lstat, readFile } from 'node:fs/promises'
+import { mkdir, open, realpath, unlink, lstat } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -42,33 +42,15 @@ const ownerPath = (state: WorkspaceState) => join(state.ownerDirectory, 'workspa
 const rejectPending = (state: WorkspaceState, error: unknown): void => {
   for (const waiter of state.pending.splice(0)) { waiter.cleanup(); waiter.reject(error) }
 }
-/**
- * 所有者文件来自已退出的进程（例如 DSH 在写入委派中途重启），或来自本进程却已没有活动租约时，视为残留并移除。
- * 内容在删除前复核，活着的其他进程持有的租约绝不接管。
- */
-const removeStaleOwner = async (state: WorkspaceState): Promise<boolean> => {
-  let raw: string
-  try { raw = await readFile(ownerPath(state), 'utf8') } catch (error) { return (error as NodeJS.ErrnoException)?.code === 'ENOENT' }
-  let owner: { schemaVersion?: number; pid?: number; host?: string; cwd?: string }
-  try { owner = JSON.parse(raw) as typeof owner } catch { return false }
-  if (owner.schemaVersion !== 1 || owner.host !== hostname() || owner.cwd !== state.cwd || !Number.isSafeInteger(owner.pid) || (owner.pid as number) <= 0) return false
-  if (owner.pid === process.pid ? state.active !== undefined : isAlive(owner.pid as number)) return false
-  if (await readFile(ownerPath(state), 'utf8') !== raw) return false
-  await unlink(ownerPath(state))
-  return true
-}
-const isAlive = (pid: number): boolean => {
-  try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException)?.code !== 'ESRCH' }
-}
+// Existing owner files are never automatically reclaimed: read/unlink is not a
+// cross-process compare-and-swap, and a dead PID is not a resource-stop proof.
 const claimOwner = async (state: WorkspaceState, lease: WorkspaceLease): Promise<void> => {
   await mkdir(state.ownerDirectory, { recursive: true, mode: 0o700 })
   if ((await lstat(state.ownerDirectory)).isSymbolicLink()) throw new WorkspaceLeaseError('LEASE_INVALID', 'Owner directory cannot be a symlink')
   let handle
-  for (let attempt = 0; handle === undefined; attempt++) {
-    try { handle = await open(ownerPath(state), 'wx', 0o600) } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error
-      if (attempt > 0 || !await removeStaleOwner(state)) throw new WorkspaceLeaseError('WORKSPACE_BUSY', 'Another process or unreconciled owner controls this workspace')
-    }
+  try { handle = await open(ownerPath(state), 'wx', 0o600) } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') throw new WorkspaceLeaseError('WORKSPACE_BUSY', 'Existing workspace lease requires controlled reconciliation; automatic stale recovery is disabled')
+    throw error
   }
   try { await handle.writeFile(JSON.stringify({ schemaVersion: 1, pid: process.pid, host: hostname(), leaseId: lease.leaseId, owner: lease.owner, cwd: state.cwd })); await handle.sync() } finally { await handle.close() }
 }
@@ -82,10 +64,12 @@ const pump = async (state: WorkspaceState): Promise<void> => {
       waiter.cleanup()
       if (waiter.signal?.aborted) { waiter.reject(new WorkspaceLeaseError('ABORTED', 'Lease request cancelled')); continue }
       let released = false
+      let releasing: Promise<void> | undefined
       const lease: WorkspaceLease = {
         workspaceId: state.workspaceId, cwd: state.cwd, owner: waiter.owner, kind: waiter.kind, leaseEpoch: ++state.epoch, leaseId: randomUUID(),
         release: async (options = {}) => {
           if (released) return
+          if (releasing !== undefined) return releasing
           if (state.active?.leaseId !== lease.leaseId) throw new WorkspaceLeaseError('LEASE_INVALID', 'Lease no longer owns this workspace')
           if (options.confirmedStopped === false) {
             state.mutationUnknown = true
@@ -98,9 +82,14 @@ const pump = async (state: WorkspaceState): Promise<void> => {
             rejectPending(state, new WorkspaceLeaseError('MUTATION_UNKNOWN', 'Cancelled writer must be reconciled before releasing its lease'))
             return
           }
-          await unlink(ownerPath(state))
-          state.active = undefined; state.mutationUnknown = false; released = true
-          void pump(state)
+          // Publish the single release promise before I/O. Two callers must
+          // never unlink twice across a following owner's wx acquisition.
+          releasing = (async () => {
+            await unlink(ownerPath(state))
+            state.active = undefined; state.mutationUnknown = false; released = true
+            void pump(state)
+          })()
+          try { await releasing } catch (error) { releasing = undefined; throw error }
         }
       }
       try {
@@ -174,9 +163,11 @@ export const createWorkspaceLeaseManager = (options: { ownerDirectory?: string }
     },
     reconcileStoppedProcess: async (cwd) => {
       const state = await get(cwd)
-      if (state.active !== undefined || state.pumping || !await removeStaleOwner(state)) return false
-      state.mutationUnknown = false
-      return true
+      if (state.active !== undefined || state.pumping || state.mutationUnknown) return false
+      try { await lstat(ownerPath(state)); return false } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return true
+        throw error
+      }
     }
   }
 }

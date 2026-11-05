@@ -65,7 +65,10 @@
     "scripts/install-profile.mjs",
     "scripts/repair-openai-metadata.mjs",
     "scripts/repair-state.mjs",
-    "skills"
+    "skills",
+    "patches/dsh-execution-boundary-0.2.2-rc.1.json",
+    "patches/dsh-execution-boundary-0.2.2-rc.1.patch",
+    "scripts/apply-dsh-execution-boundary.mjs"
   ],
   "scripts": {
     "build": "node scripts/clean-lib.mjs && tsc -p tsconfig.build.json && node scripts/build-client.mjs",

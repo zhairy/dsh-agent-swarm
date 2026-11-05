@@ -27,6 +27,9 @@ afterEach(async () => {
 
 const fixture = async () => {
   const [{ Context }, { default: JobsLocal }] = await Promise.all([loadSdk('cordis'), loadSdk('dsh-jobs-local')])
+  // This suite tests the real JobsLocal lifecycle with memory-only producers;
+  // load the actual patched capability declarations, not a fake approval flag.
+  await Promise.all(['dsh-subprocess-local', 'dsh-working-directory', 'dsh-fs-local'].map(loadSdk))
   const ctx = new Context()
   const live = new Map<string, AgentLike>()
   ctx.provide('agents')

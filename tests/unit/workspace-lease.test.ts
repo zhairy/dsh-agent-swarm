@@ -51,7 +51,7 @@ describe('canonical workspace execution leases', () => {
     } finally { await rm(directory, { recursive: true, force: true }) }
   })
 
-  it('DSH 在写入中途重启留下的所有者文件（进程已退出）不再永久占用工作区；活着的其他进程仍然独占', async () => {
+  it('旧锁即使来自已退出进程也不自动删除，等待受控核对', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'swarm-lease-test-'))
     try {
       const owners = join(directory, 'owners')
@@ -64,9 +64,8 @@ describe('canonical workspace execution leases', () => {
       const write = (pid: number) => writeFile(join(owners, file!), JSON.stringify({ schemaVersion: 1, pid, host: hostname(), leaseId: 'old', owner: 'old-root', cwd: directory }), { mode: 0o600 })
       await write(2 ** 22 + 12345)
       const restarted = createWorkspaceLeaseManager({ ownerDirectory: owners })
-      const next = await restarted.acquire(directory, 'root-after-restart', 'write')
-      expect(next.owner).toBe('root-after-restart')
-      await next.release({ confirmedStopped: true })
+      await expect(restarted.acquire(directory, 'root-after-restart', 'write')).rejects.toMatchObject({ code: 'WORKSPACE_BUSY' })
+      expect(await restarted.reconcileStoppedProcess(directory)).toBe(false)
       await write(1)
       await expect(createWorkspaceLeaseManager({ ownerDirectory: owners }).acquire(directory, 'root', 'write')).rejects.toMatchObject({ code: 'WORKSPACE_BUSY' })
     } finally { await rm(directory, { recursive: true, force: true }) }

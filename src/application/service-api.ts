@@ -26,6 +26,7 @@ import type { OutboxHandler, OutboxDispatchResult } from '../outbox.js'
 import type { SourceAdapter, SourceIngestResult, SourceTriggerStatus } from '../domain/sources/runtime.js'
 import type { SourceInstance, SourceSubscription, TriggerInput } from '../domain/sources/model.js'
 import type { WorktreeHostPort } from '../adapters/dsh-host/worktree.js'
+import type { ExecutionBoundaryPolicy } from '../adapters/dsh-host/execution-boundary.js'
 
 /** 服务依赖：宿主服务一律用 getter 延迟读取，适配服务晚于插件就绪的情况 */
 export interface SwarmServiceDepsInfo {
@@ -46,6 +47,12 @@ export interface SwarmServiceDepsInfo {
   getAgent?: (sessionId: string) => (AgentLike & { status?: 'idle' | 'running'; whenIdle?: () => Promise<void> }) | undefined
   getJobs?: () => JobsLike | undefined
   getWorktreeHost?: () => WorktreeHostPort | undefined
+  writerBoundary?: {
+    available: () => boolean
+    begin: (agentId: string, attemptId: string) => void
+    seal: (agentId: string, attemptId: string) => boolean
+    quiescent: (agentId: string, attemptId: string) => boolean
+  }
   /** 服务器计算的当前宿主goal摘要；缺少接入时receipt不冒称绑定长期goal。 */
   getGoalBinding?: (agent: AgentLike) => string | undefined
   inspectParent?: (sessionId: string) => Promise<SessionHeaderLike | undefined>
@@ -90,6 +97,8 @@ export interface SwarmService {
   CompleteManagedTool: (execution: ToolExecutionLike, result: unknown) => Promise<void>
   FinishManagedTool: (execution: ToolExecutionLike) => void
   RestoreWorktree: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
+  GetExecutionBoundary: (execution: ToolExecutionLike) => Promise<ExecutionBoundaryPolicy | undefined>
+  OnExecutionSettled: (agentId: string) => void
   getRoleForAgent: (agent: AgentLike | undefined) => RoleId | undefined
   /** 是否由百工管理：百工预设的根会话，或百工委派出的子会话（其他插件的子会话不算） */
   isManagedAgent: (agent: AgentLike | undefined) => boolean

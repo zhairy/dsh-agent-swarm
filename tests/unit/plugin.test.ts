@@ -10,9 +10,11 @@ import { ROLE_TAG_PATTERN, type DelegableRoleId } from '../../src/role-registry.
 import type { SwarmService } from '../../src/service.js'
 import type { ToolDefinitionLike } from '../../src/tool-shape.js'
 import { VALID_OUTPUTS } from '../fixtures/valid-outputs.js'
+import { EXECUTION_BOUNDARY_CAPS } from '../../src/adapters/dsh-host/execution-boundary.js'
 
 const dirs: string[] = []
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+const originalCapabilities = (globalThis as Record<symbol, unknown>)[EXECUTION_BOUNDARY_CAPS]
+afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); (globalThis as Record<symbol, unknown>)[EXECUTION_BOUNDARY_CAPS] = originalCapabilities })
 
 const makeContext = (services: Record<string, unknown>) => {
   const provided = new Map<string, unknown>()
@@ -29,7 +31,10 @@ const makeContext = (services: Record<string, unknown>) => {
   return { ctx, provided, listeners, disposers, warn }
 }
 
-const makeHost = () => {
+const makeHost = (boundaryAvailable = true) => {
+  // Registration/routing unit fixture only: its fake workers return values and
+  // execute no OS code. Physical enforcement is covered by the real Host driver.
+  ;(globalThis as Record<symbol, unknown>)[EXECUTION_BOUNDARY_CAPS] = new Set(boundaryAvailable ? ['subprocess-local/rc1', 'fs-local/rc1', 'working-directory/rc1'] : [])
   const home = mkdtempSync(join(tmpdir(), 'swarm-plugin-'))
   dirs.push(home)
   const registered: ToolDefinitionLike[] = []

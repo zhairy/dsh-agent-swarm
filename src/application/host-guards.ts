@@ -161,6 +161,10 @@ export const createHostGuardUseCases = (deps: HostGuardDeps): HostGuardUseCases 
           if (bound.taskId !== binding.taskId) return '当前专家仍绑定其它任务的工作树，不能在新任务中写入'
           if (bound.state !== 'active' || session.worktrees.isRestoring(bound.worktreeId) || deps.isWorktreeWriter?.(execution.agent, binding, bound) !== true) return '工作树尚未取得当前 agent/delegation/attempt 的有效写租约，请显式恢复'
           if ((deps.getCurrentCwd?.(execution.agent) ?? getAgentHeader(execution.agent).cwd) !== bound.path) return '实际生效 CWD 不属于当前授权工作树，拒绝写入'
+          if (execution.name === 'bash' || execution.name === 'pwsh') {
+            const workdir = (execution.arguments as { workdir?: unknown } | undefined)?.workdir
+            if (typeof workdir === 'string' && !isWithin(canonicalPath(bound.path), canonicalPath(resolve(bound.path, workdir)))) return 'Shell workdir 超出当前授权工作树'
+          }
         }
       }
       const pathDenial = getPathDenial(execution, session, binding.taskId, config, deps.privateStateRoots(), deps.getCurrentCwd)
