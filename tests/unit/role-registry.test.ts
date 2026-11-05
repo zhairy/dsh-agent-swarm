@@ -71,7 +71,10 @@ describe('角色注册表', () => {
     expect(getWantedTools('xing_zhou')).not.toContain('create_worktree')
     expect(getWantedTools('yu_shi')).not.toContain('create_worktree')
     expect(getWantedTools('tian_shu')).not.toContain('create_worktree')
-    expect(getChildPersona('ji_feng')).toContain('先调用 create_worktree')
+    expect(getChildPersona('ji_feng')).toContain('无旧工作树时才调用 create_worktree')
+    expect(getChildPersona('ji_feng')).toContain('swarm_restore_worktree')
+    expect(getWantedTools('ji_feng')).toContain('swarm_restore_worktree')
+    expect(getWantedTools('yu_shi')).not.toContain('swarm_restore_worktree')
     expect(getChildPersona('yu_shi')).not.toContain('先调用 create_worktree')
   })
 

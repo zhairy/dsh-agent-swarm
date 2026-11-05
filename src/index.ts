@@ -1,5 +1,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { createHostWorktreePort } from './adapters/dsh-host/worktree.js'
+import { createExecutionBoundary } from './adapters/dsh-host/execution-boundary.js'
 import { Config, getSwarmConfig, getRoleRoute } from './config.js'
 import {
   MANAGED_AGENTS_KEY,
@@ -33,7 +35,7 @@ import { getRpcRoutes } from './rpc.js'
 import { ensureRolePresetsForActivationHost } from './preset-registration.js'
 import { intSwarmService, type LoggerLike } from './service.js'
 import { getHostApprovalPolicy, getToolApprovalDecision } from './approval-policy.js'
-import { inspectChildRecovery, inspectRootPreference } from './host-recovery.js'
+import { inspectChildRecovery, inspectRootPreference, readHostInspection } from './host-recovery.js'
 import { getToolRecoveryResult } from './tool-recovery.js'
 import type { RouteInfo } from './domain/routing/routes.js'
 import type { GoalsLike, TokenMeterLike, UserQuestionsLike } from './host-contract.js'
@@ -92,6 +94,8 @@ export const PublishManagedAgents = (isManaged: (agent: unknown) => boolean): ((
  * @param {unknown} config - swarm-core 行的 Config（volatile）
  */
 export const apply = (ctx: PluginContextLike, config: unknown): void => {
+  let onExecutionSettled = (_agentId: string): void => {}
+  const executionBoundary = createExecutionBoundary(ctx, agentId => onExecutionSettled(agentId))
   const getConfig = () => getSwarmConfig(config)
   const fetchImpl: typeof fetch = (input, init) => globalThis.fetch(input, init)
   const rootMetadata = new Map<string, Promise<{ header: SessionHeaderLike; preference?: RouteInfo } | undefined>>()
@@ -99,12 +103,13 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     let pending = rootMetadata.get(id)
     if (pending !== undefined) return pending
     pending = (async () => {
-      const controller = ctx.get('sessionController') as { inspect: (id: string) => Promise<{ meta: SessionHeaderLike }> } | undefined
-      if (controller === undefined) return undefined
-      const inspection = await controller.inspect(id)
+      const inspection = await readHostInspection({ sessionId: id,
+        controller: ctx.get('sessionController') as Parameters<typeof readHostInspection>[0]['controller'],
+        query: ctx.get('sessionQuery') as Parameters<typeof readHostInspection>[0]['query'], signal: AbortSignal.timeout(30_000) })
+      if (inspection === undefined || inspection === null || typeof inspection !== 'object' || !('meta' in inspection)) return undefined
       const preference = inspectRootPreference(inspection)
       // Retain only bounded metadata, never an entire inspected conversation.
-      return { header: inspection.meta, ...(preference === undefined ? {} : { preference }) }
+      return { header: inspection.meta as SessionHeaderLike, ...(preference === undefined ? {} : { preference }) }
     })().catch((error) => { rootMetadata.delete(id); throw error })
     rootMetadata.set(id, pending)
     return pending
@@ -145,6 +150,8 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     getSessionProjections: () => ctx.get('sessionProjections') as SessionProjectionsLike | undefined,
     getAgent: (sessionId) => (ctx.get('agents') as { get: (id: string) => AgentLike | undefined } | undefined)?.get(sessionId),
     getJobs: () => ctx.get('jobs') as JobsLike | undefined,
+    getWorktreeHost: () => ctx.get('workingDirectory') === undefined ? undefined : createHostWorktreePort(ctx),
+    writerBoundary: executionBoundary,
     inspectParent: async (sessionId) => (await inspectRootMetadata(sessionId))?.header,
     inspectRootPreference: async (sessionId) => (await inspectRootMetadata(sessionId))?.preference,
     activateParent: async (sessionId) => {
@@ -152,10 +159,12 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
       return (await controller?.resolveAgent(sessionId))?.agent
     },
     inspectChild: async (parentSessionId, childId, notBefore) => {
-      const controller = ctx.get('sessionController') as { inspect: (id: string) => Promise<unknown> } | undefined
       const subagents = ctx.get('subagents') as SubagentsLike | undefined
-      if (controller === undefined || subagents?.listChildren === undefined) return undefined
-      const [inspection, catalog] = await Promise.all([controller.inspect(childId), subagents.listChildren(parentSessionId)])
+      if (subagents?.listChildren === undefined) return undefined
+      const [inspection, catalog] = await Promise.all([readHostInspection({ sessionId: childId,
+        controller: ctx.get('sessionController') as Parameters<typeof readHostInspection>[0]['controller'],
+        query: ctx.get('sessionQuery') as Parameters<typeof readHostInspection>[0]['query'], signal: AbortSignal.timeout(30_000) }), subagents.listChildren(parentSessionId)])
+      if (inspection === undefined) return undefined
       return inspectChildRecovery({ parentSessionId, childId, inspection, catalog, ...(notBefore === undefined ? {} : { notBefore }) })
     },
     dshHome: getDshHome(ctx),
@@ -166,6 +175,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   // Adapter refreshes include catalog/reasoning changes, not just auth changes.
   // They invalidate quota data, never erase cooldowns or half-open ownership.
   ctx.on('llm/adapters-updated', () => quotaSource.invalidate())
+  onExecutionSettled = agentId => service.OnExecutionSettled(agentId)
   ctx.effect(() => ctx.provide(SWARM_SERVICE, service))
   ctx.effect(() => () => { quotaSource.dispose(); return service.dispose() })
   ctx.effect(() => PublishManagedAgents((agent) => service.isManagedAgent(agent as AgentLike)))
@@ -188,15 +198,21 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   // This stage follows admission and the monotonic guards. A rejected tool is
   // never evidence that a writer actually entered the execution pipeline.
   ctx.on('tools/execute', async (execution: ToolExecutionLike, next: () => Promise<unknown>) => {
-    await service.BeforeManagedTool(execution)
-    service.ObserveToolDispatch(execution)
-    const result = await next()
-    return service.isManagedAgent(execution.agent) ? getToolRecoveryResult(execution.name, result) : result
+    try {
+      await service.BeforeManagedTool(execution)
+      return await executionBoundary.run(await service.GetExecutionBoundary(execution), async () => {
+        service.ObserveToolDispatch(execution)
+        const result = await next()
+        await service.CompleteManagedTool(execution, result)
+        return service.isManagedAgent(execution.agent) ? getToolRecoveryResult(execution.name, result) : result
+      })
+    } finally { service.FinishManagedTool(execution) }
   })
   ctx.on('tools/result', (execution: ToolExecutionLike, result: unknown) => service.ObserveManagedToolResult(execution, result))
   // Wrap the complete downstream policy, retaining its deny/cancel/ask. Host approval and
   // monotonic role/revision/workspace guards remain authoritative after this seam.
   ctx.on('tools/pre-execute', async (execution: ToolExecutionLike, next: () => Promise<PreToolDecisionLike>) => {
+    service.PrepareManagedTool(execution)
     const decision = await next()
     if (!service.isManagedAgent(execution.agent)) return decision
     const approvals = getConfig().approvals

@@ -205,8 +205,15 @@ export const apply = (ctx) => {
         await service.dispose()
         await handle.dispose()
         if (ctx.get('sessionController') === undefined) throw new Error('the actual public SessionController must be composed for restart integration')
-        state.persistedChild = await ctx.get('sessionController').inspect(childId)
-        state.persistedParent = await ctx.get('sessionController').inspect(handle.agent.id)
+        const inspect = async (id) => {
+          const controller = ctx.get('sessionController')
+          if (typeof controller.inspect === 'function') return controller.inspect(id)
+          const observation = await ctx.get('sessionQuery').observeSession(id, { projectionMode: 'none' })
+          try { return { meta: observation.header, inheritedEventCount: observation.inheritedEventCount, events: observation.events } }
+          finally { observation[Symbol.dispose]() }
+        }
+        state.persistedChild = await inspect(childId)
+        state.persistedParent = await inspect(handle.agent.id)
         writeFileSync(process.env.SWARM_CONTROL_RESTART_MANIFEST, JSON.stringify(manifest))
         finish('done')
         return

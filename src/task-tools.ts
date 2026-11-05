@@ -3,13 +3,17 @@ import { DEFAULT_CONTEXT_PAGE_CHARS } from './context-store.js'
 import { getMathToolDefinitions } from './math-tools.js'
 import type { SwarmService } from './service.js'
 import { getToolDefinition, type ToolDefinitionLike } from './tool-shape.js'
+import { RESTORE_WORKTREE_TOOL } from './worktree-binding.js'
 
-export type BoundTaskToolService = Pick<SwarmService, 'ReadContext' | 'ProjectFiles' | 'Calculate' | 'MessageSend' | 'MessageRead' | 'MessageAck' | 'getConfig'>
+export type BoundTaskToolService = Pick<SwarmService, 'ReadContext' | 'ProjectFiles' | 'Calculate' | 'MessageSend' | 'MessageRead' | 'MessageAck' | 'getConfig' | 'RestoreWorktree'>
 
 /** 注册不代表授权：所有入口原样传递真实 exec，由 service 校验任务绑定、版本和角色权限。 */
 export const getBoundTaskToolDefinitions = (service: BoundTaskToolService): ToolDefinitionLike[] => {
   const config = service.getConfig()
   return [
+    getToolDefinition({ name: RESTORE_WORKTREE_TOOL, description: '显式接管当前任务保留的原工作树。先从 swarm_context_read 获取 worktree_id。仅合法可写 Worker 可用；核验旧执行停止、任务版本、仓库、分支和目录并取得租约，保持原提交及 staged/unstaged/untracked 内容。不新建、reset、clean 或重新 checkout。失败时保持禁止写入。',
+      parameters: { type: 'object', required: ['worktree_id'], properties: { worktree_id: { type: 'string' } }, additionalProperties: false },
+      execute: service.RestoreWorktree, render: (_args, result) => JSON.stringify(result), isConcurrencySafe: () => false }),
     getToolDefinition({ name: 'swarm_context_read', description: '不传 ref 时列出当前任务授权材料与执行摘要；传 ref 分页读取。缺失或已替换的历史 ref 返回 ok:false 及当前授权索引，按新 ref/digest 从头读取。始终校验任务/版本，不读取其他任务或盲审禁止的作者过程。',
       parameters: { type: 'object', properties: { task_id: { type: 'string' }, ref: { type: 'string' },
         cursor: { type: 'string', description: 'UTF-16 字符单元偏移，首次省略或传 "0"；后续原样使用返回的 nextCursor，不按字节数或行号猜测' },

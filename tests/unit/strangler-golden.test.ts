@@ -61,6 +61,10 @@ describe('3.2.1 strangler golden baseline', () => {
     expect(snapshot.roles.map((role) => role.id)).toHaveLength(13)
     expect(snapshot.tools.root).toEqual(expect.arrayContaining(['swarm_task_card', 'swarm_delegate', 'swarm_status', 'swarm_accept']))
     expect(snapshot.tools.jev).toEqual(expect.arrayContaining(['jev_ask', 'jev_check', 'jev_classify', 'jev_score', 'jev_match', 'jev_screen', 'jev_health']))
+    expect(snapshot.tools.bounded).toContain('swarm_restore_worktree')
+    // The restore entry is an intentional additive API; all previous routing,
+    // roles, tools and workflow policies must still match the historical golden.
+    snapshot.tools.bounded = snapshot.tools.bounded.filter(name => name !== 'swarm_restore_worktree')
     expect(getValueDigest(snapshot)).toBe('7c7175e3ebe622dbae0d2cd7334e9b53ea69a358917d4f219c03e13a1a2f0392')
   })
 })

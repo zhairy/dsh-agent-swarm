@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "3.3.3",
+  "version": "3.3.5",
   "description": "DSH 多智能体插件：天枢统御 12 位专家，任务卡 + Mermaid 流程 + 证据门禁验收；多层模型链即时回退与链尾等待恢复、按配置语言输出、内嵌 Jev 判断 / DSH multi-agent swarm plugin with evidence-gated delegation, resilient model routing, language control and embedded Jev judgments",
   "keywords": [
     "dsh",
@@ -21,7 +21,7 @@
     "url": "https://github.com/zhairy/dsh-agent-swarm/issues"
   },
   "engines": {
-    "dsh": ">=0.2.0-rc.2 <0.2.2-0",
+    "dsh": ">=0.2.0-rc.2 <0.2.3-0",
     "node": ">=22.19.0"
   },
   "exports": {
@@ -52,17 +52,23 @@
     "docs/3.3.1-OpenAI元数据与输出上限.md",
     "docs/3.3.2-运行时完整性与原生集成.md",
     "docs/3.3.3-人工选模-角色恢复-事件溯源.md",
+    "docs/3.3.5-DSH-0.2.2适配.md",
     "lib",
     "!lib/preset-builder.*",
     "locale",
+    "patches/dsh-agent-loop-0.2.2-rc.1-step-model-bridge.patch",
     "presets",
     "scripts/doctor.mjs",
+    "scripts/apply-dsh-step-bridge.mjs",
     "scripts/evolution-evaluate.mjs",
     "scripts/export-task-diagrams.mjs",
     "scripts/install-profile.mjs",
     "scripts/repair-openai-metadata.mjs",
     "scripts/repair-state.mjs",
-    "skills"
+    "skills",
+    "patches/dsh-execution-boundary-0.2.2-rc.1.json",
+    "patches/dsh-execution-boundary-0.2.2-rc.1.patch",
+    "scripts/apply-dsh-execution-boundary.mjs"
   ],
   "scripts": {
     "build": "node scripts/clean-lib.mjs && tsc -p tsconfig.build.json && node scripts/build-client.mjs",
@@ -85,6 +91,7 @@
   "dsh": {
     "minVersion": "0.2.0-rc.2",
     "testedVersions": [
+      "0.2.2-rc.1",
       "0.2.1-rc.5",
       "0.2.1-rc.3",
       "0.2.1-rc.2",

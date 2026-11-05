@@ -1,9 +1,32 @@
-import { describe, expect, it } from 'vitest'
-import { inspectChildRecovery, inspectRootPreference } from '../../src/host-recovery.js'
+import { describe, expect, it, vi } from 'vitest'
+import { inspectChildRecovery, inspectRootPreference, readHostInspection } from '../../src/host-recovery.js'
 const descriptor = { type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: '探微·T-1' } }
 const start = (turn: number) => ({ type: 'turn/start', data: { turn } })
 const end = (turn: number, kind = 'completed') => ({ type: 'turn/end', data: { turn, reason: { kind } } })
 const input = (events: unknown[], inheritedEventCount = 0) => ({ parentSessionId: 'root', childId: 'child', inspection: { meta: { id: 'child', parentSession: 'root' }, inheritedEventCount, events }, catalog: [{ id: 'child', mode: 'continuable' }] })
+describe('Host session inspection compatibility', () => {
+  it('uses the existing inspect API when available', async () => {
+    const inspect = vi.fn(async () => ({ meta: { id: 'root' }, events: [], inheritedEventCount: 0 }))
+    const observeSession = vi.fn()
+    expect(await readHostInspection({ sessionId: 'root', controller: { inspect }, query: { observeSession }, signal: new AbortController().signal })).toMatchObject({ meta: { id: 'root' } })
+    expect(inspect).toHaveBeenCalledWith('root')
+    expect(observeSession).not.toHaveBeenCalled()
+  })
+  it('maps an exact 0.2.2 observation and releases its lease', async () => {
+    const dispose = vi.fn()
+    const observeSession = vi.fn(async () => ({ header: { id: 'child', parentSession: 'root' }, inheritedEventCount: 0,
+      events: [start(0), descriptor, end(0)], [Symbol.dispose]: dispose }))
+    const inspection = await readHostInspection({ sessionId: 'child', query: { observeSession }, signal: new AbortController().signal })
+    expect(inspectChildRecovery({ parentSessionId: 'root', childId: 'child', inspection, catalog: [{ id: 'child', mode: 'continuable' }] })).toMatchObject({ continuable: true, settled: true })
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+  it('fails closed on a mismatched observation and still releases it', async () => {
+    const dispose = vi.fn()
+    const query = { observeSession: async () => ({ header: { id: 'other' }, inheritedEventCount: 0, events: [], [Symbol.dispose]: dispose }) }
+    await expect(readHostInspection({ sessionId: 'child', query, signal: new AbortController().signal })).rejects.toThrow('身份或事件边界无效')
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+})
 describe('durable root model preference', () => {
   const header = (model: string, reason = 'initial', defaults = false) => ({ type: 'request/header', data: { reason, header: { config: { provider: 'p', model, reasoningEffort: 'high' }, ...(defaults ? { adapterDefaults: { reasoningEffort: true } } : {}) } } })
   const inspect = (events: unknown[], inheritedEventCount = 0) => ({ meta: { id: 'root' }, inheritedEventCount, events })

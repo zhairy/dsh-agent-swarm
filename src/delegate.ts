@@ -377,6 +377,7 @@ export interface DelegateDepsInfo {
 export interface ChildScopeRequest {
   role: DelegableRoleId
   allowWeb: boolean
+  parentSessionId?: string
   mode?: SuanHengMode
   language?: OutputLanguage
   explicitLanguage?: boolean
@@ -728,7 +729,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
           // 任务说明与 persona 按这一层路由的模型家族组织
           const style = getStyle(route, config)
           try {
-            deps.noteChildScope?.(getChildScope(input))
+            deps.noteChildScope?.({ ...getChildScope(input), parentSessionId: exec.agent.id })
             const run = await dispatch(exec, () => startChild(subagents, {
               provider: SPAWN_PROVIDER,
               label: `${role.name}·${task.taskId}`,
@@ -833,7 +834,7 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
       try {
         if (started) await dispatch(exec, () => subagents.sendMessage!(exec.agent, threadId, content, { signal: exec.signal }))
         else {
-          deps.noteChildScope?.(getChildScope(input))
+          deps.noteChildScope?.({ ...getChildScope(input), parentSessionId: exec.agent.id })
           await dispatch(exec, async () => {
             // 旧宿主返回 {childId,messageId}；新宿主返回激活句柄，其结果由 hub 的回合结算通知消费。
             const run = subagents.startContinuable !== undefined

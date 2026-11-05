@@ -217,7 +217,8 @@ describe('independent public runtime guard adversaries', () => {
     const task = await f.create([])
     await f.service.BeforeManagedTool({ name: 'swarm_status', arguments: { task_id: task.task_id }, agent: f.root })
     for (const filePath of ['a.ts', 'b.ts', 'c.ts']) {
-      f.service.ObserveToolDispatch({ name: 'edit', arguments: { file_path: filePath }, agent: f.root })
+      expect(() => f.service.ObserveToolDispatch({ name: 'edit', arguments: { file_path: filePath }, agent: f.root })).toThrow('Router')
+      f.service.ObserveToolDispatch({ name: 'read', arguments: { file_path: filePath }, agent: f.root })
       expect((await f.service.BeforeManagedStep(f.root, { kind: 'enter', messages: [] })).kind).toBe('enter')
     }
     expect(f.features().progress.forTask(task.task_id)?.status).toBe('active')

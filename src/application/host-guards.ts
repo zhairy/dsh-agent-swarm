@@ -6,7 +6,7 @@ import type { TaskRecord } from '../evidence.js'
 import type { AgentControlRecord } from '../agent-control.js'
 import type { TicketRepository } from '../domain/tickets/repository.js'
 import type { WorktreeRegistry } from '../worktree-binding.js'
-import { WORKTREE_TOOL } from '../worktree-binding.js'
+import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL, isWorktreeMutationTool, type WorktreeBindingInfo } from '../worktree-binding.js'
 import { getAgentHeader, WRITE_TOOL_NAMES, type AgentLike, type ToolExecutionLike } from '../host-contract.js'
 import { getToolApprovalDenial } from '../approval-policy.js'
 import { getRouterToolDenial } from '../router-worker.js'
@@ -17,7 +17,7 @@ export interface GuardSessionPort {
   rootEditAt: number
   store: Pick<TicketRepository, 'getTask' | 'getTasks'>
   features?: { bindings: { get: (agentId: string) => AgentBinding | undefined } }
-  worktrees: Pick<WorktreeRegistry, 'canCreate' | 'findByAgent'>
+  worktrees: Pick<WorktreeRegistry, 'canCreate' | 'findByAgent' | 'findByTask' | 'isRestoring'>
 }
 
 export interface HostGuardDeps {
@@ -40,6 +40,8 @@ export interface HostGuardDeps {
   isBindingCurrent: (session: GuardSessionPort, binding: AgentBinding, agent: AgentLike, task: TaskRecord) => boolean
   privateStateRoots: () => readonly string[]
   isWorkspaceMutationUnknown: (cwd: string) => boolean
+  getCurrentCwd?: (agent: AgentLike) => string
+  isWorktreeWriter?: (agent: AgentLike, binding: AgentBinding, worktree: WorktreeBindingInfo) => boolean
 }
 
 export interface HostGuardUseCases {
@@ -47,7 +49,7 @@ export interface HostGuardUseCases {
   getGuardReason: (execution: ToolExecutionLike) => string | undefined
 }
 
-const isWriter = (name: string): boolean => WRITE_TOOL_NAMES.includes(name) || name === WORKTREE_TOOL || name === 'bash' || name === 'pwsh'
+const isWriter = (name: string): boolean => isWorktreeMutationTool(name) || name === RESTORE_WORKTREE_TOOL
 
 
 const canonicalPath = (path: string): string => {
@@ -73,11 +75,11 @@ const isWithin = (base: string, target: string): boolean => {
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))
 }
 
-const getPathDenial = (execution: ToolExecutionLike, session: GuardSessionPort, taskId: string, config: SwarmConfigInfo, privateStateRoots: readonly string[]): string | undefined => {
+const getPathDenial = (execution: ToolExecutionLike, session: GuardSessionPort, taskId: string, config: SwarmConfigInfo, privateStateRoots: readonly string[], getCurrentCwd?: (agent: AgentLike) => string): string | undefined => {
   if (!['read', 'read_image', 'glob', 'grep', 'write', 'edit'].includes(execution.name)) return undefined
   const privateRoots = privateStateRoots.map(canonicalPath)
   const current = execution.agent ?? session.rootAgent
-  const cwd = current === undefined ? process.cwd() : getAgentHeader(current).cwd ?? process.cwd()
+  const cwd = current === undefined ? process.cwd() : getCurrentCwd?.(current) ?? getAgentHeader(current).cwd ?? process.cwd()
   const args = execution.arguments as Record<string, unknown> | undefined
   const targets = Object.entries(args ?? {}).filter(([key, value]) => /path|file|directory|root|cwd/i.test(key) && typeof value === 'string')
     .map(([, value]) => canonicalPath(isAbsolute(value as string) ? value as string : `${cwd}${sep}${value as string}`))
@@ -86,6 +88,8 @@ const getPathDenial = (execution: ToolExecutionLike, session: GuardSessionPort, 
     return `私有状态与账本不能通过通用文件工具读取；调用 swarm_context_read({"task_id":${JSON.stringify(taskId)}}) 列出当前授权材料与执行摘要，再按 ref 分页读取。`
   }
   if (WRITE_TOOL_NAMES.includes(execution.name) && targets.length > 0) {
+    const worktree = current === undefined ? undefined : session.worktrees.findByAgent(current.id)
+    if (worktree !== undefined && targets.some(target => !isWithin(canonicalPath(worktree.path), target))) return '写入路径超出当前 attempt 绑定的工作树'
     const task = session.store.getTask(taskId)
     if (task === undefined) return '当前任务不存在，不能校验写入范围'
     if (task.card.scope.length > 0) {
@@ -134,6 +138,7 @@ export const createHostGuardUseCases = (deps: HostGuardDeps): HostGuardUseCases 
     }
 
     const owner = execution.agent === undefined ? undefined : deps.getChildOwner(execution.agent.id)
+    if (execution.name === RESTORE_WORKTREE_TOOL && (owner === undefined || role === undefined || getRoleInfo(role).permission !== 'workspace-edit')) return '仅当前合法可写 Worker 可以恢复工作树'
     if (owner !== undefined && execution.agent !== undefined) {
       const session = deps.getSession(owner)
       const binding = session.features?.bindings.get(execution.agent.id)
@@ -148,20 +153,26 @@ export const createHostGuardUseCases = (deps: HostGuardDeps): HostGuardUseCases 
         if (!workspaceEditor) return '只有可编辑工作区的专家能够创建可写工作树'
         const denied = session.worktrees.canCreate({ agentId: execution.agent.id, taskId: binding.taskId })
         if (denied !== undefined) return denied
-      } else if (writer && workspaceEditor) {
+      } else if (writer && workspaceEditor && execution.name !== RESTORE_WORKTREE_TOOL) {
         const worktreeToolLoaded = deps.getTaskSchemaNames(execution.agent).some((tool) => tool.name === WORKTREE_TOOL)
-        if (worktreeToolLoaded) {
+        if (worktreeToolLoaded || session.worktrees.findByTask(binding.taskId).length > 0) {
           const bound = session.worktrees.findByAgent(execution.agent.id)
-          if (bound === undefined) return '可编辑专家尚未创建隔离工作树；请先调用 create_worktree，再修改文件或运行命令'
+          if (bound === undefined) return '当前 attempt 尚未绑定工作树；已有现场请从 swarm_context_read 获取 worktree_id 并调用 swarm_restore_worktree，否则先调用 create_worktree'
           if (bound.taskId !== binding.taskId) return '当前专家仍绑定其它任务的工作树，不能在新任务中写入'
+          if (bound.state !== 'active' || session.worktrees.isRestoring(bound.worktreeId) || deps.isWorktreeWriter?.(execution.agent, binding, bound) !== true) return '工作树尚未取得当前 agent/delegation/attempt 的有效写租约，请显式恢复'
+          if ((deps.getCurrentCwd?.(execution.agent) ?? getAgentHeader(execution.agent).cwd) !== bound.path) return '实际生效 CWD 不属于当前授权工作树，拒绝写入'
+          if (execution.name === 'bash' || execution.name === 'pwsh') {
+            const workdir = (execution.arguments as { workdir?: unknown } | undefined)?.workdir
+            if (typeof workdir === 'string' && !isWithin(canonicalPath(bound.path), canonicalPath(resolve(bound.path, workdir)))) return 'Shell workdir 超出当前授权工作树'
+          }
         }
       }
-      const pathDenial = getPathDenial(execution, session, binding.taskId, config, deps.privateStateRoots())
+      const pathDenial = getPathDenial(execution, session, binding.taskId, config, deps.privateStateRoots(), deps.getCurrentCwd)
       if (pathDenial !== undefined) return pathDenial
     }
 
     if (!writer) return undefined
-    if (execution.agent !== undefined && deps.isWorkspaceMutationUnknown(getAgentHeader(execution.agent).cwd ?? process.cwd())) {
+    if (execution.agent !== undefined && deps.isWorkspaceMutationUnknown(deps.getCurrentCwd?.(execution.agent) ?? getAgentHeader(execution.agent).cwd ?? process.cwd())) {
       return '工作区存在未确认副作用，必须完成恢复核对后才能再次写入或运行命令'
     }
     if (role === 'tian_shu' && execution.agent !== undefined && config.workflow.mode === 'enforced'

@@ -89,6 +89,8 @@ const requiredRuntimeFiles = packageInfo.name === 'dsh-agent-swarm'
       'package.json', 'README.md', 'THIRD-PARTY-NOTICES.md', 'LICENSE', 'cordis.patch.yml',
       'presets/declarations.json', 'locale/zh.json', 'locale/en.json',
       'skills/jev-judgments/SKILL.md', 'skills/typesafe-ai/SKILL.md', 'skills/typesafe-ai/LICENSE',
+      'patches/dsh-agent-loop-0.2.2-rc.1-step-model-bridge.patch', 'scripts/apply-dsh-step-bridge.mjs',
+      'patches/dsh-execution-boundary-0.2.2-rc.1.json', 'patches/dsh-execution-boundary-0.2.2-rc.1.patch', 'scripts/apply-dsh-execution-boundary.mjs',
       ...(packageInfo.dsh?.bundle?.patch ?? []).map((path) => String(path).replace(/^\.\//, ''))
     ])].sort()
   : []

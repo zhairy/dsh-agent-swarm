@@ -8,13 +8,46 @@ import type { PreferredRecoveryEventInfo } from '../../src/application/routing/e
 import { DEFAULT_ROUTE_CHAINS } from '../../src/domain/routing/routes.js'
 import { intRouteHealth } from '../../src/domain/routing/health.js'
 import type { RouteInfo } from '../../src/domain/routing/routes.js'
-import { apply as applyRuntime } from '../../src/runtime.js'
+import { apply as applyRuntime, STEP_MODEL_BRIDGE } from '../../src/runtime.js'
 import type { PluginContextLike } from '../../src/host-contract.js'
 
 const config = getSwarmConfig({})
 const child = { id: 'c1', session: { header: { parentSession: 'root' } } }
 const root = { id: 'root', session: { header: {} } }
 const chain = [{ provider: 'a', model: 'm1' }, { provider: 'b', model: 'm2', reasoningEffort: 'high' }, { provider: 'a', model: 'm3' }]
+
+describe('frozen-step Host compatibility boundary', () => {
+  it('rejects an unpatched new Host before model preparation', async () => {
+    const listeners = new Map<string, (...args: any[]) => any>()
+    const service = { isManagedAgent: () => true, getConfig: () => config, routeState: { getChildRole: () => undefined } }
+    applyRuntime({ get: (name: string) => name === 'agentSwarm' ? service : undefined,
+      provide: () => () => undefined, effect: () => undefined, on: (name, listener) => { listeners.set(name, listener) } } as PluginContextLike, { role: 'tian_shu' })
+    const agent = { ...root, model: { current: () => chain[0], select: () => undefined } }
+    const next = vi.fn(async () => chain[0])
+    await expect(listeners.get('agent/request')!({ agent }, next)).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' })
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('selects before preparation on the bridge and leaves the later Host request unchanged', async () => {
+    const listeners = new Map<string, (...args: any[]) => any>()
+    const admit = vi.fn(async () => chain[1])
+    const service = { isManagedAgent: () => true, getConfig: () => config, WaitAgentReady: vi.fn(), BeforeManagedRequest: vi.fn(),
+      routeState: { getChildRole: () => undefined, WaitHealthReady: vi.fn(), BeginRequestStep: vi.fn(), PreparePreferredRecovery: vi.fn(),
+        PrepareQuotaRouting: vi.fn(), AdmitRequest: admit, ReleaseProbe: vi.fn(), getChildOverride: () => undefined } }
+    applyRuntime({ get: (name: string) => name === 'agentSwarm' ? service : undefined,
+      provide: () => () => undefined, effect: () => undefined, on: (name, listener) => { listeners.set(name, listener) } } as PluginContextLike, { role: 'tian_shu' })
+    const agent = { ...root, [STEP_MODEL_BRIDGE]: true, model: { current: () => chain[0], select: () => undefined } }
+    const selected = await listeners.get('agent/swarm-model-select')!({ agent, turn: 1, step: 1 }, async () => chain[0])
+    expect(selected).toEqual(chain[1])
+    expect(service.BeforeManagedRequest).not.toHaveBeenCalled()
+    expect(await listeners.get('agent/request')!({ agent, turn: 1, step: 1 }, async () => selected)).toEqual(selected)
+    expect(service.BeforeManagedRequest).toHaveBeenCalledTimes(1)
+    expect(admit).toHaveBeenCalledTimes(1)
+    service.BeforeManagedRequest.mockRejectedValueOnce(new Error('request denied'))
+    await expect(listeners.get('agent/request')!({ agent, turn: 1, step: 2 }, async () => selected)).rejects.toThrow('request denied')
+    expect(service.routeState.ReleaseProbe).toHaveBeenCalledWith(agent.id)
+  })
+})
 
 describe('automatic source quota routing', () => {
   const primary = { provider: 'codex', model: 'gpt-6-sol', reasoningEffort: 'high' }

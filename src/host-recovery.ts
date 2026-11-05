@@ -10,9 +10,54 @@ export interface ChildRecoveryEvidence {
   turnStartedAt?: number
   settledAt?: number
   reason?: string
+  /** A closed model turn is never a certificate that process resources exited. */
+  writerQuiescent?: false
 }
 const object = (raw: unknown): raw is Record<string, unknown> => raw !== null && typeof raw === 'object' && !Array.isArray(raw)
 const integer = (raw: unknown): raw is number => Number.isSafeInteger(raw) && Number(raw) >= 0
+
+export const inspectOwnedJobHistory = (events: readonly unknown[], childId: string): { complete: boolean; reason?: string } => {
+  const jobs = new Map<string, { startedAt: number; settled: boolean }>()
+  for (const raw of events) {
+    if (!object(raw) || !['job/registered', 'job/settled'].includes(String(raw.type))) continue
+    const data = raw.data
+    if (!object(data) || typeof data.jobId !== 'string' || data.owner !== childId || !integer(data.startedAt)) return { complete: false, reason: 'job-history-identity-invalid' }
+    const previous = jobs.get(data.jobId)
+    if (raw.type === 'job/registered') {
+      if (previous !== undefined) return { complete: false, reason: 'job-history-duplicate-registration' }
+      jobs.set(data.jobId, { startedAt: data.startedAt as number, settled: false })
+    } else {
+      if (previous === undefined || previous.startedAt !== data.startedAt || previous.settled || data.producerReported !== true
+        || !['completed', 'killed'].includes(String(data.status)) || !integer(data.finishedAt) || Number(data.finishedAt) < previous.startedAt) return { complete: false, reason: 'job-settlement-unverified' }
+      previous.settled = true
+    }
+  }
+  return [...jobs.values()].some(job => !job.settled) ? { complete: false, reason: 'job-still-unsettled' } : { complete: true }
+}
+
+/** Read one exact Host observation without activating a Session or retaining its lease. */
+export const readHostInspection = async (input: {
+  sessionId: string
+  controller?: { inspect?: (id: string) => Promise<unknown> }
+  query?: { observeSession?: (id: string, options: { projectionMode: 'none'; signal: AbortSignal }) => Promise<{
+    header: unknown; inheritedEventCount: number; events: readonly unknown[]; [Symbol.dispose]: () => void
+  }> }
+  signal: AbortSignal
+}): Promise<unknown | undefined> => {
+  if (typeof input.controller?.inspect === 'function') return input.controller.inspect(input.sessionId)
+  if (typeof input.query?.observeSession !== 'function') return undefined
+  const observation = await input.query.observeSession(input.sessionId, { projectionMode: 'none', signal: input.signal })
+  try {
+    input.signal.throwIfAborted()
+    if (!object(observation.header) || observation.header.id !== input.sessionId || !integer(observation.inheritedEventCount)
+      || !Array.isArray(observation.events) || observation.inheritedEventCount > observation.events.length || observation.events.length > 200000) {
+      throw new Error('宿主会话只读快照的身份或事件边界无效')
+    }
+    return { meta: observation.header, inheritedEventCount: observation.inheritedEventCount, events: observation.events }
+  } finally {
+    observation[Symbol.dispose]()
+  }
+}
 
 /** Restore intent, never the SDK's last automatically selected fallback header. */
 export const inspectRootPreference = (inspection: unknown): { provider: string; model: string; reasoningEffort?: string } | undefined => {
@@ -43,7 +88,7 @@ export const inspectRootPreference = (inspection: unknown): { provider: string; 
 }
 
 export const inspectChildRecovery = (input: { parentSessionId: string; childId: string; inspection: unknown; catalog: unknown; notBefore?: number }): ChildRecoveryEvidence => {
-  const base = { parentSessionId: input.parentSessionId, childId: input.childId, continuable: false, settled: false }
+  const base = { parentSessionId: input.parentSessionId, childId: input.childId, continuable: false, settled: false, writerQuiescent: false as const }
   const reject = (reason: string): ChildRecoveryEvidence => ({ ...base, reason })
   if (!object(input.inspection) || !object(input.inspection.meta) || !Array.isArray(input.inspection.events) || !integer(input.inspection.inheritedEventCount)
     || input.inspection.inheritedEventCount > input.inspection.events.length || input.inspection.events.length > 200000) return reject('invalid-host-inspection')
@@ -54,6 +99,8 @@ export const inspectChildRecovery = (input: { parentSessionId: string; childId: 
   const descriptorEvent = own.find((event) => object(event) && event.type === 'subagent/descriptor')
   const descriptor = object(descriptorEvent) ? descriptorEvent.data : undefined
   if (!object(descriptor) || descriptor.version !== 3 || descriptor.mode !== 'continuable' || typeof descriptor.provider !== 'string' || descriptor.provider === '' || typeof descriptor.label !== 'string') return reject('unsupported-own-continuation-descriptor')
+  const jobs = inspectOwnedJobHistory(own, input.childId)
+  if (!jobs.complete) return { ...base, continuable: true, reason: jobs.reason }
   let open: number | undefined
   let latest = -1
   let stopReason: string | undefined

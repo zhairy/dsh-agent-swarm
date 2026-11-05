@@ -1,7 +1,7 @@
 import { CAPABILITY_TOOL_CANDIDATES, type Capability } from './host-contract.js'
 import { LANGUAGE_NAMES, LANGUAGE_PLACEHOLDER, type OutputLanguage } from './language.js'
 import { getStyledPersona, type PromptStyle } from './model-family.js'
-import { WORKTREE_TOOL } from './worktree-binding.js'
+import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL } from './worktree-binding.js'
 
 /** 13 个角色的稳定 ASCII ID（天枢 + 12 个可委派角色） */
 export const ROLE_IDS = [
@@ -172,7 +172,7 @@ const COMMON_CHILD_BOUNDARIES = [
   '不要为了确认自己使用的模型或供应商去读取 DSH 的配置、凭据或会话文件：实际使用的模型由系统记录在委派结果里，任务要求报告模型时写「由系统记录」即可。'
 ]
 
-const WORKTREE_BOUNDARY = '可编辑专家在修改任何文件或运行命令前，先调用 create_worktree 从当前本地 HEAD 创建独立工作树，再在返回目录中修改和验证。只使用本 attempt 绑定的工作树；不得复用其它任务或专家的工作树。修改后核对 git status、git diff 和真实测试结果。工作树默认保留，即使失败也不得自动删除；存在未提交文件或未合并提交时必须保留并交给天枢/用户处理。'
+const WORKTREE_BOUNDARY = '可编辑专家在修改文件或运行命令前必须取得本 attempt 的隔离工作树授权。当前任务已有保留工作树时，先用 swarm_context_read 获取 worktree_id，再显式调用 swarm_restore_worktree 接管；无旧工作树时才调用 create_worktree。恢复失败保持只读，不反复新建，不删除原现场，不绕过守卫。不得接管其它任务的工作树。修改后核对 git status、git diff 和真实测试结果。工作树默认保留，即使失败也不得自动删除；存在未提交文件或未合并提交时必须保留并交给天枢/用户处理。'
 
 const MODE_TEXT: Readonly<Record<SuanHengMode, string>> = {
   research: '当前模式：研算。在实现之前定义语义，提出候选算法，给出不变量、复杂度与数值误差分析。',
@@ -310,7 +310,7 @@ export const getWantedTools = (id: RoleId, options: { allowWeb?: boolean } = {})
   const capabilities = role.capabilities.filter((cap) => cap !== 'web' || webOpen)
   return [...new Set([
     ...capabilities.flatMap((cap) => [...CAPABILITY_TOOL_CANDIDATES[cap]]),
-    ...(role.permission === 'workspace-edit' ? [WORKTREE_TOOL] : [])
+    ...(role.permission === 'workspace-edit' ? [WORKTREE_TOOL, RESTORE_WORKTREE_TOOL] : [])
   ])]
 }
 

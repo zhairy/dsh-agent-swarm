@@ -63,6 +63,7 @@ export const RECOVERY_SCENARIOS = {
     ]
   },
   'recovery-pool-backup': { recovery: true, preset: 'tian-shu', root: [{ text: 'RECOVERY DONE' }] },
+  'recovery-capability-switch': { recovery: true, preset: 'tian-shu', root: [{ tool: 'bridge_backup_only', args: {} }, { text: 'RECOVERY DONE' }] },
   'recovery-pool-thrown': { recovery: true, preset: 'tian-shu', root: [{ text: 'RECOVERY DONE' }] },
   'recovery-all-quota': { recovery: true, preset: 'tian-shu', root: [{ text: 'UNEXPECTED SUCCESS' }] },
   'recovery-child-oneshot': { recovery: true, preset: 'tian-shu', root: [taskCard, delegate('tan_wei', 'oneshot'), { text: 'RECOVERY DONE' }] },
@@ -95,7 +96,7 @@ export const recordRecoveryRequest = (state, options) => {
 
 // 可作为独立 overlay 插件加载，不修改原 driver。LLM 只负责确定性模拟供应商响应。
 export const name = 'swarm-recovery-test-driver'
-export const inject = ['llm', 'agents', 'agentPresets', 'subagents']
+export const inject = ['llm', 'agents', 'agentPresets', 'subagents', 'tools']
 const VALID = JSON.parse(readFileSync(new URL('../../fixtures/valid-outputs.json', import.meta.url), 'utf8'))
 function* textChunks (text) {
   yield { type: 'block-start', index: 0, blockType: 'text' }
@@ -135,6 +136,17 @@ export const apply = (ctx) => {
     setTimeout(() => process.exit(status === 'done' ? 0 : 1), 100)
   }
   if (!scenario) { finish('unknown-scenario'); return }
+  if (scenarioName === 'recovery-capability-switch') {
+    state.bridgeTools = []
+    state.bridgeToolExecutions = 0
+    state.bridgeHeaders = []
+    state.bridgeSelections = []
+    ctx.tools.register({ name: 'bridge_backup_only', description: 'Only the backup model can see this test tool.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      execute: async () => { state.bridgeToolExecutions++; return 'backup tool executed' }
+    }, { when: ({ modelSelection }) => modelSelection.model === 'root' })
+  }
   if (scenarioName === 'planning-question-reply') ctx.on('user-questions/request', async request => {
     // 只模拟人类答复提供方；真实 ask_user_question、Session 和 deriveMessages 生成调用/结果身份。
     state.questionRequests = (state.questionRequests ?? 0) + 1
@@ -153,6 +165,7 @@ export const apply = (ctx) => {
     async *stream (options) {
       if (options.purpose !== undefined) { yield* textChunks('Recovery test'); return }
       recordRecoveryRequest(state, options)
+      if (scenarioName === 'recovery-capability-switch') state.bridgeTools.push({ model: options.model, tools: (options.tools ?? []).map(item => item.name) })
       const submit = value => toolChunks('structured_output', options.tools?.find(item => item.name === 'structured_output')?.parameters?.properties?.value ? { value } : value)
       const failure = getRecoveryFailure(options.model)
       if (options.model === 'fail-pool-thrown') { state.adapterThrows = (state.adapterThrows ?? 0) + 1; throw new LlmError(failure.message, failure.code, failure) }
@@ -284,6 +297,8 @@ export const apply = (ctx) => {
   ctx.llm.registerAdapter(['swarm-mock', ...(latePlanningFailure ? ['swarm-selected-mock'] : [])], adapter)
   ctx.on('session/event', (session, event) => {
     if (event.type === 'llm/retry' || event.type === 'llm/retry-started') state.recoveryEvents.push({ type: event.type, data: event.data, sessionId: session.id })
+    if (scenarioName === 'recovery-capability-switch' && event.type === 'request/header') state.bridgeHeaders.push(event.data.header?.config)
+    if (scenarioName === 'recovery-capability-switch' && event.type === 'model/selection') state.bridgeSelections.push(event.data)
   })
   ctx.on('agent/error', ({ error }) => state.agentErrors.push({ message: String(error?.message ?? error), code: error?.code }))
   const run = async () => {
@@ -306,6 +321,7 @@ export const apply = (ctx) => {
       state.runtimeStatus = ctx.get('agentSwarm')?.getStatus({}, { agent: handle.agent, signal: new AbortController().signal })
       state.committedToolResults = handle.agent.session.deriveMessages().filter(message => message.role === 'tool')
         .map(message => ({ isError: message.isError === true, text: message.content?.filter(block => block.type === 'text').map(block => block.text).join('\n') ?? '' }))
+      if (scenarioName === 'recovery-capability-switch') state.bridgeUserMessages = handle.agent.session.deriveMessages().filter(message => message.role === 'user' && message.source?.kind === 'user').length
       if (scenarioName === 'planning-question-reply') {
         const messages = handle.agent.session.deriveMessages()
         const questionCall = messages.flatMap(message => message.role === 'assistant' ? message.content : []).find(block => block.type === 'tool-call' && block.name === 'ask_user_question')
