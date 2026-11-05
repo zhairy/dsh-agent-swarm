@@ -169,7 +169,7 @@ describe('工具插件', () => {
     expect(registered.map((d) => d.name)).toEqual([
       'swarm_task_card', 'swarm_delegate', 'swarm_status', 'swarm_accept',
       'jev_ask', 'jev_check', 'jev_classify', 'jev_score', 'jev_match', 'jev_screen', 'jev_health',
-      'swarm_context_read', 'swarm_project_files', 'swarm_calculate',
+      'swarm_restore_worktree', 'swarm_context_read', 'swarm_project_files', 'swarm_calculate',
       'swarm_review_plan', 'swarm_experience'
     ])
     expect(service.getConfig().persistence.enabled).toBe(false)

@@ -10,10 +10,12 @@ import { revalidateEvidenceAssessment } from '../evidence-assessment.js'
 import type { ToolExecLike } from '../tool-shape.js'
 import { SwarmError } from '../util/errors.js'
 import type { SwarmService } from './service-api.js'
+import type { WorktreeRegistry } from '../worktree-binding.js'
 
 export interface ContextQuerySessionPort {
   rootAgent?: AgentLike
   store: Pick<TaskStore, 'getDelegation' | 'getTaskDelegations'>
+  worktrees?: Pick<WorktreeRegistry, 'project'>
 }
 
 export interface ContextQueryTaskContext {
@@ -48,6 +50,7 @@ export const createContextQueryToolUseCase = (deps: ContextQueryToolDeps): Conte
       return {
         task_id: task.taskId, stateRefreshRequired, publishedRevisions: getTaskBinding(task), projectedRevisions: getTaskBinding(projectedTask),
         materials: features.contexts.List(binding ?? getTaskContextBinding(task, features.workspaceId)),
+        worktrees: binding?.blindReview ? [] : (session.worktrees?.project(task.taskId) ?? []).map(record => ({ worktree_id: record.worktreeId, path: record.path, branch: record.branch, state: record.state })),
         executionSummary: binding?.blindReview ? { omitted: '独立盲审不披露作者执行过程或历史评分' } : {
           total: current.length, truncated: current.length > 12,
           delegations: current.slice(-12).map((record) => ({ delegationId: record.delegationId, role: record.role, status: record.status,

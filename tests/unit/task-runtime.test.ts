@@ -109,7 +109,7 @@ const reviewCases: Array<{ role: 'yu_shi' | 'suan_heng'; mode?: 'verify'; node: 
 ]
 
 describe('task execution through the public service', () => {
-  it('requires managed editable experts to bind one native Git worktree before writes and projects it from the ledger', async () => {
+  it('does not grant worktree writes from an unaudited result notification', async () => {
     const runtime = await makeRuntime({ pending: true, worktree: true, config: { persistence: { enabled: true } } })
     const created = await runtime.service.AddTaskCard(card({ scope: ['subject.ts'], flags: { changesCode: true } }), runtime.exec())
     const work = trackWork(runtime.service.delegate({ task_id: created.task_id, role: 'ji_feng', node_id: 'implementation', prompt: '隔离修改 subject.ts', backend: 'api', session: 'oneshot' }, runtime.exec()))
@@ -117,13 +117,15 @@ describe('task execution through the public service', () => {
     const child = runtime.runs[0]!.agent
     await vi.waitFor(() => expect(runtime.service.getGuardReason({ name: 'write', arguments: { path: 'subject.ts' }, agent: child })).not.toContain('身份绑定尚未就绪'), { timeout: 5000 })
     expect(runtime.service.getGuardReason({ name: 'create_worktree', arguments: { name: 'ticket-work' }, agent: runtime.root })).toContain('Router')
-    expect(runtime.service.getGuardReason({ name: 'write', arguments: { path: 'subject.ts' }, agent: child })).toContain('尚未创建隔离工作树')
+    expect(runtime.service.getGuardReason({ name: 'write', arguments: { path: 'subject.ts' }, agent: child })).toContain('尚未绑定工作树')
     expect(runtime.service.getGuardReason({ name: 'create_worktree', arguments: { name: 'ticket-work' }, agent: child })).toBeUndefined()
     const result = { path: join(runtime.home, '.agents/worktrees/ticket-work'), branch: 'ticket-work', baseCommit: 'abc123', repositoryRoot: runtime.home }
     runtime.service.ObserveManagedToolResult({ name: 'create_worktree', arguments: { name: 'ticket-work' }, agent: child }, result)
-    expect(taskView(runtime, created.task_id).worktrees).toEqual([expect.objectContaining({ ...result, taskId: created.task_id, state: 'active', retention: 'manual-only' })])
-    expect(runtime.service.getGuardReason({ name: 'write', arguments: { path: 'subject.ts' }, agent: child })).toBeUndefined()
-    expect(runtime.service.getGuardReason({ name: 'create_worktree', arguments: { name: 'second' }, agent: child })).toContain('第二棵')
+    expect(taskView(runtime, created.task_id).worktrees).toEqual([])
+    expect(runtime.service.getGuardReason({ name: 'write', arguments: { path: 'subject.ts' }, agent: child })).toContain('尚未绑定工作树')
+    // The Node runner exercises the successful Host/lease/journal completion;
+    // a tools/result notification alone must never manufacture that grant.
+    await expect(runtime.service.CompleteManagedTool({ name: 'create_worktree', agent: child, signal: new AbortController().signal }, result)).rejects.toBeDefined()
     runtime.runs[0]!.release()
     await work
   })

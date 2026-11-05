@@ -25,6 +25,7 @@ export type SwarmEventType =
   | 'review/recorded'
   | 'acceptance/recorded'
   | 'worktree/bound'
+  | 'worktree/restored'
   | 'watchdog/alert'
   | 'state/journal-begin'
   | 'state/journal-chunk'
@@ -230,6 +231,7 @@ export const createSwarmEventJournal = (input: { directory: string; rootSessionI
   const outboxEvents: SwarmEvent[] = []
   const seen = new Set<string>()
   let previousDigest = 'GENESIS', nextSeq = 1, activeStartSeq = 1, sealedFailure: string | undefined
+  let appendFailure: string | undefined
   for (const segment of [...sealedPaths(), path]) {
     if (!existsSync(segment)) continue
     const parsed = parseAndValidate(readDurableText(segment), input.rootSessionId, nextSeq, previousDigest, seen)
@@ -269,9 +271,10 @@ export const createSwarmEventJournal = (input: { directory: string; rootSessionI
   return {
     path,
     maxLineBytes,
-    ...(sealedFailure === undefined ? {} : { fatalError: sealedFailure }),
+    get fatalError() { return sealedFailure ?? appendFailure },
     append: (value) => {
       if (sealedFailure !== undefined) throw new Error(sealedFailure)
+      if (appendFailure !== undefined) throw new Error(appendFailure)
       if (seen.has(value.eventId) || seen.has(value.idempotencyKey)) return undefined
       if (typeof value.eventId !== 'string' || value.eventId.length < 1 || value.eventId.length > 128
         || typeof value.idempotencyKey !== 'string' || value.idempotencyKey.length < 1 || value.idempotencyKey.length > 512) throw new Error('Invalid event identity')
@@ -288,10 +291,17 @@ export const createSwarmEventJournal = (input: { directory: string; rootSessionI
       const line = `${JSON.stringify(event)}\n`
       const lineBytes = Buffer.byteLength(line)
       if (lineBytes > maxLineBytes) throw new Error('Event exceeds journal line limit')
-      if (activeBytes + lineBytes > sealAfterBytes) sealActive()
-      // A durable outbox/state fact is not committed until its exact line is on
-      // stable storage. Node's appendFileSync does not guarantee fsync by itself.
-      writeDurableText(path, line, 'a')
+      try {
+        if (activeBytes + lineBytes > sealAfterBytes) sealActive()
+        // A durable outbox/state fact is not committed until its exact line is on
+        // stable storage. Node's appendFileSync does not guarantee fsync by itself.
+        writeDurableText(path, line, 'a')
+      } catch (error) {
+        // A full line may have reached disk before fsync failed. Reusing the old
+        // sequence would fork the log; reopen and revalidate before any new grant.
+        appendFailure = 'Event journal durability failed; reopen and reconcile before appending'
+        throw error
+      }
       activeBytes += lineBytes
       nextSeq++
       allEvents.push(event); seen.add(event.eventId); seen.add(event.idempotencyKey)

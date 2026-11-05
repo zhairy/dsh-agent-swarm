@@ -114,7 +114,7 @@ const pump = async (state: WorkspaceState): Promise<void> => {
 }
 
 export interface WorkspaceLeaseManager {
-  acquire: (cwd: string, owner: string, kind: WorkspaceLeaseKind, signal?: AbortSignal) => Promise<WorkspaceLease>
+  acquire: (cwd: string, owner: string, kind: WorkspaceLeaseKind, signal?: AbortSignal, options?: { wait?: boolean }) => Promise<WorkspaceLease>
   getStatus: (cwd: string) => Promise<{ workspaceId: string; busy: boolean; mutationUnknown: boolean; owner?: string; leaseEpoch: number }>
   peekStatus: (cwd: string) => { workspaceId: string; busy: boolean; mutationUnknown: boolean; owner?: string; leaseEpoch: number } | undefined
   isCurrent: (lease: WorkspaceLease) => boolean
@@ -146,11 +146,12 @@ export const createWorkspaceLeaseManager = (options: { ownerDirectory?: string }
       return state?.active?.leaseId === lease.leaseId && state.active.owner === lease.owner
         && state.active.leaseEpoch === lease.leaseEpoch && !state.mutationUnknown
     },
-    acquire: async (cwd, owner, kind, signal) => {
+    acquire: async (cwd, owner, kind, signal, options) => {
       if (!owner || !['write', 'edit', 'verify'].includes(kind)) throw new WorkspaceLeaseError('LEASE_INVALID', 'Invalid execution lease')
       const state = await get(cwd)
       if (signal?.aborted) throw new WorkspaceLeaseError('ABORTED', 'Lease request cancelled')
       if (state.mutationUnknown) throw new WorkspaceLeaseError('MUTATION_UNKNOWN', 'Workspace has unreconciled side effects')
+      if (options?.wait === false && (state.active !== undefined || state.pumping || state.pending.length > 0)) throw new WorkspaceLeaseError('WORKSPACE_BUSY', 'Workspace already has an active or pending owner')
       return new Promise<WorkspaceLease>((resolve, reject) => {
         const waiter: Waiting = { owner, kind, ...(signal === undefined ? {} : { signal }), resolve, reject, cleanup: () => signal?.removeEventListener('abort', abort) }
         const abort = () => {

@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { createHostWorktreePort } from './adapters/dsh-host/worktree.js'
 import { Config, getSwarmConfig, getRoleRoute } from './config.js'
 import {
   MANAGED_AGENTS_KEY,
@@ -146,6 +147,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     getSessionProjections: () => ctx.get('sessionProjections') as SessionProjectionsLike | undefined,
     getAgent: (sessionId) => (ctx.get('agents') as { get: (id: string) => AgentLike | undefined } | undefined)?.get(sessionId),
     getJobs: () => ctx.get('jobs') as JobsLike | undefined,
+    getWorktreeHost: () => ctx.get('workingDirectory') === undefined ? undefined : createHostWorktreePort(ctx),
     inspectParent: async (sessionId) => (await inspectRootMetadata(sessionId))?.header,
     inspectRootPreference: async (sessionId) => (await inspectRootMetadata(sessionId))?.preference,
     activateParent: async (sessionId) => {
@@ -191,15 +193,19 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   // This stage follows admission and the monotonic guards. A rejected tool is
   // never evidence that a writer actually entered the execution pipeline.
   ctx.on('tools/execute', async (execution: ToolExecutionLike, next: () => Promise<unknown>) => {
-    await service.BeforeManagedTool(execution)
-    service.ObserveToolDispatch(execution)
-    const result = await next()
-    return service.isManagedAgent(execution.agent) ? getToolRecoveryResult(execution.name, result) : result
+    try {
+      await service.BeforeManagedTool(execution)
+      service.ObserveToolDispatch(execution)
+      const result = await next()
+      await service.CompleteManagedTool(execution, result)
+      return service.isManagedAgent(execution.agent) ? getToolRecoveryResult(execution.name, result) : result
+    } finally { service.FinishManagedTool(execution) }
   })
   ctx.on('tools/result', (execution: ToolExecutionLike, result: unknown) => service.ObserveManagedToolResult(execution, result))
   // Wrap the complete downstream policy, retaining its deny/cancel/ask. Host approval and
   // monotonic role/revision/workspace guards remain authoritative after this seam.
   ctx.on('tools/pre-execute', async (execution: ToolExecutionLike, next: () => Promise<PreToolDecisionLike>) => {
+    service.PrepareManagedTool(execution)
     const decision = await next()
     if (!service.isManagedAgent(execution.agent)) return decision
     const approvals = getConfig().approvals

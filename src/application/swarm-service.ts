@@ -22,6 +22,7 @@ import {
   WRITE_TOOL_NAMES,
   getAgentHeader,
   type AgentLike,
+  type ToolExecutionLike,
   type SessionHeaderLike,
   type InboxMessageLike,
   type SubagentsLike,
@@ -61,7 +62,9 @@ import { StateStoreError } from '../state-store.js'
 import { createWorkspaceLeaseManager, type WorkspaceLease } from '../util/workspace-lease.js'
 import type { ToolExecLike } from '../tool-shape.js'
 import { getPlanningRecovery } from '../planning-recovery.js'
-import { ParseCreatedWorktree, WORKTREE_TOOL, intWorktreeRegistry, type WorktreeRegistry } from '../worktree-binding.js'
+import { ParseCreatedWorktree, WORKTREE_TOOL, RESTORE_WORKTREE_TOOL, isWorktreeMutationTool, getWorktreeOwnerKey, isSameWorktreeIdentity, intWorktreeRegistry, type WorktreeRegistry, type WorktreeBindingInfo, type WorktreeOwner } from '../worktree-binding.js'
+import type { AgentBinding } from '../agent-binding.js'
+import { restoreRetainedWorktree } from './worktree-recovery.js'
 import { getContextAdmission } from '../context-admission.js'
 import { getNativeIntegrationView } from '../native-integrations.js'
 import { createAgentControl } from '../agent-control.js'
@@ -222,6 +225,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     }
     const worktrees = intWorktreeRegistry({ now })
     worktrees.hydrate(getLedgerEvents(ledger.path))
+    worktrees.hydrateJournal(journal.queryTypes(['worktree/bound', 'worktree/restored']))
     const sources = createSourceTriggerRuntime({ journal, config: deps.getConfig, now })
     if (deps.getConfig().events.journal) sources.configure(createSourceInstance({ id: 'session', kind: 'dsh-session', enabled: true, ignoredThreads: [] }))
     const outboxHandlers = new Map<string, OutboxHandler>()
@@ -343,16 +347,23 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
   let delegateEntry: SwarmService['delegate']
   const resolveEvidenceSource = createPublicEvidenceSourceResolver()
   const privateStateRoots = () => [deps.getConfig().persistence.directory || join(deps.dshHome, 'share', 'dsh-agent-swarm', 'state'),
-    getLedgerDir(), join(deps.dshHome, 'share', 'dsh-agent-swarm', 'maintenance')]
+    getLedgerDir(), join(deps.dshHome, 'share', 'dsh-agent-swarm', 'events-v2'), join(deps.dshHome, 'share', 'dsh-agent-swarm', 'maintenance')]
   const evidencePrivatePaths = () => [...privateStateRoots(),
     join(deps.dshHome, '.credentials.yaml'), join(deps.dshHome, 'plugins', 'subscriptions'),
     join(homedir(), '.config', 'dsh', 'secrets.env'), join(homedir(), '.ssh')]
   const leases = createWorkspaceLeaseManager()
+  const effectiveCwd = (agent: AgentLike): string => deps.getWorktreeHost?.()?.cwd(agent) ?? getAgentHeader(agent).cwd ?? process.cwd()
+  const activeWrites = new Map<string, number>()
+  const dispatchedWrites = new WeakSet<ToolExecutionLike>()
+  const capturedTools = new Map<string, string>()
+  const capturedExecutions = new WeakMap<ToolExecutionLike, string>()
+  const worktreeLeases = new Map<string, { lease: WorkspaceLease; ownerKey: string; attemptId: string }>()
   // Only lease-owning attempts are observed. Keep all retry children and job facts
   // until release succeeds: owner teardown may remove an unconfirmed job record.
   const leasedAttempts = new Map<string, {
     lease: WorkspaceLease; children: Map<string, Map<string, boolean>>
     signal: AbortSignal; finished: boolean; checking?: Promise<void>; retry: boolean
+    worktrees?: Map<string, WorkspaceLease>
   }>()
   const ensureFeatures = async (session: SessionStateInfo, agent?: AgentLike, coldHeader?: SessionHeaderLike): Promise<FeatureSession> => {
     if (agent !== undefined) session.rootAgent = agent
@@ -493,6 +504,142 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     const projectedTask = deriveReconciledTask(session, deriveIntentRefresh(task, session.rootAgent ?? exec.agent))
     if (binding !== undefined && !isTaskVersionCurrent(projectedTask, binding)) throw new SwarmError('STALE_EVIDENCE', '专家绑定的是旧任务需求或合同版本')
     return { session, features, task, projectedTask, binding, agent: exec.agent }
+  }
+  const worktreeOwner = (binding: AgentBinding, delegationId: string): WorktreeOwner => ({
+    agentId: binding.agentId, taskId: binding.taskId, delegationId,
+    execution: { attemptId: binding.attemptId, nodeId: binding.nodeId, cardRevision: binding.cardRevision,
+      workflowRevision: binding.workflowRevision, requestRevision: binding.requestRevision ?? 1, generation: binding.generation, leaseEpoch: binding.leaseEpoch }
+  })
+  const currentWorktreeOwner = (agentId: string): WorktreeOwner | undefined => {
+    const root = childOwners.get(agentId), control = agentControl.get(agentId)
+    const binding = root === undefined ? undefined : sessions.get(root)?.features?.bindings.get(agentId)
+    return binding === undefined || control === undefined ? undefined : worktreeOwner(binding, control.delegationId)
+  }
+  const hasWorktreeLease = (agent: AgentLike, binding: AgentBinding, record: WorktreeBindingInfo): boolean => {
+    const owner = currentWorktreeOwner(agent.id), grant = worktreeLeases.get(record.worktreeId)
+    const pending = leasedAttempts.get(binding.attemptId)
+    return owner !== undefined && record.execution !== undefined && getWorktreeOwnerKey(record) === getWorktreeOwnerKey(owner)
+      && pending !== undefined && !pending.finished && pending.lease.kind === 'write' && leases.isCurrent(pending.lease) && pending.children.has(agent.id)
+      && grant !== undefined && grant.ownerKey === getWorktreeOwnerKey(owner) && leases.isCurrent(grant.lease)
+  }
+  const getWorktreeContext = async (exec: ToolExecLike) => {
+    const context = await getToolTask({}, exec)
+    const { session, features, binding, agent } = context
+    if (session.journal.fatalError !== undefined) throw new SwarmError('RECOVERY_REQUIRED', '事件日志持久化状态异常，不能发布工作树写权限')
+    if (binding === undefined || getRoleInfo(binding.role as RoleId).permission !== 'workspace-edit') throw new SwarmError('PERMISSION_DENIED', '仅当前可写 Worker 可接管工作树')
+    const control = agentControl.get(agent.id)
+    if (control === undefined) throw new SwarmError('RECOVERY_REQUIRED', '当前委派身份不存在')
+    const owner = worktreeOwner(binding, control.delegationId)
+    const assertCurrent = (): void => {
+      exec.signal.throwIfAborted()
+      const latest = features.bindings.get(agent.id), liveControl = agentControl.get(agent.id)
+      const record = session.store.getDelegation(owner.delegationId)
+      const task = deriveReconciledTask(session, deriveIntentRefresh(getTaskOrThrow(session, owner.taskId), session.rootAgent ?? agent))
+      const pending = leasedAttempts.get(binding.attemptId)
+      if (closing || childSignals.get(agent.id)?.aborted || deps.getAgent?.(agent.id) !== agent || childOwners.get(agent.id) !== session.sessionId
+        || latest?.state !== 'active' || getWorktreeOwnerKey(worktreeOwner(latest, liveControl?.delegationId ?? '')) !== getWorktreeOwnerKey(owner)
+        || liveControl?.taskId !== owner.taskId || record?.taskId !== owner.taskId || (record.childId ?? record.session?.threadId) !== agent.id
+        || (record.attemptId ?? record.delegationId) !== binding.attemptId || (record.nodeId ?? 'legacy') !== binding.nodeId
+        || !['queued', 'running'].includes(record.status) || !isTaskVersionCurrent(task, latest)
+        || task.acceptance?.status === 'accepted' || task.acceptance?.decision === 'incomplete'
+        || quarantinedTasks.has(owner.taskId) || !pending || pending.finished || pending.lease.kind !== 'write' || !pending.children.has(agent.id) || !leases.isCurrent(pending.lease)) throw new SwarmError('RECOVERY_REQUIRED', '工作树操作的任务、委派、attempt 或租约已失效')
+      if (record.nodeId !== undefined && (task.workflowDefinition !== undefined || task.workflowState !== undefined)
+        && (task.workflowState?.nodes[record.nodeId]?.attemptId !== binding.attemptId || task.workflowState.nodes[record.nodeId]?.status !== 'running')) throw new SwarmError('STALE_EVIDENCE', '当前流程节点已被替换')
+      const denied = getGuardReason({ name: RESTORE_WORKTREE_TOOL, agent, signal: exec.signal })
+      if (denied !== undefined) throw new SwarmError('PERMISSION_DENIED', denied)
+    }
+    assertCurrent()
+    const host = deps.getWorktreeHost?.()
+    if (host === undefined) throw new SwarmError('SERVICE_UNAVAILABLE', '宿主工作树恢复能力未就绪')
+    const retainLease = (lease: WorkspaceLease, record: WorktreeBindingInfo): void => {
+      assertCurrent()
+      const pending = leasedAttempts.get(binding.attemptId)!
+      pending.worktrees ??= new Map()
+      pending.worktrees.set(record.worktreeId, lease)
+      worktreeLeases.set(record.worktreeId, { lease, ownerKey: getWorktreeOwnerKey(owner), attemptId: binding.attemptId })
+    }
+    return { ...context, binding, owner, assertCurrent, host, retainLease }
+  }
+  const RestoreWorktree: SwarmService['RestoreWorktree'] = async (raw, exec) => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(key => key !== 'worktree_id')
+      || typeof (raw as { worktree_id?: unknown }).worktree_id !== 'string' || !/^wt-[a-f0-9]{20}$/.test((raw as { worktree_id: string }).worktree_id)) throw new SwarmError('INVALID_ARGS', '仅接受合法 worktree_id')
+    const context = await getWorktreeContext(exec)
+    const { session, agent, owner, assertCurrent, host, retainLease } = context
+    if (!deps.getConfig().events.journal) throw new SwarmError('SERVICE_UNAVAILABLE', '工作树授权恢复需要 EventJournal')
+    const retained = session.worktrees.findById((raw as { worktree_id: string }).worktree_id)
+    if (retained === undefined || !session.journal.queryTypes(['worktree/bound']).some(event => {
+      const data = event.payload.binding ?? event.payload.legacyData
+      return event.ticketId === owner.taskId && ParseCreatedWorktree(data)?.path === retained.path
+    })) throw new SwarmError('RECOVERY_REQUIRED', '工作树缺少可靠的原绑定记录，不能授予恢复权限')
+    const stoppedProof = new Set<string>()
+    const latestPreviousRun = (previous: WorktreeBindingInfo) => session.store.getTaskDelegations(owner.taskId)
+      .filter(record => (record.childId ?? record.session?.threadId) === previous.agentId && (record.attemptId ?? record.delegationId) !== owner.execution!.attemptId)
+      .sort((left, right) => right.startedAt - left.startedAt)[0]
+    const assertStopped = (previous: WorktreeBindingInfo, requireColdProof = true): void => {
+      if ((activeWrites.get(agent.id) ?? 0) > 0 || (activeWrites.get(previous.agentId) ?? 0) > 0) throw new SwarmError('RECOVERY_REQUIRED', '仍有在途写入，不能交接工作树')
+      const sameAttempt = getWorktreeOwnerKey(previous) === getWorktreeOwnerKey(owner)
+      const old = session.store.getDelegation(previous.delegationId)
+      if (!sameAttempt && (old === undefined || old.taskId !== owner.taskId || (old.childId ?? old.session?.threadId) !== previous.agentId
+        || ['queued', 'running'].includes(old.status) || old.error === 'recovery_required'
+        || leasedAttempts.has(old.attemptId ?? old.delegationId))) throw new SwarmError('RECOVERY_REQUIRED', '旧委派尚未完成真实执行收尾')
+      const oldBinding = session.features?.bindings.get(previous.agentId)
+      const latest = latestPreviousRun(previous)
+      if (latest !== undefined && (['queued', 'running'].includes(latest.status) || latest.error === 'recovery_required')) throw new SwarmError('RECOVERY_REQUIRED', '旧 owner 后续执行尚未安全结束')
+      if (previous.agentId !== agent.id && [...leasedAttempts.values()].some(pending => pending.children.has(previous.agentId))) throw new SwarmError('RECOVERY_REQUIRED', '旧 owner 仍有未释放的执行租约')
+      if (previous.agentId !== agent.id && oldBinding?.state === 'active') throw new SwarmError('RECOVERY_REQUIRED', '旧 owner 仍有其它活动 attempt')
+      if (!sameAttempt && oldBinding?.state === 'active' && oldBinding.attemptId === (previous.execution?.attemptId ?? old?.attemptId ?? previous.delegationId)) throw new SwarmError('RECOVERY_REQUIRED', '旧 owner 仍持有执行授权')
+      const jobs = deps.getJobs?.()
+      if (jobs === undefined || jobs.list(previous.agentId).some(job => job.owner === previous.agentId && !['completed', 'killed'].includes(job.status))) throw new SwarmError('RECOVERY_REQUIRED', '旧 owner 后台执行未确认停止')
+      const previousAgent = deps.getAgent?.(previous.agentId)
+      if (previous.agentId !== agent.id && previousAgent !== undefined && previousAgent.status !== 'idle') throw new SwarmError('RECOVERY_REQUIRED', '旧 owner 未被宿主确认空闲')
+      if (requireColdProof && previousAgent === undefined && !stoppedProof.has(getWorktreeOwnerKey(previous))) throw new SwarmError('RECOVERY_REQUIRED', '旧会话缺少已停止的宿主证据')
+    }
+    return restoreRetainedWorktree({ id: (raw as { worktree_id: string }).worktree_id, agent, owner, signal: exec.signal,
+      registry: session.worktrees, journal: session.journal, host, leases, lock: session.taskLock, assertCurrent, retainLease,
+      getLease: record => { const grant = worktreeLeases.get(record.worktreeId); return grant?.ownerKey === getWorktreeOwnerKey(owner) ? grant.lease : undefined },
+      warn: message => deps.logger?.warn(message),
+      assertStopped,
+      confirmStopped: async previous => {
+        assertStopped(previous, false)
+        const old = latestPreviousRun(previous) ?? session.store.getDelegation(previous.delegationId)
+        if (deps.getAgent?.(previous.agentId) === undefined) {
+          const evidence = await deps.inspectChild?.(session.sessionId, previous.agentId, old?.startedAt)
+          if (evidence?.settled !== true) throw new SwarmError('RECOVERY_REQUIRED', '宿主无法证明旧会话已停止')
+          stoppedProof.add(getWorktreeOwnerKey(previous))
+        }
+        assertCurrent()
+        assertStopped(previous)
+      }
+    })
+  }
+  const CompleteManagedTool: SwarmService['CompleteManagedTool'] = async (execution, result) => {
+    if (execution.name !== WORKTREE_TOOL || execution.agent === undefined || !childOwners.has(execution.agent.id)) return
+    if (result !== null && typeof result === 'object' && (result as { isError?: boolean }).isError) return
+    const parsed = ParseCreatedWorktree(result)
+    if (parsed === undefined) throw new SwarmError('RECOVERY_REQUIRED', '工作树创建结果缺少可核验身份')
+    const exec = { agent: execution.agent, signal: execution.signal ?? new AbortController().signal }
+    const { session, owner, agent, assertCurrent, host, retainLease } = await getWorktreeContext(exec)
+    await session.taskLock.run(async () => {
+      assertCurrent()
+      const record = session.worktrees.bind({ ...parsed, ...owner })
+      session.worktrees.suspend(record.worktreeId)
+      let lease: WorkspaceLease | undefined
+      try {
+        lease = await leases.acquire(record.path, `${agent.id}:${owner.execution!.attemptId}:worktree`, 'write', exec.signal, { wait: false })
+        const observation = await host.inspect(agent, record, exec.signal)
+        assertCurrent()
+        if (host.cwd(agent) !== record.path) throw new Error('Host 未进入新建工作树')
+        const bound = { ...record, observation, state: 'recovery-required' as const }
+        const eventId = `evt-worktree-bound-${randomUUID()}`
+        const event = session.journal.append({ eventId, idempotencyKey: eventId, type: 'worktree/bound', ticketId: owner.taskId, assignmentId: owner.delegationId, actor: { kind: 'worker', id: agent.id }, payload: { binding: bound } })
+        if (event === undefined || JSON.stringify(event.payload.binding) !== JSON.stringify(bound)) throw new Error('新工作树绑定未可靠落盘')
+        assertCurrent()
+        retainLease(lease, record)
+        lease = undefined
+        session.worktrees.activate(record.worktreeId, getWorktreeOwnerKey(owner), observation)
+      } catch (error) { deps.logger?.warn(`工作树已创建但写授权未提交：id=${record.worktreeId}`); throw error }
+      finally { if (lease !== undefined) await lease.release({ confirmedStopped: true }) }
+    })
   }
   const reviewSnapshot = (task: TaskRecord): ReviewSnapshot => getReviewSnapshot({
     rootSessionId: task.sessionId, workspaceId: task.workspaceId ?? '',
@@ -964,6 +1111,19 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       try {
         const deadline = now() + CHILD_CLEANUP_WAIT_MS
         const stopped = (await Promise.all([...pending.children].map(([id, jobs]) => waitChildStopped(id, jobs, pending.signal, deadline)))).every(Boolean)
+          && [...pending.children.keys()].every(id => (activeWrites.get(id) ?? 0) === 0)
+        for (const [id, lease] of pending.worktrees ?? []) {
+          await lease.release({ confirmedStopped: stopped })
+          if (stopped) {
+            const grant = worktreeLeases.get(id)
+            for (const session of sessions.values()) {
+              const record = session.worktrees.findById(id)
+              if (record !== undefined && getWorktreeOwnerKey(record) === grant?.ownerKey) session.worktrees.suspend(id)
+            }
+            worktreeLeases.delete(id)
+            pending.worktrees!.delete(id)
+          }
+        }
         await pending.lease.release({ confirmedStopped: stopped })
         if (stopped) leasedAttempts.delete(attemptId)
       } catch (error) {
@@ -1116,7 +1276,9 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         const liveChild = deps.getAgent?.(agentId)
         if (liveChild !== undefined) ApplyChildToolScope(liveChild, role, input?.allow_web === true)
         const features = await ensureFeatures(session, session.rootAgent ?? { id: task.sessionId })
-        if (input !== undefined) session.store.UpdateDelegation(record.delegationId, { continuationInput: structuredClone(input) })
+        // Bind the actual Host child before its tools can run, including one-shot
+        // children whose final result used to be the first place recording childId.
+        session.store.UpdateDelegation(record.delegationId, { childId: agentId, ...(input === undefined ? {} : { continuationInput: structuredClone(input) }) })
         agentControl.Register({ childId: agentId, parentSessionId: task.sessionId,
           delegationId: record.delegationId, persistent: persistent === true, needsSideEffectReview: false, ...getTaskBinding(task) })
         const ready = features.bindings.bind({
@@ -2104,11 +2266,31 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     isBindingCurrent: (guardSession, binding, agent, _task) => {
       const session = guardSession as SessionStateInfo
       const task = deriveReconciledTask(session, deriveIntentRefresh(getTaskOrThrow(session, binding.taskId), session.rootAgent ?? agent))
-      return isTaskVersionCurrent(task, binding)
+      const control = agentControl.get(agent.id)
+      const record = control === undefined ? undefined : session.store.getDelegation(control.delegationId)
+      return isTaskVersionCurrent(task, binding) && control?.taskId === binding.taskId
+        && record?.taskId === binding.taskId && (record.childId ?? record.session?.threadId) === agent.id
+        && (record.attemptId ?? record.delegationId) === binding.attemptId && (record.nodeId ?? 'legacy') === binding.nodeId
+        && ['queued', 'running'].includes(record.status)
+        && (record.nodeId === undefined || task.workflowDefinition === undefined && task.workflowState === undefined
+          || task.workflowState?.nodes[record.nodeId]?.attemptId === binding.attemptId && task.workflowState.nodes[record.nodeId]?.status === 'running')
+        && getRoleForAgent(agent) === binding.role
     },
     privateStateRoots,
-    isWorkspaceMutationUnknown: (cwd) => leases.peekStatus(cwd)?.mutationUnknown === true
+    isWorkspaceMutationUnknown: (cwd) => leases.peekStatus(cwd)?.mutationUnknown === true,
+    getCurrentCwd: effectiveCwd,
+    isWorktreeWriter: hasWorktreeLease
   })
+
+  const assertToolDispatch = (execution: ToolExecutionLike): void => {
+    const agent = execution.agent
+    if (agent === undefined || !isManagedAgent(agent)) return
+    const captured = execution.callId === undefined ? capturedExecutions.get(execution) : capturedTools.get(`${agent.id}:${execution.callId}`)
+    const owner = currentWorktreeOwner(agent.id)
+    if (captured !== undefined && (owner === undefined || captured !== getWorktreeOwnerKey(owner))) throw new SwarmError('STALE_EVIDENCE', '工具等待期间 attempt 已改变，拒绝旧调用')
+    const denied = getGuardReason(execution)
+    if (denied !== undefined) throw new SwarmError('PERMISSION_DENIED', denied)
+  }
 
   const service: SwarmService = {
     getConfig: deps.getConfig,
@@ -2226,7 +2408,7 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       scheduleWatchdog()
       if (args.request_id !== undefined) admissions.get(args.request_id)?.resolve()
       const captured = prepared!
-      const cwd = getAgentHeader(exec.agent).cwd ?? process.cwd()
+      const cwd = effectiveCwd(exec.agent)
       const kind = MUTATING_ROLES.includes(args.role) ? 'write' : args.role === 'fu_he' ? 'verify' : undefined
       let lease: WorkspaceLease | undefined
       let started = false
@@ -2245,7 +2427,11 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
         const independent = args.role === 'yu_shi' || (args.role === 'suan_heng' && args.mode === 'verify') || args.role === 'fu_he'
         const referenceMemory = memory.enabled && deps.getConfig().experience.enabled && !independent
           ? formatMemoryReferences(features.experiences.query({ text: String(args.prompt ?? captured.card.goal).slice(0, 4000), excludeTaskId: captured.taskId, maxMatches: memory.maxMatches, maxChars: memory.maxChars, maxAgeMs: memory.ttlMs })) : ''
-        const input = { ...args, referenceMemory, ...(nodeId === undefined ? {} : { node_id: nodeId }), attempt_id: attemptId,
+        // Advisory dispatch may continue without a matching DAG node. Only the
+        // server-reserved node belongs in the execution identity, never a stale
+        // caller-supplied node_id that admission did not actually reserve.
+        const { node_id: _requestedNodeId, ...admittedArgs } = args
+        const input = { ...admittedArgs, referenceMemory, ...(nodeId === undefined ? {} : { node_id: nodeId }), attempt_id: attemptId,
           ...((!responsePhase && (args.role === 'yu_shi' || (args.role === 'suan_heng' && args.mode === 'verify'))) ? { session: 'new', review_phase: 'blind' } : {}) }
         const assertLeaseCurrent = (): void => {
           if (lease !== undefined && !leases.isCurrent(lease)) throw new DispatchAdmissionError('工作区租约已释放、过期或被替换，拒绝提交旧 attempt 的结果', 'RECOVERY_REQUIRED')
@@ -2364,9 +2550,46 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     },
     getStatus,
     AcceptTask,
+    RestoreWorktree,
+    CompleteManagedTool,
+    PrepareManagedTool: execution => {
+      if (execution.agent === undefined || (!isWorktreeMutationTool(execution.name) && execution.name !== RESTORE_WORKTREE_TOOL)) return
+      const owner = currentWorktreeOwner(execution.agent.id)
+      const key = owner === undefined ? 'unbound' : getWorktreeOwnerKey(owner)
+      capturedExecutions.set(execution, key)
+      if (execution.callId !== undefined) capturedTools.set(`${execution.agent.id}:${execution.callId}`, key)
+    },
+    FinishManagedTool: execution => {
+      if (dispatchedWrites.has(execution) && execution.agent !== undefined) {
+        dispatchedWrites.delete(execution)
+        const count = Math.max(0, (activeWrites.get(execution.agent.id) ?? 1) - 1)
+        if (count === 0) activeWrites.delete(execution.agent.id); else activeWrites.set(execution.agent.id, count)
+        retryChildLeases(execution.agent.id)
+      }
+      if (execution.agent !== undefined && execution.callId !== undefined) capturedTools.delete(`${execution.agent.id}:${execution.callId}`)
+      capturedExecutions.delete(execution)
+    },
     BeforeManagedTool: async (execution) => {
       const agent = execution.agent
       if (agent !== undefined) touchAssignment(agent.id)
+      assertToolDispatch(execution)
+      if (agent !== undefined && isWorktreeMutationTool(execution.name) && execution.name !== WORKTREE_TOOL) {
+        const owner = childOwners.get(agent.id), session = owner === undefined ? undefined : sessions.get(owner)
+        const record = session?.worktrees.findByAgent(agent.id)
+        if (record !== undefined) {
+          const host = deps.getWorktreeHost?.()
+          if (host === undefined || record.observation === undefined) throw new SwarmError('RECOVERY_REQUIRED', '工作树缺少可复核的目录身份')
+          try {
+            const observed = await host.inspect(agent, record, execution.signal ?? new AbortController().signal)
+            assertToolDispatch(execution)
+            if (!isSameWorktreeIdentity(record.observation, observed)) throw new SwarmError('RECOVERY_REQUIRED', '写入前发现工作树目录已被替换')
+          } catch (error) {
+            session!.worktrees.suspend(record.worktreeId)
+            deps.logger?.warn(`工作树写入核验失败，保持禁止写入：id=${record.worktreeId}`)
+            throw error
+          }
+        }
+      }
       if (agent === undefined || !isRootTianShu(agent)) return
       const id = (execution.arguments as { task_id?: unknown } | undefined)?.task_id
       if (typeof id === 'string' && getSession(agent.id).store.getTask(id) !== undefined) runtimeFocus.set(agent.id, id)
@@ -2404,29 +2627,10 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
       })
     },
     ObserveManagedToolResult: (execution, result) => {
+      if (execution.agent !== undefined && execution.callId !== undefined && !dispatchedWrites.has(execution)) capturedTools.delete(`${execution.agent.id}:${execution.callId}`)
       authorizationRuntime.observeFinalResult(execution, result)
       const agent = execution.agent
       if (agent !== undefined) touchAssignment(agent.id)
-      if (execution.name === WORKTREE_TOOL && agent !== undefined && !(result !== null && typeof result === 'object' && (result as { isError?: boolean }).isError === true)) {
-        const owner = childOwners.get(agent.id)
-        const control = agentControl.get(agent.id)
-        const parsed = ParseCreatedWorktree(result)
-        if (owner === undefined || control === undefined) {
-          deps.logger?.warn(`Git 工作树结果无法绑定：agent=${agent.id} 缺少活动委派身份`)
-        } else if (parsed === undefined) {
-          deps.logger?.warn(`Git 工作树结果无效：agent=${agent.id} 未返回 path/branch/baseCommit/repositoryRoot`)
-        } else {
-          const session = getSession(owner)
-          const existed = session.worktrees.findByPath(parsed.path)
-          try {
-            const binding = session.worktrees.bind({ ...parsed, agentId: agent.id, taskId: control.taskId, delegationId: control.delegationId })
-            if (existed === undefined) session.ledger.AddLedgerEvent({ type: 'worktree/created', taskId: control.taskId, delegationId: control.delegationId,
-              data: { ...binding, agentId: agent.id } })
-          } catch (error) {
-            deps.logger?.warn(`Git 工作树绑定被拒绝：agent=${agent.id} path=${parsed.path} reason=${getErrorText(error)}`)
-          }
-        }
-      }
       if (agent === undefined || !isRootTianShu(agent) || !observedReadTools.has(execution.name) || result === null || typeof result !== 'object' || (result as { isError?: boolean }).isError === true) return
       const run = (runtimeEvidenceBarrier.get(agent.id) ?? Promise.resolve()).then(async () => {
         const context = await authorizationContext(agent), features = getSession(agent.id).features!
@@ -2494,6 +2698,11 @@ export const intSwarmService = (deps: SwarmServiceDepsInfo): SwarmService => {
     },
     getGuardReason,
     ObserveToolDispatch: (execution) => {
+      assertToolDispatch(execution)
+      if (execution.agent !== undefined && childOwners.has(execution.agent.id) && isWorktreeMutationTool(execution.name)) {
+        dispatchedWrites.add(execution)
+        activeWrites.set(execution.agent.id, (activeWrites.get(execution.agent.id) ?? 0) + 1)
+      }
       if (execution.agent !== undefined && isRootTianShu(execution.agent)) {
         const role = (execution.arguments as { role?: unknown } | undefined)?.role
         const producer = execution.name === 'swarm_delegate' && typeof role === 'string' && ROLE_INFO_LIST.some(info => info.id === role) ? ':' + role : ''

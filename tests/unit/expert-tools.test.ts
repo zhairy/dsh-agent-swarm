@@ -23,10 +23,11 @@ const createContext = (service: unknown) => {
 }
 const createService = (persistence: boolean, messageBus: boolean): BoundTaskToolService => ({
   getConfig: () => getSwarmConfig({ persistence: { enabled: persistence }, messageBus: { enabled: messageBus } }),
+  RestoreWorktree: vi.fn(async () => ({ state: 'recovery-required' })),
   ReadContext: vi.fn(async () => ({ materials: [] })), ProjectFiles: vi.fn(async () => ({ files: [] })), Calculate: vi.fn(async () => ({ ok: true })),
   MessageSend: vi.fn(async () => ({ sent: true })), MessageRead: vi.fn(async () => ({ messages: [] })), MessageAck: vi.fn(async () => ({ acknowledged: true }))
 })
-const SAFE_NAMES = ['swarm_context_read', 'swarm_project_files', 'swarm_calculate']
+const SAFE_NAMES = ['swarm_restore_worktree', 'swarm_context_read', 'swarm_project_files', 'swarm_calculate']
 const MESSAGE_NAMES = ['swarm_message_send', 'swarm_message_read', 'swarm_message_ack']
 
 describe('独立专家安全工具入口', () => {
