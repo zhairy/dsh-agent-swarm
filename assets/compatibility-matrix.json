@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "releaseVersion": "3.4.1",
+  "status": "verified",
+  "hostVersion": "0.2.2-rc.3",
+  "scope": "Linux 本机精确包组合；不外推全部平台/供应商/第三方业务路径",
+  "definitionSha256": "3815dffe0017b69b84bc8a9155d731f728e975025add0ec5f3becab2347fcbf7",
+  "components": {
+    "swarm": {
+      "version": "3.4.1",
+      "tgzSha256": "edaff1419afb6a52ee0ed07eb818a160f52c342e2722cdde25ff6c263885f304",
+      "archiveDirectoryFilesMatched": 449,
+      "patchStates": []
+    },
+    "notebook": {
+      "version": "0.4.2+rc3.sandbox.9",
+      "tgzSha256": "36a518ed879c27d6110c42d78357abafdac00d1c65946e192563034c0189a353",
+      "archiveDirectoryFilesMatched": 17,
+      "patchStates": [
+        {
+          "id": "notebook-rc3-snapshot",
+          "state": "patched"
+        }
+      ]
+    },
+    "subscriptions": {
+      "version": "0.9.13+rc3.transport.2",
+      "tgzSha256": "79955b8ef455d4a48c50afea738053f0ebade8cb382b6407f2753f6bb33da41d",
+      "archiveDirectoryFilesMatched": 159,
+      "patchStates": [
+        {
+          "id": "subscriptions-rc3-transport",
+          "state": "patched"
+        }
+      ]
+    }
+  },
+  "checks": [
+    {
+      "id": "release-package-closure",
+      "kind": "offline",
+      "exitCode": 0,
+      "durationMs": 93.999222,
+      "stdoutSha256": "4e52a3b51d35d57ceeb49a7a5351e20f54cade7e9e5913fc3d23691d20006ed7",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "rc3-step-model-host",
+      "kind": "host-runtime",
+      "exitCode": 0,
+      "durationMs": 8025.072834,
+      "stdoutSha256": "032f05bee6e5dc3516fa237e2f2ced291727cca334dde2e2887a497388e57d4f",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "primary-live-boundary",
+      "kind": "host-runtime",
+      "exitCode": 0,
+      "durationMs": 116424.060024,
+      "stdoutSha256": "4903d45078d3041c1387910d9473b16f458ca24731affd995caedf68986ed325",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "linked-verification-boundary",
+      "kind": "host-runtime",
+      "exitCode": 0,
+      "durationMs": 72518.385641,
+      "stdoutSha256": "4903d45078d3041c1387910d9473b16f458ca24731affd995caedf68986ed325",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "notebook-js-browser-host",
+      "kind": "host-runtime",
+      "exitCode": 0,
+      "durationMs": 24078.406663,
+      "stdoutSha256": "cdb55b657091f76f63a4ef0c165a6e1f0a1f29e5c8eb011ba601ffc83b442c68",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "notebook-double-boot-host",
+      "kind": "host-runtime",
+      "exitCode": 0,
+      "durationMs": 50695.857592,
+      "stdoutSha256": "b8cb82a7843162e1af2e786d0ed6264e9653bcbe75370973915ee9f475594a2d",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "notebook-snapshot",
+      "kind": "offline",
+      "exitCode": 0,
+      "durationMs": 458.589997,
+      "stdoutSha256": "042c0af912320ea94a7dc0cb7d7355df0e927a4af880bc9c62753af131e5c943",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "route-observability-offline",
+      "kind": "offline",
+      "exitCode": 0,
+      "durationMs": 622.114504,
+      "stdoutSha256": "53207b18c8bb1e933c2b4b03d4ad179cdf06e973d2329bfd29dccb07311830fb",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}
