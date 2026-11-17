@@ -39,7 +39,7 @@ export const ensureDsh = (version = getTestedVersion()) => {
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-sandbox', private: true }))
     execSync(`npm install --no-audit --no-fund --ignore-scripts @deepseek-ai/dsh@${version}`, { cwd: dir, stdio: 'inherit' })
   }
-  if (version === '0.2.2-rc.1' && process.env.SWARM_STOCK_HOST !== '1') {
+  if (['0.2.2-rc.1', '0.2.2-rc.3'].includes(version) && process.env.SWARM_STOCK_HOST !== '1') {
     const bridge = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts/apply-dsh-step-bridge.mjs'), '--dsh-root', dir], { encoding: 'utf8' })
     if (bridge.error || bridge.status !== 0) throw new Error(`沙箱模型桥接准备失败：${bridge.stderr || bridge.error?.message || bridge.status}`)
   }

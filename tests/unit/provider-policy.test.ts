@@ -121,7 +121,7 @@ describe('供应商失败语义与恢复时间', () => {
     const failure = normalizeRouteFailure({ code: 'INVALID_REQUEST', status: 400, message: 'The `content[].thinking` in the thinking mode must be passed back to the API.' }, route)
     expect(failure.kind).toBe('protocol_incompatible')
     expect(isTerminalRouteFailure(failure)).toBe(true)
-    expect(getRouteRecoveryPolicy(failure)).toEqual({ isolate: true, retryDelayMs: 1_800_000 })
+    expect(getRouteRecoveryPolicy(failure)).toEqual({ isolate: false, retryDelayMs: 0 })
   })
 
   it('提示区分池不可用、适配器缺失、上下文过长与真正额度', () => {

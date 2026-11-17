@@ -26,15 +26,30 @@ export const SPAWN_PROVIDER = 'spawn'
 /** spawn 在请求 outputSchema 时注入给子智能体的结构化提交工具 */
 export const STRUCTURED_OUTPUT_TOOL = 'structured_output'
 
+/** 可选 Notebook 适配器的可信内部生命周期接口；不是模型可调用的 RPC。 */
+export const NOTEBOOK_RUNTIME_KEY = Symbol.for('dsh-agent-swarm.notebook-runtime.v1')
+export interface NotebookRuntimePort {
+  version: 1
+  shutdownSession: (agentId: string) => Promise<unknown>
+}
+export const getNotebookRuntimePort = (): NotebookRuntimePort | undefined => {
+  const value = (globalThis as Record<symbol, unknown>)[NOTEBOOK_RUNTIME_KEY] as Partial<NotebookRuntimePort> | undefined
+  return value?.version === 1 && typeof value.shutdownSession === 'function' ? value as NotebookRuntimePort : undefined
+}
+export const NOTEBOOK_METADATA_TOOLS = ['nb_get', 'nb_context', 'nb_list_vars', 'nb_inspect_object', 'nb_cell_history', 'nb_error_context', 'nb_kernel_list'] as const
+export const NOTEBOOK_MEMORY_TOOLS = ['nb_new', 'nb_add_cell', 'nb_delete_cell', 'nb_move_cell', 'nb_edit_cell', 'nb_apply_suggestion', 'nb_revert_cell', 'nb_clear_outputs'] as const
+export const NOTEBOOK_READ_TOOLS = ['nb_open', 'nb_list', 'nb_set_cwd'] as const
+export const NOTEBOOK_COMPUTE_TOOLS = ['nb_run_cell', 'nb_run_all', 'nb_edit_and_run_cell', 'nb_kernel_restart', 'nb_kernel_restart_and_run_all', 'nb_kernel_restart_and_clear', 'nb_kernel_interrupt', 'nb_kernel_select'] as const
+
 /** 能力 → 宿主工具候选名（0.1.7-alpha.2 实测）；jev 为本插件在天枢预设内注册的 7 个 Jev 判断工具 */
 export const CAPABILITY_TOOL_CANDIDATES = {
-  read: ['read', 'read_image'],
+  read: ['read', 'read_image', ...NOTEBOOK_METADATA_TOOLS, ...NOTEBOOK_MEMORY_TOOLS, ...NOTEBOOK_READ_TOOLS],
   search: ['glob', 'grep', 'swarm_project_files'],
-  edit: ['write', 'edit'],
+  edit: ['write', 'edit', 'nb_save'],
   shell: ['pwsh', 'bash'],
   web: ['web_search', 'web_fetch'],
   jev: ['jev_ask', 'jev_check', 'jev_classify', 'jev_health', 'jev_match', 'jev_score', 'jev_screen'],
-  calculate: ['swarm_calculate'],
+  calculate: ['swarm_calculate', ...NOTEBOOK_COMPUTE_TOOLS],
   context: ['swarm_context_read'],
   message: ['swarm_message_send', 'swarm_message_read', 'swarm_message_ack']
 } as const satisfies Record<string, readonly string[]>
@@ -115,6 +130,7 @@ export interface SubagentRunLike {
 
 /** DSH 0.2.1-alpha 起的一次激活：本地子会话固定为连续会话，结算后由调用方 dispose 实现一次性语义 */
 export interface SubagentActivationLike {
+  name?: string
   childId: string
   messageId?: string
   result: Promise<SubagentResultLike>
@@ -126,7 +142,14 @@ export interface SubagentActivationSpecLike {
   provider: string
   label: string
   childId?: string
-  request: Omit<SubagentStartRequestLike, 'label' | 'signal' | 'toolFilter' | 'persona'>
+  name?: string
+  prompt?: ContentBlockLike[]
+  parent?: AgentLike
+  agentOptions?: SubagentStartRequestLike['agentOptions']
+  outputSchema?: object
+  maxDepth?: number
+  agentPreset?: string
+  request?: Omit<SubagentStartRequestLike, 'label' | 'signal' | 'toolFilter' | 'persona'>
   signal: AbortSignal
   delivery: 'parent' | 'caller'
 }
@@ -154,9 +177,17 @@ export interface ContinuableStartSpecLike {
   signal: AbortSignal
 }
 
-/** 子智能体一轮结束（subagent/end）；连续会话每次沉寂都会发出一次 */
-export interface SubagentEndInfoLike {
+/** rc.3 用 runId 标识驻留激活；旧宿主仅提供 child id。 */
+export interface SubagentRunInfoLike {
+  runId?: string
+  provider?: string
+  parentSessionId?: string
+  local?: boolean
   id: string
+}
+
+/** 子智能体一轮结束（subagent/end）；连续会话每次沉寂都会发出一次 */
+export interface SubagentEndInfoLike extends SubagentRunInfoLike {
   stopReason: string
   lastAssistantMessage?: readonly ContentBlockLike[]
   /** Host turn/end error text captured from session/event; absent when the host did not expose one. */
@@ -169,10 +200,11 @@ export interface SubagentsLike {
   start?: (name: string, request: SubagentStartRequestLike) => Promise<SubagentRunLike>
   startActivation?: (spec: SubagentActivationSpecLike) => Promise<SubagentActivationLike>
   getProvider: (name: string) => { capabilities?: Record<string, boolean> } | undefined
-  list: () => string[]
+  list?: () => string[]
   startContinuable?: (spec: ContinuableStartSpecLike) => Promise<{ childId: string; messageId: string }>
   sendMessage?: (sender: AgentLike, targetId: string, content: ContentBlockLike[], options: { signal: AbortSignal }) => Promise<string>
   interrupt?: (targetSessionId: string, authority: { kind: 'ancestor'; agent: AgentLike }) => void
+  listDescendants?: (rootSessionId: string, signal?: AbortSignal) => Promise<Array<{ id: string; parentId: string; depth: number; kind: 'child' | 'diagnostic'; mode?: 'continuable' | 'one-shot' | 'external'; name?: string; path?: string; activity?: 'inactive' | 'running'; hasChildren?: boolean }>>
   listChildren?: (parentSessionId: string, signal?: AbortSignal) => Promise<Array<{ id: string; createdAt: number; mode: 'continuable' | 'one-shot' | 'unknown'; label?: string }>>
 }
 

@@ -1,4 +1,4 @@
-import { CAPABILITY_TOOL_CANDIDATES, type Capability } from './host-contract.js'
+import { CAPABILITY_TOOL_CANDIDATES, NOTEBOOK_METADATA_TOOLS, NOTEBOOK_MEMORY_TOOLS, NOTEBOOK_COMPUTE_TOOLS, type Capability } from './host-contract.js'
 import { LANGUAGE_NAMES, LANGUAGE_PLACEHOLDER, type OutputLanguage } from './language.js'
 import { getStyledPersona, type PromptStyle } from './model-family.js'
 import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL } from './worktree-binding.js'
@@ -63,7 +63,7 @@ export const ROLE_INFO_LIST: readonly RoleInfo[] = Object.freeze([
     id: 'suan_heng', presetId: 'suan-heng', name: '算衡', title: '数学与算法', order: 3,
     duty: '完成数学建模与算法分析：前提、定义、不变量、证明义务、反例、复杂度与数值误差。',
     boundaries: [
-      '只读，不运行 shell 命令：小型计算只用 swarm_calculate；任意数值验证程序写入 reproducible，交由复核实际运行',
+      '只读，不运行 shell 命令：小型计算用 swarm_calculate；多步数值验证可用已接入沙箱的 Notebook，reproducible 记录代码与真实输出，其他执行交由复核',
       '验算初轮独立完成，不参考研算结论；同版本同产物初审冻结后可进入 response 回应同伴，但不能替代初审门禁',
       '搜索只用于获取定义、论文与标准，不能用搜索摘要代替推导'
     ],
@@ -229,7 +229,13 @@ const CHILD_AMBIGUITY_RULE = '- **Ambiguity**: 缺少库版本、数据结构、
  * @returns {string[]} 规范，每条一行
  */
 export const getRoleRules = (id: RoleId, language?: OutputLanguage | null): string[] => {
-  const rules = [...ENGINEERING_RULES, ...(id === 'tian_shu' ? [] : [CHILD_AMBIGUITY_RULE]), ...(ROLE_RULES[id] ?? [])]
+  const role = getRoleInfo(id)
+  const notebook = id === 'tian_shu'
+    ? '- **Notebook**: 可整理 Notebook 草稿和元信息；计算交给专家，在对应子会话的 Notebook 标签查看 cell、输出和证据。不要在主持会话启动内核。'
+    : role.capabilities.includes('calculate') || role.capabilities.includes('shell')
+      ? '- **Notebook**: 多步计算与验证优先使用 nb_new/nb_add_cell/nb_run_cell，跨 cell 保留中间变量，结合 nb_context/nb_list_vars/nb_error_context 核对结果。默认只读工作区且断网；不得以 Notebook 绕过权限。JS/TS 和浏览器验证交给具备 shell 权限的专家：通过受管 bash 运行 node/tsc/vitest，前端用 agent-browser 独立 session，完成后关闭本人创建的浏览器和服务。nb_save 需要当前工作树与任务 scope，真实输出才是证据。'
+      : '- **Notebook**: 可用 Notebook 元信息和 Markdown/code 草稿整理来源、待验结论与证据；不要把未运行 cell 当作执行结果。需要计算时交给有执行能力的专家。'
+  const rules = [...ENGINEERING_RULES, notebook, ...(id === 'tian_shu' ? [] : [CHILD_AMBIGUITY_RULE]), ...(ROLE_RULES[id] ?? [])]
   if (language === null) return rules.filter(rule => !rule.includes(LANGUAGE_PLACEHOLDER))
   return language === undefined ? rules : rules.map((rule) => rule.replaceAll(LANGUAGE_PLACEHOLDER, LANGUAGE_NAMES[language]))
 }
@@ -308,10 +314,14 @@ export const getWantedTools = (id: RoleId, options: { allowWeb?: boolean } = {})
   const role = getRoleInfo(id)
   const webOpen = role.web === 'always' || (role.web === 'on-request' && options.allowWeb === true)
   const capabilities = role.capabilities.filter((cap) => cap !== 'web' || webOpen)
-  return [...new Set([
+  const wanted = [...new Set([
     ...capabilities.flatMap((cap) => [...CAPABILITY_TOOL_CANDIDATES[cap]]),
+    ...(capabilities.includes('shell') ? [...NOTEBOOK_COMPUTE_TOOLS] : []),
     ...(role.permission === 'workspace-edit' ? [WORKTREE_TOOL, RESTORE_WORKTREE_TOOL] : [])
   ])]
+  // 主持者可以整理 Notebook 草稿/元信息；任意代码与文件保存仍由获授权专家执行。
+  const rootNotebook = new Set<string>([...NOTEBOOK_METADATA_TOOLS, ...NOTEBOOK_MEMORY_TOOLS])
+  return id === 'tian_shu' ? wanted.filter(name => !name.startsWith('nb_') || rootNotebook.has(name)) : wanted
 }
 
 export const getRoleTag = (id: RoleId): string => `[[swarm:role=${id}]]`

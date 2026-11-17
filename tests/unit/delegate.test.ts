@@ -328,6 +328,63 @@ describe('intDelegator.delegate', () => {
     expect(h.session.counters.native).toBe(1)
   })
 
+  it('dispose 未确认时保留原结果但标记失败，且不发送成功结束通知', async () => {
+    const h = track(makeHarness())
+    const onChildEnd = vi.fn(async () => undefined)
+    const dispose = vi.fn(async () => { throw new Error('activation teardown failed') })
+    h.deps.onChildEnd = onChildEnd
+    h.subagents.start.mockImplementation(async () => ({
+      id: 'cleanup-failed',
+      result: Promise.resolve({ output: [{ type: 'text', text: '原执行完成' }], structured: VALID_OUTPUTS.fu_he, stopReason: 'completed' }),
+      dispose
+    }))
+
+    const record = await h.delegator.delegate({ task_id: 'T-1', role: 'fu_he', prompt: 'x' }, exec(), h.session)
+
+    expect(record).toMatchObject({
+      status: 'failed',
+      childId: 'cleanup-failed',
+      summary: '测试通过',
+      structured: VALID_OUTPUTS.fu_he
+    })
+    expect(record.error).toContain('activation teardown failed')
+    expect(record.error).toContain('completed')
+    expect(record.unresolved).toContain('Host run 清理未确认；未发送成功结束通知，执行租约与未知副作用保持隔离，需核对清理结果')
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(h.subagents.start).toHaveBeenCalledTimes(1)
+    expect(onChildEnd).not.toHaveBeenCalled()
+  })
+
+  it('原执行失败与 dispose 失败同时保留，且不发送成功结束通知', async () => {
+    const h = track(makeHarness())
+    const onChildEnd = vi.fn(async () => undefined)
+    h.deps.onChildEnd = onChildEnd
+    h.subagents.start.mockImplementation(async () => ({
+      id: 'cleanup-and-run-failed',
+      result: Promise.resolve({ output: [], stopReason: 'error', diagnostic: 'ORIGINAL_RUN_FAILURE' }),
+      dispose: vi.fn(async () => { throw new Error('CLEANUP_DISPOSE_FAILURE') })
+    }))
+
+    const record = await h.delegator.delegate({ task_id: 'T-1', role: 'fu_he', prompt: 'x' }, exec(), h.session)
+
+    expect(record.status).toBe('failed')
+    expect(record.error).toContain('ORIGINAL_RUN_FAILURE')
+    expect(record.error).toContain('CLEANUP_DISPOSE_FAILURE')
+    expect(onChildEnd).not.toHaveBeenCalled()
+  })
+
+  it('dispose 确认成功后仍发送成功结束通知', async () => {
+    const h = track(makeHarness())
+    const onChildEnd = vi.fn(async () => undefined)
+    h.deps.onChildEnd = onChildEnd
+
+    const record = await h.delegator.delegate({ task_id: 'T-1', role: 'fu_he', prompt: 'x' }, exec(), h.session)
+
+    expect(record.status).toBe('completed')
+    expect(onChildEnd).toHaveBeenCalledTimes(1)
+    expect(onChildEnd).toHaveBeenCalledWith(record.childId, undefined)
+  })
+
   it('自动升级：nativeEscalation=auto 且高风险任务时优先原生后端', async () => {
     const text = '```json\n' + JSON.stringify(VALID_OUTPUTS.yu_shi) + '\n```'
     const h = track(makeHarness({ providers: ['swarm-codex'], config: getSwarmConfig({ nativeEscalation: 'auto' }), plans: [{ result: { output: [{ type: 'text', text }], stopReason: 'completed' } }] }))
@@ -521,6 +578,35 @@ describe('连续会话与自动重试', () => {
     expect(h.startContinuable).toHaveBeenCalledTimes(2)
     expect(h.sendMessage).toHaveBeenCalledTimes(1)
     expect(ended).toHaveBeenCalledWith(target, 'not-admitted', { attemptId: failed.attemptId ?? failed.delegationId, delegationId: failed.delegationId })
+  })
+  it('连续身份在第一次及追加的启动持久化回调前就已绑定', async () => {
+    const h = track(makeThreadHarness([{ text: json('zhu_jian') }, { text: json('zhu_jian') }]))
+    const observed: Array<{ childId: string; binding: unknown }> = []
+    h.deps.onChildStart = async ({ agentId, record }) => {
+      observed.push({ childId: agentId, binding: h.session.store.getDelegation(record.delegationId)?.session })
+    }
+    await h.delegator.delegate({ task_id: 'T-1', role: 'zhu_jian', prompt: 'first' }, exec(), h.session)
+    await h.delegator.delegate({ task_id: 'T-1', role: 'zhu_jian', prompt: 'second' }, exec(), h.session)
+    expect(observed).toHaveLength(2)
+    expect(observed[0].binding).toMatchObject({ kind: 'continuable', threadId: observed[0].childId, appended: false })
+    expect(observed[1].binding).toMatchObject({ kind: 'continuable', threadId: observed[1].childId, appended: true })
+  })
+  it.each(['send-refusal', 'thinking-replay'] as const)('换线程时启动检查点绑定也同步切换：%s', async kind => {
+    const turns = kind === 'send-refusal'
+      ? [{ text: json('zhu_jian') }, { sendError: 'not-resumable' }, { text: json('zhu_jian') }]
+      : [{ stopReason: 'error', text: '', diagnostic: 'The `content[].thinking` in the thinking mode must be passed back to the API.' }, { text: json('zhu_jian') }]
+    const h = track(makeThreadHarness(turns))
+    const observed: Array<{ childId: string; binding: unknown }> = []
+    h.deps.onChildStart = async ({ agentId, record }) => {
+      observed.push({ childId: agentId, binding: h.session.store.getDelegation(record.delegationId)?.session })
+    }
+    if (kind === 'send-refusal') await h.delegator.delegate({ task_id: 'T-1', role: 'zhu_jian', prompt: 'first' }, exec(), h.session)
+    const result = await h.delegator.delegate({ task_id: 'T-1', role: 'zhu_jian', prompt: 'test retry' }, exec(), h.session)
+    expect(result.status).toBe('completed')
+    expect(observed).toHaveLength(kind === 'send-refusal' ? 3 : 2)
+    for (const point of observed) expect(point.binding).toMatchObject({ kind: 'continuable', threadId: point.childId })
+    expect(observed.at(-1)?.binding).toMatchObject({ appended: false, threadId: result.session?.threadId })
+    expect(observed.at(-1)?.childId).not.toBe(observed[0].childId)
   })
   it('Jev 未配置时按规则：铸剑开连续会话，同一任务的后续委派追加到该会话并保留路由状态', async () => {
     const h = track(makeThreadHarness([{ text: `完成。\n${json('zhu_jian')}` }, { text: json('zhu_jian') }]))

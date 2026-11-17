@@ -33,7 +33,10 @@
   },
   {
     "id": "tool-fs",
-    "name": "@deepseek-ai/dsh-tool-fs"
+    "name": "@deepseek-ai/dsh-tool-fs",
+    "config": {
+      "applyPatch": false
+    }
   },
   {
     "id": "tool-fs-search",
@@ -52,7 +55,14 @@
   },
   {
     "id": "skill-filesystem",
-    "name": "@deepseek-ai/dsh-skill-filesystem"
+    "name": "@deepseek-ai/dsh-skill-filesystem",
+    "config": {
+      "customSkillDirs": [
+        {
+          "$js": "process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@deepseek-ai/dsh-agent-preset/package.json')), 'skills')"
+        }
+      ]
+    }
   },
   {
     "id": "tool-skill",
@@ -121,11 +131,10 @@
     "config": [
       {
         "id": "tool-subagent-control",
-        "name": "@deepseek-ai/dsh-tool-subagent-control"
-      },
-      {
-        "id": "tool-subagent-list-agents",
-        "name": "@deepseek-ai/dsh-tool-subagent-control/list-agents"
+        "name": "@deepseek-ai/dsh-tool-subagent-control",
+        "config": {
+          "interrupt": false
+        }
       },
       {
         "id": "tool-subagent",
@@ -133,7 +142,8 @@
         "config": {
           "provider": "spawn",
           "toolName": "subagent",
-          "modelSelectionSettings": true
+          "modelSelection": true,
+          "modelDiscovery": true
         }
       },
       {
@@ -181,9 +191,15 @@
     "name": "@deepseek-ai/dsh-tool-present"
   },
   {
+    "id": "tool-office",
+    "name": "@deepseek-ai/dsh-tool-office"
+  },
+  {
     "id": "tool-plugin-manager",
     "name": "@deepseek-ai/dsh-plugin-manager/tools",
-    "disabled": true
+    "disabled": {
+      "$js": "!ctx.get('profileContext')"
+    }
   },
   {
     "id": "tool-plugin-market",

@@ -15,6 +15,7 @@ import {
   type ApprovalServiceLike,
   type ToolExecutionLike,
   type SubagentEndInfoLike,
+  type SubagentRunInfoLike,
   type AttachmentsLike,
   type CredentialsLike,
   type LlmLike,
@@ -160,10 +161,10 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     },
     inspectChild: async (parentSessionId, childId, notBefore) => {
       const subagents = ctx.get('subagents') as SubagentsLike | undefined
-      if (subagents?.listChildren === undefined) return undefined
+      if (subagents?.listChildren === undefined && subagents?.listDescendants === undefined) return undefined
       const [inspection, catalog] = await Promise.all([readHostInspection({ sessionId: childId,
         controller: ctx.get('sessionController') as Parameters<typeof readHostInspection>[0]['controller'],
-        query: ctx.get('sessionQuery') as Parameters<typeof readHostInspection>[0]['query'], signal: AbortSignal.timeout(30_000) }), subagents.listChildren(parentSessionId)])
+        query: ctx.get('sessionQuery') as Parameters<typeof readHostInspection>[0]['query'], signal: AbortSignal.timeout(30_000) }), subagents.listDescendants !== undefined ? subagents.listDescendants(parentSessionId, AbortSignal.timeout(30_000)) : subagents.listChildren!(parentSessionId)])
       if (inspection === undefined) return undefined
       return inspectChildRecovery({ parentSessionId, childId, inspection, catalog, ...(notBefore === undefined ? {} : { notBefore }) })
     },
@@ -182,6 +183,7 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   // 0.2.1-alpha 起子智能体 composition 由 agentPreset 承载；角色预设默认不在模式列表，按需注册。
   ensureRolePresetsForActivationHost(ctx, getLogger(ctx))
   // 连续会话（continuable）的每一轮结束都经 subagent/end 通知；swarm_delegate 据此取回结果
+  ctx.on('subagent/start', (info: SubagentRunInfoLike) => service.OnSubagentStart(info))
   ctx.on('subagent/end', (info: SubagentEndInfoLike) => service.OnSubagentEnd(info))
   ctx.on('agent/disposed', (payload: { agent?: AgentLike } | undefined) => {
     if (payload?.agent !== undefined) service.OnAgentDisposed(payload.agent.id)

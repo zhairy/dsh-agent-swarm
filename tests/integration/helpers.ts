@@ -34,6 +34,10 @@ export interface ScenarioRunInfo {
   subagentProviders?: string[]
   ledgerEvents: Array<{ type: string; data: Record<string, unknown> }>
   workspace: string
+  worktreePath?: string
+  writerResults?: Array<{ tool: string; isError: boolean }>
+  verificationRead?: string
+  verificationCwd?: string
   stdout: string
   stderr: string
 }
@@ -63,7 +67,13 @@ export const runScenario = async (
   git(workspace, ['add', '-A'])
   git(workspace, ['commit', '-q', '-m', 'init'])
   const overlay = `${workspace}.overlay.yml`
-  writeFileSync(overlay, YAML.stringify([{ id: 'swarm-core', config: { planningReview: { enabled: false }, ...coreConfig } }]))
+  writeFileSync(overlay, YAML.stringify([
+    { id: 'swarm-core', config: { planningReview: { enabled: false }, ...coreConfig } },
+    ...(scenario === 'gate-flow' ? [
+      { id: 'permission', config: { defaultPreset: 'worktree-fixture', presets: { 'worktree-fixture': { sandbox: 'workspace-write', approval: 'never' } } } },
+      { insert: [{ id: 'flow-worktrees', name: '@deepseek-ai/dsh-experimental-worktree', config: { retainOnArchive: true } }, { id: 'flow-worktree-tool', name: '@deepseek-ai/dsh-experimental-tool-worktree' }] }
+    ] : [])
+  ]))
   const out = `${workspace}.out.json`
   const result = await runDshAsync({
     args: ['--profile', PROFILE, '--patch', overlay],

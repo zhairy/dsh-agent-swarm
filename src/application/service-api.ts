@@ -2,7 +2,7 @@ import type { SwarmConfigInfo } from '../config.js'
 import type { DelegationRecord } from '../evidence.js'
 import type {
   AgentLike, ApprovalServiceLike, AttachmentsLike, CredentialsLike, GoalsLike, JobLifecycleEventLike, JobsLike,
-  LlmLike, PreStepDecisionLike, SessionHeaderLike, SessionProjectionsLike, SubagentEndInfoLike, SubagentsLike,
+  LlmLike, PreStepDecisionLike, SessionHeaderLike, SessionProjectionsLike, SubagentEndInfoLike, SubagentRunInfoLike, SubagentsLike,
   TokenMeterLike, ToolExecutionLike, ToolsLike, UserQuestionsLike
 } from '../host-contract.js'
 import type { RouteInfo, RouteProbe } from '../domain/routing/routes.js'
@@ -104,6 +104,7 @@ export interface SwarmService {
   isManagedAgent: (agent: AgentLike | undefined) => boolean
   /** 宿主的 subagent/end：连续会话一轮结束 */
   OnSubagentEnd: (info: SubagentEndInfoLike) => void
+  OnSubagentStart: (info: SubagentRunInfoLike) => void
   OnAgentDisposed: (childId: string) => void
   OnJobEvent: (sessionId: string, event: JobLifecycleEventLike) => void
   /** 天枢进入下一步前：滤掉已由 swarm_delegate 取走结果的连续会话结束通知，避免同一结果进上下文两次 */

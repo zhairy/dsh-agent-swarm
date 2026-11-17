@@ -33,6 +33,12 @@ export const apply = ctx => {
       const id = String(options.sessionId)
       if (!steps.has(id)) { steps.set(id, 0); roles.set(id, state.children.length); state.children.push(id) }
       const step = steps.get(id), position = roles.get(id); steps.set(id, step + 1)
+      if (options.model === 'role-fu_he') {
+        if (step === 0) { yield* call('read', { file_path: 'allowed/inside.txt' }); return }
+        if ((options.tools || []).some(tool => tool.name === 'structured_output') && step === 1) { yield* call('structured_output', outputs.fu_he); return }
+        yield* text(`完成。\n\`\`\`json\n${JSON.stringify(outputs.fu_he)}\n\`\`\``)
+        return
+      }
       if (phase === 'cold') {
         if (step === 0) { yield* call('swarm_restore_worktree', { worktree_id: fixture.worktreeId }); return }
       } else if (position === 0) {
@@ -88,6 +94,10 @@ export const apply = ctx => {
     state.results.push({ agentId: execution.agent.id, tool: execution.name, command: execution.arguments?.command, isError: result.isError, exitCode: result.value?.exitCode,
       text: result.isError ? textOf(result).slice(0, 240) : undefined })
     if (execution.name === 'create_worktree' && !result.isError) checkout = result.value.path
+    if (execution.name === 'read' && execution.arguments?.file_path === 'allowed/inside.txt') {
+      state.verificationRead = textOf(result)
+      state.verificationCwd = ctx.workingDirectory.get(execution.agent.session)
+    }
     if (execution.name === 'swarm_restore_worktree' && !result.isError && beforeRestore) state.snapshotRetained = JSON.stringify(snapshot()) === JSON.stringify(beforeRestore)
   })
   const run = async () => {
@@ -131,17 +141,39 @@ export const apply = ctx => {
       }
       assert.deepEqual(state.results.filter(row => row.tool === 'write').map(row => row.isError), [false, true, true])
       assert.equal(state.fsBoundaryDenied, true)
+      await service.delegate({ task_id: task.task_id, role: 'fu_he', prompt: 'Read allowed/inside.txt from the task worktree and verify its actual contents.', session: 'oneshot', backend: 'api' }, exec)
+      assert.ok(state.verificationRead?.includes('inside-ok'), 'verifier read the source checkout instead of the task worktree')
+      assert.equal(state.verificationCwd, checkout)
+      assert.equal(readFileSync(join(fixture.repositoryRoot, 'allowed/inside.txt'), 'utf8'), 'initial')
       await service.delegate({ task_id: task.task_id, role: 'zhu_jian', prompt: 'Explicitly restore the retained tree in this new attempt, then write only inside allowed.', session: 'oneshot', backend: 'api' }, exec)
       assert.equal(state.snapshotRetained, true)
       assert.equal(readFileSync(join(checkout, 'allowed/second.txt'), 'utf8'), 'second-owner')
       const old = { id: state.children[0], session: { header: { parentSession: root.id, agentPreset: 'zhu-jian', cwd: fixture.repositoryRoot } } }
       state.oldOwnerDenied = service.getGuardReason({ name: 'write', agent: old, arguments: { path: 'allowed/late.txt' } }) !== undefined
       assert.equal(state.oldOwnerDenied, true)
+      if (process.env.SWARM_DSH_VERSION === '0.2.2-rc.3') {
+        // 独立普通会话走原生归档 API，使用干净工作树与唯一 ignored 文件，
+        // 避免因未提交改动本来就无法清理而误判 retainOnArchive 生效。
+        const archiveId = `archive-retention-${randomUUID()}`
+        const archiveHandle = await ctx.agents.create({ sessionId: archiveId, meta: { cwd: fixture.repositoryRoot }, agentOptions: { provider: 'swarm-boundary-mock', model: 'root' } })
+        const worktrees = ctx.get('worktrees')
+        const retained = await worktrees.create(archiveHandle.agent, { name: 'archive-retention' }, new AbortController().signal)
+        mkdirSync(join(retained.path, '.agents'), { recursive: true })
+        const ignored = join(retained.path, '.agents', 'archive-proof.txt')
+        writeFileSync(ignored, 'ignored contents must survive archive')
+        assert.equal(execFileSync('git', ['--no-optional-locks', '-C', retained.path, 'status', '--porcelain'], { encoding: 'utf8' }).trim(), '')
+        const archiveSession = archiveHandle.agent.session
+        await archiveHandle.dispose()
+        await ctx.get('workspaceRegistry').archiveSession(archiveId)
+        assert.equal(await worktrees.cleanupOf(archiveSession, null), null)
+        assert.equal(readFileSync(ignored, 'utf8'), 'ignored contents must survive archive')
+        state.archiveIgnoredFilesRetained = true
+      }
       writeFileSync(process.env.SWARM_BOUNDARY_FIXTURE, JSON.stringify({ ...fixture, taskId: task.task_id, path: checkout, worktreeId }), { mode: 0o600 })
     }
     await service.dispose()
     await handle.dispose()
-    return { ...state, status: 'passed', realHost: '0.2.2-rc.1', llm: 'local mock', workspace: checkout }
+    return { ...state, status: 'passed', realHost: process.env.SWARM_DSH_VERSION, llm: 'local mock', workspace: checkout }
   }
   setTimeout(() => { void run().then(result => { writeFileSync(process.env.SWARM_BOUNDARY_OUT, JSON.stringify(result, null, 2), { mode: 0o600 }); setTimeout(() => process.exit(0), 100) }, error => { writeFileSync(process.env.SWARM_BOUNDARY_OUT, JSON.stringify({ ...state, status: 'failed', error: String(error?.stack ?? error) }, null, 2), { mode: 0o600 }); setTimeout(() => process.exit(1), 100) }) }, 500)
   setTimeout(() => process.exit(2), 120000).unref()

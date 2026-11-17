@@ -8,3 +8,4 @@ release-artifacts/
 .omc/
 .work/
 *.log
+__pycache__/

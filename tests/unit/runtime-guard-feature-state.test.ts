@@ -13,7 +13,7 @@ import { createProgressGuard, type ProgressGuardState } from '../../src/progress
 import { createAuthorizationRepository, type AuthorizationState } from '../../src/authorization-wait.js'
 import { IssueVerificationReceipt, IsVerificationReceiptCurrent, RUNTIME_POLICY_VERSION, type VerificationReceipt } from '../../src/verification-receipt.js'
 import { getValueDigest } from '../../src/workflow.js'
-import { getWorkspaceId } from '../../src/artifacts.js'
+import { getArtifactSnapshot, getWorkspaceId } from '../../src/artifacts.js'
 import { createMemoryHandoffEnvelope } from '../../src/memory-handoff.js'
 import { digest } from '../../src/task-model.js'
 
@@ -199,5 +199,21 @@ describe('FeatureState schema-2安全隔离与旧格式兼容', () => {
     expect(features.store.read().schemaVersion).toBe(2)
     await features.progress.observe({ lineageId: getTaskRuntimeLineage({ ...scope, taskId: 'T-1' }), action: 'checkpoint', projection: { evidence: 1 } })
     expect(features.store.read().progressHistory).toBeDefined()
+  })
+})
+
+// 使用真实文件采样区分目录身份错误与摘要内容损坏，禁止放宽恢复边界。
+describe('artifact 恢复目录身份', () => {
+  it('同目录采样可恢复，其他目录采样给出精确身份诊断', async () => {
+    const root = await home(), worker = await home()
+    await writeFile(join(root, 'artifact.txt'), 'same content')
+    await writeFile(join(worker, 'artifact.txt'), 'same content')
+    const scope = { rootSessionId: 'root', workspaceId: await getWorkspaceId(root) }
+    const state = initial(2, scope)
+    state.tasks[0]!.artifactSnapshot = await getArtifactSnapshot(root, ['artifact.txt'])
+    expect(inspectFeatureState(JSON.parse(JSON.stringify(state)), scope)).toEqual({ ok: true })
+    state.tasks[0]!.artifactSnapshot = await getArtifactSnapshot(worker, ['artifact.txt'])
+    expect(inspectFeatureState(JSON.parse(JSON.stringify(state)), scope)).toEqual({ ok: false,
+      issues: [{ path: '$.tasks[0].artifactSnapshot.workspaceId', code: 'ARTIFACT_WORKSPACE_MISMATCH' }] })
   })
 })

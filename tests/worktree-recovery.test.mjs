@@ -325,13 +325,21 @@ test('worktree service: a new delegated Worker restores the retained tree; previ
   assert.equal(await readFile(join(f.created.path, 'worker.txt'), 'utf8'), 'new authorized owner\n')
   await assert.rejects(service.RestoreWorktree({ worktree_id: id, owner: 'forged' }, b.exec))
   assert.ok(service.getGuardReason({ name: RESTORE_WORKTREE_TOOL, arguments: { worktree_id: id }, ...rootExec }))
+  const originalIdentity = await f.host.inspect(b.child, f.created, b.exec.signal)
   await rename(f.created.path, `${f.created.path}-original`)
   await mkdir(f.created.path)
   await copyFile(join(`${f.created.path}-original`, '.git'), join(f.created.path, '.git'))
+  const replacedIdentity = await f.host.inspect(b.child, f.created, b.exec.signal)
+  // 复制 .git 保持 Git 路径和 HEAD，不能掩盖真实目录 inode 已被置换。
+  assert.equal(replacedIdentity.head, originalIdentity.head)
+  assert.equal(replacedIdentity.gitDirectory, originalIdentity.gitDirectory)
+  assert.equal(replacedIdentity.commonDirectory, originalIdentity.commonDirectory)
+  assert.notEqual(replacedIdentity.directoryIdentity, originalIdentity.directoryIdentity)
   await assert.rejects(service.BeforeManagedTool({ name: 'write', arguments: { path: 'injected.txt' }, ...b.exec }), /目录已被替换/)
   assert.ok(service.getGuardReason({ name: 'write', arguments: { path: 'injected.txt' }, ...b.exec }))
   b.child.status = 'idle'
   b.result.resolve({ output: [], stopReason: 'completed', structured: outputs.zhu_jian })
-  await b.run
+  // 写入已被拒绝后，产物结算也必须拒绝置换目录，不能记录成成功恢复。
+  await assert.rejects(b.run, /任务产物工作树目录身份已改变/)
   assert.ok(service.getGuardReason({ name: 'write', arguments: { path: 'worker.txt' }, ...b.exec }))
 })

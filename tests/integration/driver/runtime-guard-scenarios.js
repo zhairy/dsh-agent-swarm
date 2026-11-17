@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 
 export const name = 'swarm-auth-313-host'
@@ -26,7 +26,14 @@ export const apply = ctx => {
   const directory = process.env.SWARM_AUTH_EVIDENCE_DIR
   mkdirSync(directory, { recursive: true })
   const waitMs = Number(process.env.SWARM_AUTH_WAIT_MS ?? 300000)
-  const state = { hostVersion: process.env.SWARM_HOST_VERSION ?? '0.2.1-rc.3', provider: 'deterministic-local-fixture', requestedWaitMs: waitMs, sessions: {}, errors: [], startedAt: new Date().toISOString() }
+  const hostVersion = process.env.SWARM_HOST_VERSION ?? process.env.SWARM_DSH_VERSION
+  assert(hostVersion, 'Host version must be supplied explicitly')
+  const sdkVersion = (() => {
+    try { return JSON.parse(readFileSync(join(process.env.SWARM_DSH_MODULES, '@deepseek-ai', 'dsh', 'package.json'), 'utf8')).version }
+    catch { return null }
+  })()
+  const state = { hostVersion, configuredHostVersion: process.env.SWARM_HOST_VERSION ?? null, sdkModules: process.env.SWARM_DSH_MODULES ?? null,
+    sdkVersion, provider: 'deterministic-local-fixture', requestedWaitMs: waitMs, sessions: {}, errors: [], startedAt: new Date().toISOString() }
   const handles = [], scopes = [], byId = new Map()
   let finished = false
   const save = phase => writeFileSync(join(directory, 'host-auth-live.json'), JSON.stringify({ ...state, phase }, null, 2))

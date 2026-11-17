@@ -1,4 +1,4 @@
-import { CAPABILITY_TOOL_CANDIDATES, type AgentLike, type ApprovalServiceLike, type PreToolDecisionLike, type ToolExecutionLike } from './host-contract.js'
+import { CAPABILITY_TOOL_CANDIDATES, NOTEBOOK_COMPUTE_TOOLS, type AgentLike, type ApprovalServiceLike, type PreToolDecisionLike, type ToolExecutionLike } from './host-contract.js'
 import { APPROVAL_SCOPES, type ApprovalsConfigInfo } from './config.js'
 import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL } from './worktree-binding.js'
 
@@ -13,7 +13,9 @@ const SCOPE_LABELS: Record<ApprovalScope, string> = {
 /** Classifies public tool names; it does not infer the safety of arbitrary code or MCP payloads. */
 export const getToolApprovalScope = (name: string): ApprovalScope | undefined => {
   if (CAPABILITY_TOOL_CANDIDATES.edit.includes(name as 'write' | 'edit') || name === WORKTREE_TOOL || name === RESTORE_WORKTREE_TOOL) return 'write'
-  if (name === 'bash' || name === 'pwsh' || name === 'run_code') return 'shell'
+  if (name === 'bash' || name === 'pwsh' || name === 'run_code'
+    || (NOTEBOOK_COMPUTE_TOOLS as readonly string[]).includes(name)
+    || ['nb_list_vars', 'nb_inspect_object', 'nb_context', 'nb_error_context'].includes(name)) return 'shell'
   if (name.startsWith('mcp__')) return 'external_mcp'
   if ((CAPABILITY_TOOL_CANDIDATES.jev as readonly string[]).includes(name)) return 'jev'
   return undefined

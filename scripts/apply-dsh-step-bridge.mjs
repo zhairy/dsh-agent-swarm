@@ -6,9 +6,10 @@ import { createRequire } from 'node:module'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const VERSION = '0.2.2-rc.1'
-const ORIGINAL_SHA256 = 'a6fa8e0c7c90191caf5f4a3bb5c624a86e9845cf3c79d020b71420d0e20ae4c1'
-const PATCHED_SHA256 = 'c7390f4da755e9c57ad9176df605d2991822bdeb7f13e87260b4f5d0e51ea5ae'
+const PROFILES = {
+  '0.2.2-rc.1': ['a6fa8e0c7c90191caf5f4a3bb5c624a86e9845cf3c79d020b71420d0e20ae4c1', 'c7390f4da755e9c57ad9176df605d2991822bdeb7f13e87260b4f5d0e51ea5ae'],
+  '0.2.2-rc.3': ['f09f60814d4e96a880f41b9fc3832f33c56a28f954f48810d8439ce83ad6ffa8', 'c094632e3070de8d9fef9d1cf2ae66bc78d67d622d3bbf2f44692c6309cb7fe5'],
+}
 const args = process.argv.slice(2)
 const at = args.indexOf('--dsh-root')
 if (at < 0 || !args[at + 1]) throw new Error('必须显式提供 --dsh-root，指向隔离安装根目录')
@@ -16,7 +17,9 @@ if (args.filter((arg) => arg === '--dsh-root').length !== 1 || args.some((arg, i
   || (args.includes('--check') && args.includes('--restore'))) throw new Error('参数无效：只能选择 --check 或 --restore')
 const installRoot = realpathSync(resolve(args[at + 1]))
 const dshManifest = join(installRoot, 'node_modules/@deepseek-ai/dsh/package.json')
-if (JSON.parse(readFileSync(dshManifest, 'utf8')).version !== VERSION) throw new Error('DSH 版本与桥接补丁不匹配')
+const VERSION = JSON.parse(readFileSync(dshManifest, 'utf8')).version
+if (!Object.hasOwn(PROFILES, VERSION)) throw new Error('DSH 版本与桥接补丁不匹配')
+const [ORIGINAL_SHA256, PATCHED_SHA256] = PROFILES[VERSION]
 const require = createRequire(dshManifest)
 const agentManifest = realpathSync(require.resolve('@deepseek-ai/dsh-agent-loop/package.json'))
 if (!agentManifest.startsWith(installRoot + sep)) throw new Error('agent-loop 实际位置超出指定安装根目录')
@@ -24,7 +27,7 @@ if (JSON.parse(readFileSync(agentManifest, 'utf8')).version !== VERSION) throw n
 const packageRoot = dirname(agentManifest)
 const target = join(packageRoot, 'lib/index.js')
 const backup = join(packageRoot, `lib/index.js.swarm-pristine-${ORIGINAL_SHA256.slice(0, 12)}`)
-const patchFile = resolve(dirname(fileURLToPath(import.meta.url)), '../patches/dsh-agent-loop-0.2.2-rc.1-step-model-bridge.patch')
+const patchFile = resolve(dirname(fileURLToPath(import.meta.url)), `../patches/dsh-agent-loop-${VERSION}-step-model-bridge.patch`)
 const digest = (path) => createHash('sha256').update(readFileSync(path)).digest('hex')
 const current = digest(target)
 const restore = args.includes('--restore')

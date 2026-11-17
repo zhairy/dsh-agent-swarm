@@ -93,7 +93,8 @@ export const inspectChildRecovery = (input: { parentSessionId: string; childId: 
   if (!object(input.inspection) || !object(input.inspection.meta) || !Array.isArray(input.inspection.events) || !integer(input.inspection.inheritedEventCount)
     || input.inspection.inheritedEventCount > input.inspection.events.length || input.inspection.events.length > 200000) return reject('invalid-host-inspection')
   if (input.inspection.meta.id !== input.childId || input.inspection.meta.parentSession !== input.parentSessionId) return reject('parent-child-lineage-mismatch')
-  if (!Array.isArray(input.catalog) || !input.catalog.some((item) => object(item) && item.id === input.childId && item.mode === 'continuable')) return reject('parent-catalog-does-not-own-continuable-child')
+  if (!Array.isArray(input.catalog) || !input.catalog.some((item) => object(item) && item.id === input.childId && item.mode === 'continuable'
+    && (!('kind' in item) || (item.kind === 'child' && item.parentId === input.parentSessionId && item.depth === 1)))) return reject('parent-catalog-does-not-own-continuable-child')
   const own = input.inspection.events.slice(input.inspection.inheritedEventCount)
   // The Host's public fold uses the FIRST own descriptor; inherited or later facts cannot rewrite identity.
   const descriptorEvent = own.find((event) => object(event) && event.type === 'subagent/descriptor')

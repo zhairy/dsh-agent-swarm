@@ -109,6 +109,8 @@ export interface EvidenceAssessmentInput {
   record: DelegationRecord
 }
 export interface EvidenceAssessmentDeps {
+  /** 服务端核验目标后的内部路径映射；不得用于改写原始来源或绕过 inside 检查。 */
+  mapCodePath?: (path: string) => string
   ask: JevClient['ask']
   now?: () => number
   policy?: Partial<EvidenceAssessmentPolicy>
@@ -255,6 +257,8 @@ export const assessExplorationEvidence = async (input: EvidenceAssessmentInput, 
   const codeCache = new Map<string, Promise<ObservedCodeReference>>()
   const fileCache = new Map<string, Promise<{ reference: ObservedCodeReference; body?: string }>>()
   const capture = (path: string, kind: 'code' | 'manifest' = 'code', focus = '') => {
+    try { path = deps.mapCodePath?.(path) ?? path }
+    catch { return Promise.resolve<ObservedCodeReference>({ path, kind, status: 'unknown', reason: 'code-path-mapping-rejected' }) }
     const key = kind + ':' + path + ':' + hash(focus)
     let pending = codeCache.get(key)
     if (!pending) {
@@ -311,7 +315,7 @@ export const assessExplorationEvidence = async (input: EvidenceAssessmentInput, 
     if (signal?.aborted) return undefined
     const shownCode = [...(focused?.status === 'observed' ? [focused] : []), ...projectCode.filter((ref) => ref.path !== focused?.path)].slice(0, 8)
     const state = { claim: getRedactedText(candidate.claim, 2000), source: { ...source, locator: getRedactedText(source.locator, 2000) },
-      project: { goal: getRedactedText(input.goal, 2000), acceptance: input.acceptance.map((value) => getRedactedText(value, 500)), scope: input.scope,
+      project: { goal: getRedactedText(input.goal, 2000), acceptance: input.acceptance.map((value) => getRedactedText(value, 500)), scope: input.scope.map(path => deps.mapCodePath?.(path) ?? path),
         binding: input.binding, codeReferences: shownCode.map((ref) => ({ path: ref.path, digest: ref.digest, excerpt: ref.excerpt, startLine: ref.startLine, endLine: ref.endLine, truncated: ref.truncated ?? false })),
         additionalCodeReferences: projectCode.filter((ref) => !shownCode.includes(ref)).map((ref) => ({ path: ref.path, digest: ref.digest })),
         manifest: { digest: manifest.digest ?? null, excerpt: manifest.excerpt ?? null } },

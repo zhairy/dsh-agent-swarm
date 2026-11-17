@@ -1,0 +1,62 @@
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -4819,0 +4820 @@
++	const anchorName = `--dsh-subscription-${(0, react.useId)().replaceAll(':', '')}`;
+@@ -5010,8 +5011 @@
+-	const pos = (0, __deepseek_ai_dsh_client_ui_primitives.useAnchoredPosition)({
+-		open,
+-		anchorRef: rootRef,
+-		panelRef,
+-		side: "top",
+-		gap: PANEL_GAP,
+-		margin: PANEL_MARGIN
+-	});
++
+@@ -5068 +5062 @@
+-		style: styles.anchor,
++		style: { ...styles.anchor, anchorName },
+@@ -5070 +5064 @@
+-			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("style", { children: subscriptionChromeCss }),
++			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("style", { children: subscriptionChromeCss + "\n@position-try --dsh-subscription-window {\n  position-area: none;\n  top: max(12px, var(--dsh-frame-overlay-top, 12px));\n  bottom: max(12px, calc(anchor(top) + 8px));\n  left: 12px;\n  right: 12px;\n  margin: 0;\n  align-self: safe end;\n  justify-self: safe end;\n}\n\n@position-try --dsh-subscription-opposite {\n  top: max(12px, calc(anchor(bottom) + 8px));\n  bottom: 12px;\n  align-self: start;\n}\n\n@position-try --dsh-subscription-wide-opposite {\n  top: max(12px, calc(anchor(bottom) + 8px));\n  bottom: 12px;\n  left: 12px;\n  right: 12px;\n  align-self: start;\n  justify-self: safe end;\n}\n\n@position-try --dsh-subscription-tall {\n  position-area: none;\n  top: max(12px, var(--dsh-frame-overlay-top, 12px));\n  bottom: 12px;\n  left: max(12px, anchor(left));\n  right: 12px;\n  margin: 0;\n  align-self: safe start;\n  justify-self: start;\n}\n\n@position-try --dsh-subscription-viewport {\n  position-area: none;\n  inset: max(12px, var(--dsh-frame-overlay-top, 12px)) 12px 12px;\n  margin: 0;\n  align-self: safe start;\n  justify-self: safe end;\n}\n" }),
+@@ -5101 +5095 @@
+-					...pos ?? MEASURE_STYLE
++					positionAnchor: anchorName, positionArea: 'none', top: `max(${PANEL_MARGIN}px, var(--dsh-frame-overlay-top, 12px))`, bottom: `max(${PANEL_MARGIN}px, calc(anchor(top) + ${PANEL_GAP}px))`, left: `max(${PANEL_MARGIN}px, anchor(left))`, right: `${PANEL_MARGIN}px`, alignSelf: 'end', justifySelf: 'start', height: 'fit-content', minHeight: 0, margin: 0, positionTryFallbacks: '--dsh-subscription-window, --dsh-subscription-opposite, --dsh-subscription-wide-opposite, --dsh-subscription-tall, --dsh-subscription-viewport'
+@@ -5270,9 +5263,0 @@
+-/**
+-* Unplaced portal panel: hidden but laid out so the clamp measures real
+-* dimensions (the `useAnchoredPosition` measure pass).
+-*/
+-const MEASURE_STYLE = {
+-	visibility: "hidden",
+-	left: 0,
+-	top: 0
+-};
+@@ -5556 +5540,0 @@
+-//# sourceMappingURL=client.js.map--- a/lib/client/SubscriptionUsageBadge.js
++++ b/lib/client/SubscriptionUsageBadge.js
+@@ -28 +28 @@
+-import { useCallback, useEffect, useRef, useState } from 'react';
++import { useCallback, useEffect, useId, useRef, useState } from 'react';
+@@ -32 +32 @@
+-import { useAnchoredPosition, useDismissOnOutsidePointer } from '@deepseek-ai/dsh-client-ui-primitives';
++import { useDismissOnOutsidePointer } from '@deepseek-ai/dsh-client-ui-primitives';
+@@ -238,0 +239 @@
++    const anchorName = `--dsh-subscription-${useId().replaceAll(':', '')}`;
+@@ -423 +423,0 @@
+-    const pos = useAnchoredPosition({ open, anchorRef: rootRef, panelRef, side: 'top', gap: PANEL_GAP, margin: PANEL_MARGIN });
+@@ -475 +475 @@
+-    const pill = (_jsxs("span", { ref: rootRef, style: styles.anchor, children: [_jsx("style", { children: subscriptionChromeCss }), _jsxs("button", { type: "button", className: "dsh-subscription-usage-pill", style: { ...styles.pill, ...(hover || open ? styles.pillActive : {}) }, "aria-haspopup": "dialog", "aria-expanded": open, "aria-label": `${title} · ${label}`, title: title, onMouseEnter: () => { setHover(true); }, onMouseLeave: () => { setHover(false); }, onClick: toggle, children: [_jsx(UsageBadgeIcon, {}), _jsx("span", { style: styles.label, children: label })] }), open && createPortal(_jsxs("div", { ref: panelRef, role: "dialog", "aria-label": title, className: "dsh-subscription-usage-panel", style: { ...styles.panel, ...(pos ?? MEASURE_STYLE) }, children: [_jsx("div", { style: styles.title, children: _jsxs("span", { style: styles.titleLabel, children: [_jsx(UsageBadgeIcon, {}), title] }) }), _jsx("div", { style: styles.titleRule, "aria-hidden": true }), expanded.map((d, index) => (_jsxs("section", { style: index === 0 ? undefined : styles.section, children: [_jsxs("div", { style: styles.providerRow, children: [_jsxs("span", { style: styles.providerName, children: [d.name, d.provider === current && _jsx("span", { style: styles.currentTag, children: translate('usageBadgeCurrent') })] }), d.accounts.length === 1 && _jsx(AccountMeta, { account: d.accounts[0], translate: translate })] }), _jsx("p", { style: { ...styles.providerMeta, whiteSpace: 'normal', overflow: 'visible' }, children: translate('quotaAccountsHint') }), _jsx(CodexExhaustionNotice, { display: d, translate: translate }), d.accounts.map((account, accountIndex) => (_jsxs("div", { style: accountIndex === 0 ? undefined : styles.accountBlock, children: [d.accounts.length > 1 && (_jsx("div", { style: styles.accountRow, children: _jsx(AccountMeta, { account: account, translate: translate }) })), _jsx(UsageFreshness, { usage: account.usage, failed: account.loadFailed === true, t: translate }), d.provider === 'codex' && creditBalanceText(account.usage?.credits, translate) !== undefined && (_jsx("p", { style: styles.providerMeta, children: creditBalanceText(account.usage?.credits, translate) })), !!account.usage?.windows?.length && _jsx(AccountWindows, { windows: account.windows, model: d.provider === badgeSelection?.provider ? badgeSelection.model : undefined, provider: d.provider, translate: translate, mode: quotaMode }, `${d.provider}:${badgeSelection?.model ?? ''}`)] }, account.key)))] }, d.provider)))] }), document.body)] }));
++    const pill = (_jsxs("span", { ref: rootRef, style: { ...styles.anchor, anchorName }, children: [_jsx("style", { children: subscriptionChromeCss + "\n@position-try --dsh-subscription-window {\n  position-area: none;\n  top: max(12px, var(--dsh-frame-overlay-top, 12px));\n  bottom: max(12px, calc(anchor(top) + 8px));\n  left: 12px;\n  right: 12px;\n  margin: 0;\n  align-self: safe end;\n  justify-self: safe end;\n}\n\n@position-try --dsh-subscription-opposite {\n  top: max(12px, calc(anchor(bottom) + 8px));\n  bottom: 12px;\n  align-self: start;\n}\n\n@position-try --dsh-subscription-wide-opposite {\n  top: max(12px, calc(anchor(bottom) + 8px));\n  bottom: 12px;\n  left: 12px;\n  right: 12px;\n  align-self: start;\n  justify-self: safe end;\n}\n\n@position-try --dsh-subscription-tall {\n  position-area: none;\n  top: max(12px, var(--dsh-frame-overlay-top, 12px));\n  bottom: 12px;\n  left: max(12px, anchor(left));\n  right: 12px;\n  margin: 0;\n  align-self: safe start;\n  justify-self: start;\n}\n\n@position-try --dsh-subscription-viewport {\n  position-area: none;\n  inset: max(12px, var(--dsh-frame-overlay-top, 12px)) 12px 12px;\n  margin: 0;\n  align-self: safe start;\n  justify-self: safe end;\n}\n" }), _jsxs("button", { type: "button", className: "dsh-subscription-usage-pill", style: { ...styles.pill, ...(hover || open ? styles.pillActive : {}) }, "aria-haspopup": "dialog", "aria-expanded": open, "aria-label": `${title} · ${label}`, title: title, onMouseEnter: () => { setHover(true); }, onMouseLeave: () => { setHover(false); }, onClick: toggle, children: [_jsx(UsageBadgeIcon, {}), _jsx("span", { style: styles.label, children: label })] }), open && createPortal(_jsxs("div", { ref: panelRef, role: "dialog", "aria-label": title, className: "dsh-subscription-usage-panel", style: { ...styles.panel, positionAnchor: anchorName }, children: [_jsx("div", { style: styles.title, children: _jsxs("span", { style: styles.titleLabel, children: [_jsx(UsageBadgeIcon, {}), title] }) }), _jsx("div", { style: styles.titleRule, "aria-hidden": true }), expanded.map((d, index) => (_jsxs("section", { style: index === 0 ? undefined : styles.section, children: [_jsxs("div", { style: styles.providerRow, children: [_jsxs("span", { style: styles.providerName, children: [d.name, d.provider === current && _jsx("span", { style: styles.currentTag, children: translate('usageBadgeCurrent') })] }), d.accounts.length === 1 && _jsx(AccountMeta, { account: d.accounts[0], translate: translate })] }), _jsx("p", { style: { ...styles.providerMeta, whiteSpace: 'normal', overflow: 'visible' }, children: translate('quotaAccountsHint') }), _jsx(CodexExhaustionNotice, { display: d, translate: translate }), d.accounts.map((account, accountIndex) => (_jsxs("div", { style: accountIndex === 0 ? undefined : styles.accountBlock, children: [d.accounts.length > 1 && (_jsx("div", { style: styles.accountRow, children: _jsx(AccountMeta, { account: account, translate: translate }) })), _jsx(UsageFreshness, { usage: account.usage, failed: account.loadFailed === true, t: translate }), d.provider === 'codex' && creditBalanceText(account.usage?.credits, translate) !== undefined && (_jsx("p", { style: styles.providerMeta, children: creditBalanceText(account.usage?.credits, translate) })), !!account.usage?.windows?.length && _jsx(AccountWindows, { windows: account.windows, model: d.provider === badgeSelection?.provider ? badgeSelection.model : undefined, provider: d.provider, translate: translate, mode: quotaMode }, `${d.provider}:${badgeSelection?.model ?? ''}`)] }, account.key)))] }, d.provider)))] }), document.body)] }));
+@@ -520,5 +519,0 @@
+-/**
+- * Unplaced portal panel: hidden but laid out so the clamp measures real
+- * dimensions (the `useAnchoredPosition` measure pass).
+- */
+-const MEASURE_STYLE = { visibility: 'hidden', left: 0, top: 0 };
+@@ -545,0 +541 @@
++        positionArea: 'none', top: `max(${PANEL_MARGIN}px, var(--dsh-frame-overlay-top, 12px))`, bottom: `max(${PANEL_MARGIN}px, calc(anchor(top) + ${PANEL_GAP}px))`, left: `max(${PANEL_MARGIN}px, anchor(left))`, right: `${PANEL_MARGIN}px`, alignSelf: 'end', justifySelf: 'start', height: 'fit-content', minHeight: 0, margin: 0, positionTryFallbacks: '--dsh-subscription-window, --dsh-subscription-opposite, --dsh-subscription-wide-opposite, --dsh-subscription-tall, --dsh-subscription-viewport',
+--- a/package.json
++++ b/package.json
+@@ -3 +3 @@
+-  "version": "0.9.13",
++  "version": "0.9.13+rc3.ui.1",

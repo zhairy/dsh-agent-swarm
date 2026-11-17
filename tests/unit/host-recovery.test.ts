@@ -70,3 +70,14 @@ describe('real Host cold-child lifecycle evidence', () => {
     expect(inspectChildRecovery(input([...closed.inspection.events, { type: 'user/message', data: { source: { kind: 'compact-checkpoint' } } }])).settled).toBe(true)
   })
 })
+
+describe('rc.3 后代目录直接归属', () => {
+  it('仅接受直接 child，拒绝孙代、错误父级和诊断项', () => {
+    const base = input([start(0), descriptor, end(0)])
+    const entry = { id: 'child', mode: 'continuable', kind: 'child', parentId: 'root', depth: 1 }
+    expect(inspectChildRecovery({ ...base, catalog: [entry] }).settled).toBe(true)
+    for (const invalid of [{ ...entry, depth: 2 }, { ...entry, parentId: 'sibling' }, { ...entry, kind: 'diagnostic' }]) {
+      expect(inspectChildRecovery({ ...base, catalog: [invalid] }).continuable).toBe(false)
+    }
+  })
+})

@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-swarm",
-  "version": "3.3.5",
+  "version": "3.4.0",
   "description": "DSH 多智能体插件：天枢统御 12 位专家，任务卡 + Mermaid 流程 + 证据门禁验收；多层模型链即时回退与链尾等待恢复、按配置语言输出、内嵌 Jev 判断 / DSH multi-agent swarm plugin with evidence-gated delegation, resilient model routing, language control and embedded Jev judgments",
   "keywords": [
     "dsh",
@@ -22,7 +22,7 @@
   },
   "engines": {
     "dsh": ">=0.2.0-rc.2 <0.2.3-0",
-    "node": ">=22.19.0"
+    "node": ">=24.9.0"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -68,7 +68,18 @@
     "skills",
     "patches/dsh-execution-boundary-0.2.2-rc.1.json",
     "patches/dsh-execution-boundary-0.2.2-rc.1.patch",
-    "scripts/apply-dsh-execution-boundary.mjs"
+    "scripts/apply-dsh-execution-boundary.mjs",
+    "scripts/apply-plugin-compat.mjs",
+    "patches/dsh-notebook-0.4.2-rc3-runtime.json",
+    "patches/dsh-notebook-0.4.2-rc3-runtime.patch",
+    "patches/dsh-subscriptions-0.9.13-rc3-transport.json",
+    "patches/dsh-subscriptions-0.9.13-rc3-transport.patch",
+    "docs/3.4.0-DSH-rc3与本机升级.md",
+    "docs/3.4.0-第三方插件与兼容包.md",
+    "docs/3.4.0-已知问题与迭代计划.md",
+    "patches/dsh-agent-loop-0.2.2-rc.3-step-model-bridge.patch",
+    "patches/dsh-execution-boundary-0.2.2-rc.3.json",
+    "patches/dsh-execution-boundary-0.2.2-rc.3.patch"
   ],
   "scripts": {
     "build": "node scripts/clean-lib.mjs && tsc -p tsconfig.build.json && node scripts/build-client.mjs",
@@ -91,6 +102,7 @@
   "dsh": {
     "minVersion": "0.2.0-rc.2",
     "testedVersions": [
+      "0.2.2-rc.3",
       "0.2.2-rc.1",
       "0.2.1-rc.5",
       "0.2.1-rc.3",

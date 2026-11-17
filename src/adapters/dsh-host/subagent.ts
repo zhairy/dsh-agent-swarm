@@ -5,6 +5,7 @@ import { SwarmError } from '../../util/errors.js'
 export interface ChildStartInput {
   provider: string
   label: string
+  name?: string
   childId?: string
   prompt: ContentBlockLike[]
   parent: AgentLike
@@ -49,10 +50,13 @@ export const startChild = async (subagents: SubagentsLike, input: ChildStartInpu
     const activation: SubagentActivationLike = await subagents.startActivation({
       provider: input.provider, label: input.label,
       ...(input.childId === undefined ? {} : { childId: input.childId }),
-      request: { ...request, ...(input.agentPreset === undefined ? {} : { agentPreset: input.agentPreset }) },
+      // rc.3 公开 listDescendants 且改为顶层参数；在创建前判别，绝不失败后重试。
+      ...(typeof subagents.listDescendants === 'function'
+        ? { ...request, ...(input.name === undefined ? {} : { name: input.name }), ...(input.agentPreset === undefined ? {} : { agentPreset: input.agentPreset }) }
+        : { request: { ...request, ...(input.agentPreset === undefined ? {} : { agentPreset: input.agentPreset }) } }),
       signal: input.signal, delivery: 'caller'
     })
-    return { id: activation.childId, result: activation.result, dispose: activation.dispose }
+    return { id: activation.childId, result: activation.result, dispose: () => activation.dispose() }
   }
   throw new SwarmError('SERVICE_UNAVAILABLE', '宿主没有可用的子智能体启动接口（start/startActivation 均缺失）')
 }

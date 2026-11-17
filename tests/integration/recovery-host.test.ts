@@ -16,6 +16,9 @@ interface RecoveryRun extends ScenarioRunInfo {
   recoveryEvents: Array<{ type: string; data?: unknown }>
   recoveryTerminal?: string
   agentErrors?: Array<{ message?: string; code?: string }>
+  worktreePath?: string
+  writerResults?: Array<{ tool: string; isError: boolean }>
+  writerResult?: { isError: boolean; text: string }
   adapterThrows?: number
   bridgeTools?: Array<{ model: string; tools: string[] }>
   bridgeToolExecutions?: number
@@ -51,6 +54,10 @@ const runRecovery = async (scenario: string, routes: Record<string, unknown>, mo
   const overlay = `${workspace}.overlay.yml`
   writeFileSync(overlay, YAML.stringify([
     { id: 'swarm-core', config: { ...RECOVERY_BASE, routes, ...options.config } },
+    ...(scenario === 'recovery-write-once' ? [
+      { id: 'permission', config: { defaultPreset: 'worktree-fixture', presets: { 'worktree-fixture': { sandbox: 'workspace-write', approval: 'never' } } } },
+      { insert: [{ id: 'recovery-worktrees', name: '@deepseek-ai/dsh-experimental-worktree', config: { retainOnArchive: true } }, { id: 'recovery-worktree-tool', name: '@deepseek-ai/dsh-experimental-tool-worktree' }] }
+    ] : []),
     { insert: [
       ...(scenario === 'planning-question-reply' ? [{ id: 'swarm-question-fixture-tool', name: '@deepseek-ai/dsh-tool-ask-user' }] : []),
       { id: 'swarm-recovery-test-driver', name: join(DRIVER_DIR, 'recovery-scenarios.js') }
@@ -75,7 +82,7 @@ beforeAll(() => {
 })
 
 describe('真实 AgentLoop：pool exhausted 9060669ms 与终态恢复', () => {
-  it.skipIf(getTestedVersion() !== '0.2.2-rc.1')('切换备用时重新解析模型条件工具，且执行只发生一次', async () => {
+  it.skipIf(!['0.2.2-rc.1', '0.2.2-rc.3'].includes(getTestedVersion()))('切换备用时重新解析模型条件工具，且执行只发生一次', async () => {
     const run = await runRecovery('recovery-capability-switch', getRoutesOverlay({ tian_shu: ['fail-pool', 'root'] }), 'normal', 'fail-pool')
     expect(run.status, run.error ?? run.stderr).toBe('done')
     expect(run.bridgeTools?.[0]).toMatchObject({ model: 'fail-pool' })
@@ -133,9 +140,13 @@ describe('真实 AgentLoop：pool exhausted 9060669ms 与终态恢复', () => {
     expect(run.status, run.error ?? run.stderr).toBe('done')
     expect(failureRequests(run).map((request) => request.model)).toEqual(['fail-pool'])
     const requests = run.recoveryRequests.filter((request) => request.model === 'writer-ji_feng')
-    expect(requests).toHaveLength(2) // 第一次真实 write，第二次 structured_output。
+    expect(requests).toHaveLength(3) // create_worktree、write、structured_output 各一个请求。
     expect(new Set(requests.map((request) => request.sessionId)).size).toBe(1)
-    expect(readFileSync(join(run.workspace, 'hello.txt'), 'utf8')).toBe('hello swarm\n')
+    expect(run.writerResult, '真实 write 必须成功，结构化 fixture 不能代替副作用').toMatchObject({ isError: false })
+    expect(run.writerResults).toEqual([{ tool: 'create_worktree', isError: false }, { tool: 'write', isError: false }])
+    expect(run.worktreePath).toBeTruthy()
+    expect(readFileSync(join(run.worktreePath!, 'hello.txt'), 'utf8')).toBe('hello swarm\n')
+    expect(existsSync(join(run.workspace, 'hello.txt'))).toBe(false)
     expect(run.ledgerEvents.filter((event) => event.type === 'delegation/completed')).toHaveLength(1)
     expect(run.ledgerEvents.filter((event) => event.type === 'delegation/retry')).toEqual([])
     expect(retryEvents(run)).toEqual([])

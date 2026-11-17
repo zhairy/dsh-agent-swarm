@@ -43,6 +43,12 @@ describe('调度边界短检查点', () => {
     expect(getCheckpoint({ ...input, resource: { exhausted: true } }).nextAction).toBe('incomplete')
     expect(getCheckpoint({ ...input, unresolved: [], acceptanceReady: true }).nextAction).toBe('accept-ready')
   })
+  it('修复轮为零时禁止新修复，但保留没有未决项时的最终验证与验收收尾', () => {
+    expect(getCheckpoint({ ...input, resource: { remainingFixRounds: 0 } }).nextAction).toBe('incomplete')
+    expect(getCheckpoint({ ...input, resource: { remainingFixRounds: 1 } }).nextAction).toBe('continue')
+    expect(getCheckpoint({ ...input, unresolved: [], resource: { remainingFixRounds: 0 } }).nextAction).toBe('continue')
+    expect(getCheckpoint({ ...input, unresolved: [], acceptanceReady: true, resource: { remainingFixRounds: 0 } }).nextAction).toBe('accept-ready')
+  })
   it('点、点斜杠与斜杠都表示任务根，不把根内改动判为越界', () => {
     for (const allowedPaths of [['.'], ['./'], ['/']]) {
       expect(getCheckpoint({ ...input, allowedPaths, changedPaths: ['src/a.ts'] }).scope.outsidePaths).toEqual([])
@@ -55,4 +61,15 @@ describe('调度边界短检查点', () => {
     expect(getCheckpoint({ ...input, cardRevision: 2, roundId: 'R2', evidenceRefs: ['new'] }, first).knownEvidenceRefs).toEqual(['new'])
     expect(getCheckpoint({ ...input, evidenceRefs: ['E1', '风险证据'], roundId: 'R2' }, first).convergence.repeatedWithoutProgress).toBe(0)
   })
+})
+
+// 需求改版不能继承旧需求的无进展计数，否则新需求首轮就可能被停止。
+it('需求版本变化重置收敛基线与检查点身份', () => {
+  const first = getCheckpoint({ ...input, requestRevision: 1 })
+  const second = getCheckpoint({ ...input, requestRevision: 1, roundId: 'R2' }, first)
+  const next = getCheckpoint({ ...input, requestRevision: 2, roundId: 'R3' }, second)
+  expect(next.convergence.blocked).toBe(false)
+  expect(next.convergence.repeatedWithoutProgress).toBe(0)
+  expect(next.review.newEvidence).toEqual(['E1'])
+  expect(getCheckpoint({ ...input, requestRevision: 2 }).id).not.toBe(first.id)
 })

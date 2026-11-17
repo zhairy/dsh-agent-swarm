@@ -195,12 +195,17 @@ export const createProgressGuard = <T extends ProgressGuardState>(store: Durable
           // 停滞或耗尽时结算的句柄也要落盘移除，否则后续结算仍看到已结束的句柄。
           if (input.waitHandle.state !== 'settled' || control.status !== 'active') return { set: { runtimeControls: { [input.lineageId]: control } } }
         }
-        const recovery = input.recoveryEvent !== undefined && input.recoveryEvent !== control.lastUserEvent
-        if (recovery && control.status !== 'exhausted') {
+        const newRecoveryEvent = input.recoveryEvent !== undefined && input.recoveryEvent !== control.lastUserEvent
+        // 用户继续只能恢复结构循环；未知等待、重启对账等停滞必须由对应句柄结算。
+        const recovery = newRecoveryEvent && control.status !== 'exhausted'
+          && (control.status === 'active' || control.reason?.startsWith('LOOP_DETECTED'))
+        const recoveryEventRecorded = newRecoveryEvent && control.status === 'stalled' && !recovery
+        if (recoveryEventRecorded) control.lastUserEvent = input.recoveryEvent!.slice(0,512)
+        if (recovery) {
           if (control.recoveries >= RECOVERY_LIMIT) { control.status = 'exhausted'; control.reason = '恢复窗口已用尽；保留证据并显式升级处理' }
           else { control.recoveries++; control.lastUserEvent = input.recoveryEvent!.slice(0,512); control.status = 'active'; delete control.reason }
         }
-        if (control.status !== 'active') { result = control; return recovery ? { set: { runtimeControls: { [input.lineageId]: control } } } : {} }
+        if (control.status !== 'active') { result = control; return recovery || recoveryEventRecorded ? { set: { runtimeControls: { [input.lineageId]: control } } } : {} }
         const priorGraph = taskId === undefined ? undefined : control.taskGraphs?.[taskId]
         const graphChanged = input.graphDigest !== undefined && priorGraph !== undefined && input.graphDigest !== priorGraph
         if ((input.replan || graphChanged) && ++control.replans > REPLAN_LIMIT) { control.replans = REPLAN_LIMIT; control.status = 'exhausted'; control.reason = '同一谱系重规划已达有限上界' }

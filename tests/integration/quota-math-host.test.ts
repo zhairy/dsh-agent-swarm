@@ -14,7 +14,7 @@ const candidate = (file: string) => import(pathToFileURL(join(getPluginRoot(), '
 const [{ Context }, { SystemPrompt }, { ToolRuntime }, { HostConnectionService }, swarm, swarmTools, swarmRuntime] = await Promise.all([
   sdk('cordis'), sdk('dsh-system-prompt'), sdk('dsh-tools'), sdk('dsh-client-connection'), candidate('index.js'), candidate('tools.js'), candidate('runtime.js')
 ])
-const nativeExecutor = getTestedVersion() === '0.2.2-rc.1' ? await sdk('dsh-tool-executor-native') : undefined
+const nativeExecutor = ['0.2.2-rc.1', '0.2.2-rc.3'].includes(getTestedVersion()) ? await sdk('dsh-tool-executor-native') : undefined
 const sdkVersions = Object.fromEntries(['dsh', 'cordis', 'dsh-tools', 'dsh-client-connection'].map((name) => [name, JSON.parse(readFileSync(join(sdkModules, '@deepseek-ai', name, 'package.json'), 'utf8')).version]))
 const providers = ['codex', 'claude', 'grok', 'copilot', 'antigravity']
 const cleanups: (() => Promise<void>)[] = []

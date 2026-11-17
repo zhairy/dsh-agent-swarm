@@ -890,6 +890,31 @@ describe('long-running preferred route recovery', () => {
     }
   })
 
+  it('a 180 second root recovery timer cannot bypass a 300 second provider hint', async () => {
+    let clock = 0
+    const selected = getSwarmConfig({ agents: { rootRecoverMs: 180_000 }, routes: { tian_shu: { chain: [primary, backup] } } })
+    const registry = createRouteEngine(undefined, async () => ({ ok: true, vision: false }), { now: () => clock })
+    registry.RestoreRootPreference(root.id, primary)
+    registry.BeginRequestStep(root.id, 0, 0)
+    registry.getRequestOverride(root, primary, 'tian_shu', selected, true)
+    await registry.recover({ agent: root, provider: primary.provider, failure: {
+      code: 'RATE_LIMIT', status: 429, message: 'pool "primary" exhausted: every member is unavailable or failed', providerRetryAfterMs: 300_000
+    } }, vi.fn(), 'tian_shu', selected)
+    expect(registry.getRequestOverride(root, primary, 'tian_shu', selected, true)).toMatchObject(backup)
+    registry.MarkRequestSucceeded(root.id)
+
+    clock = 180_000
+    registry.BeginRequestStep(root.id, 0, 1)
+    await registry.PreparePreferredRecovery(root, backup, 'tian_shu', selected)
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', selected, true)).toMatchObject(backup)
+    registry.MarkRequestSucceeded(root.id)
+
+    clock = 300_000
+    registry.BeginRequestStep(root.id, 0, 2)
+    await registry.PreparePreferredRecovery(root, backup, 'tian_shu', selected)
+    expect(registry.getRequestOverride(root, backup, 'tian_shu', selected, true)).toMatchObject(primary)
+  })
+
   it('legacy hosts also distinguish the last actual fallback header from a new user choice', async () => {
     const registry = createRouteEngine()
     registry.AddChild(child.id, { chain: [primary, backup], role: 'tan_wei', persistent: true })
@@ -1229,7 +1254,7 @@ describe('故障恢复', () => {
     expect(registry.getRequestOverride(root, picked, 'tian_shu', sticky).model).not.toBe('gpt-6-sol')
   })
 
-  it('断网：等待网络恢复后在原路由重试，不消耗路由链；联网时按常规回退', async () => {
+  it('断网等待后重试原路由；联网仍先短重试，预算耗尽才回退', async () => {
     const waits: Array<{ recovered?: boolean }> = []
     const offline = makeNetwork([false])
     const registry = createRouteEngine(undefined, undefined, { network: offline.network, onNetworkWait: (event) => waits.push(event) })
@@ -1240,10 +1265,12 @@ describe('故障恢复', () => {
     expect(registry.getRequestOverride(root, picked, 'tian_shu', config)).toEqual(picked)
     expect(waits.map((event) => event.recovered)).toEqual([undefined, true])
     const online = makeNetwork([true])
-    const other = createRouteEngine(undefined, undefined, { network: online.network })
+    const other = createRouteEngine(undefined, undefined, { network: online.network, sleep: async () => undefined })
     other.getRequestOverride(root, picked, 'tian_shu', config)
     await expect(other.getErrorAction({ agent: root, provider: 'deepseek-official', failure }, undefined, 'tian_shu', config)).resolves.toEqual({ kind: 'retry' })
     expect(online.calls.waitOnline).toBe(0)
+    expect(other.getRequestOverride(root, picked, 'tian_shu', config)).toEqual(picked)
+    await other.getErrorAction({ agent: root, provider: 'deepseek-official', failure }, undefined, 'tian_shu', config)
     expect(other.getRequestOverride(root, picked, 'tian_shu', config).model).not.toBe('deepseek-flash')
   })
 
@@ -1640,15 +1667,17 @@ describe('链尾保持：长期目标中铸剑链耗尽（D-74）的回归', () 
       expect(registry.getChild(child.id)?.route).toEqual(flash)
       retries += 1
     }
-    // 1 次宿主短重试 + 指数退避 5/10/20/40 秒、之后每次 60 秒，总等待不超过 networkWaitMs（10 分钟）
-    expect(sleeps).toEqual([500, 5000, 10000, 20000, 40000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000])
+    // 短重试后按模型级短隔离重探；半开失败延长退避，但总等待仍受同一预算约束。
+    expect(sleeps[0]).toBe(500)
+    expect(sleeps[1]).toBe(10000)
+    expect(sleeps.slice(1).every((ms, index, all) => ms <= 60000 && (index === 0 || ms >= all[index - 1]))).toBe(true)
     expect(sleeps.slice(1).reduce((sum, ms) => sum + ms, 0)).toBeLessThanOrEqual(config.agents.networkWaitMs)
     expect(retries).toBe(sleeps.length)
     expect(registry.getTerminal(child.id)).toBe('route_chain_exhausted')
     const detail = registry.getTerminalDetail(child.id)!
     expect(detail).toContain('claude/claude-opus-5-5 auth_invalid')
     expect(detail).toContain('codex/gpt-6-astra pool_exhausted')
-    expect(detail).toContain('deepseek-official/deepseek-flash 本次请求已失败')
+    expect(detail).toContain('deepseek-official/deepseek-flash network_transient')
   })
 
   it('链尾在等待中恢复时继续执行；全部隔离但有路由即将到期时等到期再试，不提前判定耗尽', async () => {

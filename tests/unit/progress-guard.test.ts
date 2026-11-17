@@ -278,6 +278,25 @@ describe('等待、有限容量与真实证据恢复', () => {
     await f.observe({ step: 2 }, { waiting: true, waitHandle: { id: 'w1', kind: 'tool', state: 'settled', openedAt: 1 } })
     expect(f.store.read().runtimeControls[f.lineageId]!.status).toBe('active')
   })
+  it('用户继续事件只能恢复结构停滞，不能替代未知等待句柄的可靠结算', async () => {
+    const f = await fixture()
+    const unknown = { id: 'w1', kind: 'tool' as const, state: 'unknown' as const, openedAt: 1 }
+    const recoveryEvent = 'user-message:continue'
+    await f.observe({ step: 1 }, { waiting: true, waitHandle: unknown })
+    const sequence = f.store.getSequence()
+    expect(await f.observe({ step: 2 }, { recoveryEvent })).toMatchObject({
+      status: 'stalled',
+      recoveries: 0,
+      reason: expect.stringContaining('WAIT_HANDLE_UNKNOWN')
+    })
+    expect(f.store.getSequence()).toBe(sequence + 1)
+    expect(Object.values(f.store.read().runtimeControls[f.lineageId]!.waitHandles ?? {})).toEqual([unknown])
+    expect(f.store.read().runtimeControls[f.lineageId]!.lastUserEvent).toBe(recoveryEvent)
+    expect(await f.observe({ step: 3 }, { recoveryEvent, waiting: true, waitHandle: { ...unknown, state: 'settled' } })).toMatchObject({
+      status: 'active',
+      recoveries: 0
+    })
+  })
   it('长任务里依次出现的开放等待只跟踪当前一个，不会累加到容量上限而永久耗尽', async () => {
     const f = await fixture()
     for (let index = 0; index < 24; index++) {
