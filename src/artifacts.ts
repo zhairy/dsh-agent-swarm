@@ -20,7 +20,7 @@ export interface ArtifactSnapshotInfo {
   complete: boolean
 }
 export type ArtifactSnapshot = ArtifactSnapshotInfo
-export interface ArtifactLimitsInfo { maxFiles?: number; maxFileBytes?: number; maxTotalBytes?: number }
+export interface ArtifactLimitsInfo { maxFiles?: number; maxFileBytes?: number; maxTotalBytes?: number; exclude?: readonly string[] }
 
 const isInside = (workspace: string, path: string): boolean => {
   const rel = relative(workspace, path)
@@ -46,6 +46,8 @@ export const getArtifactSnapshot = async (workspace: string, paths: readonly str
   for (const value of Object.values(limits)) if (!Number.isSafeInteger(value) || value < 1) throw new Error('产物摘要限额必须为正整数')
   if (paths.length > limits.maxFiles) throw new Error('输入文件路径数量超过上限')
   const entries: ArtifactEntryInfo[] = []
+  const excluded = options.exclude ?? []
+  if (excluded.some(path => !path || isAbsolute(path) || path.split('/').some(part => ['', '.', '..'].includes(part)))) throw new Error('产物排除目录必须为受控相对路径')
   const seen = new Set<string>()
   let totalBytes = 0
   const addUnknown = (path: string, reason: string): void => { entries.push({ path, state: 'unknown', reason }) }
@@ -57,6 +59,8 @@ export const getArtifactSnapshot = async (workspace: string, paths: readonly str
     if (seen.has(path)) return
     seen.add(path)
     if (!isInside(root, path)) { addUnknown(input, '路径不在工作区内'); return }
+    // 独立验证的临时输出不属于源码产物；排除项仅由调用方固定，模型工具不能传入。
+    if (excluded.some(parent => label === parent || label.startsWith(`${parent}/`))) return
     if (entries.length >= limits.maxFiles) { addUnknown(label, '文件数量超过上限'); return }
     let canonical: string
     try { canonical = await realpath(path) }

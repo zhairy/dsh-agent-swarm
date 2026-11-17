@@ -26,6 +26,7 @@ export type SwarmEventType =
   | 'acceptance/recorded'
   | 'worktree/bound'
   | 'worktree/restored'
+  | 'workspace/verification-outputs'
   | 'watchdog/alert'
   | 'state/journal-begin'
   | 'state/journal-chunk'

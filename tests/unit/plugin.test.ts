@@ -1,3 +1,4 @@
+import { getNotebookSnapshotRuntime } from '../../src/notebook-snapshot.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,13 +14,20 @@ import { VALID_OUTPUTS } from '../fixtures/valid-outputs.js'
 import { EXECUTION_BOUNDARY_CAPS } from '../../src/adapters/dsh-host/execution-boundary.js'
 
 const dirs: string[] = []
+const lifecycleDisposers: Array<Array<() => void>> = []
 const originalCapabilities = (globalThis as Record<symbol, unknown>)[EXECUTION_BOUNDARY_CAPS]
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); (globalThis as Record<symbol, unknown>)[EXECUTION_BOUNDARY_CAPS] = originalCapabilities })
+afterEach(async () => {
+  // 模拟 Cordis 的完整卸载顺序；全局快照端口和服务存储必须先释放，再删除 fixture。
+  for (const disposers of lifecycleDisposers.splice(0).reverse()) for (const dispose of disposers.reverse()) await dispose()
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  ;(globalThis as Record<symbol, unknown>)[EXECUTION_BOUNDARY_CAPS] = originalCapabilities
+})
 
 const makeContext = (services: Record<string, unknown>) => {
   const provided = new Map<string, unknown>()
   const listeners = new Map<string, (...args: never[]) => unknown>()
   const disposers: Array<() => void> = []
+  lifecycleDisposers.push(disposers)
   const warn = vi.fn()
   const ctx: PluginContextLike = {
     get: (name) => provided.get(name) ?? services[name],
@@ -31,7 +39,7 @@ const makeContext = (services: Record<string, unknown>) => {
   return { ctx, provided, listeners, disposers, warn }
 }
 
-const makeHost = (boundaryAvailable = true) => {
+const makeHost = (boundaryAvailable = true, inject?: PluginContextLike['inject']) => {
   // Registration/routing unit fixture only: its fake workers return values and
   // execute no OS code. Physical enforcement is covered by the real Host driver.
   ;(globalThis as Record<symbol, unknown>)[EXECUTION_BOUNDARY_CAPS] = new Set(boundaryAvailable ? ['subprocess-local/rc1', 'fs-local/rc1', 'working-directory/rc1'] : [])
@@ -59,6 +67,7 @@ const makeHost = (boundaryAvailable = true) => {
     profileContext: { home }
   }
   const context = makeContext(services)
+  if (inject !== undefined) context.ctx.inject = inject
   host.apply(context.ctx, { jev: { enabled: false }, planningReview: { enabled: false } })
   return { ...context, registered, guards, toolsService, home, services }
 }
@@ -82,7 +91,8 @@ describe('宿主插件', () => {
     expect(provided.get('agentSwarm')).toBeDefined()
     expect(guards).toHaveLength(1)
     expect(guards[0]?.({ name: 'write', agent: { id: 'a', session: { header: { agentPreset: 'yu-shi' } } } })).toContain('守卫')
-    expect(disposers).toHaveLength(4)
+    expect(disposers).toHaveLength(5)
+    expect(getNotebookSnapshotRuntime()?.resolveReadContext).toBeTypeOf('function')
   })
 
   it('重复 llm/adapters-updated 不修改健康隔离、退避或半开探测所有者', async () => {
@@ -144,12 +154,11 @@ describe('宿主插件', () => {
   })
 
   it('有 connection 时注册设置页 RPC（Jev 密钥状态与测试连接）', async () => {
-    const { ctx, provided } = makeHost()
-    expect(provided.get('agentSwarm')).toBeDefined()
     const routes: Array<{ path: string; fetch: (request: Request) => Promise<Response> }> = []
     const connection = { fetch: { register: (route: { path: string; fetch: (request: Request) => Promise<Response> }) => { routes.push(route); return () => undefined } } }
     const scoped = makeContext({ connection })
-    host.apply({ ...ctx, inject: (deps, callback) => { expect(deps).toEqual(['connection']); callback(scoped.ctx) } }, { jev: { enabled: false } })
+    const { provided } = makeHost(true, (deps, callback) => { expect(deps).toEqual(['connection']); callback(scoped.ctx) })
+    expect(provided.get('agentSwarm')).toBeDefined()
     expect(routes.map((route) => route.path)).toEqual(['/api/swarm.jevStatus', '/api/swarm.jevHealth', '/api/swarm.quotaView', '/api/swarm.taskView', '/api/swarm.taskIndex', '/api/swarm.agentView', '/api/swarm.agentControl', '/api/swarm-assets/mermaid.min.js'])
     const response = await routes[1]!.fetch(new Request('http://h/api/swarm.jevHealth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'x', method: 'swarm.jevHealth' }) }))
     expect(await response.json()).toMatchObject({ rpcId: 'x', result: { ok: true, value: { enabled: false, result: { ok: false, error: 'Jev is disabled in swarm-core config' } } } })
@@ -174,7 +183,7 @@ describe('工具插件', () => {
     expect(registered.map((d) => d.name)).toEqual([
       'swarm_task_card', 'swarm_delegate', 'swarm_status', 'swarm_accept',
       'jev_ask', 'jev_check', 'jev_classify', 'jev_score', 'jev_match', 'jev_screen', 'jev_health',
-      'swarm_restore_worktree', 'swarm_context_read', 'swarm_project_files', 'swarm_calculate',
+      'swarm_prepare_verification', 'swarm_git_save', 'swarm_bind_primary_workspace', 'swarm_restore_worktree', 'swarm_context_read', 'swarm_project_files', 'swarm_calculate',
       'swarm_review_plan', 'swarm_experience'
     ])
     expect(service.getConfig().persistence.enabled).toBe(false)

@@ -64,7 +64,10 @@ describe('3.2.1 strangler golden baseline', () => {
     expect(snapshot.tools.bounded).toContain('swarm_restore_worktree')
     // The restore entry is an intentional additive API; all previous routing,
     // roles, tools and workflow policies must still match the historical golden.
-    snapshot.tools.bounded = snapshot.tools.bounded.filter(name => name !== 'swarm_restore_worktree')
+    const additive = new Set(['swarm_restore_worktree', 'swarm_bind_primary_workspace', 'swarm_git_save', 'swarm_prepare_verification'])
+    expect(snapshot.tools.bounded).toEqual(expect.arrayContaining([...additive]))
+    snapshot.tools.bounded = snapshot.tools.bounded.filter(name => !additive.has(name))
+    snapshot.tools.root = snapshot.tools.root.filter(name => !additive.has(name))
     expect(getValueDigest(snapshot)).toBe('7c7175e3ebe622dbae0d2cd7334e9b53ea69a358917d4f219c03e13a1a2f0392')
   })
 })

@@ -242,6 +242,8 @@ export const getTaskCardText = (result: TaskCardResult): string => {
     `需求版本：${result.requestRevision}；合同版本：${result.cardRevision}；流程版本：${result.workflowRevision}；规划审核：${getPlanningStatusText(result.planningReview?.status, result.workflowMode)}`,
     `流程控制模式：${result.workflowMode}；用户明确要求的审核、角色权限与验收门禁仍须遵守。`,
     ...getPlanningRecoveryText(result.planningRecovery),
+    ...(result.workspacePlanUnavailable ? ['工作区核验当前不可用，已有规划仅供参考，不授予写入能力；先恢复 Host 核验并更新任务卡。'] : []),
+    ...(result.workspacePlan === null ? [] : [`工作区规划：${result.workspacePlan.mode}；${result.workspacePlan.reason}；HEAD ${result.workspacePlan.head}；项目规则摘要 ${result.workspacePlan.digest}。规划本身不授予写权限。`]),
     ...(result.planningScope === null ? [] : [`阶段任务：${result.planningScope.rationale}；延期：${result.planningScope.deferred.join('；')}。本任务验收不代表整体目标完成。`]),
     ...(result.planningRecovery.automaticReviewPaused && !['pass', 'pass_with_degradation'].includes(result.planningReview?.status ?? '')
       ? ['自动规划审核已暂停；任务卡与 scope 仍可修改。完成修订后调用 swarm_review_plan 显式复审，不能复用旧批准。'] : []),

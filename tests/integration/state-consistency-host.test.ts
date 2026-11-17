@@ -28,7 +28,7 @@ const runState = async (scenario: 'root-write' | 'writer-completion') => {
       routes: Object.fromEntries(['tian_shu', 'tan_wei', 'ji_feng', 'fu_he', 'yu_shi'].map(role => [role, { chain: [{ provider: PROVIDER, model: role === 'tian_shu' ? 'root' : `role-${role}` }], upgrade: { enabled: false } }])) } },
     { insert: [{ id: 'state-worktrees', name: '@deepseek-ai/dsh-experimental-worktree' }, { id: 'state-worktree-tool', name: '@deepseek-ai/dsh-experimental-tool-worktree' }, { id: 'swarm-state-consistency-driver', name: join(DRIVER_DIR, 'state-consistency-scenarios.js') }] }
   ]))
-  const processResult = await runDshAsync({ args: ['--profile', PROFILE, '--patch', overlay], cwd: workspace, timeout: 50000,
+  const processResult = await runDshAsync({ args: ['--profile', PROFILE, '--patch', overlay], cwd: workspace, timeout: 90000,
     env: { SWARM_SCENARIO: '', SWARM_RECOVERY_SCENARIO: '', SWARM_UPGRADE_SCENARIO: '', SWARM_STATE_CONSISTENCY_SCENARIO: scenario, SWARM_STATE_CONSISTENCY_OUT: out } })
   if (!existsSync(out)) throw new Error(`State consistency driver produced no output\n${processResult.stdout}\n${processResult.stderr}`)
   writeFileSync(`${workspace}.process.json`, JSON.stringify(processResult, null, 2))

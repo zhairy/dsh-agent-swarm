@@ -6,7 +6,10 @@ import type { SwarmEvent } from './event-journal.js'
 /** DSH 官方 Git 工作树 bundle 注册的模型工具。 */
 export const WORKTREE_TOOL = 'create_worktree'
 export const RESTORE_WORKTREE_TOOL = 'swarm_restore_worktree'
-export const isWorktreeMutationTool = (name: string): boolean => ['write', 'edit', 'apply_patch', 'bash', 'pwsh', 'nb_save', WORKTREE_TOOL].includes(name)
+export const PRIMARY_WORKSPACE_TOOL = 'swarm_bind_primary_workspace'
+export const WORKSPACE_GIT_SAVE_TOOL = 'swarm_git_save'
+export const VERIFICATION_OUTPUT_TOOL = 'swarm_prepare_verification'
+export const isWorktreeMutationTool = (name: string): boolean => ['write', 'edit', 'apply_patch', 'bash', 'pwsh', 'nb_save', WORKTREE_TOOL, PRIMARY_WORKSPACE_TOOL, WORKSPACE_GIT_SAVE_TOOL, VERIFICATION_OUTPUT_TOOL].includes(name)
 
 export interface WorktreeAuthorization {
   attemptId: string
@@ -34,6 +37,8 @@ export interface WorktreeOwner {
 }
 
 export interface CreatedWorktreeInfo {
+  /** 缺省值保留旧 linked 记录；primary 只能由可信 Host 绑定入口产生。 */
+  kind?: 'linked' | 'primary'
   path: string
   branch: string
   baseCommit: string
@@ -80,10 +85,12 @@ const parseJsonObject = (value: string): unknown => {
 /** 只接受 DSH 官方工具声明的四个结果字段；同时兼容直接结果和文本渲染结果。 */
 export const ParseCreatedWorktree = (value: unknown): CreatedWorktreeInfo | undefined => {
   if (object(value) && validString(value.path) && validString(value.branch) && validString(value.baseCommit) && validString(value.repositoryRoot)) {
+    if (value.kind !== undefined && value.kind !== 'primary' && value.kind !== 'linked') return undefined
     if (!isAbsolute(value.path) || !isAbsolute(value.repositoryRoot)) return undefined
     const rel = relative(value.repositoryRoot, value.path)
-    if (rel === '' || rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)) return undefined
-    return { path: value.path, branch: value.branch, baseCommit: value.baseCommit, repositoryRoot: value.repositoryRoot }
+    if (value.kind === 'primary' ? rel !== '' : rel === '' || rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)) return undefined
+    return { path: value.path, branch: value.branch, baseCommit: value.baseCommit, repositoryRoot: value.repositoryRoot,
+      ...(value.kind === undefined ? {} : { kind: value.kind }) }
   }
   if (!object(value)) return undefined
   if (object(value.structured)) return ParseCreatedWorktree(value.structured)
@@ -116,7 +123,8 @@ export interface WorktreeRegistry {
   hydrateJournal: (events: readonly SwarmEvent[]) => void
 }
 
-const worktreeId = (path: string): string => `wt-${createHash('sha256').update(path).digest('hex').slice(0, 20)}`
+// 主树可以按顺序服务不同任务，记录不能因共享路径混为同一授权；物理排他仍由路径租约保护。
+const worktreeId = (path: string, taskId?: string): string => `wt-${createHash('sha256').update(taskId === undefined ? path : `${path}\0${taskId}`).digest('hex').slice(0, 20)}`
 
 /** Per-root registry. A retained worktree is never reused across tickets or assignments. */
 export const intWorktreeRegistry = (deps: { now?: () => number } = {}): WorktreeRegistry => {
@@ -144,12 +152,15 @@ export const intWorktreeRegistry = (deps: { now?: () => number } = {}): Worktree
   }
 
   const bind = (input: CreatedWorktreeInfo & WorktreeOwner & { observation?: WorktreeObservation }): WorktreeBindingInfo => {
+    if (ParseCreatedWorktree(input) === undefined) throw new Error('工作树种类、路径或仓库字段无效')
     if (!validString(input.path) || !validString(input.branch) || !validString(input.baseCommit) || !validString(input.repositoryRoot)
       || !validString(input.agentId) || !validString(input.taskId) || !validString(input.delegationId)) throw new Error('工作树绑定字段无效')
     if (input.execution !== undefined && !validExecution(input.execution) || input.observation !== undefined && !validObservation(input.observation)) throw new Error('工作树执行身份或目录指纹无效')
-    const existing = records.get(worktreeId(input.path))
+    const id = worktreeId(input.path, input.kind === 'primary' ? input.taskId : undefined)
+    const existing = records.get(id)
+    if ([...records.values()].some(row => row.taskId === input.taskId && row.worktreeId !== id)) throw new Error('当前任务已经绑定其它工作树，不能追加不同种类或路径')
     if (existing !== undefined) {
-      if (getWorktreeOwnerKey(existing) !== getWorktreeOwnerKey(input) || existing.branch !== input.branch || existing.repositoryRoot !== input.repositoryRoot || existing.baseCommit !== input.baseCommit) {
+      if (getWorktreeOwnerKey(existing) !== getWorktreeOwnerKey(input) || (existing.kind ?? 'linked') !== (input.kind ?? 'linked') || existing.branch !== input.branch || existing.repositoryRoot !== input.repositoryRoot || existing.baseCommit !== input.baseCommit) {
         throw new Error('该工作树已经绑定到其它任务或专家，不能复用')
       }
       return structuredClone(existing)
@@ -158,7 +169,7 @@ export const intWorktreeRegistry = (deps: { now?: () => number } = {}): Worktree
     if (agentRecord !== undefined) throw new Error('当前专家已经绑定工作树，不能创建第二棵可写工作树')
     const record: WorktreeBindingInfo = {
       ...input,
-      worktreeId: worktreeId(input.path),
+      worktreeId: id,
       state: 'active',
       retention: 'manual-only',
       createdAt: now(),
@@ -198,7 +209,7 @@ export const intWorktreeRegistry = (deps: { now?: () => number } = {}): Worktree
     },
     publishRestore: (expected, next) => {
       const previous = assertPrevious(expected)
-      if (next.taskId !== previous.taskId || next.path !== previous.path || next.branch !== previous.branch
+      if (next.taskId !== previous.taskId || next.path !== previous.path || (next.kind ?? 'linked') !== (previous.kind ?? 'linked') || next.branch !== previous.branch
         || next.baseCommit !== previous.baseCommit || next.repositoryRoot !== previous.repositoryRoot
         || next.ownershipRevision !== previous.ownershipRevision + 1) throw new Error('恢复提交的工作树身份不一致')
       publish({ ...next, state: 'recovery-required' })
@@ -226,7 +237,7 @@ export const intWorktreeRegistry = (deps: { now?: () => number } = {}): Worktree
         const data = event.data
         const parsed = ParseCreatedWorktree(data)
         if (parsed === undefined || !validString(event.taskId) || !validString(event.delegationId) || !validString(data.agentId)) continue
-        const id = worktreeId(parsed.path)
+        const id = worktreeId(parsed.path, parsed.kind === 'primary' ? event.taskId : undefined)
         if (records.has(id) || byAgent.has(data.agentId)) continue
         const record: WorktreeBindingInfo = {
           ...parsed,
@@ -250,7 +261,7 @@ export const intWorktreeRegistry = (deps: { now?: () => number } = {}): Worktree
         const raw = event.payload.binding ?? event.payload.legacyData
         const parsed = ParseCreatedWorktree(raw)
         if (parsed === undefined || !object(raw) || !validString(raw.agentId) || !validString(event.ticketId) || !validString(event.assignmentId)) throw new Error('工作树持久记录无效，拒绝恢复写权限')
-        const id = worktreeId(parsed.path)
+        const id = worktreeId(parsed.path, parsed.kind === 'primary' ? event.ticketId : undefined)
         const previous = records.get(id)
         const execution = raw.execution as WorktreeAuthorization | undefined
         if (execution !== undefined && !validExecution(execution)) throw new Error('持久工作树的 attempt 身份无效')
@@ -264,7 +275,7 @@ export const intWorktreeRegistry = (deps: { now?: () => number } = {}): Worktree
         if (event.type === 'worktree/restored') {
           if (previous === undefined || event.payload.previousOwner !== getWorktreeOwnerKey(previous)
             || next.ownershipRevision !== previous.ownershipRevision + 1 || next.execution === undefined
-            || next.taskId !== previous.taskId || next.branch !== previous.branch || next.repositoryRoot !== previous.repositoryRoot || next.baseCommit !== previous.baseCommit) throw new Error('工作树恢复事件链不一致')
+            || (next.kind ?? 'linked') !== (previous.kind ?? 'linked') || next.taskId !== previous.taskId || next.branch !== previous.branch || next.repositoryRoot !== previous.repositoryRoot || next.baseCommit !== previous.baseCommit) throw new Error('工作树恢复事件链不一致')
         } else if (previous !== undefined) {
           if (next.taskId !== previous.taskId || next.branch !== previous.branch || next.repositoryRoot !== previous.repositoryRoot || next.baseCommit !== previous.baseCommit) throw new Error('持久工作树重复绑定冲突')
           continue

@@ -2,11 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
 import { lstatSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, writeFile, rename, rm, access } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rename, rm, access, link } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { createExecutionBoundary, getExecutionBoundaryCarrier, EXECUTION_BOUNDARY_CAPS } from '../lib/adapters/dsh-host/execution-boundary.js'
+import { createExecutionBoundary, getExecutionBoundaryCarrier, EXECUTION_BOUNDARY_CAPS, EXECUTION_BOUNDARY_KEY } from '../lib/adapters/dsh-host/execution-boundary.js'
 
 const fixture = async t => {
   await access('/usr/bin/bwrap')
@@ -24,11 +24,13 @@ const fixture = async t => {
   const boundary = createExecutionBoundary({ get: name => name === 'fs' ? { processPathFromHostPath: p => p } : name === 'subprocess' ? { resolveExecutable: async program => { assert.equal(program, 'bwrap'); return '/usr/bin/bwrap' } } : name === 'agents' ? { get: id => id === agentId ? { id, session: {} } : undefined } : name === 'sandboxPolicy' ? { resolve: () => hostPolicy } : undefined }, () => {})
   boundary.begin(agentId, attemptId)
   let valid = true
+  const hooks = { beforeSpawn: undefined }
   const policy = { agentId, attemptId, mode: 'write', operation: 'shell', cwd, repositoryRoot: repo, writeScopes: [allowed], expectedDirectoryIdentity: [stat.dev, stat.ino, stat.birthtimeNs].join(':'), assertCurrent: () => { if (!valid) throw new Error('revoked') } }
   const carrier = getExecutionBoundaryCarrier()
   const launch = async (argv, override = {}) => {
     const ticket = carrier.prepareSpawn({ argv, cwd, ...override })
     ticket.assertContainment('linux-scope')
+    await hooks.beforeSpawn?.(ticket)
     const env = { ...process.env, ...ticket.spec.env }
     for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key]
     const child = spawn(ticket.spec.argv[0], ticket.spec.argv.slice(1), { cwd: ticket.spec.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -40,7 +42,7 @@ const fixture = async t => {
     return { ...result, stdout, stderr }
   }
   const run = (argv, override) => boundary.run(policy, () => launch(argv, override))
-  return { home, repo, cwd, allowed, boundary, carrier, policy, hostPolicy, launch, run, revoke: () => { valid = false } }
+  return { home, repo, cwd, allowed, boundary, carrier, policy, hostPolicy, hooks, launch, run, revoke: () => { valid = false } }
 }
 const write = path => [process.execPath, '-e', 'require("fs").writeFileSync(process.argv[1],"changed")', path]
 
@@ -121,6 +123,16 @@ test('execution edge: host runtime absence and persistent terminals fail closed'
   globalThis[EXECUTION_BOUNDARY_CAPS] = new Set()
   await assert.rejects(f.run(['/usr/bin/true']), /桥接/)
 })
+
+test('execution edge: an old process carrier without the verifier hardlink rule fails closed', async () => {
+  const previous = globalThis[EXECUTION_BOUNDARY_KEY]
+  globalThis[EXECUTION_BOUNDARY_KEY] = { primaryProtectionVersion: 1, version: 1 }
+  try {
+    assert.throws(() => getExecutionBoundaryCarrier(), /旧进程/)
+  } finally {
+    globalThis[EXECUTION_BOUNDARY_KEY] = previous
+  }
+})
 test('quiescence: producer completion alone is insufficient; waitForExit must confirm the managed range', async t => {
   const f = await fixture(t)
   await f.boundary.run(f.policy, async () => {
@@ -149,4 +161,171 @@ test('quiescence: only an observed completed epoch can certify a writer, and sea
   assert.equal(f.boundary.seal(f.policy.agentId, f.policy.attemptId), true)
   assert.equal(f.boundary.quiescent(f.policy.agentId, f.policy.attemptId), true)
   await assert.rejects(f.run(['/usr/bin/true']), /已结束/)
+})
+
+test('future verification directories do not block other admitted writes or become writable before preparation', async t => {
+  const f = await fixture(t)
+  const future = join(f.cwd, 'var/tmp')
+  f.policy.writeScopes.push(future)
+  assert.equal((await f.run(write(join(f.allowed, 'allowed.txt')))).code, 0)
+  assert.notEqual((await f.run(['/usr/bin/python3', '-c', 'import os,sys;os.makedirs(sys.argv[1])', future])).code, 0)
+})
+
+test('kernel execution: a pre-existing hardlink alias cannot write protected Git metadata', async t => {
+  const f = await fixture(t)
+  const metadata = join(f.cwd, 'metadata')
+  const protectedFile = join(metadata, 'config')
+  const alias = join(f.allowed, 'config-alias')
+  await mkdir(metadata)
+  await writeFile(protectedFile, 'protected')
+  await link(protectedFile, alias)
+  const stat = lstatSync(metadata, { bigint: true })
+  Object.assign(f.policy, {
+    protectedRoots: [metadata],
+    expectedGitIdentity: [stat.dev, stat.ino, stat.birthtimeNs].join(':')
+  })
+
+  await assert.rejects(f.run(write(alias)), /硬链接 alias/)
+  assert.equal(await readFile(protectedFile, 'utf8'), 'protected')
+  assert.equal(lstatSync(alias).nlink, 2)
+})
+
+test('kernel execution: the namespace check rejects an alias created after host preflight', async t => {
+  const f = await fixture(t)
+  const metadata = join(f.cwd, 'metadata')
+  const protectedFile = join(metadata, 'config')
+  const alias = join(f.allowed, 'late-config-alias')
+  await mkdir(metadata)
+  await writeFile(protectedFile, 'protected')
+  const stat = lstatSync(metadata, { bigint: true })
+  Object.assign(f.policy, {
+    protectedRoots: [metadata],
+    expectedGitIdentity: [stat.dev, stat.ino, stat.birthtimeNs].join(':')
+  })
+  f.hooks.beforeSpawn = async () => { await link(protectedFile, alias) }
+
+  const result = await f.run(write(alias))
+
+  assert.equal(result.code, 125)
+  assert.match(result.stderr, /SWARM_EXECUTION_BOUNDARY_REJECTED/)
+  assert.equal(await readFile(protectedFile, 'utf8'), 'protected')
+  assert.equal(lstatSync(alias).nlink, 2)
+})
+
+test('kernel execution: Shell cannot create a new hardlink from protected metadata', async t => {
+  const f = await fixture(t)
+  const metadata = join(f.cwd, 'metadata')
+  const protectedFile = join(metadata, 'config')
+  const alias = join(f.allowed, 'runtime-config-alias')
+  await mkdir(metadata)
+  await writeFile(protectedFile, 'protected')
+  const stat = lstatSync(metadata, { bigint: true })
+  Object.assign(f.policy, {
+    protectedRoots: [metadata],
+    expectedGitIdentity: [stat.dev, stat.ino, stat.birthtimeNs].join(':')
+  })
+
+  const result = await f.run([
+    process.execPath,
+    '-e',
+    'require("fs").linkSync(process.argv[1], process.argv[2])',
+    protectedFile,
+    alias
+  ])
+
+  assert.notEqual(result.code, 0)
+  await assert.rejects(access(alias), error => error.code === 'ENOENT')
+  assert.equal(await readFile(protectedFile, 'utf8'), 'protected')
+})
+
+test('kernel execution: verifier writable scopes reject a hardlink alias to source', async t => {
+  const f = await fixture(t)
+  const metadata = join(f.cwd, 'metadata')
+  const protectedFile = join(metadata, 'config')
+  const source = join(f.cwd, 'source.ts')
+  const alias = join(f.allowed, 'source-alias.ts')
+  await mkdir(metadata)
+  await writeFile(protectedFile, 'protected')
+  await writeFile(source, 'source-read-only')
+  const sourceBefore = await readFile(source)
+  await link(source, alias)
+  const metadataStat = lstatSync(metadata, { bigint: true })
+  const allowedStat = lstatSync(f.allowed, { bigint: true })
+  Object.assign(f.policy, {
+    protectedRoots: [metadata],
+    expectedGitIdentity: [metadataStat.dev, metadataStat.ino, metadataStat.birthtimeNs].join(':'),
+    expectedWritableIdentities: [{
+      path: f.allowed,
+      identity: [allowedStat.dev, allowedStat.ino, allowedStat.birthtimeNs].join(':')
+    }]
+  })
+
+  const outcome = await f.run(write(alias)).then(
+    result => ({ result }),
+    error => ({ error })
+  )
+
+  assert.deepEqual(await readFile(source), sourceBefore)
+  assert.ok('error' in outcome || outcome.result.code !== 0)
+  assert.equal(lstatSync(alias).nlink, 2)
+})
+
+test('kernel execution: namespace check applies the strict verifier hardlink rule', async t => {
+  const f = await fixture(t)
+  const metadata = join(f.cwd, 'metadata')
+  const protectedFile = join(metadata, 'config')
+  const source = join(f.cwd, 'source.ts')
+  const alias = join(f.allowed, 'late-source-alias.ts')
+  await mkdir(metadata)
+  await writeFile(protectedFile, 'protected')
+  await writeFile(source, 'source-read-only')
+  const sourceBefore = await readFile(source)
+  const metadataStat = lstatSync(metadata, { bigint: true })
+  const allowedStat = lstatSync(f.allowed, { bigint: true })
+  Object.assign(f.policy, {
+    protectedRoots: [metadata],
+    expectedGitIdentity: [metadataStat.dev, metadataStat.ino, metadataStat.birthtimeNs].join(':'),
+    expectedWritableIdentities: [{
+      path: f.allowed,
+      identity: [allowedStat.dev, allowedStat.ino, allowedStat.birthtimeNs].join(':')
+    }]
+  })
+  f.hooks.beforeSpawn = async () => { await link(source, alias) }
+
+  const result = await f.run(write(alias))
+
+  assert.deepEqual(await readFile(source), sourceBefore)
+  assert.equal(result.code, 125)
+  assert.match(result.stderr, /SWARM_EXECUTION_BOUNDARY_REJECTED/)
+  assert.equal(lstatSync(alias).nlink, 2)
+})
+
+test('kernel execution: strict verifier hardlink policy leaves ordinary source reads available', async t => {
+  const f = await fixture(t)
+  const metadata = join(f.cwd, 'metadata')
+  const source = join(f.cwd, 'source.ts')
+  await mkdir(metadata)
+  await writeFile(join(metadata, 'config'), 'protected')
+  await writeFile(source, 'source-readable')
+  const metadataStat = lstatSync(metadata, { bigint: true })
+  const allowedStat = lstatSync(f.allowed, { bigint: true })
+  Object.assign(f.policy, {
+    protectedRoots: [metadata],
+    expectedGitIdentity: [metadataStat.dev, metadataStat.ino, metadataStat.birthtimeNs].join(':'),
+    expectedWritableIdentities: [{
+      path: f.allowed,
+      identity: [allowedStat.dev, allowedStat.ino, allowedStat.birthtimeNs].join(':')
+    }]
+  })
+
+  const result = await f.run([
+    process.execPath,
+    '-e',
+    'process.stdout.write(require("fs").readFileSync(process.argv[1]))',
+    source
+  ])
+
+  assert.equal(result.code, 0)
+  assert.equal(result.stdout, 'source-readable')
+  assert.equal(await readFile(source, 'utf8'), 'source-readable')
 })

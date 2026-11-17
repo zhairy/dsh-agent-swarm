@@ -9,6 +9,7 @@ const hash = (path: string) => createHash('sha256').update(readFileSync(path)).d
 const evidence = process.env.SWARM_TEST_EVIDENCE_DIR ?? '/data/nas/public/swarm/release-artifacts/v3.4.0-local-20261116'
 
 it('真实 rc3：冻结后原生拒绝切换；桥接重组工具/提示且不重放已执行工具', () => {
+  mkdirSync(evidence, { recursive: true })
   // 复制整个 SDK，所有 restore/apply 均落在副本，绝不调用 ensureDsh。
   const source = join(SANDBOX_ROOT, 'dsh-0.2.2-rc.3')
   const target = join(source, 'node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js')

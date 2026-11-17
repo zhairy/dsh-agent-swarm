@@ -5,13 +5,15 @@ import { SwarmError } from './util/errors.js'
 import { waitForPlanning } from './planning-wait.js'
 import { MERMAID_PARSER_VERSION, ParseWorkflowMermaid, ValidateWorkflow, WORKFLOW_GENERATOR_VERSION, getCanonicalWorkflow, getValueDigest, getWorkflowDigest, getWorkflowMermaid, type MermaidParserLike, type WorkflowDefinition, type WorkflowParserResultInfo } from './workflow.js'
 
-export const PLANNING_REVIEW_POLICY_VERSION = '2'
-export const PLANNING_REVIEW_QUESTION_VERSION = '4'
+export const PLANNING_REVIEW_POLICY_VERSION = '3'
+export const PLANNING_REVIEW_QUESTION_VERSION = '5'
 export type PlanningReviewVerdict = 'pass' | 'changes_requested' | 'unknown' | 'needs-clarification'
 export type PlanningReviewStatus = 'pending' | 'reviewing' | 'pass' | 'pass_with_degradation' | 'changes_requested' | 'unknown' | 'needs-clarification' | 'review_required' | 'unavailable' | 'stale'
 export interface RequirementMapInfo { id: string; text: string; required: boolean; acceptanceIds: string[]; nodeIds: string[] }
 export interface PlanningExecutionPolicyInfo { maxAutoFixRounds?: number; maxPlanningReviewFixRounds?: number; planningReviewTimeoutMs?: number; workflowMode?: 'off' | 'advisory' | 'enforced'; profile?: 'legacy' | 'bounded'; maxCalls?: number; delegationLimit?: number }
 export interface ReviewSnapshotInputInfo {
+  workspacePlan?: import('./workspace-policy.js').WorkspacePlan
+  workspacePlanUnavailable?: boolean
   rootSessionId: string
   workspaceId: string
   taskId: string
@@ -57,6 +59,7 @@ const PLANNING_RUNTIME_RULES = {
   independence: '独立规划审核总是新建只读会话；执行阶段御史初审和算衡验算由宿主强制 session=new，显式回应阶段另行校验冻结初审。相同角色名不代表复用同一初审上下文。',
   failure: '审核超时或取消不授予执行权限；同一明确负结论不重新抽样。修正实质合同后才能复审；修复轮次上限以 executionPolicy 为准，无法满足则记录未完成。',
   evidence: '执行前只检查产出与验证计划，实际测试结果须在执行后提交。阶段验收仅覆盖阶段交付，延期项不表示完成。'
+  ,workspace: '项目硬限制由 Host 读取并绑定摘要；primary 禁止第二工作树，linked 沿用隔离工作树；blocked 必须先澄清。衡鉴规划不能授予写权限，写入仍需当前任务、角色、Host 策略和排他租约。'
 } as const
 export interface ReviewDimensionInfo { verdict: PlanningReviewVerdict; summary: string; evidenceRefs: string[] }
 export interface PlanningReviewFindingInfo {
@@ -185,6 +188,8 @@ const getReviewSnapshotDigest = (body: Omit<ReviewSnapshot, 'snapshotDigest'>): 
 export const ValidateReviewSnapshot = (snapshot: ReviewSnapshot): string[] => {
   const errors = ValidateWorkflow(snapshot.workflow, snapshot.card, snapshot.gates).errors
   if (snapshot.requestSource === 'host' && snapshot.requestHistoryUnavailable) errors.push('宿主需求历史当前不可读取，无法确认最新授权；恢复公开消息接口后再审核，不复用旧批准')
+  if (snapshot.workspacePlanUnavailable && snapshot.permissions.some(role => role.permission === 'workspace-edit')) errors.push('Host 无法核验项目工作区规则，不能批准代码写入规划')
+  if (snapshot.workspacePlan?.mode === 'blocked') errors.push('项目工作区要求存在冲突，必须先澄清')
   const reqs = new Set(snapshot.requirements.map((item) => item.id))
   const acceptances = new Set(snapshot.acceptances.map((item) => item.id))
   const nodes = new Set(snapshot.workflow.nodes.map((item) => item.id))

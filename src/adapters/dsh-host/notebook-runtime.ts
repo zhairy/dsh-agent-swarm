@@ -60,6 +60,8 @@ export interface NotebookEpoch {
 }
 
 export interface NotebookBoundaryScope {
+  /** 当前任务身份；托管 Notebook 快照必须保留该值，避免跨任务串用视图。 */
+  taskId?: string
   agentId: string
   attemptId: string
   mode: 'write' | 'read-only' | 'host-worktree'
@@ -226,6 +228,7 @@ const assertAbsolute = (name: string, path: string): string => {
 
 const validateScope = (scope: NotebookBoundaryScope): NotebookBoundaryScope => {
   if (typeof scope.agentId !== 'string' || typeof scope.attemptId !== 'string'
+    || (scope.taskId !== undefined && (typeof scope.taskId !== 'string' || scope.taskId.trim() === ''))
     || typeof scope.cwd !== 'string' || typeof scope.repositoryRoot !== 'string'
     || !Array.isArray(scope.writeScopes) || typeof scope.assertCurrent !== 'function'
     || scope.epoch === null || typeof scope.epoch !== 'object') throw new Error('Notebook 执行边界 scope 不完整')

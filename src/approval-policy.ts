@@ -1,6 +1,6 @@
 import { CAPABILITY_TOOL_CANDIDATES, NOTEBOOK_COMPUTE_TOOLS, type AgentLike, type ApprovalServiceLike, type PreToolDecisionLike, type ToolExecutionLike } from './host-contract.js'
 import { APPROVAL_SCOPES, type ApprovalsConfigInfo } from './config.js'
-import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL } from './worktree-binding.js'
+import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL, PRIMARY_WORKSPACE_TOOL, WORKSPACE_GIT_SAVE_TOOL, VERIFICATION_OUTPUT_TOOL } from './worktree-binding.js'
 
 export { APPROVAL_SCOPES, type ApprovalsConfigInfo } from './config.js'
 export type ApprovalScope = typeof APPROVAL_SCOPES[number]
@@ -12,7 +12,7 @@ const SCOPE_LABELS: Record<ApprovalScope, string> = {
 
 /** Classifies public tool names; it does not infer the safety of arbitrary code or MCP payloads. */
 export const getToolApprovalScope = (name: string): ApprovalScope | undefined => {
-  if (CAPABILITY_TOOL_CANDIDATES.edit.includes(name as 'write' | 'edit') || name === WORKTREE_TOOL || name === RESTORE_WORKTREE_TOOL) return 'write'
+  if (CAPABILITY_TOOL_CANDIDATES.edit.includes(name as 'write' | 'edit') || [WORKTREE_TOOL, RESTORE_WORKTREE_TOOL, PRIMARY_WORKSPACE_TOOL, WORKSPACE_GIT_SAVE_TOOL, VERIFICATION_OUTPUT_TOOL].includes(name)) return 'write'
   if (name === 'bash' || name === 'pwsh' || name === 'run_code'
     || (NOTEBOOK_COMPUTE_TOOLS as readonly string[]).includes(name)
     || ['nb_list_vars', 'nb_inspect_object', 'nb_context', 'nb_error_context'].includes(name)) return 'shell'

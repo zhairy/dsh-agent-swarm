@@ -1,7 +1,7 @@
 import { CAPABILITY_TOOL_CANDIDATES, NOTEBOOK_METADATA_TOOLS, NOTEBOOK_MEMORY_TOOLS, NOTEBOOK_COMPUTE_TOOLS, type Capability } from './host-contract.js'
 import { LANGUAGE_NAMES, LANGUAGE_PLACEHOLDER, type OutputLanguage } from './language.js'
 import { getStyledPersona, type PromptStyle } from './model-family.js'
-import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL } from './worktree-binding.js'
+import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL, PRIMARY_WORKSPACE_TOOL, WORKSPACE_GIT_SAVE_TOOL, VERIFICATION_OUTPUT_TOOL } from './worktree-binding.js'
 
 /** 13 个角色的稳定 ASCII ID（天枢 + 12 个可委派角色） */
 export const ROLE_IDS = [
@@ -172,7 +172,7 @@ const COMMON_CHILD_BOUNDARIES = [
   '不要为了确认自己使用的模型或供应商去读取 DSH 的配置、凭据或会话文件：实际使用的模型由系统记录在委派结果里，任务要求报告模型时写「由系统记录」即可。'
 ]
 
-const WORKTREE_BOUNDARY = '可编辑专家在修改文件或运行命令前必须取得本 attempt 的隔离工作树授权。当前任务已有保留工作树时，先用 swarm_context_read 获取 worktree_id，再显式调用 swarm_restore_worktree 接管；无旧工作树时才调用 create_worktree。恢复失败保持只读，不反复新建，不删除原现场，不绕过守卫。不得接管其它任务的工作树。修改后核对 git status、git diff 和真实测试结果。工作树默认保留，即使失败也不得自动删除；存在未提交文件或未合并提交时必须保留并交给天枢/用户处理。'
+const WORKTREE_BOUNDARY = '修改文件或运行命令前先读取任务卡 workspacePlan。primary 表示项目要求唯一主工作树：调用 swarm_bind_primary_workspace，expected_head 必须取已核验的 HEAD，禁止 create_worktree。linked 沿用 create_worktree；blocked 先澄清。已有记录从 swarm_context_read 获取 worktree_id，再显式 swarm_restore_worktree；不可自动接管。所有模式仍需当前 attempt、Host 策略和排他租约；失败保持只读，不删除现场或重复建树。主仓库 .git 禁止普通文件和 Shell 编辑，WIP/提交使用受控 swarm_git_save。保留所有 staged/unstaged/untracked 内容，结束核对真实测试与 git 状态。'
 
 const MODE_TEXT: Readonly<Record<SuanHengMode, string>> = {
   research: '当前模式：研算。在实现之前定义语义，提出候选算法，给出不变量、复杂度与数值误差分析。',
@@ -317,7 +317,8 @@ export const getWantedTools = (id: RoleId, options: { allowWeb?: boolean } = {})
   const wanted = [...new Set([
     ...capabilities.flatMap((cap) => [...CAPABILITY_TOOL_CANDIDATES[cap]]),
     ...(capabilities.includes('shell') ? [...NOTEBOOK_COMPUTE_TOOLS] : []),
-    ...(role.permission === 'workspace-edit' ? [WORKTREE_TOOL, RESTORE_WORKTREE_TOOL] : [])
+    ...(id === 'fu_he' ? [VERIFICATION_OUTPUT_TOOL] : []),
+    ...(role.permission === 'workspace-edit' ? [WORKTREE_TOOL, RESTORE_WORKTREE_TOOL, PRIMARY_WORKSPACE_TOOL, WORKSPACE_GIT_SAVE_TOOL, VERIFICATION_OUTPUT_TOOL] : [])
   ])]
   // 主持者可以整理 Notebook 草稿/元信息；任意代码与文件保存仍由获授权专家执行。
   const rootNotebook = new Set<string>([...NOTEBOOK_METADATA_TOOLS, ...NOTEBOOK_MEMORY_TOOLS])

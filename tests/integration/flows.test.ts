@@ -159,7 +159,12 @@ describe('衡鉴 Jev', () => {
     const request = requests.at(-1)
     expect(request?.auth).toBe('Bearer test-key')
     expect(request?.body.model).toBe('jev-1.14.0')
-    expect(Object.keys((request?.body.state ?? {}) as object).sort()).toEqual(['acceptance_count', 'flags', 'goal', 'profile', 'scope_count', 'task'])
+    const state = (request?.body.state ?? {}) as Record<string, unknown>
+    expect(Object.keys(state).sort()).toEqual(['acceptance_count', 'flags', 'goal', 'profile', 'scope_count', 'task', 'workspace'])
+    // 新增 Host 规则摘要是规划输入，不能顺便发送物理仓库路径、历史正文或任意源码。
+    expect(Object.keys(state.workspace as object).sort()).toEqual(['allowedModes', 'evidence', 'mode', 'reason', 'request', 'sourceDigests', 'worktreeCountAtPlanning'])
+    expect((state.workspace as { request: unknown }).request).toMatchObject({ source: 'host', text: expect.any(String) })
+    expect(JSON.stringify(state.workspace)).not.toContain('repositoryRoot')
   })
 
   it('jev-fallback：Jev 过载时按严格路径追加验算与审查', async () => {

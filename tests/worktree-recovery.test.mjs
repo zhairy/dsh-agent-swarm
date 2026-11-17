@@ -343,3 +343,63 @@ test('worktree service: a new delegated Worker restores the retained tree; previ
   await assert.rejects(b.run, /任务产物工作树目录身份已改变/)
   assert.ok(service.getGuardReason({ name: 'write', arguments: { path: 'worker.txt' }, ...b.exec }))
 })
+
+test('worktree service: a successful Host create that fails contract binding is quarantined and not rebound', { timeout: 20000 }, async t => {
+  const cleanup = []
+  const f = await fixture({ after: action => cleanup.push(action) })
+  const root = { id: 'root', status: 'idle', session: { header: { agentPreset: 'tian-shu', cwd: f.created.repositoryRoot } } }
+  const live = new Map([[root.id, root]])
+  let waiting
+  const outputs = JSON.parse(await readFile(new URL('./fixtures/valid-outputs.json', import.meta.url), 'utf8'))
+  const config = getSwarmConfig({ jev: { enabled: false }, review: { enabled: false }, planningReview: { enabled: false }, workflow: { mode: 'advisory' },
+    watchdog: { enabled: false }, agents: { maxRetries: 0 }, routes: { zhu_jian: { chain: [{ provider: 'fixture', model: 'fixture' }] } } })
+  const service = intSwarmService({ getConfig: () => config, dshHome: join(f.directory, 'service'), getLlm: () => undefined,
+    getCredentials: () => undefined, getAttachments: () => undefined, getAgent: id => live.get(id), getWorktreeHost: () => f.host,
+    getJobs: () => ({ list: () => [] }), fetch: async () => { throw new Error('network prohibited') }, probe: async () => ({ ok: true, vision: false }),
+    writerBoundary: { available: () => true, begin: () => {}, seal: () => true, quiescent: () => true },
+    getTools: () => ({ register: () => () => {}, guard: () => () => {}, schemas: () => ['create_worktree', 'read', 'write', 'edit', 'bash', 'swarm_context_read'].map(name => ({ name })) }),
+    getSubagents: () => ({ list: () => ['spawn'], getProvider: () => ({ capabilities: { agentOptions: true, outputSchema: true, toolFilter: true, persona: true, depthLimit: true } }),
+      start: async () => {
+        const result = deferred()
+        const child = { id: 'orphan-writer', status: 'running', session: { header: { parentSession: root.id, agentPreset: 'zhu-jian', cwd: f.created.repositoryRoot } } }
+        live.set(child.id, child)
+        waiting = { child, result }
+        return { id: child.id, result: result.promise, dispose: async () => {} }
+      } }) })
+  let run
+  cleanup.push(async () => {
+    if (waiting !== undefined) {
+      waiting.child.status = 'idle'
+      waiting.result.resolve({ output: [], stopReason: 'completed', structured: outputs.zhu_jian })
+    }
+    await run?.catch(() => undefined)
+    await service.dispose()
+  })
+  t.after(async () => { for (const action of cleanup.reverse()) await action() })
+  const rootExec = { agent: root, signal: new AbortController().signal }
+  const task = await service.AddTaskCard({ title: 'reject unconfirmed worktree', goal: 'keep the rejected create quarantined', acceptance: ['no rebind'], scope: ['.'], flags: {} }, rootExec)
+  run = service.delegate({ task_id: task.task_id, role: 'zhu_jian', prompt: 'Create the isolated worktree once.', session: 'oneshot', backend: 'api' }, rootExec)
+  for (let i = 0; i < 200 && waiting === undefined; i++) await new Promise(resolve => setTimeout(resolve, 5))
+  assert.ok(waiting)
+  await service.WaitAgentReady(waiting.child)
+  const childExec = { agent: waiting.child, signal: new AbortController().signal }
+  const rejected = { ...f.created, baseCommit: 'b'.repeat(40) }
+
+  await service.GetExecutionBoundary({ name: 'create_worktree', arguments: { from: 'HEAD' }, ...childExec })
+  await assert.rejects(service.CompleteManagedTool({ name: 'create_worktree', ...childExec }, rejected), /基线/)
+
+  const status = service.getStatus({ task_id: task.task_id }, rootExec).tasks[0]
+  assert.deepEqual(status.worktrees, [])
+  assert.ok(service.getGuardReason({ name: 'write', arguments: { path: 'must-not-write.txt' }, ...childExec }))
+  const eventJournal = createSwarmEventJournal({
+    directory: join(f.directory, 'service', 'share', 'dsh-agent-swarm', 'events-v2'),
+    rootSessionId: root.id
+  })
+  const events = eventJournal.read().events
+  assert.equal(events.filter(event => event.type === 'worktree/bound').length, 0)
+  const quarantined = events.filter(event => event.type === 'ticket/quarantined')
+  assert.equal(quarantined.length, 1)
+  assert.equal(quarantined[0].ticketId, task.task_id)
+  assert.equal(quarantined[0].payload.path, f.created.path)
+  assert.equal(quarantined[0].payload.baseCommit, 'b'.repeat(40))
+})

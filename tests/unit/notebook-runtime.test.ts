@@ -69,6 +69,7 @@ const createCarrier = (scope: NotebookBoundaryScope | undefined) => {
 }
 
 const createScope = (root: string, mode: NotebookBoundaryScope['mode'] = 'read-only'): NotebookBoundaryScope => ({
+  taskId: 'T-notebook',
   agentId: 'agent-a',
   attemptId: 'attempt-a',
   mode,
@@ -127,6 +128,11 @@ it('compute reuse key includes the exact attempt and canonical workspace', withW
   assert.notEqual(first, second)
   assert.match(first, /attempt-a/)
   assert.ok(first.includes(root))
+}))
+
+it('snapshot task identity must be a non-empty string when present', withWorkspace((_root, carrier, scope) => {
+  scope.taskId = ' '
+  assert.throws(() => getNotebookBoundaryScope(carrier), /scope 不完整/)
 }))
 
 it('path checks keep reads and writes inside the active workspace', withWorkspace((root, carrier) => {

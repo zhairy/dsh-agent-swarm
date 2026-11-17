@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadTaskViewStoreModule } from './client-module-loader.js'
+import { loadRouteObservabilityModule, loadTaskViewStoreModule } from './client-module-loader.js'
 import { MERMAID_PARSER_VERSION } from '../../src/workflow.js'
 
 interface ElementInfo { type: unknown; props: Record<string, unknown>; children: unknown[] }
@@ -19,6 +19,7 @@ const loadModule = (view: unknown = null) => {
   new Function('require', 'module', 'exports', source)((name: string) => {
     if (name === 'react') return React
     if (name === '@swarm/task-view-store') return loadTaskViewStoreModule()
+    if (name === '@swarm/route-observability') return loadRouteObservabilityModule()
     if (name === '@deepseek-ai/dsh-client-ui-primitives') return { MarkdownText: 'MarkdownText' }
     throw new Error(`unexpected require ${name}`)
   }, module, module.exports)
@@ -26,6 +27,12 @@ const loadModule = (view: unknown = null) => {
 }
 const event = (seq = 1, text = 'task_id: T-1（任务卡已记录）\n```mermaid\nflowchart TD\n  n_a["分析"]\n```') => ({ type: 'tool/result', seq, data: { message: { content: [{ type: 'text', text }], isError: false } } })
 const textOf = (element: any): string => typeof element === 'string' ? element : element === null || element === undefined ? '' : (element.children ?? []).map(textOf).join('')
+const elements = (node: unknown): ElementInfo[] => {
+  if (Array.isArray(node)) return node.flatMap(elements)
+  if (node === null || node === undefined || typeof node !== 'object' || !('children' in node)) return []
+  const element = node as ElementInfo
+  return [element, ...element.children.flatMap(elements)]
+}
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 describe('真实任务流程客户端投影', () => {
@@ -139,6 +146,82 @@ describe('真实任务流程客户端投影', () => {
     expect(text).toContain('eventOutbox 2')
     expect(text).toContain('eventOutboxFailed 1')
     expect(text).not.toContain('preview')
+  })
+
+  it('shows primary, linked and blocked workspace planning reasons without internal paths or lease details', () => {
+    const { WorkspacePlanStatus } = loadModule().__test__
+    const t = (key: string) => key
+    const base = {
+      reason: '项目明确要求唯一主工作树，禁止创建第二工作树',
+      repositoryRoot: '/data/private/project',
+      branch: 'feature/worktree-policy',
+      head: 'a'.repeat(40),
+      sources: [{ path: 'AGENTS.md', digest: 'b'.repeat(64) }],
+      digest: 'c'.repeat(64)
+    }
+    const primary = WorkspacePlanStatus({ view: { workspacePlan: { ...base, mode: 'primary' }, workspacePlanUnavailable: false }, t })
+    const primaryText = textOf(primary)
+    expect(primary.props.role).toBe('status')
+    expect(primaryText).toContain('workspacePlanPrimary')
+    expect(primaryText).toContain(base.reason)
+    expect(primaryText).toContain('AGENTS.md')
+    expect(primaryText).toContain(base.branch)
+    expect(primaryText).toContain('aaaaaaaa')
+    expect(primaryText).not.toContain(base.repositoryRoot)
+    expect(primaryText).not.toContain(base.digest)
+    expect(primaryText).not.toContain('lease')
+
+    const linked = WorkspacePlanStatus({ view: { workspacePlan: { ...base, mode: 'linked', reason: '项目明确要求隔离工作树' }, workspacePlanUnavailable: false }, t })
+    expect(textOf(linked)).toContain('workspacePlanLinked')
+    expect(textOf(linked)).toContain('项目明确要求隔离工作树')
+
+    const blocked = WorkspacePlanStatus({ view: { workspacePlan: { ...base, mode: 'blocked', reason: '项目存在互相冲突的工作树要求，需要人工澄清' }, workspacePlanUnavailable: false }, t })
+    expect(textOf(blocked)).toContain('workspacePlanBlocked')
+    expect(textOf(blocked)).toContain('项目存在互相冲突的工作树要求')
+    expect(textOf(blocked)).not.toContain('bypass')
+  })
+
+  it('gives unavailable Host verification precedence over a stale recorded workspace mode', () => {
+    const { WorkspacePlanStatus, getWorkspacePlanView } = loadModule().__test__
+    const value = getWorkspacePlanView({
+      workspacePlanUnavailable: true,
+      workspacePlan: {
+        mode: 'primary',
+        reason: 'old reason',
+        repositoryRoot: '/private',
+        branch: 'main',
+        head: 'a'.repeat(40),
+        sources: [],
+        digest: 'b'.repeat(64)
+      }
+    })
+    expect(value).toMatchObject({ state: 'unavailable', reasonKey: 'workspacePlanUnavailable' })
+    const node = WorkspacePlanStatus({ view: { workspacePlanUnavailable: true }, t: (key: string) => key })
+    expect(textOf(node)).toContain('workspacePlanUnavailable')
+    expect(textOf(node)).not.toContain('old reason')
+  })
+
+  it('renders workspace planning beside task freshness in both full and compact task views', () => {
+    const module = loadModule()
+    const { TaskFlowContent, WorkspacePlanStatus } = module.__test__
+    const view = {
+      task_id: 'T-1',
+      workspacePlanUnavailable: false,
+      workspacePlan: {
+        mode: 'primary',
+        reason: '项目要求唯一主工作树',
+        repositoryRoot: '/private/project',
+        branch: 'main',
+        head: 'd'.repeat(40),
+        sources: [{ path: 'agent.md', digest: 'e'.repeat(64) }],
+        digest: 'f'.repeat(64)
+      }
+    }
+    const snapshot = { value: view, status: 'live', error: null, updatedAt: 1 }
+    const full = TaskFlowContent({ taskId: 'T-1', progressPage: true, snapshot, t: (key: string) => key })
+    const compact = TaskFlowContent({ taskId: 'T-1', compact: true, snapshot: { ...snapshot, status: 'historical' }, t: (key: string) => key })
+    expect(elements(full).filter((node) => node.type === WorkspacePlanStatus)).toHaveLength(1)
+    expect(elements(compact).filter((node) => node.type === WorkspacePlanStatus)).toHaveLength(1)
   })
 
   it('注册标准聊天节点并为当前任务注入共享Store，而不是每行独立RPC', async () => {
