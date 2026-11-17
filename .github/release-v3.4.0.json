@@ -449,5 +449,7 @@
     "plugin-inventory.json": "aac6724cadb76c61d7a99e003ab32a89d3c123e07aee5abf2d36d13676791ca0",
     "third-party-manifest.json": "a60c81a25d740c8e6235de833283eeb5645de2f9c1e75d66d2b96c00eb308ab9",
     "verification-summary.json": "32142d93499eee5385c7f9d56754d4263ed085852b667da84ed89ebf60ef6d29"
-  }
+  },
+  "releaseCommit": "9c3caa568983415ef5ff64040ba24289f74558d1",
+  "draftMustExist": true
 }
