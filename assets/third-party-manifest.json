@@ -33,7 +33,7 @@
     {
       "id": "subscriptions",
       "name": "dsh-plugin-subscriptions",
-      "version": "0.9.13+rc3.transport.1",
+      "version": "0.9.13+rc3.transport.2",
       "directory": "components/subscriptions",
       "license": "MIT",
       "source": "https://github.com/V1ki/dsh-plugin-subscriptions",
@@ -44,6 +44,7 @@
       "patchManifest": "patches/subscriptions.json",
       "files": {
         "LICENSE": "1fcf4016009aa6dd0bd490f6fdaf0552424a1052ca8d2c59a09da3eb7e2cd722",
+        "cordis.patch.yml": "df616106e59021c90a96ba61037e904ceb8dc62b20ea9b27062f9abb6a21ec8f",
         "lib/antigravity-model-id.d.ts": "a6c6e2f226643038e38425ed7984d0d00d7c75dbec6091ce7614a59e3d95ac3d",
         "lib/antigravity-model-id.js": "600abd650813cbbecea1cf2d287d3ceb0c4f1c119015887880d0939323b55c83",
         "lib/auth/claude-code-creds.d.ts": "5e3896b125298a17848415a430bbb89cceb8cdc9b2605cf1325fc25d21c7fe03",
@@ -200,7 +201,7 @@
         "lib/translate/responses.js": "a575f0f3bbae739bad79835f27bbde76db962f35462e2301e30960733cc78c37",
         "lib/translate/sse.d.ts": "f8541464d48e371c5cdb84279d8b7f9aeca786ad597add47bb4876ced9f863a8",
         "lib/translate/sse.js": "304b03ec6df90053361d781c9821089254da13b3e33e56e02afb2ebbaab17e1b",
-        "package.json": "84bbdc7920fa98440085874e83b96657709bdfeedbea98af5da0cb8bd97cd69e"
+        "package.json": "243f71310ee0bc50d21267b5e08aab58762f24fbb19905d5a17a0d03d569ffd5"
       }
     },
     {
@@ -565,7 +566,7 @@
   ],
   "supportFiles": {
     "KNOWN-ISSUES.zh-CN.md": "7034cabeaf76d141103f67f5dbd5a0ede0e99094ae9765fe8009d5dbf439d202",
-    "README.zh-CN.md": "a264678c678066dffbd5c230a9decdb66adb868d9bfda189dbc8603ced4680f2",
+    "README.zh-CN.md": "6952943422ee6e5f2ef6892a3b5b9f7c63f99aea49dfbf23feb646c40c582649",
     "host-patches/apply-dsh-execution-boundary.mjs": "5f3bdab7b50ddb7bdcecc91d1bd0ddc4b56fae6dc8f938df129bdd6140b1902e",
     "host-patches/apply-dsh-step-bridge.mjs": "f2fb0d34967b4815fed78a88befa013717bbe382707a9728903713172a1de7e8",
     "licenses/calculator-LICENSE": "8bda1ee96ffdbd04ee68ecb89ba02c1010398f8d081218d809ecf817d45b18a9",
@@ -589,10 +590,10 @@
     "patches/notebook.patch": "e1f2d105047f07563ee6b139b6376b09902a0a5c3975dbef7ba6be742467c4c9",
     "patches/rigorquant.json": "100ffee1749889fb3b5b1b7354c108214d2d9eaf8355108a95dd7e7e4c6ebddc",
     "patches/rigorquant.patch": "417207bfc7af500ff81410f92a7bc29f5d72b1b65d1a7e34c06cd0d803754ad0",
-    "patches/subscriptions.json": "97079bece897b981faa8b3fe19b88ebd6db5581ea1755cfd63800d6ee38e4e85",
-    "patches/subscriptions.patch": "8c24e5df197a9ebb21c1de4434e0660606ef3d465404d5370e14fbf4b279a06e",
+    "patches/subscriptions.json": "3707bd4f5d849b1302874cfc1dbc2ff161c905bc57d85b1faaa2fa3a09bc17c5",
+    "patches/subscriptions.patch": "513f3ec79b732b44006c5f16a6a03722e1b98ae4745a62876b6a2c1a96458ca4",
     "tools/apply-plugin-compat.mjs": "00cf113607084ac2851acf3732b3c10adaf8d2900784b2b6714a4c7a7104eb3e",
-    "tools/verify-compat.mjs": "dc2d882fef2fd82416e4dee95025c3a042a6514589ce703a27ba42dd6c82563a",
-    "plugin-inventory.json": "aac6724cadb76c61d7a99e003ab32a89d3c123e07aee5abf2d36d13676791ca0"
+    "tools/verify-compat.mjs": "694c67b0619dbd6cf585f53487186dca6bf07cfba7a1f121190f6084673993b9",
+    "plugin-inventory.json": "b0e058eb471e468c991050ee7c6ad84e80bd621afadd787c00a696a4878ab3a0"
   }
 }

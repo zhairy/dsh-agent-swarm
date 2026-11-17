@@ -12,7 +12,7 @@
     "failed": 0
   },
   "nodeTests": {
-    "passed": 62,
+    "passed": 64,
     "failed": 0
   },
   "publicationPreflightTests": {
@@ -52,13 +52,14 @@
   },
   "compatArchive": {
     "components": 6,
-    "regularFiles": 478,
+    "regularFiles": 479,
     "relativeImports": 180,
     "symlinks": 0,
     "nodeModules": 0,
     "runtimeCodeUnchangedFromValidatedComponents": true,
     "nonemptyCompositePatchesRoundtrip": 4,
-    "openCodeGo": "72 upstream files unchanged"
+    "openCodeGo": "72 upstream files unchanged",
+    "declaredEntrypointsVerified": true
   },
   "licenseReview": "passed after adding missing notices; private legacy presets excluded",
   "providerScope": "bounded fixed-text observations do not guarantee future provider availability",
@@ -67,5 +68,19 @@
     "No all-third-party-business-feature guarantee",
     "No full multi-language pool or microVM platform",
     "No account, private histories, site screenshots, runtime configs or node_modules in assets"
-  ]
+  ],
+  "gitCommit": "9c3caa568983415ef5ff64040ba24289f74558d1",
+  "publicationCommit": "364dab50440635a5ae303dd61612e8276ffea270",
+  "sourceTree": "8020449b51aa94acef59a06e29c46cebb8990bf4",
+  "sourceFilesVerified": true,
+  "subscriptionsOverlayRepair": {
+    "version": "0.9.13+rc3.transport.2",
+    "files": 159,
+    "overlaySha256": "df616106e59021c90a96ba61037e904ceb8dc62b20ea9b27062f9abb6a21ec8f",
+    "runtimeLibFilesUnchanged": 156,
+    "entrypointRegressionTests": 5,
+    "realHostSettingsVerified": true,
+    "subscriptionsAuthApiVerified": true,
+    "businessFeatureScope": "startup and settings recovery; no expanded provider availability claim"
+  }
 }

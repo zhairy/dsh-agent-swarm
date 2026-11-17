@@ -2,13 +2,15 @@
 
 目标宿主为 DSH **0.2.2-rc.3**，Node.js **>=24.9.0**。兼容归档随 [v3.4.0 Release](https://github.com/zhairy/dsh-agent-swarm/releases/tag/v3.4.0) 发布。它包含代码和补丁，不包含账号、密钥、Cookie、模型配置、会话、工作树或 Python 虚拟环境。
 
+2026-11-17 附件修订：初版 Subscriptions 兼容包遗漏 `cordis.patch.yml`，导致 Host 报 ENOENT、设置中缺少订阅入口。修订版 `0.9.13+rc3.transport.2` 恢复该文件；156 个 lib 文件与初版兼容构建逐字节一致。完整兼容归档、清单和 SHA256SUMS 已同步替换，请重新下载并核验；Swarm 主包与 v3.4.0 产品 tag 保持不变。校验器现在反查 main/types/exports/overlay 声明，拒绝文件缺失或未入清单的组件。
+
 ## 组件与用途
 
 | 组件 | 上游/基线 | 兼容版本 | 主要处理 |
 | --- | --- | --- | --- |
 | DSH Agent Swarm | 本仓库 | 3.4.0 | rc.3 子代理/恢复、原生执行边界、路由、等待/授权及 Notebook 接线 |
 | [dsh-notebook](https://github.com/beihzb/dsh-notebook) | 0.4.2 | 0.4.2+rc3.sandbox.3 | rc.3 工具输出契约、受管内核、角色与路径权限、退出证明、完成视图和环境元信息 |
-| [dsh-plugin-subscriptions](https://github.com/V1ki/dsh-plugin-subscriptions) | 0.9.13 | 0.9.13+rc3.transport.1 | 空文本/错误工具结果、Gemini thinking 兼容、rc.3 peers、CSS anchors、脱敏传输诊断 |
+| [dsh-plugin-subscriptions](https://github.com/V1ki/dsh-plugin-subscriptions) | 0.9.13 | 0.9.13+rc3.transport.2 | 空文本/错误工具结果、Gemini thinking 兼容、rc.3 peers、CSS anchors、脱敏传输诊断 |
 | dsh-rigorquant | 0.7.0 | 0.7.0+rc3.sidecar.2 | 冻结前选模、公共 Team/Subagent 身份、关闭态和权限守卫、移除过期 cwd 模板 |
 | [dsh-opencode-go](https://github.com/Duskriver/dsh-opencode-go) | 0.4.4 | 0.4.4，上游字节无需额外补丁 | 保留上游目录刷新/模型池；owner区分由配套设置包装器处理 |
 | dsh-opencode-live | 本地适配器 | 0.1.0+rc22.local.1 | Zen 动态目录、元数据交集、动态注册/释放，复用 rc.3 Pi AI |
@@ -94,6 +96,6 @@ Swarm托管计算默认为只读工作区、断网和有界资源。Root整理�
 
 ## 验证范围
 
-Swarm核心1792项单测通过、14项既有跳过；Node62项通过（含新增的3项兼容归档校验测试）；显式rc.3 Host56项通过。另有Notebook元信息5项、Subscriptions诊断6项及真实受管Notebook/JS/TS/浏览器路径验证。精确包验证与公开校验摘要随资产发布。
+Swarm核心1792项单测通过、14项既有跳过；Node64项通过（含5项兼容归档校验测试）；显式rc.3 Host56项通过。另有Notebook元信息5项、Subscriptions诊断6项及真实受管Notebook/JS/TS/浏览器路径验证。精确包验证与公开校验摘要随资产发布。
 
-RigorQuant已覆盖历史打开与Team权限相关路径，OpenCode覆盖注册/目录和归属边界，calculator覆盖工具契约；这些不等于验证每个第三方业务功能。完整限制和后续验收标准见[已知问题与迭代计划](KNOWN-ISSUES-AND-ROADMAP.zh-CN.md)。
+RigorQuant已覆盖历史打开与Team权限相关路径，OpenCode覆盖注册/目录和归属边界，calculator覆盖工具契约；这些不等于验证每个第三方业务功能。完整限制和后续验收标准见[已知问题与迭代计划](3.4.0-已知问题与迭代计划.md)。
