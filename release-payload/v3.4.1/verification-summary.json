@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "releaseVersion": "3.4.1",
+  "gitCommit": "168dc348c743f803d9e572be8393197e33a985d0",
+  "sourceTree": "33aa89ab2d1486253e7afde927806108b2528f45",
+  "hostVersion": "0.2.2-rc.3",
+  "validatedScope": "Linux 本机/API Worker；指定精确安装包、组件及已列明行为",
+  "tests": {
+    "node": {
+      "passed": 148,
+      "failed": 0
+    },
+    "unit": {
+      "files": 146,
+      "passed": 1836,
+      "existingSkipped": 14,
+      "failed": 0
+    },
+    "rc3Integration": {
+      "covered": 56,
+      "fullRunPassed": 55,
+      "fixtureSetupFailure": "step-model证据目录未创建；补mkdir后独立真实Host复验通过，矩阵再次通过",
+      "postFixDedicatedPassed": 1
+    },
+    "exactPackageMatrix": {
+      "status": "verified",
+      "checksPassed": 8,
+      "report": "compatibility-matrix.json"
+    },
+    "dependencyAudit": {
+      "sourceKnownVulnerabilities": 0,
+      "exactInstalledProductionKnownVulnerabilities": 0
+    }
+  },
+  "deployment": {
+    "swarm": "3.4.1",
+    "notebook": "0.4.2+rc3.sandbox.9",
+    "subscriptions": "0.9.13+rc3.transport.2",
+    "rigorquant": "0.7.0+rc3.sidecar.2",
+    "service": "dsh-web user service",
+    "active": true,
+    "automaticRestarts": 0,
+    "enabledPlugins": 263,
+    "nonActiveEnabledPlugins": 0,
+    "originalSessionsPreserved": 1161,
+    "missingOriginalSessions": 0,
+    "explicitAcceptanceSessionsAdded": 1,
+    "runningSessionsAfterProof": 0,
+    "installedSwarmFilesMatched": 449,
+    "installedNotebookFilesMatched": 17,
+    "onlyTwoBundleVersionsChanged": true,
+    "cordisAndWorkspaceConfigHashesPreserved": true,
+    "modelProbe": {
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "reply": "SWARM341_LIVE_OK",
+      "toolCalls": 0
+    },
+    "browser": {
+      "capturedErrors": 0,
+      "subscriptionControlsLoaded": true,
+      "acceptanceHistoryPresentAfterClick": true,
+      "historyPresentAfterAsyncReloadSettled": true,
+      "notebookTabLoaded": true
+    },
+    "routerNotebook": {
+      "memoryViewWorked": true,
+      "runHTTP": 403,
+      "saveHTTP": 403,
+      "activeKernelsForAcceptanceSession": 0,
+      "unexpectedSaveFile": false
+    }
+  },
+  "jev": {
+    "report": "jev-audit-summary.json",
+    "distinctToolsCompleted": 7,
+    "screenManualReviewCompleted": true,
+    "originalUncertaintyRetained": true
+  },
+  "publicationGate": "发布器核验固定sourceFiles、assets、不可移动tag，草稿附件逐一下载后才转为正式；发布后由发布操作者再独立下载核对。",
+  "noUniversalBugFreeClaim": true,
+  "knownLimits": [
+    "Notebook只恢复数据与原来源，不恢复内核/变量/旧写权；dirty清空旧来源",
+    "路由trace为有界进程内缓存，重启清空",
+    "复核输出拒绝symlink、多链接文件和不可有界核验的节点，不自动删除",
+    "Git保存只支持精确存在的普通文件，目录递归/删除/任意Git命令不开放",
+    "PTC、持久终端、原生CLI私有写入口没有新增豁免",
+    "rc.1只保留历史脚本，不作为本轮全矩阵通过",
+    "启用263行不等于所有第三方业务/外部MCP/所有供应商均完整验收"
+  ]
+}

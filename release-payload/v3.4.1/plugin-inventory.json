@@ -1,0 +1,296 @@
+{
+  "schemaVersion": 1,
+  "releaseVersion": "3.4.1",
+  "hostVersion": "0.2.2-rc.3",
+  "scope": "本机已安装bundle及启用行冷启动健康；不是每个插件业务功能的完整验收",
+  "bundles": [
+    {
+      "name": "@deepseek-ai/dsh-base",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-web-app",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-tool-calculator",
+      "version": "0.0.1+rc22.local.1",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@liustack/modlens",
+      "version": "3.27.5",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-plugin-subscriptions",
+      "version": "0.9.13+rc3.transport.2",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-rigorquant",
+      "version": "0.7.0+rc3.sidecar.2",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-sql",
+      "version": "0.5.12",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-ultramath",
+      "version": "0.6.3",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "math-research-dsh",
+      "version": "2.0.5",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@beihaizb/dsh-notebook",
+      "version": "0.4.2+rc3.sandbox.9",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@weaxs/dsh-stock-analysis",
+      "version": "0.2.12",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-astock-research",
+      "version": "0.1.1",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-quant-data-mcp",
+      "version": "0.2.0",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-web-search-free",
+      "version": "1.10.0",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dshmarket",
+      "version": "1.73.20",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@changfenhuang/dsh-genui",
+      "version": "0.16.0",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-vibe-math",
+      "version": "2.8.5",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@mengyuly/dsh-ponytail",
+      "version": "0.4.3",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-legacy-presets",
+      "version": "1.0.0",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-agent-swarm",
+      "version": "3.4.1",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@tt-a1i/archify-dsh",
+      "version": "1.1.0",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@openviking/dsh-memory-plugin",
+      "version": "0.5.38",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-voice-input-bundle",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-auto-review",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-badge-skill-bundle",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-ralph-bundle",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-session-search",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-tool-worktree",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-terminal-bundle",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-session-titles-bundle",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-subagent-codex",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@deepseek-ai/dsh-subagent-claude-code",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "dsh-opencode-go",
+      "version": "0.4.4",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-inspector-profile",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "dsh-opencode-live",
+      "version": "0.1.0+rc22.local.1",
+      "enabled": true,
+      "availability": "profile"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-forge-bundle",
+      "version": "0.2.2-rc.3",
+      "enabled": true,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-acp-app",
+      "version": "0.2.2-rc.3",
+      "enabled": false,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-headless",
+      "version": "0.2.2-rc.3",
+      "enabled": false,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-sdk-app",
+      "version": "0.2.2-rc.3",
+      "enabled": false,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-sdk-minimal",
+      "version": "0.2.2-rc.3",
+      "enabled": false,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-cot-translation-bundle",
+      "version": "0.2.2-rc.3",
+      "enabled": false,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-liveshare",
+      "version": "0.2.2-rc.3",
+      "enabled": false,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-cua-bundle",
+      "version": "0.2.2-rc.3",
+      "enabled": false,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-experimental-plugin-market-bundle",
+      "version": "0.2.2-rc.3",
+      "enabled": false,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-personalized-recommendations",
+      "version": "0.2.2-rc.3",
+      "enabled": false,
+      "availability": "installation"
+    },
+    {
+      "name": "@deepseek-ai/dsh-deepseek-chat-import",
+      "version": "0.2.2-rc.3",
+      "enabled": false,
+      "availability": "installation"
+    }
+  ],
+  "health": {
+    "enabledRows": 263,
+    "nonActiveEnabledRows": 0
+  },
+  "redistributedComponentIds": [
+    "notebook",
+    "subscriptions",
+    "rigorquant",
+    "opencode-go",
+    "calculator",
+    "opencode-live"
+  ]
+}
