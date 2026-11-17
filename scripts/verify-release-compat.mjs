@@ -35,6 +35,27 @@ export const ValidateCompatBundle = (rootInput, sdkInput, options = {}) => {
     for (const [path, expected] of Object.entries(component.files)) checkFile(`${component.directory}/${path}`, expected)
     const pkg = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
     if (pkg.name !== component.name || pkg.version !== component.version) throw new Error('组件包名或版本不匹配')
+    // 文件清单本身可能就漏打了启动overlay；必须反查包的声明，不能仅验已列文件。
+    const declared = []
+    const add = (value, allowWildcard = false) => {
+      if (typeof value !== 'string') throw new Error('声明入口格式无效')
+      if (value.includes('*') && !allowWildcard) throw new Error('声明入口不接受通配符')
+      if (!value.includes('*')) declared.push(value.startsWith('./') ? value.slice(2) : value)
+    }
+    const exportsOf = value => {
+      if (typeof value === 'string') add(value, true)
+      else if (value && typeof value === 'object') Object.values(value).forEach(exportsOf)
+    }
+    if (pkg.main) add(pkg.main)
+    if (pkg.types) add(pkg.types)
+    exportsOf(pkg.exports)
+    const patches = pkg.dsh?.bundle?.patch
+    if (patches !== undefined) (Array.isArray(patches) ? patches : [patches]).forEach(value => add(value))
+    for (const path of new Set(declared)) {
+      const target = safePath(directory, path)
+      if (!existsSync(target) || !lstatSync(target).isFile() || !inside(directory, realpathSync(target))) throw new Error(`声明入口缺失或越界: ${component.name} -> ${path}`)
+      if (!Object.hasOwn(component.files, path)) throw new Error(`声明入口未列入文件清单: ${component.name} -> ${path}`)
+    }
     componentDirectories.push(directory)
   }
   for (const [path, expected] of Object.entries(plan.supportFiles ?? {})) checkFile(path, expected)
