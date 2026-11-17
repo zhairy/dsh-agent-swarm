@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "release": "v3.4.0",
+  "date": "2026-11-17",
+  "timezone": "Asia/Shanghai",
+  "host": "0.2.2-rc.3",
+  "node": "24.22.3",
+  "unit": {
+    "files": 139,
+    "passed": 1792,
+    "skipped": 14,
+    "failed": 0
+  },
+  "nodeTests": {
+    "passed": 62,
+    "failed": 0
+  },
+  "publicationPreflightTests": {
+    "passed": 3,
+    "failed": 0
+  },
+  "rc3HostRegression": {
+    "passed": 56,
+    "failed": 0,
+    "skipped": 0,
+    "evidenceReused": "same 355 runtime lib files; exact SDK version/checksums revalidated"
+  },
+  "freshExactPackageHost": {
+    "passed": true,
+    "provider": "local deterministic mock",
+    "notebookCrossStepValue": 42,
+    "kernelResidual": 0,
+    "js": 42,
+    "ts": 42,
+    "browser": "private loopback, read expected DOM, closed owned browser/server",
+    "completedNotebookViewRetained": true
+  },
+  "freshRigorQuantCombination": {
+    "passed": true,
+    "cases": 6,
+    "sdkBytesUnchanged": true
+  },
+  "notebookMetadataTests": {
+    "passed": 5
+  },
+  "subscriptionsTransportTests": {
+    "passed": 6
+  },
+  "productionDependencyAudit": {
+    "vulnerabilities": 0,
+    "scope": "Swarm production npm dependencies, not all third-party transitive dependencies"
+  },
+  "compatArchive": {
+    "components": 6,
+    "regularFiles": 478,
+    "relativeImports": 180,
+    "symlinks": 0,
+    "nodeModules": 0,
+    "runtimeCodeUnchangedFromValidatedComponents": true,
+    "nonemptyCompositePatchesRoundtrip": 4,
+    "openCodeGo": "72 upstream files unchanged"
+  },
+  "licenseReview": "passed after adding missing notices; private legacy presets excluded",
+  "providerScope": "bounded fixed-text observations do not guarantee future provider availability",
+  "scopeLimits": [
+    "No unattended infinite task completion guarantee",
+    "No all-third-party-business-feature guarantee",
+    "No full multi-language pool or microVM platform",
+    "No account, private histories, site screenshots, runtime configs or node_modules in assets"
+  ]
+}
