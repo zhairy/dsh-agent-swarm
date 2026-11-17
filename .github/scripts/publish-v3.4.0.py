@@ -89,7 +89,9 @@ def publish(plan, assets):
         api('git/refs', '-X', 'POST', '-f', 'ref=refs/tags/' + TAG, '-f', 'sha=' + tag['sha'])
     else:
         obj = ref['object']
-        target = api('git/tags/' + obj['sha'])['object']['sha'] if obj['type'] == 'tag' else obj['sha']
+        if obj['type'] != 'tag':
+            raise RuntimeError('Existing tag is not annotated; refusing to replace or accept it')
+        target = api('git/tags/' + obj['sha'])['object']['sha']
         if target != commit:
             raise RuntimeError('Existing tag targets different source; refusing to move it')
     release = release_for_tag()

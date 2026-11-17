@@ -62,6 +62,22 @@ class PublicationTests(unittest.TestCase):
         Path('.github/release-v3.4.0.json').write_text(json.dumps(plan))
         self.assertEqual(publisher.load_plan()['tag'], 'v3.4.0')
 
+    def test_lightweight_tag_cannot_be_accepted_as_annotated(self):
+        assets = Path('assets')
+        assets.mkdir()
+        values = {'verification-summary.json': b'{}', 'dsh-agent-swarm-3.4.0.tgz': b'package', 'dsh-agent-swarm.tgz': b'package'}
+        for name, value in values.items():
+            (assets / name).write_bytes(value)
+        self.plan.update(assets={name: hashlib.sha256(value).hexdigest() for name, value in values.items()}, hostVersion='0.2.2-rc.3', assetCommit='a' * 40)
+        commit = publisher.git('rev-parse', 'HEAD')
+        def remote(path, *args, **kwargs):
+            self.assertEqual(path, 'git/ref/tags/v3.4.0')
+            return {'object': {'type': 'commit', 'sha': commit}}
+        env = {'GITHUB_REPOSITORY': publisher.REPO, 'GITHUB_REF': 'refs/heads/main', 'GITHUB_SHA': commit}
+        with patch.dict(os.environ, env), patch.object(publisher, 'api', side_effect=remote):
+            with self.assertRaisesRegex(RuntimeError, 'annotated'):
+                publisher.publish(self.plan, assets)
+
 
 if __name__ == '__main__':
     unittest.main()
