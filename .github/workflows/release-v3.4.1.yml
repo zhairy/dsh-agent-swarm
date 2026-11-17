@@ -24,6 +24,8 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+      - name: Verify publication transport guard
+        run: python3 .github/scripts/test_publish_v3_4_1.py
       - id: assets
         run: python3 .github/scripts/publish-v3.4.1.py prepare
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -34,4 +36,4 @@ jobs:
       - name: Verify, publish, and download every asset
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/publish-v3.4.1.py publish --assets release-assets/assets
+        run: python3 .github/scripts/publish-v3.4.1.py publish --assets release-assets/release-payload/v3.4.1

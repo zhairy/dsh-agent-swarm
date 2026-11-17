@@ -4,7 +4,7 @@
   "repository": "zhairy/dsh-agent-swarm",
   "hostVersion": "0.2.2-rc.3",
   "releaseCommit": "168dc348c743f803d9e572be8393197e33a985d0",
-  "assetCommit": "e36fda676433f4528abaa08048a7e69db3badea5",
+  "assetCommit": "c442a32c7b989cbed141b8452cd4419d08cdbce2",
   "draftMustExist": false,
   "sourceFiles": {
     ".gitattributes": "93699a1108fd9da226b06f84ee12e317f4ea4d2f18a8fd05260443fd1bf2faef",
