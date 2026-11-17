@@ -46,6 +46,9 @@ export interface SwarmServiceDepsInfo {
   /** Actual public AgentRegistry instance; never synthesize an ancestor authority from an ID. */
   getAgent?: (sessionId: string) => (AgentLike & { status?: 'idle' | 'running'; whenIdle?: () => Promise<void> }) | undefined
   getJobs?: () => JobsLike | undefined
+  recordNotebookBinding?: (agent: AgentLike, binding: import('../adapters/dsh-host/notebook-context.js').NotebookContextBinding, signal: AbortSignal) => Promise<void>
+  getVerificationOutputs?: () => import('../adapters/dsh-host/verification-outputs.js').VerificationOutputPort | undefined
+  getWorkspaceGit?: () => import('../adapters/dsh-host/workspace-git.js').WorkspaceGitPort | undefined
   getWorktreeHost?: () => WorktreeHostPort | undefined
   writerBoundary?: {
     available: () => boolean
@@ -96,6 +99,10 @@ export interface SwarmService {
   PrepareManagedTool: (execution: ToolExecutionLike) => void
   CompleteManagedTool: (execution: ToolExecutionLike, result: unknown) => Promise<void>
   FinishManagedTool: (execution: ToolExecutionLike) => void
+  GetNotebookTaskBinding: (agentId: string) => (import('../adapters/dsh-host/notebook-context.js').NotebookContextBinding & { agentId: string }) | undefined
+  PrepareVerificationOutputs: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
+  SaveWorkspaceGit: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
+  BindPrimaryWorkspace: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   RestoreWorktree: (raw: unknown, exec: ToolExecLike) => Promise<unknown>
   GetExecutionBoundary: (execution: ToolExecutionLike) => Promise<ExecutionBoundaryPolicy | undefined>
   OnExecutionSettled: (agentId: string) => void

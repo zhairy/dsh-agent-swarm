@@ -11,6 +11,13 @@ DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文
 - 适配 DSH **0.2.2-rc.3**，保留旧启动协议；rc.1 / rc.3 的跨模型回退与工作树写入需要安装[版本绑定的宿主桥接](docs/3.4.0-DSH-rc3与本机升级.md)，要求 Node.js 24.9 或更新版本。缺少匹配桥接时明确拒绝执行。
 - 新建会话选「百工模式」即可使用；Jev 可选择 TypeSafe 官方接口，或从 DSH 当前模型目录选择第三方 Jev 兼容模型
 
+### 3.4.1 的变化
+
+- 根据项目规则自动规划唯一主工作树或隔离工作树，写入仍校验当前 Host/任务/attempt 与排他租约。
+- 提供受控主树绑定、精确 Git 保存和复核有限输出域；保留原 linked、恢复与安全门禁。
+- Notebook 显式数据保存/只读恢复、脱敏路由时间线，以及可复现兼容包和矩阵自动核验。
+- 说明与限制见[主工作区与执行观测](docs/3.4.1-主工作区与执行观测.md)、[兼容矩阵](docs/3.4.1-兼容矩阵.md)及[发布说明](https://github.com/zhairy/dsh-agent-swarm/releases/tag/v3.4.1)。
+
 ### 3.4.0 的变化
 
 - 适配 rc.3 顶层子代理启动与具名成员目录；历史恢复严格区分直接子级和后代，创建失败不重试发布。
@@ -217,6 +224,13 @@ A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" lea
 
 - Targets DSH **0.2.2-rc.3** while retaining legacy start protocols. Cross-model fallback and protected worktree writes on rc.1 / rc.3 require the [version-bound Host bridges](docs/3.4.0-DSH-rc3与本机升级.md) and Node.js 24.9 or newer. Missing bridges fail closed.
 - Start a session in the "百工模式" (Agent Swarm) preset. Jev can use the official TypeSafe API or a third-party Jev-compatible model selected from the live DSH catalog.
+
+### What's new in 3.4.1
+
+- Plans primary or linked workspaces from verified project rules; current task authorization and exclusive leases still control writes.
+- Adds controlled primary binding, exact-path Git saves, and limited verification outputs while retaining linked recovery fences.
+- Adds explicit Notebook data snapshots with read-only recovery, redacted route timelines, and reproducible compatibility packages checked against extracted release components.
+- See the [compatibility matrix](docs/3.4.1-兼容矩阵.md) and [release notes](https://github.com/zhairy/dsh-agent-swarm/releases/tag/v3.4.1) for scope and limitations.
 
 ### What's new in 3.4.0
 

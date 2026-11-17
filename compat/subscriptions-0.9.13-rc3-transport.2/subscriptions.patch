@@ -1,0 +1,320 @@
+--- a/lib/client/SubscriptionUsageBadge.js
++++ b/lib/client/SubscriptionUsageBadge.js
+@@ -25,11 +25,11 @@
+ import { AntigravityQuotaSummary } from './AntigravityQuotaSummary.js';
+ import { creditBalanceText, quotaPercent, quotaText, quotaIsStale, quotaUnavailableText, UsageFreshness, useQuotaClock } from './quota-display.js';
+ import { readUsageCache, subscribeUsage, failUsage } from './usage-cache.js';
+-import { useCallback, useEffect, useRef, useState } from 'react';
++import { useCallback, useEffect, useId, useRef, useState } from 'react';
+ import { subscriptionChromeCss } from './provider-settings-styles.js';
+ import { createPortal } from 'react-dom';
+ import * as primitives from '@deepseek-ai/dsh-client-ui-primitives';
+-import { useAnchoredPosition, useDismissOnOutsidePointer } from '@deepseek-ai/dsh-client-ui-primitives';
++import { useDismissOnOutsidePointer } from '@deepseek-ai/dsh-client-ui-primitives';
+ import { callSubscriptionsAuth, usageBarColor } from './SubscriptionsSection.js';
+ import { en } from './locales.js';
+ import { hostIcon } from './host-icons.js';
+@@ -236,6 +236,7 @@
+     const mountedRef = useRef(true);
+     const rootRef = useRef(null);
+     const panelRef = useRef(null);
++    const anchorName = `--dsh-subscription-${useId().replaceAll(':', '')}`;
+     // Always-rendered, invisible marker in the dock: locates the composer bar
+     // (and the host stats row inside it) even while the pill itself is portaled.
+     const seatRef = useRef(null);
+@@ -420,7 +421,6 @@
+             clearInterval(timer);
+         };
+     }, []);
+-    const pos = useAnchoredPosition({ open, anchorRef: rootRef, panelRef, side: 'top', gap: PANEL_GAP, margin: PANEL_MARGIN });
+     useDismissOnOutsidePointer(rootRef, open, setOpen, panelRef);
+     useEffect(() => {
+         if (!open)
+@@ -472,7 +472,7 @@
+         if (next)
+             void refresh();
+     };
+-    const pill = (_jsxs("span", { ref: rootRef, style: styles.anchor, children: [_jsx("style", { children: subscriptionChromeCss }), _jsxs("button", { type: "button", className: "dsh-subscription-usage-pill", style: { ...styles.pill, ...(hover || open ? styles.pillActive : {}) }, "aria-haspopup": "dialog", "aria-expanded": open, "aria-label": `${title} · ${label}`, title: title, onMouseEnter: () => { setHover(true); }, onMouseLeave: () => { setHover(false); }, onClick: toggle, children: [_jsx(UsageBadgeIcon, {}), _jsx("span", { style: styles.label, children: label })] }), open && createPortal(_jsxs("div", { ref: panelRef, role: "dialog", "aria-label": title, className: "dsh-subscription-usage-panel", style: { ...styles.panel, ...(pos ?? MEASURE_STYLE) }, children: [_jsx("div", { style: styles.title, children: _jsxs("span", { style: styles.titleLabel, children: [_jsx(UsageBadgeIcon, {}), title] }) }), _jsx("div", { style: styles.titleRule, "aria-hidden": true }), expanded.map((d, index) => (_jsxs("section", { style: index === 0 ? undefined : styles.section, children: [_jsxs("div", { style: styles.providerRow, children: [_jsxs("span", { style: styles.providerName, children: [d.name, d.provider === current && _jsx("span", { style: styles.currentTag, children: translate('usageBadgeCurrent') })] }), d.accounts.length === 1 && _jsx(AccountMeta, { account: d.accounts[0], translate: translate })] }), _jsx("p", { style: { ...styles.providerMeta, whiteSpace: 'normal', overflow: 'visible' }, children: translate('quotaAccountsHint') }), _jsx(CodexExhaustionNotice, { display: d, translate: translate }), d.accounts.map((account, accountIndex) => (_jsxs("div", { style: accountIndex === 0 ? undefined : styles.accountBlock, children: [d.accounts.length > 1 && (_jsx("div", { style: styles.accountRow, children: _jsx(AccountMeta, { account: account, translate: translate }) })), _jsx(UsageFreshness, { usage: account.usage, failed: account.loadFailed === true, t: translate }), d.provider === 'codex' && creditBalanceText(account.usage?.credits, translate) !== undefined && (_jsx("p", { style: styles.providerMeta, children: creditBalanceText(account.usage?.credits, translate) })), !!account.usage?.windows?.length && _jsx(AccountWindows, { windows: account.windows, model: d.provider === badgeSelection?.provider ? badgeSelection.model : undefined, provider: d.provider, translate: translate, mode: quotaMode }, `${d.provider}:${badgeSelection?.model ?? ''}`)] }, account.key)))] }, d.provider)))] }), document.body)] }));
++    const pill = (_jsxs("span", { ref: rootRef, style: { ...styles.anchor, anchorName }, children: [_jsx("style", { children: subscriptionChromeCss + "\n@position-try --dsh-subscription-window {\n  position-area: none;\n  top: max(12px, var(--dsh-frame-overlay-top, 12px));\n  bottom: max(12px, calc(anchor(top) + 8px));\n  left: 12px;\n  right: 12px;\n  margin: 0;\n  align-self: safe end;\n  justify-self: safe end;\n}\n\n@position-try --dsh-subscription-opposite {\n  top: max(12px, calc(anchor(bottom) + 8px));\n  bottom: 12px;\n  align-self: start;\n}\n\n@position-try --dsh-subscription-wide-opposite {\n  top: max(12px, calc(anchor(bottom) + 8px));\n  bottom: 12px;\n  left: 12px;\n  right: 12px;\n  align-self: start;\n  justify-self: safe end;\n}\n\n@position-try --dsh-subscription-tall {\n  position-area: none;\n  top: max(12px, var(--dsh-frame-overlay-top, 12px));\n  bottom: 12px;\n  left: max(12px, anchor(left));\n  right: 12px;\n  margin: 0;\n  align-self: safe start;\n  justify-self: start;\n}\n\n@position-try --dsh-subscription-viewport {\n  position-area: none;\n  inset: max(12px, var(--dsh-frame-overlay-top, 12px)) 12px 12px;\n  margin: 0;\n  align-self: safe start;\n  justify-self: safe end;\n}\n" }), _jsxs("button", { type: "button", className: "dsh-subscription-usage-pill", style: { ...styles.pill, ...(hover || open ? styles.pillActive : {}) }, "aria-haspopup": "dialog", "aria-expanded": open, "aria-label": `${title} · ${label}`, title: title, onMouseEnter: () => { setHover(true); }, onMouseLeave: () => { setHover(false); }, onClick: toggle, children: [_jsx(UsageBadgeIcon, {}), _jsx("span", { style: styles.label, children: label })] }), open && createPortal(_jsxs("div", { ref: panelRef, role: "dialog", "aria-label": title, className: "dsh-subscription-usage-panel", style: { ...styles.panel, positionAnchor: anchorName }, children: [_jsx("div", { style: styles.title, children: _jsxs("span", { style: styles.titleLabel, children: [_jsx(UsageBadgeIcon, {}), title] }) }), _jsx("div", { style: styles.titleRule, "aria-hidden": true }), expanded.map((d, index) => (_jsxs("section", { style: index === 0 ? undefined : styles.section, children: [_jsxs("div", { style: styles.providerRow, children: [_jsxs("span", { style: styles.providerName, children: [d.name, d.provider === current && _jsx("span", { style: styles.currentTag, children: translate('usageBadgeCurrent') })] }), d.accounts.length === 1 && _jsx(AccountMeta, { account: d.accounts[0], translate: translate })] }), _jsx("p", { style: { ...styles.providerMeta, whiteSpace: 'normal', overflow: 'visible' }, children: translate('quotaAccountsHint') }), _jsx(CodexExhaustionNotice, { display: d, translate: translate }), d.accounts.map((account, accountIndex) => (_jsxs("div", { style: accountIndex === 0 ? undefined : styles.accountBlock, children: [d.accounts.length > 1 && (_jsx("div", { style: styles.accountRow, children: _jsx(AccountMeta, { account: account, translate: translate }) })), _jsx(UsageFreshness, { usage: account.usage, failed: account.loadFailed === true, t: translate }), d.provider === 'codex' && creditBalanceText(account.usage?.credits, translate) !== undefined && (_jsx("p", { style: styles.providerMeta, children: creditBalanceText(account.usage?.credits, translate) })), !!account.usage?.windows?.length && _jsx(AccountWindows, { windows: account.windows, model: d.provider === badgeSelection?.provider ? badgeSelection.model : undefined, provider: d.provider, translate: translate, mode: quotaMode }, `${d.provider}:${badgeSelection?.model ?? ''}`)] }, account.key)))] }, d.provider)))] }), document.body)] }));
+     return (_jsxs(_Fragment, { children: [seat, statsRow !== null && statsRow.isConnected ? createPortal(pill, statsRow) : pill] }));
+ }
+ /**
+@@ -517,11 +517,6 @@
+     const percent = quotaPercent(w.usedPercent, quotaMode);
+     return (_jsxs(_Fragment, { children: [_jsx("dt", { style: styles.dt, children: label }), _jsxs("dd", { style: { ...styles.dd, color: usageBarColor(w.usedPercent) }, children: [quotaText(w.usedPercent, quotaMode, translate), w.resetsAt !== undefined && _jsxs("span", { style: styles.reset, children: [" \u00B7 ", w.resetsAt <= Date.now() ? translate('quotaExpiredWindow') : windowLabel(w)] })] }), _jsx("div", { style: styles.bar, "aria-hidden": true, children: _jsx("div", { style: { ...styles.barFill, width: `${percent ?? 0}%`, background: usageBarColor(w.usedPercent) } }) })] }));
+ }
+-/**
+- * Unplaced portal panel: hidden but laid out so the clamp measures real
+- * dimensions (the `useAnchoredPosition` measure pass).
+- */
+-const MEASURE_STYLE = { visibility: 'hidden', left: 0, top: 0 };
+ const styles = {
+     seat: { display: 'none' },
+     anchor: { minWidth: 0, maxWidth: '100%', display: 'inline-flex' },
+@@ -543,6 +538,7 @@
+     // Mirrors the host stat-dialog panel.
+     panel: {
+         position: 'fixed', zIndex: 1100, boxSizing: 'border-box',
++        positionArea: 'none', top: `max(${PANEL_MARGIN}px, var(--dsh-frame-overlay-top, 12px))`, bottom: `max(${PANEL_MARGIN}px, calc(anchor(top) + ${PANEL_GAP}px))`, left: `max(${PANEL_MARGIN}px, anchor(left))`, right: `${PANEL_MARGIN}px`, alignSelf: 'end', justifySelf: 'start', height: 'fit-content', minHeight: 0, margin: 0, positionTryFallbacks: '--dsh-subscription-window, --dsh-subscription-opposite, --dsh-subscription-wide-opposite, --dsh-subscription-tall, --dsh-subscription-viewport',
+         background: 'var(--dsw-specific-menu)',
+         width: 'max-content', minWidth: 'min(300px, 100vw - 24px)', maxWidth: 'min(440px, 100vw - 24px)',
+         maxHeight: 'min(560px, 100dvh - 24px)', overflowY: 'auto', overscrollBehavior: 'contain',
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -4817,6 +4817,7 @@
+ 	const mountedRef = (0, react.useRef)(true);
+ 	const rootRef = (0, react.useRef)(null);
+ 	const panelRef = (0, react.useRef)(null);
++	const anchorName = `--dsh-subscription-${(0, react.useId)().replaceAll(':', '')}`;
+ 	const seatRef = (0, react.useRef)(null);
+ 	const currentRef = (0, react.useRef)(currentModel);
+ 	currentRef.current = currentModel;
+@@ -5007,14 +5008,7 @@
+ 			clearInterval(timer);
+ 		};
+ 	}, []);
+-	const pos = (0, __deepseek_ai_dsh_client_ui_primitives.useAnchoredPosition)({
+-		open,
+-		anchorRef: rootRef,
+-		panelRef,
+-		side: "top",
+-		gap: PANEL_GAP,
+-		margin: PANEL_MARGIN
+-	});
++
+ 	(0, __deepseek_ai_dsh_client_ui_primitives.useDismissOnOutsidePointer)(rootRef, open, setOpen, panelRef);
+ 	(0, react.useEffect)(() => {
+ 		if (!open) return;
+@@ -5065,9 +5059,9 @@
+ 	};
+ 	const pill = /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+ 		ref: rootRef,
+-		style: styles.anchor,
++		style: { ...styles.anchor, anchorName },
+ 		children: [
+-			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("style", { children: subscriptionChromeCss }),
++			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("style", { children: subscriptionChromeCss + "\n@position-try --dsh-subscription-window {\n  position-area: none;\n  top: max(12px, var(--dsh-frame-overlay-top, 12px));\n  bottom: max(12px, calc(anchor(top) + 8px));\n  left: 12px;\n  right: 12px;\n  margin: 0;\n  align-self: safe end;\n  justify-self: safe end;\n}\n\n@position-try --dsh-subscription-opposite {\n  top: max(12px, calc(anchor(bottom) + 8px));\n  bottom: 12px;\n  align-self: start;\n}\n\n@position-try --dsh-subscription-wide-opposite {\n  top: max(12px, calc(anchor(bottom) + 8px));\n  bottom: 12px;\n  left: 12px;\n  right: 12px;\n  align-self: start;\n  justify-self: safe end;\n}\n\n@position-try --dsh-subscription-tall {\n  position-area: none;\n  top: max(12px, var(--dsh-frame-overlay-top, 12px));\n  bottom: 12px;\n  left: max(12px, anchor(left));\n  right: 12px;\n  margin: 0;\n  align-self: safe start;\n  justify-self: start;\n}\n\n@position-try --dsh-subscription-viewport {\n  position-area: none;\n  inset: max(12px, var(--dsh-frame-overlay-top, 12px)) 12px 12px;\n  margin: 0;\n  align-self: safe start;\n  justify-self: safe end;\n}\n" }),
+ 			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+ 				type: "button",
+ 				className: "dsh-subscription-usage-pill",
+@@ -5098,7 +5092,7 @@
+ 				className: "dsh-subscription-usage-panel",
+ 				style: {
+ 					...styles.panel,
+-					...pos ?? MEASURE_STYLE
++					positionAnchor: anchorName, positionArea: 'none', top: `max(${PANEL_MARGIN}px, var(--dsh-frame-overlay-top, 12px))`, bottom: `max(${PANEL_MARGIN}px, calc(anchor(top) + ${PANEL_GAP}px))`, left: `max(${PANEL_MARGIN}px, anchor(left))`, right: `${PANEL_MARGIN}px`, alignSelf: 'end', justifySelf: 'start', height: 'fit-content', minHeight: 0, margin: 0, positionTryFallbacks: '--dsh-subscription-window, --dsh-subscription-opposite, --dsh-subscription-wide-opposite, --dsh-subscription-tall, --dsh-subscription-viewport'
+ 				},
+ 				children: [
+ 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+@@ -5267,15 +5261,6 @@
+ 		})
+ 	] });
+ }
+-/**
+-* Unplaced portal panel: hidden but laid out so the clamp measures real
+-* dimensions (the `useAnchoredPosition` measure pass).
+-*/
+-const MEASURE_STYLE = {
+-	visibility: "hidden",
+-	left: 0,
+-	top: 0
+-};
+ const styles = {
+ 	seat: { display: "none" },
+ 	anchor: {
+@@ -5553,4 +5538,3 @@
+ exports.apply = apply;
+ exports.inject = inject;
+ return module.exports; } });
+-//# sourceMappingURL=client.js.map
+\ No newline at end of file
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -3085,7 +3085,11 @@
+ }
+ /** Preserve native image blocks, retaining the existing text-only wire shape. */
+ function toolResultContent(block) {
+-	if (!block.content.some((part) => part.type === "image" && "dataBase64" in part)) return block.content.map((part) => part.type === "text" ? part.text : "").join("");
++	if (!block.content.some((part) => part.type === "image" && "dataBase64" in part)) {
++        const text = block.content.map((part) => part.type === "text" ? part.text : "").join("");
++        // Anthropic 拒绝空错误结果，保留错误标记并提供最小文本。
++        return text.length === 0 && block.isError === true ? "(no output)" : text;
++    }
+ 	const content = [];
+ 	for (const part of block.content) {
+ 		if (part.type === "text" && part.text.length > 0) content.push({
+@@ -3178,7 +3182,8 @@
+ 				content: toolResultContent({
+ 					type: "tool-result",
+ 					toolCallId: ToolCallId(id),
+-					content: message.content
++					content: message.content,
++                    ...message.isError === true ? { isError: true } : {}
+ 				}),
+ 				...message.isError === true ? { is_error: true } : {}
+ 			});
+@@ -3192,6 +3197,7 @@
+ 		}
+ 		for (const block of message.content) switch (block.type) {
+ 			case "text":
++                if (block.text.length === 0) break;
+ 				blocks.push({
+ 					type: "text",
+ 					text: message.role === "system" ? `${SYSTEM_REMINDER_OPEN}${block.text}${SYSTEM_REMINDER_CLOSE}` : block.text
+@@ -3273,12 +3279,12 @@
+ 		type: "text",
+ 		text: CLAUDE_CODE_IDENTITY
+ 	}];
+-	if (system !== void 0 && system.length > 0) blocks.push({
++	if (system !== void 0 && system.trim().length > 0) blocks.push({
+ 		type: "text",
+ 		text: system
+ 	});
+ 	const history = messages ?? [];
+-	for (const message of history.slice(0, conversationStart(history))) for (const block of message.content) if (block.type === "text") blocks.push({
++	for (const message of history.slice(0, conversationStart(history))) for (const block of message.content) if (block.type === "text" && block.text.trim().length > 0) blocks.push({
+ 		type: "text",
+ 		text: block.text
+ 	});
+@@ -9375,6 +9381,8 @@
+ 	if (effort === void 0) return void 0;
+ 	const supported = antigravityReasoning(model);
+ 	if (supported === void 0 || effort !== "off" && !supported.efforts.some((entry) => entry.id === effort)) throw new LlmError(`Antigravity model ${model} does not support reasoning effort ${effort}`, "UNSUPPORTED_REASONING_EFFORT");
++	// Gemini 4/Argon 拒绝零预算，off 应保持上游默认。
++	if ((/argon/.test(model) || model.startsWith("gemini-4")) && effort === "off") return void 0;
+ 	if (effort === "off") return {
+ 		includeThoughts: false,
+ 		thinkingBudget: 0
+--- a/lib/providers/common.js
++++ b/lib/providers/common.js
+@@ -192,6 +192,49 @@
+         timedOut: () => expired,
+     };
+ }
++
++const CAUSE_SUMMARY_LIMIT = 120;
++const SAFE_ERROR_NAMES = new Set([
++    'Error',
++    'TypeError',
++    'RangeError',
++    'AbortError',
++    'TimeoutError',
++    'DOMException',
++    'SocketError',
++    'FetchError',
++    'RequestError',
++    'ConnectTimeoutError',
++    'HeadersTimeoutError',
++    'BodyTimeoutError',
++]);
++const SAFE_NETWORK_CODE = /^(?:UND_ERR_[A-Z0-9_]+|E(?:CONNRESET|CONNREFUSED|CONNABORTED|PIPE|TIMEDOUT|HOSTUNREACH|NETUNREACH|NETDOWN|ADDRNOTAVAIL|NOTFOUND|AI_AGAIN)|CERT_[A-Z0-9_]+|ERR_(?:TLS|SSL)_[A-Z0-9_]+|ABORT_ERR)$/;
++function summarizeCause(error) {
++    const parts = [];
++    const seen = new Set();
++    let current = error;
++    for (let depth = 0; depth < 4 && current !== undefined && current !== null; depth += 1) {
++        const errorName = current instanceof Error && SAFE_ERROR_NAMES.has(current.name) ? current.name : current instanceof Error ? 'Error' : 'NonError';
++        let code;
++        try {
++            code = typeof current.code === 'string' && SAFE_NETWORK_CODE.test(current.code) ? current.code : undefined;
++        }
++        catch {
++            code = undefined;
++        }
++        const rendered = code === undefined ? errorName : `${errorName}[${code}]`;
++        if (!seen.has(rendered))
++            parts.push(rendered);
++        seen.add(rendered);
++        if (typeof current !== 'object' && typeof current !== 'function')
++            break;
++        const cause = current.cause;
++        if (cause === current)
++            break;
++        current = cause;
++    }
++    return parts.join(' -> ').slice(0, CAUSE_SUMMARY_LIMIT);
++}
+ /**
+  * Classify a thrown fetch failure. Caller cancellation maps to ABORTED, idle
+  * expiry to TIMEOUT, and everything else (DNS, TLS, refused connection) to
+@@ -209,7 +252,8 @@
+         return new LlmError(`${label} request aborted by caller`, 'ABORTED', { cause: error });
+     if (error instanceof LlmError)
+         return error;
+-    return new LlmError(`${label} request failed`, 'TRANSPORT', { cause: error });
++    const cause = summarizeCause(error);
++    return new LlmError(`${label} request failed${cause.length === 0 ? '' : `; cause: ${cause}`}`, 'TRANSPORT', { cause: error });
+ }
+ /** OAuth token-endpoint failure carrying the provider's `error` code when it sent one. */
+ export class OAuthEndpointError extends Error {
+--- a/lib/providers/pool.js
++++ b/lib/providers/pool.js
+@@ -14,11 +14,9 @@
+ import { streamAccountWithReplay } from './replay.js';
+ /** Bound on sticky-session memory; oldest entries evict past it. */
+ const STICKY_SESSION_LIMIT = 1000;
+-/** Display form of one member (account shown when pinned). */
++/** Privacy-safe display form: account keys never enter logs or persisted failures. */
+ function memberLabel(member) {
+-    return member.account === undefined
+-        ? `${member.provider}/${member.model}`
+-        : `${member.provider}/${member.account}/${member.model}`;
++    return `${member.provider}/${member.model}`;
+ }
+ /** How long a pools snapshot is trusted (auth changes invalidate immediately). */
+ const POOLS_CACHE_TTL_MS = 5_000;
+@@ -405,8 +403,7 @@
+         }
+         else if (cooling !== undefined) {
+             code = cooling.reason;
+-            message = `pool "${model}" exhausted: every member is cooling down;`
+-                + ` ${cooling.key} (${cooling.reason})${recovers}`;
++            message = `pool "${model}" exhausted: every member is cooling down; ${cooling.reason}${recovers}`;
+         }
+         else {
+             code = 'NO_ADAPTER';
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "dsh-plugin-subscriptions",
+-  "version": "0.9.13",
++  "version": "0.9.13+rc3.transport.2",
+   "description": "Use ChatGPT (Codex), Claude, Grok (X Premium), GitHub Copilot, and Google Antigravity subscriptions as DeepSeek Harness LLM providers, with OAuth login from the web Settings page",
+   "license": "MIT",
+   "repository": {
+@@ -36,7 +36,8 @@
+   },
+   "files": [
+     "lib",
+-    "cordis.patch.yml"
++    "cordis.patch.yml",
++    "LICENSE"
+   ],
+   "dsh": {
+     "bundle": {
+@@ -59,11 +60,11 @@
+   },
+   "peerDependencies": {
+     "@deepseek-ai/cordis": "^4.0.1 || 4.0.5-alpha.1 || 4.0.5-alpha.2",
+-    "@deepseek-ai/dsh-attachment": ">=0.2.0-rc.2 || >=0.2.1-0",
+-    "@deepseek-ai/dsh-home-paths": ">=0.2.0-rc.2 || >=0.2.1-0",
+-    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 || >=0.2.1-0",
+-    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2 || >=0.2.1-0",
+-    "@deepseek-ai/dsh-web": ">=0.2.0-rc.2 || >=0.2.1-0",
++    "@deepseek-ai/dsh-attachment": "0.2.2-rc.3",
++    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.3",
++    "@deepseek-ai/dsh-llm": "0.2.2-rc.3",
++    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
++    "@deepseek-ai/dsh-web": "0.2.2-rc.3",
+     "@deepseek-ai/schemastery": "^3.18.1 || 3.18.5-alpha.1 || 3.18.5-alpha.2"
+   },
+   "devDependencies": {
+@@ -139,5 +140,6 @@
+         }
+       }
+     }
+-  }
++  },
++  "private": true
+ }

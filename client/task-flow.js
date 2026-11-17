@@ -2,6 +2,7 @@
 const React = require('react')
 const h = React.createElement
 const { retainTaskViewStore } = require('@swarm/task-view-store')
+const routeObservability = require('@swarm/route-observability')
 let MarkdownText
 try { MarkdownText = require('@deepseek-ai/dsh-client-ui-primitives').MarkdownText } catch { MarkdownText = undefined }
 
@@ -11,6 +12,8 @@ const ASSET_URL = '/api/swarm-assets/mermaid.min.js'
 const EMPTY_LABELS = Object.freeze({ code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' })
 const zh = { title: '任务流程', refresh: '刷新状态', source: 'Mermaid 源码', loading: '读取任务状态…', unavailable: '任务状态暂不可用', renderError: '图形展示不可用，仍可读取源码与步骤', pending: '流程已生成，等待审核', notReviewed: '流程已生成（观察模式，按需审核）', nodePending: '待执行', reviewing: '审核中', pass: '已审核', pass_with_degradation: '降级审核', changes_requested: '需修正', unknown: '审核未确定', 'needs-clarification': '待澄清', review_required: '需独立复核', stale: '审核失效', ready: '可执行', running: '执行中', succeeded: '已完成', failed: '失败', blocked: '阻塞', skipped: '跳过', generated: '流程已生成', workflowMode: '流程模式' }
 const en = { title: 'Task flow', refresh: 'Refresh status', source: 'Mermaid source', loading: 'Loading task state…', unavailable: 'Task state unavailable', renderError: 'Diagram unavailable; source and steps remain readable', pending: 'Generated, awaiting review', notReviewed: 'Generated (advisory mode; review on demand)', nodePending: 'Pending', reviewing: 'Reviewing', pass: 'Reviewed', pass_with_degradation: 'Reviewed with degradation', changes_requested: 'Changes requested', unknown: 'Review undetermined', 'needs-clarification': 'Needs clarification', review_required: 'Independent review required', stale: 'Review stale', ready: 'Ready', running: 'Running', succeeded: 'Completed', failed: 'Failed', blocked: 'Blocked', skipped: 'Skipped', generated: 'Flow generated', workflowMode: 'Flow mode' }
+Object.assign(zh, routeObservability.dictionaries.zh)
+Object.assign(en, routeObservability.dictionaries.en)
 Object.assign(zh, { zoomIn: '放大', zoomOut: '缩小', fit: '适应宽度' })
 Object.assign(en, { zoomIn: 'Zoom in', zoomOut: 'Zoom out', fit: 'Fit width' })
 Object.assign(zh, { planningReview: '规划审核', goalDimension: '目标', designDimension: '流程设计', mermaidDimension: 'Mermaid', agentOpinion: '独立 Agent', jevOpinion: 'Jev 判断', syntaxCheck: '语法', projectionCheck: '投影', semanticCheck: '语义', reviewNotReviewed: '未审核', checkPass: '通过', checkFail: '未通过', reviewIssues: '审核发现与错误' })
@@ -21,6 +24,32 @@ Object.assign(zh, { diagramType: '图表视角', workflow: '工作流', orchestr
 Object.assign(en, { diagramType: 'Diagram view', workflow: 'Workflow', orchestration: 'Pre-execution orchestration', architecture: 'Delegation topology', sequence: 'Recorded call sequence', dataflow: 'Contract and evidence', lifecycle: 'Lifecycle snapshot', progress: 'Current completed delegation nodes', progressUnknown: 'No delegation nodes; progress is not applicable', progressBoundary: 'Node ratio does not measure effort, correctness, or acceptance; failures, blocks and skips remain separate.', exportSnapshot: 'Export diagram snapshot JSON', deviations: 'State deviation diagnostics', omitted: 'Older records omitted', diagramBindingMismatch: 'Diagram revision mismatch; retaining the original flow. Refresh status.' })
 Object.assign(zh, { unknownNode: '状态未知', projectionPending: '这是待同步的只读投影；图表刷新不会批准新版本执行。' })
 Object.assign(en, { unknownNode: 'Unknown state', projectionPending: 'This is a read projection awaiting synchronization. Refreshing diagrams does not authorize the new revision.' })
+Object.assign(zh, {
+  workspacePlan: '工作区规划',
+  workspacePlanMode: '模式',
+  workspacePlanPrimary: '唯一主工作树',
+  workspacePlanLinked: '隔离工作树',
+  workspacePlanBlocked: '需澄清',
+  workspacePlanNeedsVerification: '待 Host 核验',
+  workspacePlanUnavailable: 'Host 无法核验项目工作区规则；当前不会授予主工作树写入能力。',
+  workspacePlanBlockedHint: '需要先澄清项目工作区规则；当前规划不能作为写入依据。',
+  workspacePlanBasis: '依据',
+  workspacePlanBranch: '分支',
+  workspacePlanHead: 'HEAD'
+})
+Object.assign(en, {
+  workspacePlan: 'Workspace plan',
+  workspacePlanMode: 'mode',
+  workspacePlanPrimary: 'single primary workspace',
+  workspacePlanLinked: 'isolated workspace',
+  workspacePlanBlocked: 'clarification needed',
+  workspacePlanNeedsVerification: 'Host verification required',
+  workspacePlanUnavailable: 'The Host cannot verify project workspace rules; primary-workspace write access is not granted.',
+  workspacePlanBlockedHint: 'Clarify the project workspace rules first; the current plan is not write authorization.',
+  workspacePlanBasis: 'basis',
+  workspacePlanBranch: 'branch',
+  workspacePlanHead: 'HEAD'
+})
 
 const textOf = (event) => {
   const content = event?.data?.message?.content
@@ -165,6 +194,56 @@ const styles = {
   steps: { paddingLeft: 22, lineHeight: 1.8 }
 }
 
+const WORKSPACE_MODES = new Set(['primary', 'linked', 'blocked'])
+const WORKSPACE_SOURCES = new Set(['AGENTS.md', 'agent.md'])
+const safePlanText = (value, maxLength) => typeof value === 'string'
+  ? value.replace(/[\u0000-\u001F\u007F]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength)
+  : undefined
+
+const getWorkspacePlanView = (view) => {
+  if (view?.workspacePlanUnavailable === true) return { state: 'unavailable', mode: null, reason: null, reasonKey: 'workspacePlanUnavailable', sources: [], branch: undefined, head: undefined }
+  const plan = view?.workspacePlan
+  if (plan === null || typeof plan !== 'object' || Array.isArray(plan) || !WORKSPACE_MODES.has(plan.mode)) return null
+  const reason = safePlanText(plan.reason, 360)
+  if (reason === undefined || reason === '') return null
+  const sources = Array.isArray(plan.sources)
+    ? [...new Set(plan.sources.map((source) => source?.path).filter((path) => WORKSPACE_SOURCES.has(path)))].slice(0, 2)
+    : []
+  const branch = safePlanText(plan.branch, 160)
+  const head = typeof plan.head === 'string' && /^[a-f0-9]{40,64}$/.test(plan.head) ? plan.head.slice(0, 8) : undefined
+  return { state: plan.mode, mode: plan.mode, reason, reasonKey: plan.mode === 'primary' ? 'workspacePlanPrimary' : plan.mode === 'linked' ? 'workspacePlanLinked' : 'workspacePlanBlocked', sources, branch: branch === '' ? undefined : branch, head }
+}
+
+function WorkspacePlanStatus ({ view, t }) {
+  const value = getWorkspacePlanView(view)
+  if (value === null) return null
+  const translate = typeof t === 'function' ? t : (key) => zh[key] ?? key
+  const label = translate(value.state === 'unavailable' ? 'workspacePlanNeedsVerification' : value.reasonKey)
+  const reason = value.state === 'unavailable' ? translate('workspacePlanUnavailable') : value.reason
+  const blocking = value.state === 'unavailable' || value.state === 'blocked'
+  const context = [
+    value.sources.length === 0 ? null : `${translate('workspacePlanBasis')}：${value.sources.join('、')}`,
+    value.branch === undefined ? null : `${translate('workspacePlanBranch')}：${value.branch}`,
+    value.head === undefined ? null : `${translate('workspacePlanHead')}：${value.head}`
+  ].filter((item) => item !== null).join(' · ')
+  return h('div', {
+    role: 'status',
+    'data-workspace-plan-state': value.state,
+    style: {
+      ...styles.status,
+      margin: '6px 0',
+      padding: '7px 9px',
+      border: '1px solid var(--dsw-alias-border-l2, #dbe0e6)',
+      borderRadius: 8,
+      background: blocking ? 'var(--dsw-alias-bg-module-platform, transparent)' : 'transparent'
+    }
+  },
+  h('strong', null, `${translate('workspacePlan')} · ${translate('workspacePlanMode')}：${label}`),
+  h('p', { style: { margin: '3px 0', overflowWrap: 'anywhere' } }, reason),
+  context === '' ? null : h('p', { style: { margin: '3px 0', overflowWrap: 'anywhere' } }, context),
+  value.state === 'blocked' ? h('p', { style: { margin: '3px 0' } }, translate('workspacePlanBlockedHint')) : null)
+}
+
 const getTaskMarkdown = (view, fallback) => {
   const card = view?.card
   if (card === undefined) return typeof view?.markdown === 'string' ? view.markdown : view?.goal === undefined ? fallback : `### ${view.title ?? view.task_id}\n\n${view.goal}`
@@ -247,6 +326,14 @@ Object.assign(en, { historical: 'Historical tool record / passive cache', contra
 
 const validateTaskView = (value) => {
   if (value?.diagrams !== undefined && getDiagramBundle(value) === null) throw new Error('Task diagram binding or progress mismatch')
+  if (value !== null && typeof value === 'object' && value.routeObservability !== undefined) {
+    const sanitized = routeObservability.sanitizeRouteObservability(value.routeObservability)
+    if (sanitized === undefined) {
+      const { routeObservability: _invalid, ...rest } = value
+      return rest
+    }
+    return { ...value, routeObservability: sanitized }
+  }
   return value
 }
 const useTaskSnapshot = (store, root, task, options) => {
@@ -376,13 +463,15 @@ function TaskFlowContent ({ taskId, fallback = '', historicalSource, snapshot = 
     compact ? null : h(PlanningReviewPanel, { review: view?.planningReview, t: translate })
   ]
   const progress = h(TaskProgressSummary, { bundle, t: translate })
+  const routeTrace = progressPage ? h(routeObservability.RouteObservabilityPanel, { value: view?.routeObservability, t: translate }) : null
   const pending = view?.stateRefreshRequired === true ? h('p', { role: 'status', 'data-swarm-projection-pending': '' }, translate('projectionPending')) : null
   const blocker = view?.blockedRecovery?.active === true && typeof view.blockedRecovery.summary === 'string' ? h('p', { role: 'status', 'data-swarm-current-block': '' }, `${translate('currentBlock')}：${view.blockedRecovery.summary}`) : null
   const canvas = compact ? h('p', { style: styles.status }, translate('openProgress')) : h(TaskDiagramPanel, { key: taskId, view, source: view?.flow?.mermaid ?? view?.mermaid ?? historicalSource, t: translate, preference: source?.readPreference(), setPreference: source?.setPreference })
   return h('section', { style: styles.card, 'data-swarm-task-flow': taskId, 'aria-label': translate('title') },
     h('div', { style: styles.header }, h('strong', null, `${translate('title')} · ${taskId}`), h('span', { style: styles.status, 'data-planning-status': headerStatus }, translate(headerStatus === 'unavailable' && view !== null ? 'reviewUnavailable' : headerStatus)), typeof onRefresh !== 'function' ? null : h('button', { type: 'button', style: styles.button, onClick: onRefresh }, translate('refresh'))),
     h(Freshness, { snapshot, t: translate }),
-    ...(progressPage ? [progress, h(RuntimeGuardStatus, { view, t: translate }), h(NativeHostStatus, { view, t: translate }), h(EventDrivenStatus, { view, t: translate }), blocker, pending, canvas, h('details', { 'data-swarm-contract-details': '' }, h('summary', null, translate('contractDetails')), ...contract)] : [...contract, progress, h(NativeHostStatus, { view, t: translate }), h(EventDrivenStatus, { view, t: translate }), blocker, pending, canvas]))
+    h(WorkspacePlanStatus, { view, t: translate }),
+    ...(progressPage ? [progress, routeTrace, h(RuntimeGuardStatus, { view, t: translate }), h(NativeHostStatus, { view, t: translate }), h(EventDrivenStatus, { view, t: translate }), blocker, pending, canvas, h('details', { 'data-swarm-contract-details': '' }, h('summary', null, translate('contractDetails')), ...contract)] : [...contract, progress, h(NativeHostStatus, { view, t: translate }), h(EventDrivenStatus, { view, t: translate }), blocker, pending, canvas]))
 }
 
 function TaskFlowRow (props) {
@@ -412,4 +501,4 @@ exports.validateTaskView = validateTaskView
 exports.TaskFlowContent = TaskFlowContent
 exports.useTaskSnapshot = useTaskSnapshot
 exports.dictionaries = { zh, en }
-exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, TaskFlowRow, TaskFlowContent, TaskDiagramPanel, TaskProgressSummary, Freshness, NativeHostStatus, EventDrivenStatus, validateTaskView, useTaskSnapshot, zh, en, styles, DIAGRAM_KINDS }
+exports.__test__ = { readTaskResult, taskFlowDefinition, validateSource, loadMermaid, isSafeSvgMarkup, getTaskMarkdown, getPlanningReviewView, PlanningReviewPanel, getDiagramBundle, exportDiagramSnapshot, TaskFlowRow, TaskFlowContent, TaskDiagramPanel, TaskProgressSummary, Freshness, WorkspacePlanStatus, getWorkspacePlanView, NativeHostStatus, EventDrivenStatus, RouteObservabilityPanel: routeObservability.RouteObservabilityPanel, validateTaskView, useTaskSnapshot, zh, en, styles, DIAGRAM_KINDS }

@@ -1,7 +1,11 @@
+import { createNotebookContextPortFromContext, NotebookContextError, type NotebookContextAgent } from './adapters/dsh-host/notebook-context.js'
+import { createVerificationOutputPort } from './adapters/dsh-host/verification-outputs.js'
+import { createNotebookSnapshotStore, installNotebookSnapshotRuntime } from './notebook-snapshot.js'
+import { createWorkspaceGitPort } from './adapters/dsh-host/workspace-git.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHostWorktreePort } from './adapters/dsh-host/worktree.js'
-import { createExecutionBoundary } from './adapters/dsh-host/execution-boundary.js'
+import { createExecutionBoundary, EXECUTION_BOUNDARY_CAPS } from './adapters/dsh-host/execution-boundary.js'
 import { Config, getSwarmConfig, getRoleRoute } from './config.js'
 import {
   MANAGED_AGENTS_KEY,
@@ -98,6 +102,17 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   let onExecutionSettled = (_agentId: string): void => {}
   const executionBoundary = createExecutionBoundary(ctx, agentId => onExecutionSettled(agentId))
   const getConfig = () => getSwarmConfig(config)
+  const notebookContext = createNotebookContextPortFromContext(ctx)
+  const notebookSnapshots = createNotebookSnapshotStore({ dshHome: getDshHome(ctx) })
+  ctx.effect(() => installNotebookSnapshotRuntime({ ...notebookSnapshots, resolveReadContext: async (sessionId, signal) => {
+    const context = await notebookContext.read(sessionId, signal)
+    const current = service.GetNotebookTaskBinding(sessionId)
+    if (current !== undefined && (context?.managed !== true || context.taskId !== current.taskId || context.attemptId !== current.attemptId || context.rootSessionId !== current.rootSessionId)) throw new NotebookContextError('NOTEBOOK_CONTEXT_NOT_DURABLE', '当前任务关联尚未可靠落盘，不能读取上一任务的 Notebook')
+    // 草稿豁免只认 Host 当前真实 Agent 的角色投影，不信旧 header 或 HTTP 字段。
+    const liveAgent = (ctx.get('agents') as { get: (id: string) => AgentLike | undefined } | undefined)?.get(sessionId)
+    if (context !== undefined && liveAgent?.id === sessionId && service.getRoleForAgent(liveAgent) === 'tian_shu') return { ...context, routerDraft: true }
+    return context
+  } }))
   const fetchImpl: typeof fetch = (input, init) => globalThis.fetch(input, init)
   const rootMetadata = new Map<string, Promise<{ header: SessionHeaderLike; preference?: RouteInfo } | undefined>>()
   const inspectRootMetadata = (id: string) => {
@@ -134,6 +149,12 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
   const service = intSwarmService({
     orderQuotaRoutes: quotaSource.orderQuotaRoutes, onQuotaRouteSuccess: quotaSource.succeeded, quotaDiagnostics: quotaSource.diagnostics,
     getConfig,
+    recordNotebookBinding: async (agent, binding, signal) => {
+      const caps = (globalThis as Record<symbol, unknown>)[EXECUTION_BOUNDARY_CAPS]
+      // 旧 Host/只读单测未提供该公开 API：仅不启用新增快照恢复，不阻断原代码工具。
+      if (!(caps instanceof Set) || !caps.has('subprocess-local/rc3') || ctx.get('sessionQuery') === undefined || ctx.get('sessions') === undefined) return
+      await notebookContext.record(agent as NotebookContextAgent, binding, signal)
+    },
     getLlm: () => ctx.get('llm') as LlmLike | undefined,
     getTokenMeter: () => ctx.get('tokenMeter') as TokenMeterLike | undefined,
     getSubagents: () => ctx.get('subagents') as SubagentsLike | undefined,
@@ -151,6 +172,8 @@ export const apply = (ctx: PluginContextLike, config: unknown): void => {
     getSessionProjections: () => ctx.get('sessionProjections') as SessionProjectionsLike | undefined,
     getAgent: (sessionId) => (ctx.get('agents') as { get: (id: string) => AgentLike | undefined } | undefined)?.get(sessionId),
     getJobs: () => ctx.get('jobs') as JobsLike | undefined,
+    getVerificationOutputs: () => createVerificationOutputPort(ctx),
+    getWorkspaceGit: () => createWorkspaceGitPort(ctx),
     getWorktreeHost: () => ctx.get('workingDirectory') === undefined ? undefined : createHostWorktreePort(ctx),
     writerBoundary: executionBoundary,
     inspectParent: async (sessionId) => (await inspectRootMetadata(sessionId))?.header,

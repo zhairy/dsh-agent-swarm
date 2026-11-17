@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 1,
+  "releaseVersion": "3.4.1",
+  "defaultHostVersion": "0.2.2-rc.3",
+  "hosts": {
+    "0.2.2-rc.3": {
+      "role": "local-target",
+      "claim": "v3.4.1-local",
+      "requiredChecks": [
+        "release-package-closure",
+        "rc3-step-model-host",
+        "primary-live-boundary",
+        "linked-verification-boundary",
+        "notebook-js-browser-host",
+        "notebook-double-boot-host",
+        "notebook-snapshot",
+        "route-observability-offline"
+      ],
+      "patches": [
+        {
+          "id": "rc3-step-model-bridge",
+          "type": "sha-state",
+          "target": "@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "originalSha256": "f09f60814d4e96a880f41b9fc3832f33c56a28f954f48810d8439ce83ad6ffa8",
+          "patchedSha256": "c094632e3070de8d9fef9d1cf2ae66bc78d67d622d3bbf2f44692c6309cb7fe5",
+          "artifact": "patches/dsh-agent-loop-0.2.2-rc.3-step-model-bridge.patch",
+          "artifactSha256": "3d1578f64b0011de90b991cb5f72ce7294bb8046cee285b3c99b4e0cfd45e63a",
+          "requiredState": "patched"
+        },
+        {
+          "id": "rc3-execution-boundary",
+          "type": "execution-boundary",
+          "plan": "patches/dsh-execution-boundary-0.2.2-rc.3.json",
+          "planSha256": "edd4069758c2ffe43c7a1c0f44826c22f1139b618a8f5e8a8202e89ff8dbd873",
+          "artifact": "patches/dsh-execution-boundary-0.2.2-rc.3.patch",
+          "artifactSha256": "a85635a2d0de7bfbc776ee4ab1889811d542edb9025cd690088609b1162c1793",
+          "requiredState": "patched"
+        }
+      ]
+    },
+    "0.2.2-rc.1": {
+      "role": "retained",
+      "claim": "rc1-retained-only",
+      "requiredChecks": [
+        "release-package-closure",
+        "rc1-bridge-install"
+      ],
+      "patches": [
+        {
+          "id": "rc1-step-model-bridge",
+          "type": "sha-state",
+          "target": "@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "originalSha256": "a6fa8e0c7c90191caf5f4a3bb5c624a86e9845cf3c79d020b71420d0e20ae4c1",
+          "patchedSha256": "c7390f4da755e9c57ad9176df605d2991822bdeb7f13e87260b4f5d0e51ea5ae",
+          "artifact": "patches/dsh-agent-loop-0.2.2-rc.1-step-model-bridge.patch",
+          "artifactSha256": "7fcd508388acef7b0345a09b4a38bd89d49ee8bb8e2c5a9905a7872790652902",
+          "allowedStates": [
+            "original",
+            "patched"
+          ]
+        },
+        {
+          "id": "rc1-execution-boundary",
+          "type": "execution-boundary",
+          "plan": "patches/dsh-execution-boundary-0.2.2-rc.1.json",
+          "planSha256": "11a2f7d88953ce3899a2c2833446ee668f595868a56674faaf3eaabe3cf79212",
+          "artifact": "patches/dsh-execution-boundary-0.2.2-rc.1.patch",
+          "artifactSha256": "8fd6805f6d9114e207e4fd5b91187a9fd1dac09de33ed8ac0e729ed9cc02afcf",
+          "allowedStates": [
+            "original",
+            "patched"
+          ]
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "id": "swarm",
+      "packageName": "dsh-agent-swarm",
+      "version": "${releaseVersion}",
+      "requiredArtifactForHosts": [
+        "0.2.2-rc.3"
+      ],
+      "defaultPath": ".",
+      "required": true,
+      "requiredForHosts": [
+        "0.2.2-rc.3",
+        "0.2.2-rc.1"
+      ],
+      "requiredEntries": [
+        "lib/index.js",
+        "lib/tools.js",
+        "lib/expert-tools.js",
+        "lib/runtime.js",
+        "lib/client.js"
+      ],
+      "patches": []
+    },
+    {
+      "id": "notebook",
+      "packageName": "@beihaizb/dsh-notebook",
+      "version": "0.4.2+rc3.sandbox.9",
+      "distributionSha256": "36a518ed879c27d6110c42d78357abafdac00d1c65946e192563034c0189a353",
+      "defaultPath": "third_party/dsh-notebook",
+      "requiredForHosts": [
+        "0.2.2-rc.3"
+      ],
+      "requiredEntries": [
+        "lib/index.js",
+        "lib/client.js",
+        "lib/notebook-host-context.js",
+        "lib/notebook-runtime.js",
+        "lib/notebook-snapshot-bridge.js",
+        "lib/vendor/dompurify.es.mjs",
+        "lib/vendor/DOMPurify.LICENSE",
+        "lib/vendor/DOMPurify.LICENSE-MPL",
+        "lib/vendor/DOMPurify.NOTICE"
+      ],
+      "patches": [
+        {
+          "id": "notebook-rc3-snapshot",
+          "type": "plugin-plan",
+          "plan": "patches/dsh-notebook-0.4.2-rc3-snapshot.json",
+          "planSha256": "435b15e4242378209e108c17b3f9c94f0a86e62c089f83fe698705948a5cad7b",
+          "baseVersion": "0.4.2",
+          "requiredState": "patched"
+        }
+      ]
+    },
+    {
+      "id": "subscriptions",
+      "packageName": "dsh-plugin-subscriptions",
+      "version": "0.9.13+rc3.transport.2",
+      "distributionSha256": "79955b8ef455d4a48c50afea738053f0ebade8cb382b6407f2753f6bb33da41d",
+      "requiredForHosts": [
+        "0.2.2-rc.3"
+      ],
+      "requiredEntries": [
+        "lib/index.js",
+        "lib/client.js"
+      ],
+      "patches": [
+        {
+          "id": "subscriptions-rc3-transport",
+          "type": "plugin-plan",
+          "plan": "compat/subscriptions-0.9.13-rc3-transport.2/subscriptions.json",
+          "planSha256": "3707bd4f5d849b1302874cfc1dbc2ff161c905bc57d85b1faaa2fa3a09bc17c5",
+          "baseVersion": "0.9.13",
+          "requiredState": "patched"
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "release-package-closure": {
+      "kind": "offline",
+      "command": [
+        "node",
+        "--test",
+        "tests/release-compat.test.mjs"
+      ],
+      "timeoutMs": 120000
+    },
+    "rc3-step-model-host": {
+      "kind": "host-runtime",
+      "hostVersion": "0.2.2-rc.3",
+      "requiredSdkPath": ".sandbox/dsh-0.2.2-rc.3/node_modules",
+      "command": [
+        "node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "tests/integration/step-model-rc3.test.ts",
+        "--config",
+        "vitest.integration.config.ts",
+        "--maxWorkers=1"
+      ],
+      "env": {
+        "SWARM_TEST_EVIDENCE_DIR": "${evidenceRun}/step-model-host"
+      },
+      "timeoutMs": 120000
+    },
+    "primary-live-boundary": {
+      "kind": "host-runtime",
+      "hostVersion": "0.2.2-rc.3",
+      "requiredSdkPath": ".sandbox/dsh-0.2.2-rc.3/node_modules",
+      "command": [
+        "node",
+        "tests/integration/run-execution-boundary.mjs",
+        "--primary",
+        "--bundle",
+        "${component:swarm}",
+        "--dsh",
+        "${sdk}",
+        "--out",
+        "${evidenceRun}/primary-host"
+      ],
+      "timeoutMs": 180000
+    },
+    "linked-verification-boundary": {
+      "kind": "host-runtime",
+      "hostVersion": "0.2.2-rc.3",
+      "requiredSdkPath": ".sandbox/dsh-0.2.2-rc.3/node_modules",
+      "command": [
+        "node",
+        "tests/integration/run-execution-boundary.mjs",
+        "--verify-linked",
+        "--bundle",
+        "${component:swarm}",
+        "--dsh",
+        "${sdk}",
+        "--out",
+        "${evidenceRun}/linked-verification-host"
+      ],
+      "timeoutMs": 180000
+    },
+    "notebook-js-browser-host": {
+      "kind": "host-runtime",
+      "hostVersion": "0.2.2-rc.3",
+      "requiredSdkPath": ".sandbox/dsh-0.2.2-rc.3/node_modules",
+      "requiredEnv": [
+        "DSH_NOTEBOOK_CONTROLLER_PYTHON"
+      ],
+      "command": [
+        "node",
+        "scripts/verify-notebook-host.mjs",
+        "--dsh",
+        "${sdk}",
+        "--swarm",
+        "${component:swarm}",
+        "--notebook",
+        "${component:notebook}",
+        "--python",
+        "${env:DSH_NOTEBOOK_CONTROLLER_PYTHON}",
+        "--out",
+        "${evidenceRun}/notebook-js-browser"
+      ],
+      "timeoutMs": 660000
+    },
+    "notebook-double-boot-host": {
+      "kind": "host-runtime",
+      "hostVersion": "0.2.2-rc.3",
+      "requiredSdkPath": ".sandbox/dsh-0.2.2-rc.3/node_modules",
+      "requiredEnv": [
+        "DSH_NOTEBOOK_CONTROLLER_PYTHON"
+      ],
+      "command": [
+        "node",
+        "scripts/verify-notebook-snapshot-host.mjs",
+        "--dsh",
+        "${sdk}",
+        "--swarm",
+        "${component:swarm}",
+        "--notebook",
+        "${component:notebook}",
+        "--python",
+        "${env:DSH_NOTEBOOK_CONTROLLER_PYTHON}",
+        "--out",
+        "${evidenceRun}/notebook-double-boot-host"
+      ],
+      "timeoutMs": 660000
+    },
+    "notebook-snapshot": {
+      "kind": "offline",
+      "command": [
+        "node",
+        "--test",
+        "tests/notebook-snapshot.test.mjs"
+      ],
+      "timeoutMs": 120000
+    },
+    "route-observability-offline": {
+      "kind": "offline",
+      "command": [
+        "node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "tests/unit/route-observability.test.ts",
+        "tests/unit/client-route-observability.test.ts",
+        "--config",
+        "vitest.config.ts",
+        "--maxWorkers=1"
+      ],
+      "timeoutMs": 120000
+    },
+    "rc1-bridge-install": {
+      "kind": "offline",
+      "hostVersion": "0.2.2-rc.1",
+      "requiredSdkPath": ".sandbox/dsh-0.2.2-rc.1/node_modules",
+      "command": [
+        "node",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "tests/integration/bridge-install.test.ts",
+        "--config",
+        "vitest.integration.config.ts",
+        "--maxWorkers=1"
+      ],
+      "timeoutMs": 120000
+    }
+  }
+}

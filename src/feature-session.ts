@@ -1,3 +1,4 @@
+import { ValidateWorkspacePlan } from './workspace-policy.js'
 import { join } from 'node:path'
 import { lstat, mkdir, open, readFile } from 'node:fs/promises'
 import type { SwarmConfigInfo } from './config.js'
@@ -212,7 +213,7 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
     const sourceEffectIds = new Set<string>()
     for (const [index, task] of state.tasks.entries()) {
       at(`$.tasks[${index}]`, 'TASK_FORMAT')
-      if (!object(task) || !identifier(task.taskId) || tasks.has(task.taskId) || task.sessionId !== expected.rootSessionId || (task.workspaceId !== undefined && task.workspaceId !== expected.workspaceId) || ValidateTaskCard(task.card).card === undefined || !strings(task.delegationIds) || new Set(task.delegationIds).size !== task.delegationIds.length || !Number.isSafeInteger(task.rounds) || task.rounds < 0 || !Number.isFinite(task.createdAt) || !Number.isFinite(task.updatedAt) || ![task.cardRevision, task.workflowRevision, task.requestRevision].every(optionalRevision) || (task.intentLastDigest !== undefined && !/^[a-f0-9]{64}$/.test(task.intentLastDigest)) || (task.sourceEffectId !== undefined && (!/^effect-[a-f0-9]{40}$/.test(task.sourceEffectId) || sourceEffectIds.has(task.sourceEffectId)))) return invalid()
+      if (!object(task) || !identifier(task.taskId) || tasks.has(task.taskId) || task.sessionId !== expected.rootSessionId || (task.workspaceId !== undefined && task.workspaceId !== expected.workspaceId) || ValidateTaskCard(task.card).card === undefined || task.workspacePlan !== undefined && !ValidateWorkspacePlan(task.workspacePlan) || task.workspacePlanUnavailable !== undefined && typeof task.workspacePlanUnavailable !== 'boolean' || !strings(task.delegationIds) || new Set(task.delegationIds).size !== task.delegationIds.length || !Number.isSafeInteger(task.rounds) || task.rounds < 0 || !Number.isFinite(task.createdAt) || !Number.isFinite(task.updatedAt) || ![task.cardRevision, task.workflowRevision, task.requestRevision].every(optionalRevision) || (task.intentLastDigest !== undefined && !/^[a-f0-9]{64}$/.test(task.intentLastDigest)) || (task.sourceEffectId !== undefined && (!/^effect-[a-f0-9]{40}$/.test(task.sourceEffectId) || sourceEffectIds.has(task.sourceEffectId)))) return invalid()
       if (task.sourceEffectId !== undefined) sourceEffectIds.add(task.sourceEffectId)
       at(`$.tasks[${index}].intentRefs`, 'INTENT_REFERENCE_FORMAT')
       if (task.runtimeGoalId !== undefined && (state.schemaVersion !== 2 || !identifier(task.runtimeGoalId))) return invalid()

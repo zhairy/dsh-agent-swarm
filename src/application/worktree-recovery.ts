@@ -4,6 +4,7 @@ import type { SwarmEventJournal } from '../event-journal.js'
 import { getWorktreeOwnerKey, isSameWorktreeIdentity, type WorktreeBindingInfo, type WorktreeOwner, type WorktreeRegistry } from '../worktree-binding.js'
 import type { WorktreeHostPort } from '../adapters/dsh-host/worktree.js'
 import type { WorkspaceLease, WorkspaceLeaseManager } from '../util/workspace-lease.js'
+import { assertWorkspacePlanBinding, type WorkspacePlan } from '../workspace-policy.js'
 
 export interface RestoreWorktreeInput {
   id: string
@@ -19,6 +20,10 @@ export interface RestoreWorktreeInput {
   confirmStopped: (previous: WorktreeBindingInfo) => Promise<void>
   assertStopped: (previous: WorktreeBindingInfo) => void
   getLease: (record: WorktreeBindingInfo) => WorkspaceLease | undefined
+  /** 新 attempt 已在根路径排队取得的租约；仅 primary 可复用，避免对同一路径自锁。 */
+  primaryLease?: WorkspaceLease
+  expectedHead?: string
+  workspacePlan?: WorkspacePlan
   retainLease: (lease: WorkspaceLease, record: WorktreeBindingInfo) => void
   warn: (message: string) => void
 }
@@ -27,6 +32,7 @@ export interface RestoreWorktreeInput {
 export const restoreRetainedWorktree = async (input: RestoreWorktreeInput): Promise<WorktreeBindingInfo> => {
   const expected = input.registry.findById(input.id)
   if (!expected || expected.taskId !== input.owner.taskId) throw new Error('工作树不属于当前任务')
+  if (expected.kind === 'primary' || input.workspacePlan !== undefined) assertWorkspacePlanBinding(input.workspacePlan, expected)
   const unreserve = input.registry.reserve(input.id)
   let acquired: WorkspaceLease | undefined
   try {
@@ -44,12 +50,14 @@ export const restoreRetainedWorktree = async (input: RestoreWorktreeInput): Prom
       input.registry.suspend(input.id)
       await input.confirmStopped(current)
       assertCurrent()
-      if (!reusableLease) {
+      const reserved = current.kind === 'primary' && input.primaryLease?.cwd === current.path && input.leases.isCurrent(input.primaryLease) ? input.primaryLease : undefined
+      if (!reusableLease && reserved === undefined) {
         acquired = await input.leases.acquire(current.path, `${input.agent.id}:${input.owner.execution!.attemptId}:worktree`, 'write', input.signal, { wait: false })
       }
-      const lease = acquired ?? existingLease!
+      const lease = acquired ?? reserved ?? existingLease!
       const before = await input.host.inspect(input.agent, current, input.signal)
       assertCurrent()
+      if (current.kind === 'primary' && before.head !== (input.expectedHead ?? current.observation?.head)) throw new Error('主工作区 HEAD 漂移；先核对实际 HEAD，再显式提供 expected_head')
       if (current.observation !== undefined && !isSameWorktreeIdentity(current.observation, before)) throw new Error('原工作树目录已被替换')
       await input.host.setCwd(input.agent, current.path, input.signal)
       assertCurrent()

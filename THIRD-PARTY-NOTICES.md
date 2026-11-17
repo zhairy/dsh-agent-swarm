@@ -1,6 +1,6 @@
 # 第三方声明 / Third-party notices
 
-本插件包含或改编了以下 MIT 许可的第三方内容。
+本插件及兼容附件包含或改编了下列第三方内容；各节分别说明许可证。
 
 ## jev-mcp 0.2.1
 
@@ -72,3 +72,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## v3.4.1 Notebook 净化器
+
+Notebook 兼容构建单独分发未修改的 DOMPurify 3.4.18 ESM，用于 Markdown、HTML、SVG 的只读输出净化。它与上文 Mermaid 自身依赖独立，不替换 Mermaid 的传递依赖。
+
+原始来源、npm 完整性和文件 SHA-256 记录在 `third_party/dsh-notebook/lib/vendor/DOMPurify.NOTICE`；双许可证原文为同目录的 `DOMPurify.LICENSE`（Apache-2.0）和 `DOMPurify.LICENSE-MPL`（MPL-2.0）。两份许可及来源文件完整保留在 Notebook 单包和兼容总包中。Notebook 的 MIT 许可保持原样；这些兼容构建不代表上游发行版。

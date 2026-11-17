@@ -67,11 +67,16 @@ describe('角色注册表', () => {
 
   it('只有可编辑工作区的专家获得 DSH 原生 create_worktree 工具', () => {
     expect(getWantedTools('ji_feng')).toContain('create_worktree')
+    expect(getWantedTools('ji_feng')).toContain('swarm_bind_primary_workspace')
+    expect(getWantedTools('ji_feng')).toContain('swarm_git_save')
+    expect(getWantedTools('fu_he')).toContain('swarm_prepare_verification')
+    expect(getWantedTools('fu_he')).not.toContain('swarm_bind_primary_workspace')
+    expect(getWantedTools('xing_zhou')).not.toContain('swarm_prepare_verification')
     expect(getWantedTools('zhu_jian')).toContain('create_worktree')
     expect(getWantedTools('xing_zhou')).not.toContain('create_worktree')
     expect(getWantedTools('yu_shi')).not.toContain('create_worktree')
     expect(getWantedTools('tian_shu')).not.toContain('create_worktree')
-    expect(getChildPersona('ji_feng')).toContain('无旧工作树时才调用 create_worktree')
+    expect(getChildPersona('ji_feng')).toContain('linked 沿用 create_worktree')
     expect(getChildPersona('ji_feng')).toContain('swarm_restore_worktree')
     expect(getWantedTools('ji_feng')).toContain('swarm_restore_worktree')
     expect(getWantedTools('yu_shi')).not.toContain('swarm_restore_worktree')

@@ -1,6 +1,6 @@
 import { ParseJevAnswers, type JevAskOutcome, type JevClient, type JevConfigInfo, type JevModelsOutcome, type JevOutcome, type JevUsageInfo } from './jev.js'
 import type { TaskCard } from './policy.js'
-import { getJevState, JEV_QUESTIONS } from './jev.js'
+import { getJevState, getJevQuestions } from './jev.js'
 
 type TextStreamChunk = {
   type: string
@@ -126,8 +126,8 @@ export const intThirdPartyJevClient = (config: JevConfigInfo, deps: { getLlm: ()
     return { ok: true, answers, model: selected.model, attempts: 1, usage: usageOf(usage), latencyMs: now() - started }
   }
 
-  const triage = async (card: TaskCard, signal?: AbortSignal): Promise<JevOutcome> => {
-    const outcome = await ask(getJevState(card), JEV_QUESTIONS, signal)
+  const triage = async (card: TaskCard, signal?: AbortSignal, workspace?: import('./workspace-policy.js').WorkspacePlan, request?: { text: string; source: 'host' | 'declared' }): Promise<JevOutcome> => {
+    const outcome = await ask(getJevState(card, workspace, request), getJevQuestions(workspace), signal)
     if (!outcome.ok) return { ok: false, reason: outcome.reason, attempts: outcome.attempts }
     const answers = ParseJevAnswers({ answers: outcome.answers })
     return Object.keys(answers).length === 0 ? { ok: false, reason: 'malformed-response', attempts: outcome.attempts } : { ok: true, answers, attempts: outcome.attempts }

@@ -11,6 +11,7 @@ const project = fileURLToPath(new URL('../../', import.meta.url))
 const args = process.argv.slice(2), option = name => args[args.indexOf(name) + 1]
 if (!args.includes('--dsh') || !args.includes('--out')) throw new Error('Usage: node tests/integration/run-execution-boundary.mjs --dsh <node_modules> --out <evidence-directory> [--bundle <extracted-package>]')
 const modules = resolve(option('--dsh')), sourceHost = dirname(modules), output = resolve(option('--out'))
+const primaryProof = args.includes('--primary'), linkedVerification = args.includes('--verify-linked')
 const bundle = args.includes('--bundle') ? resolve(option('--bundle')) : project
 mkdirSync(output, { recursive: true, mode: 0o700 })
 const runId = randomUUID(), startedAt = new Date().toISOString()
@@ -57,14 +58,21 @@ try {
   mkdirSync(repo); mkdirSync(join(repo, 'allowed'))
   const git = (...command) => run('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', '-C', repo, ...command])
   git('init', '-b', 'main')
-  for (const [name, value] of Object.entries({ '.gitignore': '.agents/\n', 'source.txt': 'source-protected', 'denied.txt': 'scope-protected', 'allowed/inside.txt': 'initial', 'allowed/drift.txt': 'source-drift-protected' })) writeFileSync(join(repo, name), value)
+  for (const [name, value] of Object.entries({ '.gitignore': '.agents/\nvar/\n', 'source.txt': 'source-protected', 'denied.txt': 'scope-protected', 'allowed/inside.txt': 'initial', 'allowed/drift.txt': 'source-drift-protected' })) writeFileSync(join(repo, name), value)
+  if (primaryProof) {
+    writeFileSync(join(home, 'outside.txt'), 'outside-protected')
+    mkdirSync(join(repo, 'var/reports/swarm/previous'), { recursive: true })
+    writeFileSync(join(repo, 'var/reports/swarm/previous/proof.txt'), 'old-report-protected')
+    writeFileSync(join(repo, 'agent.md'), '唯一基线工作树是当前仓库。禁止 git worktree add、linked worktree、第二 checkout。\n')
+    writeFileSync(join(repo, '.gitignore'), '.agents/\nvar/\n')
+  }
   git('add', '.'); git('commit', '-m', 'execution boundary fixture')
-  const newFixture = () => ({ repositoryRoot: repo, path: join(repo, '.agents/worktrees/boundary-case'), rootId: `boundary-root-${randomUUID()}` })
+  const newFixture = () => ({ repositoryRoot: repo, path: primaryProof ? repo : join(repo, '.agents/worktrees/boundary-case'), rootId: `boundary-root-${randomUUID()}` })
   writeFileSync(fixture, JSON.stringify(newFixture()), { mode: 0o600 })
   const profile = join(home, 'profiles/web'); mkdirSync(join(profile, 'node_modules'), { recursive: true })
   symlinkSync(bundle, join(profile, 'node_modules/dsh-agent-swarm'))
   writeFileSync(join(profile, 'package.json'), JSON.stringify({ name: 'execution-boundary-proof', private: true, type: 'module', dependencies: { 'dsh-agent-swarm': `link:${bundle}` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-agent-swarm'] } } }), { mode: 0o600 })
-  writeFileSync(patch, `- id: permission\n  config:\n    defaultPreset: boundary-proof\n    presets:\n      boundary-proof:\n        sandbox: workspace-write\n        approval: never\n- id: swarm-core\n  config:\n    jev:\n      enabled: false\n    review:\n      enabled: false\n    planningReview:\n      enabled: false\n    watchdog:\n      enabled: false\n    workflow:\n      mode: advisory\n    agents:\n      maxRetries: 0\n    routes:\n      fu_he:\n        chain:\n          - provider: swarm-boundary-mock\n            model: role-fu_he\n      zhu_jian:\n        chain:\n          - provider: swarm-boundary-mock\n            model: role-zhu_jian\n      tian_shu:\n        chain:\n          - provider: swarm-boundary-mock\n            model: root\n- insert:\n    - id: boundary-worktrees\n      name: '@deepseek-ai/dsh-experimental-worktree'\n${hostVersion === '0.2.2-rc.3' ? '      config:\n        retainOnArchive: true\n' : ''}    - id: boundary-worktree-tool\n      name: '@deepseek-ai/dsh-experimental-tool-worktree'\n    - id: boundary-driver\n      name: ${project}/tests/integration/driver/execution-boundary.mjs\n`, { mode: 0o600 })
+  writeFileSync(patch, `- id: permission\n  config:\n    defaultPreset: boundary-proof\n    presets:\n      boundary-proof:\n        sandbox: workspace-write\n        approval: never\n- id: swarm-core\n  config:\n    jev:\n      enabled: false\n    review:\n      enabled: false\n    planningReview:\n      enabled: false\n    watchdog:\n      enabled: false\n    workflow:\n      mode: advisory\n    agents:\n      maxRetries: 0\n    routes:\n      fu_he:\n        chain:\n          - provider: swarm-boundary-mock\n            model: role-fu_he\n      zhu_jian:\n        chain:\n          - provider: swarm-boundary-mock\n            model: role-zhu_jian\n      tian_shu:\n        chain:\n          - provider: swarm-boundary-mock\n            model: root\n- insert:\n    - id: boundary-worktrees\n      name: '@deepseek-ai/dsh-experimental-worktree'\n${hostVersion === '0.2.2-rc.3' ? '      config:\n        retainOnArchive: true\n' : ''}    - id: boundary-worktree-tool\n      name: '@deepseek-ai/dsh-experimental-tool-worktree'\n    - id: boundary-driver\n      name: ${project}/tests/integration/driver/${primaryProof ? 'primary-workspace' : linkedVerification ? 'linked-verification' : 'execution-boundary'}.mjs\n`, { mode: 0o600 })
   // Keep the bootstrap outside /tmp: the real Host workspace sandbox masks
   // host /tmp. HOME itself is inherited/left unset, never repurposed.
   writeFileSync(preload, `import os from 'node:os';import{syncBuiltinESMExports}from'node:module';os.homedir=()=>${JSON.stringify(home)};syncBuiltinESMExports();const real=globalThis.fetch;globalThis.fetch=(x,o)=>{const u=new URL(typeof x==='string'||x instanceof URL?String(x):x.url);return ['127.0.0.1','localhost'].includes(u.hostname)?real(x,o):Promise.resolve(new Response('offline fixture',{status:503}))};`, { flag: 'wx', mode: 0o600 })
@@ -80,7 +88,7 @@ try {
   writeFileSync(fixture, JSON.stringify(newFixture()), { mode: 0o600 })
   const live = await runPhase('live'), cold = await runPhase('cold')
   for (const [name, expected] of Object.entries(sourceHashes)) assert.equal(hash(join(modules, name)), expected, 'live Host file changed')
-  writeFileSync(join(output, 'summary.json'), JSON.stringify({ status: 'passed', runId, startedAt, finishedAt: new Date().toISOString(), host: plan.hostVersion, bundle, modelProvider: 'local mock; no external inference', sourceHostUnchanged: true, bridgeChecks: ['unpatched-refusal', 'idempotence', 'unknown-checksum-refusal', 'restore'], unsupportedHostBlocked: unsupported.unsupportedHostBlocked, liveHandoff: live.snapshotRetained && live.oldOwnerDenied, physicalScopeEnforced: live.fsBoundaryDenied && live.driftPrevented, coldWriteGrantDenied: cold.coldWriteGrantDenied, ...(hostVersion === '0.2.2-rc.3' ? { archiveIgnoredFilesRetained: live.archiveIgnoredFilesRetained === true } : {}) }, null, 2), { mode: 0o600 })
+  writeFileSync(join(output, 'summary.json'), JSON.stringify({ status: 'passed', proofKind: primaryProof ? 'primary' : linkedVerification ? 'linked-verification' : 'linked', verifierOutputsEnforced: live.verifierOutputsEnforced === true, ...(primaryProof ? { verifierOutputsEnforced: live.verifierOutputsEnforced, primaryGitSave: live.primaryGitSave, gitMetadataProtected: live.gitMetadataProtected, soleWorktree: live.soleWorktree } : {}), runId, startedAt, finishedAt: new Date().toISOString(), host: plan.hostVersion, bundle, modelProvider: 'local mock; no external inference', sourceHostUnchanged: true, bridgeChecks: ['unpatched-refusal', 'idempotence', 'unknown-checksum-refusal', 'restore'], unsupportedHostBlocked: unsupported.unsupportedHostBlocked, liveHandoff: live.snapshotRetained && live.oldOwnerDenied, physicalScopeEnforced: primaryProof ? live.fsBoundaryDenied && live.gitMetadataProtected && live.outsideHostPreserved : live.fsBoundaryDenied && live.driftPrevented, coldWriteGrantDenied: cold.coldWriteGrantDenied, ...(!primaryProof && hostVersion === '0.2.2-rc.3' ? { archiveIgnoredFilesRetained: live.archiveIgnoredFilesRetained === true } : {}) }, null, 2), { mode: 0o600 })
 } catch (error) {
   writeFileSync(join(output, 'summary.json'), JSON.stringify({ status: 'failed', runId, startedAt, error: String(error) }), { mode: 0o600 })
   throw error

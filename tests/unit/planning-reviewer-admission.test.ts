@@ -21,7 +21,9 @@ it('admits only the live planning reviewer snapshot without inventing a delegati
   const result = new Promise<SubagentResultLike>(resolve => { finish = resolve })
   const config = getSwarmConfig({ workflow: { mode: 'advisory' }, jev: { enabled: false }, planningReview: { requireJev: false },
     routes: { yu_shi: { chain: [{ provider: 'fixture', model: 'reviewer' }] } } })
+  const recordNotebookBinding = vi.fn(async () => undefined)
   const service = intSwarmService({
+    recordNotebookBinding,
     getConfig: () => config, getLlm: () => undefined,
     getSubagents: () => ({ getProvider: () => ({ capabilities: { agentOptions: true, outputSchema: true, persona: true, toolFilter: true, depthLimit: true } }),
       start: async () => ({ id: child.id, result, dispose: async () => undefined }) }),
@@ -37,6 +39,10 @@ it('admits only the live planning reviewer snapshot without inventing a delegati
     review = service.ReviewPlan({ task_id: task.task_id }, exec)
     await expect.poll(() => service.agentControl.get(child.id), { timeout: 5000 }).toBeDefined()
     await service.WaitAgentReady(child)
+    // 规划审核不是执行委派，不制造普通 task/attempt marker，也不能获得 Notebook 能力。
+    expect(recordNotebookBinding).not.toHaveBeenCalled()
+    expect(service.GetNotebookTaskBinding(child.id)).toBeUndefined()
+    expect(service.getGuardReason({ name: 'nb_new', agent: child, arguments: {} })).toBeDefined()
     expect(service.getGuardReason({ name: 'read', agent: child, arguments: { path: 'README.md' } })).toBeUndefined()
     expect(service.getGuardReason({ name: 'structured_output', agent: child, arguments: {} })).toBeUndefined()
     expect(service.getGuardReason({ name: 'write', agent: child, arguments: { path: 'README.md' } })).toBeDefined()

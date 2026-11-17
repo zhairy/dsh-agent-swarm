@@ -333,6 +333,7 @@ export const isTriageUseful = (card: TaskCard, gates: GateRequirement[]): boolea
 
 /** Jev 答案中本插件读取的字段 */
 export interface TriageAnswers {
+  workspaceMode?: { choice: 'primary' | 'linked' | 'blocked'; confidence: number }
   mathTask?: { choice: string; confidence: number }
   needBenchmark?: number
   novelty?: { score: number; confidence: number }

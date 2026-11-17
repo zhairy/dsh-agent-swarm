@@ -8,7 +8,7 @@ import type { TicketRepository } from '../domain/tickets/repository.js'
 import type { WorktreeRegistry } from '../worktree-binding.js'
 import { getNotebookRuntimePort } from '../host-contract.js'
 import { getNotebookToolClass } from '../adapters/dsh-host/notebook-runtime.js'
-import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL, isWorktreeMutationTool, type WorktreeBindingInfo } from '../worktree-binding.js'
+import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL, PRIMARY_WORKSPACE_TOOL, VERIFICATION_OUTPUT_TOOL, isWorktreeMutationTool, type WorktreeBindingInfo } from '../worktree-binding.js'
 import { getAgentHeader, WRITE_TOOL_NAMES, type AgentLike, type ToolExecutionLike } from '../host-contract.js'
 import { getToolApprovalDenial } from '../approval-policy.js'
 import { getRouterToolDenial } from '../router-worker.js'
@@ -38,7 +38,7 @@ export interface HostGuardDeps {
   getChildOwner: (agentId: string) => string | undefined
   getChildSignal: (agentId: string) => AbortSignal | undefined
   getTaskSchemaNames: (agent: AgentLike) => readonly { name: string }[]
-  isQuarantined: (taskId: string) => boolean
+  isQuarantined: (taskId: string, rootSessionId: string) => boolean
   isBindingCurrent: (session: GuardSessionPort, binding: AgentBinding, agent: AgentLike, task: TaskRecord) => boolean
   privateStateRoots: () => readonly string[]
   isWorkspaceMutationUnknown: (cwd: string) => boolean
@@ -147,22 +147,26 @@ export const createHostGuardUseCases = (deps: HostGuardDeps): HostGuardUseCases 
     }
 
     const owner = execution.agent === undefined ? undefined : deps.getChildOwner(execution.agent.id)
-    if (execution.name === RESTORE_WORKTREE_TOOL && (owner === undefined || role === undefined || getRoleInfo(role).permission !== 'workspace-edit')) return '仅当前合法可写 Worker 可以恢复工作树'
+    if (execution.name === VERIFICATION_OUTPUT_TOOL && (owner === undefined || role !== 'fu_he')) return '仅当前复核 Worker 可准备测试输出'
+    if ([RESTORE_WORKTREE_TOOL, PRIMARY_WORKSPACE_TOOL].includes(execution.name) && (owner === undefined || role === undefined || getRoleInfo(role).permission !== 'workspace-edit')) return '仅当前合法可写 Worker 可以绑定或恢复工作区'
     if (owner !== undefined && execution.agent !== undefined) {
       const session = deps.getSession(owner)
       const binding = session.features?.bindings.get(execution.agent.id)
       if (binding === undefined) return '当前专家的身份绑定尚未就绪，不能执行工具'
       if (execution.signal?.aborted || deps.getChildSignal(execution.agent.id)?.aborted) return '专家已经取消，延迟工具调用被拒绝'
       if (binding.state !== 'active') return '专家执行身份已经撤销，请重新委派'
-      if (deps.isQuarantined(binding.taskId) && writer) return 'Ticket 已隔离：存在未知外部副作用，只允许只读核对与恢复读取，禁止写入、工作树或命令执行'
+      if (deps.isQuarantined(binding.taskId, owner) && writer) return 'Ticket 已隔离：存在未知外部副作用，只允许只读核对与恢复读取，禁止写入、工作树或命令执行'
       const task = session.store.getTask(binding.taskId)
       if (task === undefined || !deps.isBindingCurrent(session, binding, execution.agent, task)) return '专家绑定的是旧任务版本，不能继续执行工具'
+      if (task.workspacePlan?.mode === 'blocked' && writer) return '项目工作区要求互相冲突，澄清前禁止写入'
       const workspaceEditor = role !== undefined && getRoleInfo(role).permission === 'workspace-edit'
+      if ((workspaceEditor || execution.name === VERIFICATION_OUTPUT_TOOL) && writer && task.workspacePlanUnavailable) return 'Host 无法核验项目工作区规则，写入前先修复核验并重新规划'
       if (execution.name === WORKTREE_TOOL) {
+        if (task.workspacePlan?.mode === 'primary' || task.workspacePlan?.mode === 'blocked') return '项目要求唯一主工作区或规则待澄清，禁止创建 linked 工作树'
         if (!workspaceEditor) return '只有可编辑工作区的专家能够创建可写工作树'
         const denied = session.worktrees.canCreate({ agentId: execution.agent.id, taskId: binding.taskId })
         if (denied !== undefined) return denied
-      } else if (writer && workspaceEditor && execution.name !== RESTORE_WORKTREE_TOOL) {
+      } else if (writer && workspaceEditor && ![RESTORE_WORKTREE_TOOL, PRIMARY_WORKSPACE_TOOL].includes(execution.name)) {
         const worktreeToolLoaded = deps.getTaskSchemaNames(execution.agent).some((tool) => tool.name === WORKTREE_TOOL)
         if (worktreeToolLoaded || session.worktrees.findByTask(binding.taskId).length > 0) {
           const bound = session.worktrees.findByAgent(execution.agent.id)
@@ -189,6 +193,7 @@ export const createHostGuardUseCases = (deps: HostGuardDeps): HostGuardUseCases 
       return '强制任务流程中，写入与通用命令需通过受工作区租约管理的专家执行'
     }
     if ((execution.name === 'bash' || execution.name === 'pwsh') && role !== undefined && getRoleInfo(role).capabilities.includes('shell')) return undefined
+    if (execution.name === VERIFICATION_OUTPUT_TOOL && role === 'fu_he') return undefined
     if (role === undefined || isWriteAllowed(role)) return undefined
     return `dsh-agent-swarm 守卫：「${getRoleInfo(role).name}」是${getPermissionLabel(role)}角色，不能调用 ${execution.name} 修改文件。请在结果中写明需要的改动，由天枢交给铸剑或疾风处理。`
   }

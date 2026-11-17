@@ -17,6 +17,15 @@ import { getFailureClass, getRouteKey, getRouteLabel, isSameRoute, type FailureC
 import { getUpgradedChain } from '../../domain/routing/upgrade.js'
 import { getCanonicalJson } from '../../workflow.js'
 import { formatContextAdmissionError } from '../../context-admission.js'
+import {
+  intRouteObservability,
+  type RouteObservationBudget,
+  type RouteObservationEndReason,
+  type RouteObservationTerminal,
+  type RouteObservabilityOptions,
+  type RouteObservabilitySnapshot,
+  type RouteObservabilityStore
+} from '../../route-observability.js'
 
 /** 一次路由回退 */
 export interface FallbackEventInfo {
@@ -95,6 +104,8 @@ export interface NetworkWaitEventInfo {
 /** 路由状态注册表的可选依赖 */
 export interface RouteEngineOptions {
   now?: () => number
+  /** 进程内有界、脱敏路由 trace 的上限；默认值见 route-observability.ts。 */
+  observability?: RouteObservabilityOptions
   /** 联网探测；缺省时不做断网等待 */
   network?: NetworkMonitorInfo
   onNetworkWait?: (event: NetworkWaitEventInfo) => void
@@ -123,7 +134,7 @@ export interface RequestRecoveryState {
   transientRetries: number
   waitedMs: number
   attemptedRoutes: string[]
-  terminal?: 'route_chain_exhausted' | 'recovery_attempts_exhausted' | 'route_health_persist_failed' | 'context_recovery_required'
+  terminal?: RouteObservationTerminal
   contextRecoveryAttempts?: number
   suppressedRetryAfterMs?: number
   completed?: boolean
@@ -179,6 +190,7 @@ export interface RouteEngine {
   /** The delegation owner calls this after every result/terminal has been consumed, including failure and cancellation. */
   FinishLogicalRequest: (logicalRequestId: string) => void
   getRecovery: (agentId: string) => RequestRecoveryState | undefined
+  getRouteObservability: (agentIds?: readonly string[]) => RouteObservabilitySnapshot
   /** Aggregate lifecycle counts only; no session, request or model identities. */
   getRecoveryDiagnostics: () => { agents: number; logicalRequests: number; logicalStates: number; disposedTerminals: number }
   getTerminal: (agentId: string) => RequestRecoveryState['terminal']
@@ -293,6 +305,7 @@ const FindNextIndex = (chain: RouteInfo[], start: number, tried: ReadonlySet<str
  */
 export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) => void, probe?: RouteProbe, options: RouteEngineOptions = {}): RouteEngine => {
   const now = options.now ?? Date.now
+  const observability: RouteObservabilityStore = intRouteObservability({ now, ...(options.observability ?? {}) })
   const health = options.health ?? intRouteHealth(now)
   const recoveries = new Map<string, RequestRecoveryState>()
   // Health is profile-wide, so its durability barrier must survive the child
@@ -380,10 +393,53 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
   }
   const recoveryOf = (id: string): RequestRecoveryState => { if (!recoveries.has(id)) begin(id, id); return recoveries.get(id) as RequestRecoveryState }
   const policyOf = (config?: SwarmConfigInfo): RecoveryPolicy => ({ ...DEFAULT_RECOVERY_POLICY, ...(config as (SwarmConfigInfo & { recovery?: Partial<RecoveryPolicy> }) | undefined)?.recovery, ...options.recovery })
-  const terminal = (id: string, reason: RequestRecoveryState['terminal'], failure?: LlmFailureLike): undefined => {
+  const getObservedScope = (agentId: string): 'child' | 'root' => children.has(agentId) ? 'child' : 'root'
+  const observeRequest = (agentId: string, requestId: string, at = now()): void => {
+    observability.BeginRequest({
+      agentId,
+      requestId,
+      scope: getObservedScope(agentId),
+      at,
+      ...(requestPositions.get(agentId) === undefined ? {} : { position: { ...requestPositions.get(agentId)! } })
+    })
+  }
+  const getObservationBudget = (recovery: RequestRecoveryState, config?: SwarmConfigInfo): RouteObservationBudget => {
+    const policy = config === undefined ? undefined : policyOf(config)
+    return {
+      maxLogicalAttempts: policy?.maxLogicalAttempts ?? null,
+      logicalAttemptsUsed: countedAttempts(recovery),
+      maxTransientRetries: policy?.maxTransientRetries ?? null,
+      transientRetriesUsed: recovery.transientRetries,
+      maxTransientWaitMs: policy?.maxTransientWaitMs ?? null,
+      transientWaitUsedMs: recovery.waitedMs,
+      maxHoldWaits: MAX_HOLD_RETRIES,
+      holdWaitsUsed: recovery.holdRetries ?? 0,
+      maxHoldWaitMs: config?.agents?.networkWaitMs ?? null,
+      holdWaitUsedMs: recovery.holdWaitedMs ?? 0
+    }
+  }
+  const updateObservationBudget = (agentId: string, recovery: RequestRecoveryState, config?: SwarmConfigInfo): void => {
+    observability.UpdateBudget({ agentId, requestId: recovery.logicalRequestId, budget: getObservationBudget(recovery, config) })
+  }
+  const finishObservation = (agentId: string, requestId: string, final: Parameters<RouteObservabilityStore['FinishRequest']>[0]['final'], endReason: RouteObservationEndReason,
+    terminal?: RouteObservationTerminal): void => {
+    observability.FinishRequest({
+      agentId,
+      requestId,
+      at: now(),
+      final,
+      endReason,
+      ...(terminal === undefined ? {} : { terminal })
+    })
+  }
+  const getFailureRoute = (payload: RequestErrorPayloadLike): RouteInfo =>
+    observedRequest(payload)?.route ?? lastRoutes.get(payload.agent.id) ?? children.get(payload.agent.id)?.chain[children.get(payload.agent.id)!.index]
+      ?? { provider: payload.provider, model: '' }
+  const terminal = (id: string, reason: NonNullable<RequestRecoveryState['terminal']>, failure?: LlmFailureLike): undefined => {
     const state = recoveryOf(id)
     state.terminal = reason
     state.suppressedRetryAfterMs = (failure as RouteFailureMetadata | undefined)?.providerRetryAfterMs
+    finishObservation(id, state.logicalRequestId, 'failed', 'route_terminal', reason)
     return undefined // 真实 DSH agent-loop 中非 retry 即失败，不发明 stop 动作。
   }
   const managed = (agent: AgentLike, role: RoleId | undefined): boolean => children.has(agent.id) || (role !== undefined && getAgentHeader(agent).parentSession === undefined)
@@ -463,6 +519,86 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     return observation.position !== undefined && payload.turn !== undefined && payload.step !== undefined
       && (payload.turn !== observation.position.turn || payload.step !== observation.position.step)
   }
+  const recordFailureObservation = (payload: RequestErrorPayloadLike, route: RouteInfo, terminal?: RouteObservationTerminal): void => {
+    const requestId = observedRequest(payload)?.recovery.logicalRequestId ?? recoveries.get(payload.agent.id)?.logicalRequestId
+    if (requestId === undefined) return
+    observeRequest(payload.agent.id, requestId)
+    const normalized = normalizeRouteFailure(payload.failure as RouteFailureMetadata, route)
+    observability.AddFailure({
+      agentId: payload.agent.id,
+      requestId,
+      at: now(),
+      kind: normalized.kind,
+      route,
+      ...(normalized.status === undefined ? {} : { status: normalized.status }),
+      ...(normalized.providerRetryAfterMs === undefined ? {} : { retryAfterMs: normalized.providerRetryAfterMs }),
+      ...(terminal === undefined ? {} : { terminal })
+    })
+    const recovery = recoveries.get(payload.agent.id)
+    if (recovery !== undefined) updateObservationBudget(payload.agent.id, recovery)
+  }
+  const recordIgnoredFailure = (payload: RequestErrorPayloadLike, route: RouteInfo, reason: 'stale_request' | 'duplicate_failure' | 'manual_pause' | 'signal_aborted'): void => {
+    const requestId = observedRequest(payload)?.recovery.logicalRequestId ?? recoveries.get(payload.agent.id)?.logicalRequestId
+    if (requestId === undefined) return
+    const normalized = normalizeRouteFailure(payload.failure as RouteFailureMetadata, route)
+    observability.AddIgnoredFailure({
+      agentId: payload.agent.id,
+      requestId,
+      at: now(),
+      kind: normalized.kind,
+      route,
+      reason,
+      ...(normalized.status === undefined ? {} : { status: normalized.status }),
+      ...(normalized.providerRetryAfterMs === undefined ? {} : { retryAfterMs: normalized.providerRetryAfterMs })
+    })
+  }
+  const startObservedWait = (event: NetworkWaitEventInfo): { waitId: string | null; startedAt: number } => {
+    const startedAt = now()
+    const requestId = recoveries.get(event.agentId)?.logicalRequestId
+    const failureKind = event.failure === undefined
+      ? undefined
+      : normalizeRouteFailure(event.failure as RouteFailureMetadata, event.route ?? { provider: '', model: '' }).kind
+    const waitId = requestId === undefined ? null : observability.BeginWait({
+      agentId: event.agentId,
+      requestId,
+      at: startedAt,
+      reason: event.reason,
+      ...(event.waitMs === undefined ? {} : { plannedMs: event.waitMs }),
+      ...(event.route === undefined ? {} : { route: event.route }),
+      ...(failureKind === undefined ? {} : { failureKind })
+    })
+    options.onNetworkWait?.(event)
+    return { waitId, startedAt }
+  }
+  const finishObservedWait = (event: NetworkWaitEventInfo, wait: { waitId: string | null; startedAt: number }, signal?: AbortSignal): void => {
+    const at = now()
+    const outcome = signal?.aborted === true ? 'cancelled' : event.recovered === undefined ? 'unknown' : event.recovered ? 'completed' : 'timeout'
+    observability.EndWait(wait.waitId, {
+      at,
+      waitedMs: Math.max(0, at - wait.startedAt),
+      outcome,
+      ...(event.reason === 'network' && event.recovered !== undefined ? { reportedRecovered: event.recovered } : {})
+    })
+    options.onNetworkWait?.(event)
+  }
+  const startInternalWait = (agentId: string, reason: 'retry' | 'context_compaction', startedAt: number, plannedMs?: number): string | null => {
+    const requestId = recoveries.get(agentId)?.logicalRequestId
+    return requestId === undefined ? null : observability.BeginWait({
+      agentId,
+      requestId,
+      at: startedAt,
+      reason,
+      ...(plannedMs === undefined ? {} : { plannedMs })
+    })
+  }
+  const finishInternalWait = (waitId: string | null, startedAt: number, signal?: AbortSignal): void => {
+    const at = now()
+    observability.EndWait(waitId, {
+      at,
+      waitedMs: Math.max(0, at - startedAt),
+      outcome: signal?.aborted === true ? 'cancelled' : 'completed'
+    })
+  }
   /** 兼容旧宿主的改写前路由；必须排除实际自动回退和适配器默认值漂移。 */
   const lastResolved = new Map<string, RouteInfo>()
   const upgrades = new Map<string, RootUpgradeStateInfo>()
@@ -476,8 +612,12 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     const ordered = quotaOrders.get(agentId)
     return ordered !== undefined && ordered.logicalRequestId === recoveries.get(agentId)?.logicalRequestId ? ordered.chain : declared
   }
-  const quotaCancelled = (signal?: AbortSignal): void => {
-    if (signal?.aborted === true) throw new SwarmError('RECOVERY_REQUIRED', '额度路由准备已取消；未启动新的模型请求')
+  const quotaCancelled = (agentId: string, signal?: AbortSignal): void => {
+    if (signal?.aborted === true) {
+      const recovery = recoveries.get(agentId)
+      if (recovery !== undefined) finishObservation(agentId, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+      throw new SwarmError('RECOVERY_REQUIRED', '额度路由准备已取消；未启动新的模型请求')
+    }
   }
   const canUse = (route: RouteInfo): boolean => health.isAvailable(route) && canServe(route)
   const admissionKey = (route: RouteInfo): string => getCanonicalJson([route.provider, route.model, route.reasoningEffort ?? null, route.policy ?? {}])
@@ -523,11 +663,23 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     const scope = children.has(agentId) ? 'child' : 'root'
     recovery.holdRetries = (recovery.holdRetries ?? 0) + 1
     recovery.holdWaitedMs = (recovery.holdWaitedMs ?? 0) + target.wait
-    options.onNetworkWait?.({ agentId, scope, reason: 'route', failure, route: target.route, waitMs: target.wait })
+    updateObservationBudget(agentId, recovery, config)
+    const started = startObservedWait({ agentId, scope, reason: 'route', failure, route: target.route, waitMs: target.wait })
     return (options.sleep ?? SleepWithSignal)(target.wait, signal).then(() => {
-      options.onNetworkWait?.({ agentId, scope, reason: 'route', failure, route: target.route, recovered: true, waitedMs: target.wait })
-      if (signal?.aborted === true || manualPauses.has(agentId) || recoveries.get(agentId) !== recovery) return undefined
+      finishObservedWait({ agentId, scope, reason: 'route', failure, route: target.route, recovered: true, waitedMs: target.wait }, started, signal)
+      if (signal?.aborted === true) {
+        finishObservation(agentId, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+        return undefined
+      }
+      if (manualPauses.has(agentId)) {
+        finishObservation(agentId, recovery.logicalRequestId, 'cancelled', 'manual_pause')
+        return undefined
+      }
+      if (recoveries.get(agentId) !== recovery) return undefined
       return retarget(target.route)
+    }, (error) => {
+      observability.EndWait(started.waitId, { at: now(), waitedMs: Math.max(0, now() - started.startedAt), outcome: 'unknown' })
+      throw error
     })
   }
 
@@ -672,13 +824,27 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
       // 联网只排除“整机断网”，不能证明单次供应商连接已不可重试。
       if (await network.isOnline()) return retryOnline?.() ?? fallback()
       const route = lastRoutes.get(agentId)
-      const started = now()
-      options.onNetworkWait?.({ agentId, scope, reason: 'network', failure: payload.failure, ...(route === undefined ? {} : { route }) })
-      const recovered = await network.waitOnline(payload.signal, holdLeft(recovery, config))
+      const waitStartedAt = now()
+      const observed = startObservedWait({ agentId, scope, reason: 'network', failure: payload.failure, ...(route === undefined ? {} : { route }) })
+      let recovered: boolean
+      try {
+        recovered = await network.waitOnline(payload.signal, holdLeft(recovery, config))
+      } catch (error) {
+        observability.EndWait(observed.waitId, { at: now(), waitedMs: Math.max(0, now() - observed.startedAt), outcome: 'unknown' })
+        throw error
+      }
       recovery.holdRetries = (recovery.holdRetries ?? 0) + 1
-      recovery.holdWaitedMs = (recovery.holdWaitedMs ?? 0) + (now() - started)
-      options.onNetworkWait?.({ agentId, scope, reason: 'network', failure: payload.failure, recovered, waitedMs: now() - started, ...(route === undefined ? {} : { route }) })
-      if (payload.signal?.aborted === true || manualPauses.has(agentId)) return undefined
+      recovery.holdWaitedMs = (recovery.holdWaitedMs ?? 0) + (now() - waitStartedAt)
+      updateObservationBudget(agentId, recovery, config)
+      finishObservedWait({ agentId, scope, reason: 'network', failure: payload.failure, recovered, waitedMs: now() - waitStartedAt, ...(route === undefined ? {} : { route }) }, observed, payload.signal)
+      if (payload.signal?.aborted === true) {
+        finishObservation(agentId, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+        return undefined
+      }
+      if (manualPauses.has(agentId)) {
+        finishObservation(agentId, recovery.logicalRequestId, 'cancelled', 'manual_pause')
+        return undefined
+      }
       return recovered ? { kind: 'retry' } : fallback()
     })()
   }
@@ -689,7 +855,11 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     if (!managed(agent, _presetRole)) return resolved
     if (pendingHealthCommit !== undefined) throw new SwarmError('RECOVERY_REQUIRED', '健康状态持久提交仍未完成；请在请求边界等待，未启动模型请求')
     if (failedHealthCommit) throw new SwarmError('SERVICE_UNAVAILABLE', 'route_health_persist_failed')
-    if (manualPauses.has(agent.id)) throw new SwarmError('RECOVERY_REQUIRED', '子会话已人工暂停；取消沉寂后显式继续')
+    if (manualPauses.has(agent.id)) {
+      const recovery = recoveries.get(agent.id)
+      if (recovery !== undefined) finishObservation(agent.id, recovery.logicalRequestId, 'cancelled', 'manual_pause')
+      throw new SwarmError('RECOVERY_REQUIRED', '子会话已人工暂停；取消沉寂后显式继续')
+    }
     if (recoveries.get(agent.id)?.completed) begin(agent.id, `${agent.id}:request:${++requestSequence}`)
     const recovery = recoveryOf(agent.id)
     const freshSynchronousBoundary = probe === undefined && recoveryBoundaries.delete(agent.id)
@@ -786,6 +956,9 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     if (activeChild?.initialQuotaOrder !== undefined) children.set(agent.id, { ...activeChild, initialQuotaOrder: undefined })
     recovery.attempts += 1
     recovery.attemptedRoutes.push(getRouteLabel(route))
+    observeRequest(agent.id, recovery.logicalRequestId)
+    observability.AddSelection({ agentId: agent.id, requestId: recovery.logicalRequestId, ordinal: recovery.attempts, at: now(), route })
+    updateObservationBudget(agent.id, recovery, config)
     const next = route === undefined ? resolved : getRoutedConfig(resolved, route)
     lastRoutes.set(agent.id, route)
     requestObservations.set(agent.id, { route: { ...route, ...(route.policy === undefined ? {} : { policy: { ...route.policy,
@@ -796,13 +969,22 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
   }
 
   const api: RouteEngine = {
-    BeginLogicalRequest: begin,
-    BeginRequestStep: (id, turn, step) => { requestPositions.set(id, { turn, step }); begin(id, `${children.get(id)?.logicalRequestId ?? id}:${turn}:${step}`) },
+    BeginLogicalRequest: (id, logicalRequestId) => {
+      begin(id, logicalRequestId)
+    },
+    BeginRequestStep: (id, turn, step) => {
+      requestPositions.set(id, { turn, step })
+      const logicalRequestId = `${children.get(id)?.logicalRequestId ?? id}:${turn}:${step}`
+      begin(id, logicalRequestId)
+      observeRequest(id, logicalRequestId)
+    },
     FinishLogicalRequest: (id) => {
       const group = logical.get(id)
       if (group === undefined || !group.delegation) return
       for (const agentId of group.agents) {
         if (agentScopes.get(agentId) !== id) continue
+        const recovery = recoveries.get(agentId)
+        if (recovery !== undefined) finishObservation(agentId, recovery.logicalRequestId, 'released', 'logical_request_finished', recovery.terminal)
         agentScopes.delete(agentId)
         quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
         disposedTerminals.delete(agentId)
@@ -814,6 +996,7 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
       logical.delete(id)
     },
     getRecovery: (id) => { const state = recoveries.get(id); return state === undefined ? undefined : { ...state, attemptedRoutes: [...state.attemptedRoutes], ...(state.observedAttemptIds === undefined ? {} : { observedAttemptIds: [...state.observedAttemptIds] }) } },
+    getRouteObservability: (agentIds) => observability.getSnapshot(agentIds),
     getRecoveryDiagnostics: () => ({ agents: recoveries.size, logicalRequests: logical.size, logicalStates, disposedTerminals: disposedTerminals.size }),
     getTerminal: (id) => recoveries.get(id)?.terminal ?? disposedTerminals.get(id),
     getTerminalDetail: (id) => recoveries.get(id)?.terminalDetail,
@@ -845,6 +1028,14 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
       }
       const state = recoveryOf(id)
       if (state.observedAttemptIds?.includes(attemptId)) return
+      observeRequest(id, state.logicalRequestId)
+      observability.AddAttemptStart({
+        agentId: id,
+        requestId: state.logicalRequestId,
+        attemptId,
+        at: now(),
+        ...(actualRoute === undefined ? {} : { route: actualRoute })
+      })
       state.observedAttemptIds = [...(state.observedAttemptIds ?? []), attemptId]
       state.observedModelAttempts = (state.observedModelAttempts ?? 0) + 1
       state.observationCoverage = 'agent-loop-stream-attempts'
@@ -859,7 +1050,10 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
         preferredTrials.delete(id)
       }
       const recovery = recoveries.get(id)
-      if (recovery !== undefined) recovery.completed = true
+      if (recovery !== undefined) {
+        recovery.completed = true
+        finishObservation(id, recovery.logicalRequestId, 'succeeded', 'host_success')
+      }
       const scope = agentScopes.get(id)
       const group = scope === undefined ? undefined : logical.get(scope)
       // Long-lived delegates keep recent completed steps for restart accounting;
@@ -873,16 +1067,41 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     recover: async (payload, next, role, config, compaction) => {
       if (!managed(payload.agent, role)) return next()
       // 请求中止时探测并未得出结论：释放半开占用，避免该路由对其它根会话长期不可用。
-      if (payload.signal?.aborted === true) { health.release(payload.agent.id); return undefined }
-      if (manualPauses.has(payload.agent.id) || staleFailure(payload)) return undefined
-      if (normalizeRouteFailure(payload.failure as RouteFailureMetadata, { provider: payload.provider, model: '' }).kind === 'context_exceeded') {
+      if (payload.signal?.aborted === true) {
+        health.release(payload.agent.id)
+        const recovery = recoveries.get(payload.agent.id)
+        if (recovery !== undefined) finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+        return undefined
+      }
+      if (manualPauses.has(payload.agent.id)) {
+        const recovery = recoveries.get(payload.agent.id)
+        if (recovery !== undefined) finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'manual_pause')
+        return undefined
+      }
+      if (staleFailure(payload)) {
+        recordIgnoredFailure(payload, getFailureRoute(payload), 'stale_request')
+        return undefined
+      }
+      const failed = getFailureRoute(payload)
+      if (normalizeRouteFailure(payload.failure as RouteFailureMetadata, failed).kind === 'context_exceeded') {
         const recovery = recoveryOf(payload.agent.id)
+        recordFailureObservation(payload, failed)
         const before = payload.agent.session?.surface?.replaceGeneration
         if (compaction === undefined || payload.signal === undefined || before === undefined || (recovery.contextRecoveryAttempts ?? 0) >= 1) return terminal(payload.agent.id, 'context_recovery_required')
         recovery.contextRecoveryAttempts = (recovery.contextRecoveryAttempts ?? 0) + 1
+        const startedAt = now()
+        const waitId = startInternalWait(payload.agent.id, 'context_compaction', startedAt)
         try { await compaction.compactIfNeeded(payload.agent, 'context-overflow', payload.signal) } catch { /* a durable shrink may have committed before an auxiliary failure */ }
+        finishInternalWait(waitId, startedAt, payload.signal)
         const after = payload.agent.session?.surface?.replaceGeneration
-        if (payload.signal.aborted || manualPauses.has(payload.agent.id)) return undefined
+        if (payload.signal.aborted) {
+          finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+          return undefined
+        }
+        if (manualPauses.has(payload.agent.id)) {
+          finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'manual_pause')
+          return undefined
+        }
         return after !== undefined && after > before ? { kind: 'retry' } : terminal(payload.agent.id, 'context_recovery_required')
       }
       // 不 await next()：宿主 normal/always recovery 在 next 内会真正 sleep。
@@ -899,7 +1118,9 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
         ...(state.logicalRequestId === undefined ? {} : { logicalRequestId: state.logicalRequestId }),
         ...(state.requireVision === true ? { requireVision: true } : {})
       })
-      if (state.logicalRequestId !== undefined) begin(agentId, state.logicalRequestId)
+      if (state.logicalRequestId !== undefined) {
+        begin(agentId, state.logicalRequestId)
+      }
     },
     getChild: (agentId) => {
       const state = children.get(agentId)
@@ -970,7 +1191,7 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     },
     PrepareQuotaRouting: async (agent, resolved, role, config, signal) => {
       if (!managed(agent, role)) return
-      quotaCancelled(signal)
+      quotaCancelled(agent.id, signal)
       if (options.orderQuotaRoutes === undefined || manualPauses.has(agent.id) || childOverrides.has(agent.id) || quotaManualSelections.has(agent.id) || (!children.has(agent.id) && !config.rootFallback)) return
       const recovery = recoveryOf(agent.id)
       if (recovery.terminal !== undefined || quotaOrders.get(agent.id)?.logicalRequestId === recovery.logicalRequestId) return
@@ -988,8 +1209,8 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
       try {
         let proposed: readonly RouteInfo[]
         try { proposed = child?.initialQuotaOrder ?? await options.orderQuotaRoutes(declared, signal, trial === undefined ? [] : [trial]) }
-        catch (error) { quotaCancelled(signal); proposed = declared }
-        quotaCancelled(signal)
+        catch (error) { quotaCancelled(agent.id, signal); proposed = declared }
+        quotaCancelled(agent.id, signal)
         const stillCurrent = () => quotaPreparations.get(agent.id) === token && recoveries.get(agent.id) === recovery && children.get(agent.id) === child && roots.get(agent.id) === root && upgrades.get(agent.id) === upgrade && !manualPauses.has(agent.id) && !childOverrides.has(agent.id) && !quotaManualSelections.has(agent.id)
         if (!stillCurrent()) return
         const chain = getValidatedQuotaOrder(declared, proposed)
@@ -1001,13 +1222,13 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
         const retainedFallback = lastRoutes.has(agent.id) && (child === undefined ? root?.override !== undefined || (upgrade?.index ?? 0) > 0 : child.index > 0)
         if (recovery.attempts > 0 || child?.initialQuotaOrder !== undefined || trial !== undefined || retainedFallback || chain.every((route, index) => sameSelection(route, declared[index]!))) return
         for (const candidate of chain) {
-          quotaCancelled(signal)
+          quotaCancelled(agent.id, signal)
           if (!canUse(candidate)) continue
           // Preflight already verified the chosen child route. New root choices
           // and other candidates must pass the same capability/metadata gate.
           if (!sameSelection(candidate, current) && probe !== undefined) {
             const checked = await probe(candidate, signal)
-            quotaCancelled(signal)
+            quotaCancelled(agent.id, signal)
             if (!stillCurrent()) return
             if (!checked.ok || (child?.requireVision === true && !checked.vision)) continue
           }
@@ -1082,6 +1303,8 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
       return chain === undefined ? undefined : [...chain]
     },
     DelAgent: (agentId) => {
+      const recovery = recoveries.get(agentId)
+      if (recovery !== undefined) finishObservation(agentId, recovery.logicalRequestId, 'released', 'agent_released', recovery.terminal)
       quotaOrders.delete(agentId); quotaPreparations.delete(agentId); quotaManualSelections.delete(agentId)
       health.release(agentId)
       forgetRecovery(agentId, true)
@@ -1101,6 +1324,8 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     ReleaseAgent: (agentId) => {
       quotaOrders.delete(agentId); quotaPreparations.delete(agentId)
       health.release(agentId)
+      const recovery = recoveries.get(agentId)
+      if (recovery !== undefined) finishObservation(agentId, recovery.logicalRequestId, 'released', 'agent_released', recovery.terminal)
       if (children.get(agentId)?.persistent === true) return
       quotaManualSelections.delete(agentId)
       forgetRecovery(agentId, false)
@@ -1122,13 +1347,29 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
       const contextChecks = options.admitContext === undefined ? undefined : new Map<string, boolean>()
       const contextRejected = new Map<string, import('../../context-admission.js').ContextAdmissionInfo>()
       for (;;) {
-        if (signal?.aborted === true) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+        if (signal?.aborted === true) {
+          const recovery = recoveries.get(agent.id)
+          if (recovery !== undefined) finishObservation(agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+          throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+        }
         if (managed(agent, presetRole)) {
-          if (manualPauses.has(agent.id)) throw new SwarmError('RECOVERY_REQUIRED', '子会话已人工暂停；取消沉寂后显式继续')
+          if (manualPauses.has(agent.id)) {
+            const recovery = recoveries.get(agent.id)
+            if (recovery !== undefined) finishObservation(agent.id, recovery.logicalRequestId, 'cancelled', 'manual_pause')
+            throw new SwarmError('RECOVERY_REQUIRED', '子会话已人工暂停；取消沉寂后显式继续')
+          }
           const recovery = recoveries.get(agent.id)
           const child = children.get(agent.id)
-          await waitHealthReady(agent.id, signal)
-          if (Boolean(signal?.aborted)) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+          try {
+            await waitHealthReady(agent.id, signal)
+          } catch (error) {
+            if (Boolean(signal?.aborted) && recovery !== undefined) finishObservation(agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+            throw error
+          }
+          if (Boolean(signal?.aborted)) {
+            if (recovery !== undefined) finishObservation(agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+            throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+          }
           if (recoveries.get(agent.id) !== recovery || (child !== undefined && !children.has(agent.id))) throw new SwarmError('RECOVERY_REQUIRED', '路由准入所属请求已结束或变更')
           if (children.get(agent.id) !== child) { checks?.clear(); contextChecks?.clear() }
           if (pendingHealthCommit !== undefined) continue
@@ -1154,11 +1395,17 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
             const checked: { ok: boolean; vision?: boolean; reason?: string } = probe === undefined
               ? { ok: true, vision: true }
               : await (signal === undefined ? probe(error.route) : probe(error.route, signal))
-            if (Boolean(signal?.aborted)) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+            if (Boolean(signal?.aborted)) {
+              if (recovery !== undefined) finishObservation(agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+              throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+            }
             if (recoveries.get(agent.id) !== recovery || (child !== undefined && !children.has(agent.id))) throw new SwarmError('RECOVERY_REQUIRED', '路由准入所属请求已结束或变更')
             if (children.get(agent.id) !== child || roots.get(agent.id) !== root || rootPreferences.get(agent.id) !== preference || upgrades.get(agent.id) !== upgrade || quotaOrders.get(agent.id) !== order) { checks?.clear(); contextChecks?.clear(); continue }
             const context = options.admitContext === undefined ? { ok: true } : await options.admitContext(agent, error.route, resolved, signal)
-            if (Boolean(signal?.aborted)) throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+            if (Boolean(signal?.aborted)) {
+              if (recovery !== undefined) finishObservation(agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+              throw new SwarmError('RECOVERY_REQUIRED', '路由准入已取消；未启动新的模型请求')
+            }
             if (!context.ok) {
               checks?.set(admissionKey(error.route), false)
               contextChecks?.set(admissionKey(error.route), false)
@@ -1189,13 +1436,26 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
         recovery.holdRetries = (recovery.holdRetries ?? 0) + 1
         recovery.admissionHolds = (recovery.admissionHolds ?? 0) + 1
         recovery.holdWaitedMs = (recovery.holdWaitedMs ?? 0) + wait.waitMs
+        updateObservationBudget(agent.id, recovery, config)
         const event = { agentId: agent.id, scope: children.has(agent.id) ? 'child' as const : 'root' as const, reason: 'route' as const, route: wait.route }
-        options.onNetworkWait?.({ ...event, waitMs: wait.waitMs })
-        await (options.sleep ?? SleepWithSignal)(wait.waitMs, signal)
+        const observed = startObservedWait({ ...event, waitMs: wait.waitMs })
+        try {
+          await (options.sleep ?? SleepWithSignal)(wait.waitMs, signal)
+        } catch (error) {
+          observability.EndWait(observed.waitId, { at: now(), waitedMs: Math.max(0, now() - observed.startedAt), outcome: 'unknown' })
+          throw error
+        }
         for (const [key, accepted] of checks ?? []) if (accepted) checks!.delete(key)
         if (children.get(agent.id) !== child || roots.get(agent.id) !== root) checks?.clear()
-        options.onNetworkWait?.({ ...event, recovered: true, waitedMs: wait.waitMs })
-        if (Boolean(signal?.aborted)) throw new SwarmError('RECOVERY_REQUIRED', '等待路由恢复时已取消；未启动新的模型请求')
+        finishObservedWait({ ...event, recovered: true, waitedMs: wait.waitMs }, observed, signal)
+        if (Boolean(signal?.aborted)) {
+          finishObservation(agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+          throw new SwarmError('RECOVERY_REQUIRED', '等待路由恢复时已取消；未启动新的模型请求')
+        }
+        if (manualPauses.has(agent.id)) {
+          finishObservation(agent.id, recovery.logicalRequestId, 'cancelled', 'manual_pause')
+          throw new SwarmError('RECOVERY_REQUIRED', '子会话已人工暂停；取消沉寂后显式继续')
+        }
         if (recoveries.get(agent.id) !== recovery || (child !== undefined && !children.has(agent.id))) throw new SwarmError('RECOVERY_REQUIRED', '路由准入所属请求已结束或变更')
         // 只解除本次等待目标的已试标记；手选、换步或重新登记不能被旧等待覆盖。
         if (children.get(agent.id) === child && roots.get(agent.id) === root && health.isAvailable(wait.route)) {
@@ -1208,14 +1468,28 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     getErrorAction: (payload, action, presetRole, config) => {
       if (!managed(payload.agent, presetRole)) return action
       // 请求中止时探测并未得出结论：释放半开占用，避免该路由对其它根会话长期不可用。
-      if (payload.signal?.aborted === true) { health.release(payload.agent.id); return undefined }
-      if (manualPauses.has(payload.agent.id) || staleFailure(payload)) return undefined
+      if (payload.signal?.aborted === true) {
+        health.release(payload.agent.id)
+        const recovery = recoveries.get(payload.agent.id)
+        if (recovery !== undefined) finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+        return undefined
+      }
+      if (manualPauses.has(payload.agent.id)) {
+        const recovery = recoveries.get(payload.agent.id)
+        if (recovery !== undefined) finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'manual_pause')
+        return undefined
+      }
+      if (staleFailure(payload)) {
+        recordIgnoredFailure(payload, getFailureRoute(payload), 'stale_request')
+        return undefined
+      }
       const recovery = recoveryOf(payload.agent.id)
       if (recovery.terminal !== undefined) return undefined
       const policy = policyOf(config)
       const observation = observedRequest(payload)
-      const failed = observation?.route ?? lastRoutes.get(payload.agent.id) ?? children.get(payload.agent.id)?.chain[children.get(payload.agent.id)!.index] ?? { provider: payload.provider, model: '' }
+      const failed = getFailureRoute(payload)
       const normalized = normalizeRouteFailure(payload.failure as RouteFailureMetadata, failed)
+      recordFailureObservation(payload, failed)
       recovery.lastFailure = {
         kind: normalized.kind,
         provider: normalized.provider,
@@ -1245,14 +1519,35 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
         if (longWait) recovery.suppressedRetryAfterMs = normalized.providerRetryAfterMs
       }
       const afterHealthCommit = (): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
-        if (recoveries.get(payload.agent.id) !== recovery || manualPauses.has(payload.agent.id) || payload.signal?.aborted === true) return undefined
+        if (recoveries.get(payload.agent.id) !== recovery) return undefined
+        if (manualPauses.has(payload.agent.id)) {
+          finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'manual_pause')
+          return undefined
+        }
+        if (payload.signal?.aborted === true) {
+          finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+          return undefined
+        }
         // 第八次的终态故障仍要记录域隔离，随后停止恢复，不再尝试第九个模型。
         if (countedAttempts(recovery) >= policy.maxLogicalAttempts) return terminal(payload.agent.id, 'recovery_attempts_exhausted')
         const retryShort = (): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
           if (!canShortRetry()) return undefined
           recovery.transientRetries += 1
           recovery.waitedMs += delay
-          return (options.sleep ?? SleepWithSignal)(delay, payload.signal).then(() => payload.signal?.aborted === true ? undefined : { kind: 'retry' })
+          updateObservationBudget(payload.agent.id, recovery, config)
+          const startedAt = now()
+          const waitId = startInternalWait(payload.agent.id, 'retry', startedAt, delay)
+          return (options.sleep ?? SleepWithSignal)(delay, payload.signal).then(() => {
+            finishInternalWait(waitId, startedAt, payload.signal)
+            if (payload.signal?.aborted === true) {
+              finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+              return undefined
+            }
+            return { kind: 'retry' }
+          }, (error) => {
+            observability.EndWait(waitId, { at: now(), waitedMs: Math.max(0, now() - startedAt), outcome: 'unknown' })
+            throw error
+          })
         }
         if (!fatal && !longWait && !failedProbe && (!isNetworkSuspect(payload.failure) || options.network === undefined || config.agents.networkWaitMs <= 0)) {
           const retry = retryShort()
@@ -1261,8 +1556,18 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
         const child = children.get(payload.agent.id)
         const withQuota = (fallback: () => RequestErrorActionLike | Promise<RequestErrorActionLike>) => options.orderQuotaRoutes === undefined ? fallback : async () => {
           try { await api.PrepareQuotaRouting(payload.agent, { ...failed }, presetRole, config, payload.signal) }
-          catch (error) { if (payload.signal?.aborted === true) return undefined; throw error }
-          if (recoveries.get(payload.agent.id) !== recovery || payload.signal?.aborted === true) return undefined
+          catch (error) {
+            if (payload.signal?.aborted === true) {
+              finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+              return undefined
+            }
+            throw error
+          }
+          if (recoveries.get(payload.agent.id) !== recovery) return undefined
+          if (payload.signal?.aborted === true) {
+            finishObservation(payload.agent.id, recovery.logicalRequestId, 'cancelled', 'signal_aborted')
+            return undefined
+          }
           return fallback()
         }
         if (child !== undefined) {

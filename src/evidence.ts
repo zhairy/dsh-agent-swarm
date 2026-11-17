@@ -131,6 +131,9 @@ export interface AcceptanceRecord {
 
 /** 任务记录 */
 export interface TaskRecord {
+  /** Host 读取项目硬限制的规划事实，不是模型声明的授权。 */
+  workspacePlan?: import('./workspace-policy.js').WorkspacePlan
+  workspacePlanUnavailable?: boolean
   /** Stable Host goal owner; revisions remain separately bound by receipts. */
   runtimeGoalId?: string
   /** Immutable idempotency key for a Source/Outbox materialized Ticket. */

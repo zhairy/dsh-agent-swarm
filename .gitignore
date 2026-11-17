@@ -1,5 +1,7 @@
 node_modules
 lib/
+!third_party/dsh-notebook/lib/
+!third_party/dsh-notebook/lib/**
 coverage/
 release-artifacts/
 .sandbox

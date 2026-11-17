@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadTaskViewStoreModule } from './client-module-loader.js'
+import { loadRouteObservabilityModule, loadTaskViewStoreModule } from './client-module-loader.js'
 
 const deferred = () => { let resolve!: (value: unknown) => void; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 const stores: any[] = []
@@ -30,7 +30,8 @@ const loadClient = (state: unknown[] = []) => {
     return module.exports
   }
   const store = loadTaskViewStoreModule()
-  const flow = load('task-flow.js', (id) => id === 'react' ? react : id === '@swarm/task-view-store' ? store : {})
+  const routeObservability = loadRouteObservabilityModule()
+  const flow = load('task-flow.js', (id) => id === 'react' ? react : id === '@swarm/task-view-store' ? store : id === '@swarm/route-observability' ? routeObservability : {})
   const progress = load('task-progress.js', (id) => id === 'react' ? react : id === '@swarm/task-view-store' ? store : id === '@swarm/task-flow' ? flow : {})
   return { progress, flow, effects, setState }
 }

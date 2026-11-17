@@ -44,7 +44,8 @@ test('Notebook 未核验环境的展示与执行保持分离', async t => {
   const boundaryKey = Symbol.for('dsh-agent-swarm.execution-boundary.v1')
   const managedKey = Symbol.for('dsh-agent-swarm/managed-agents')
   const runtimeKey = Symbol.for('dsh-agent-swarm.notebook-runtime.v1')
-  const oldGlobals = new Map([boundaryKey, managedKey, runtimeKey].map(key => [key, globalThis[key]]))
+  const snapshotRuntimeKey = Symbol.for('dsh-agent-swarm.notebook-snapshot.v1')
+  const oldGlobals = new Map([boundaryKey, managedKey, runtimeKey, snapshotRuntimeKey].map(key => [key, globalThis[key]]))
   const effects = []
   t.after(async () => {
     try { for (const dispose of effects.reverse()) await dispose?.() }
@@ -99,6 +100,24 @@ test('Notebook 未核验环境的展示与执行保持分离', async t => {
   const storage = new AsyncLocalStorage()
   globalThis[boundaryKey] = { storage }
   globalThis[managedKey] = { version: 1, isManaged: agent => [root.id, worker.id].includes(agent?.id) }
+  const readContexts = new Map([
+    [root.id, {
+      schemaVersion: 1, sessionId: root.id, managed: false, taskId: null, agentId: root.id,
+      attemptId: null, rootSessionId: null, cwd: workspace, directoryIdentity: 'fixture-root',
+      source: 'host-session', routerDraft: true,
+    }],
+    [worker.id, {
+      schemaVersion: 1, sessionId: worker.id, managed: true, taskId: 'T-metadata', agentId: worker.id,
+      attemptId: 'metadata-attempt', rootSessionId: root.id, cwd: workspace, directoryIdentity: 'fixture-worker',
+      source: 'swarm-marker',
+    }],
+  ])
+  globalThis[snapshotRuntimeKey] = {
+    version: 1,
+    save: async () => ({ saved: true, digest: '0'.repeat(64), bytes: 1 }),
+    load: async () => undefined,
+    resolveReadContext: async sessionId => readContexts.get(sessionId),
+  }
   const tools = new Map()
   let handler
   const { apply } = await import(pathToFileURL(join(pluginRoot, 'lib', 'index.js')).href)
@@ -148,7 +167,7 @@ test('Notebook 未核验环境的展示与执行保持分离', async t => {
 
   await t.test('Worker 继承未核验选择时计算仍拒绝，展示不能覆盖实际选择或启动进程', async () => {
     const scope = {
-      agentId: worker.id, attemptId: 'metadata-attempt', cwd: workspace, repositoryRoot: workspace,
+      taskId: 'T-metadata', agentId: worker.id, attemptId: 'metadata-attempt', cwd: workspace, repositoryRoot: workspace,
       mode: 'read-only', operation: 'shell', writeScopes: [], epoch: {}, assertCurrent: () => {},
     }
     assertUnavailable(await storage.run(scope, () => invoke(worker, 'nb_get')))

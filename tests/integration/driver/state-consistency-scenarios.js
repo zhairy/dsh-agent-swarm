@@ -173,5 +173,6 @@ export const apply = ctx => {
     state.final = committed()
     finish('done')
   })().catch(error => finish('error', { error: String(error?.stack ?? error) })) }, 200)
-  setTimeout(() => finish('timeout'), 40000).unref()
+  // 每次真实写入现在核验项目、基线、租约及物理边界；给完整流程留出有界余量。
+  setTimeout(() => finish('timeout'), 75000).unref()
 }
