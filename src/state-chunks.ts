@@ -1,4 +1,5 @@
 import { canonicalStateJson, checksumText, deepFreeze, StateStoreError } from './state-core.js'
+import { types } from 'node:util'
 
 /**
  * 分片状态模型：把完整状态按顶层段拆成可独立编码、哈希与持久化的分片。
@@ -147,10 +148,32 @@ const chunkOf = (value: unknown): Chunk => {
   }
 }
 
-/** 已通过 canonicalStateJson 往返的值：可直接冻结，省掉一次多余的解析。 */
+// 只缓存内容已规范校验且整棵图不可变的对象；浅冻结并不证明后代不会被验证器修改。
+// WeakMap 随状态引用释放，缓存不持有会话或无限增长的编码字符串索引。
+const immutableEncodings = new WeakMap<object, Readonly<Pick<Chunk, 'encoded' | 'hash' | 'bytes'>>>()
+const isDeeplyFrozen = (value: unknown, depth = 0): boolean => {
+  if (value === null || typeof value !== 'object') return true
+  // Proxy 可在冻结后被撤销；连同嵌套 Proxy 一并排除，保留每次访问时的拒绝语义。
+  if (depth > 64 || types.isProxy(value) || !Object.isFrozen(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return false
+  return Reflect.ownKeys(value).every(key => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    return descriptor !== undefined && 'value' in descriptor && isDeeplyFrozen(descriptor.value, depth + 1)
+  })
+}
+
+/** 已规范化的值保留原引用；重复恢复只复用不可变内容的编码，不省略容器/键校验。 */
 const chunkOfVerified = (value: unknown): Chunk => {
+  const object = value !== null && typeof value === 'object' ? value : undefined
+  const cached = object === undefined ? undefined : immutableEncodings.get(object)
+  if (cached !== undefined) return { ...cached, value }
+  // 必须在编码前证明整棵图已冻结，不能依赖 deepFreeze 对外部浅冻结值的短路。
+  const immutable = object !== undefined && isDeeplyFrozen(object)
   const encoded = canonicalStateJson(value)
-  return { encoded, hash: checksumText(encoded), bytes: Buffer.byteLength(encoded, 'utf8'), value: deepFreeze(value) }
+  const content = { encoded, hash: checksumText(encoded), bytes: Buffer.byteLength(encoded, 'utf8') }
+  if (immutable) immutableEncodings.set(object!, Object.freeze(content))
+  return { ...content, value: deepFreeze(value) }
 }
 
 /** 从已编码的分片重建 Chunk（恢复回放与日志校验共用；不重新编码）。 */

@@ -15,7 +15,9 @@ const bundle = args.includes('--bundle') ? resolve(option('--bundle')) : project
 mkdirSync(output, { recursive: true, mode: 0o700 })
 const runId = randomUUID(), startedAt = new Date().toISOString()
 writeFileSync(join(output, 'summary.json'), JSON.stringify({ status: 'running', runId, startedAt }), { mode: 0o600 })
-const plan = JSON.parse(readFileSync(join(project, 'patches/dsh-execution-boundary-0.2.2-rc.1.json'), 'utf8'))
+const hostVersion = JSON.parse(readFileSync(join(modules, '@deepseek-ai/dsh/package.json'), 'utf8')).version
+if (!['0.2.2-rc.1', '0.2.2-rc.3'].includes(hostVersion)) throw new Error('Unsupported proof Host version')
+const plan = JSON.parse(readFileSync(join(project, `patches/dsh-execution-boundary-${hostVersion}.json`), 'utf8'))
 const hash = file => createHash('sha256').update(readFileSync(file)).digest('hex')
 const sourceHashes = Object.fromEntries(plan.files.map(entry => [entry.path, hash(join(modules, entry.path))]))
 const sdk = mkdtempSync(join(dirname(sourceHost), '.swarm-execution-proof-'))
@@ -32,7 +34,7 @@ const runPhase = async phase => {
   let timer
   try {
     child = spawn(process.execPath, [join(sdk, 'node_modules/@deepseek-ai/dsh/lib/bin.js'), '--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', String(port), '--no-open'], {
-      cwd: repo, env: { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1', NODE_OPTIONS: `--import=${preload}`, SWARM_BOUNDARY_FIXTURE: fixture, SWARM_BOUNDARY_PHASE: phase, SWARM_BOUNDARY_OUT: resultFile }, stdio: ['ignore', fd, fd]
+      cwd: repo, env: { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1', NODE_OPTIONS: `--import=${preload}`, SWARM_DSH_VERSION: hostVersion, SWARM_BOUNDARY_FIXTURE: fixture, SWARM_BOUNDARY_PHASE: phase, SWARM_BOUNDARY_OUT: resultFile }, stdio: ['ignore', fd, fd]
     })
     timer = setTimeout(() => child.kill('SIGTERM'), 125000)
     const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve) })
@@ -62,7 +64,7 @@ try {
   const profile = join(home, 'profiles/web'); mkdirSync(join(profile, 'node_modules'), { recursive: true })
   symlinkSync(bundle, join(profile, 'node_modules/dsh-agent-swarm'))
   writeFileSync(join(profile, 'package.json'), JSON.stringify({ name: 'execution-boundary-proof', private: true, type: 'module', dependencies: { 'dsh-agent-swarm': `link:${bundle}` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-agent-swarm'] } } }), { mode: 0o600 })
-  writeFileSync(patch, `- id: permission\n  config:\n    defaultPreset: boundary-proof\n    presets:\n      boundary-proof:\n        sandbox: workspace-write\n        approval: never\n- id: swarm-core\n  config:\n    jev:\n      enabled: false\n    review:\n      enabled: false\n    planningReview:\n      enabled: false\n    watchdog:\n      enabled: false\n    workflow:\n      mode: advisory\n    agents:\n      maxRetries: 0\n    routes:\n      zhu_jian:\n        chain:\n          - provider: swarm-boundary-mock\n            model: role-zhu_jian\n      tian_shu:\n        chain:\n          - provider: swarm-boundary-mock\n            model: root\n- insert:\n    - id: boundary-worktrees\n      name: '@deepseek-ai/dsh-experimental-worktree'\n    - id: boundary-worktree-tool\n      name: '@deepseek-ai/dsh-experimental-tool-worktree'\n    - id: boundary-driver\n      name: ${project}/tests/integration/driver/execution-boundary.mjs\n`, { mode: 0o600 })
+  writeFileSync(patch, `- id: permission\n  config:\n    defaultPreset: boundary-proof\n    presets:\n      boundary-proof:\n        sandbox: workspace-write\n        approval: never\n- id: swarm-core\n  config:\n    jev:\n      enabled: false\n    review:\n      enabled: false\n    planningReview:\n      enabled: false\n    watchdog:\n      enabled: false\n    workflow:\n      mode: advisory\n    agents:\n      maxRetries: 0\n    routes:\n      fu_he:\n        chain:\n          - provider: swarm-boundary-mock\n            model: role-fu_he\n      zhu_jian:\n        chain:\n          - provider: swarm-boundary-mock\n            model: role-zhu_jian\n      tian_shu:\n        chain:\n          - provider: swarm-boundary-mock\n            model: root\n- insert:\n    - id: boundary-worktrees\n      name: '@deepseek-ai/dsh-experimental-worktree'\n${hostVersion === '0.2.2-rc.3' ? '      config:\n        retainOnArchive: true\n' : ''}    - id: boundary-worktree-tool\n      name: '@deepseek-ai/dsh-experimental-tool-worktree'\n    - id: boundary-driver\n      name: ${project}/tests/integration/driver/execution-boundary.mjs\n`, { mode: 0o600 })
   // Keep the bootstrap outside /tmp: the real Host workspace sandbox masks
   // host /tmp. HOME itself is inherited/left unset, never repurposed.
   writeFileSync(preload, `import os from 'node:os';import{syncBuiltinESMExports}from'node:module';os.homedir=()=>${JSON.stringify(home)};syncBuiltinESMExports();const real=globalThis.fetch;globalThis.fetch=(x,o)=>{const u=new URL(typeof x==='string'||x instanceof URL?String(x):x.url);return ['127.0.0.1','localhost'].includes(u.hostname)?real(x,o):Promise.resolve(new Response('offline fixture',{status:503}))};`, { flag: 'wx', mode: 0o600 })
@@ -78,7 +80,7 @@ try {
   writeFileSync(fixture, JSON.stringify(newFixture()), { mode: 0o600 })
   const live = await runPhase('live'), cold = await runPhase('cold')
   for (const [name, expected] of Object.entries(sourceHashes)) assert.equal(hash(join(modules, name)), expected, 'live Host file changed')
-  writeFileSync(join(output, 'summary.json'), JSON.stringify({ status: 'passed', runId, startedAt, finishedAt: new Date().toISOString(), host: plan.hostVersion, bundle, modelProvider: 'local mock; no external inference', sourceHostUnchanged: true, bridgeChecks: ['unpatched-refusal', 'idempotence', 'unknown-checksum-refusal', 'restore'], unsupportedHostBlocked: unsupported.unsupportedHostBlocked, liveHandoff: live.snapshotRetained && live.oldOwnerDenied, physicalScopeEnforced: live.fsBoundaryDenied && live.driftPrevented, coldWriteGrantDenied: cold.coldWriteGrantDenied }, null, 2), { mode: 0o600 })
+  writeFileSync(join(output, 'summary.json'), JSON.stringify({ status: 'passed', runId, startedAt, finishedAt: new Date().toISOString(), host: plan.hostVersion, bundle, modelProvider: 'local mock; no external inference', sourceHostUnchanged: true, bridgeChecks: ['unpatched-refusal', 'idempotence', 'unknown-checksum-refusal', 'restore'], unsupportedHostBlocked: unsupported.unsupportedHostBlocked, liveHandoff: live.snapshotRetained && live.oldOwnerDenied, physicalScopeEnforced: live.fsBoundaryDenied && live.driftPrevented, coldWriteGrantDenied: cold.coldWriteGrantDenied, ...(hostVersion === '0.2.2-rc.3' ? { archiveIgnoredFilesRetained: live.archiveIgnoredFilesRetained === true } : {}) }, null, 2), { mode: 0o600 })
 } catch (error) {
   writeFileSync(join(output, 'summary.json'), JSON.stringify({ status: 'failed', runId, startedAt, error: String(error) }), { mode: 0o600 })
   throw error

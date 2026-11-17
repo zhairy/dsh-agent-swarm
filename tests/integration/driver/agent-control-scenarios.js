@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 /** The real Host owns sessions, cancellation, settlement, leases and request routing.
  * Only the model response is deterministic, including one genuinely cancellable hang. */
@@ -72,6 +73,10 @@ export const apply = (ctx) => {
       if (longrun && options.model === 'backup') { await delay(5100); yield* tool('read', { file_path: 'README.md' }); return }
       if (longrun) state.realReadResult = (options.messages?.at(-1)?.content ?? []).filter((item) => item.type === 'text').map((item) => item.text).join('\n')
       if (writer && options.model === 'writer-hang' && state.requests.filter((item) => item.model === 'writer-hang').length === 1) {
+        yield* tool('create_worktree', { name: 'manual-writer' })
+        return
+      }
+      if (writer && options.model === 'writer-hang' && state.requests.filter((item) => item.model === 'writer-hang').length === 2) {
         const properties = Object.keys((options.tools ?? []).find((item) => item.name === 'write')?.parameters?.properties ?? {})
         if (properties.length === 0) throw new Error('actual writer tool not available')
         yield* tool('write', { [properties.find((key) => /path|file/i.test(key)) ?? 'file_path']: 'hello.txt', [properties.find((key) => /content|text|data/i.test(key)) ?? 'content']: 'one controlled write\n' })
@@ -89,7 +94,11 @@ export const apply = (ctx) => {
         await new Promise((resolve) => { if (options.signal.aborted) resolve(); else options.signal.addEventListener('abort', resolve, { once: true }) })
         return
       }
-      if (writer && options.model === 'recovered' && state.requests.filter((item) => item.model === 'recovered').length === 1) { yield* tool('read', { file_path: 'hello.txt' }); return }
+      if (writer && options.model === 'recovered' && state.requests.filter((item) => item.model === 'recovered').length === 1) {
+        yield* tool('swarm_restore_worktree', { worktree_id: state.writerBindings[0].worktreeId })
+        return
+      }
+      if (writer && options.model === 'recovered' && state.requests.filter((item) => item.model === 'recovered').length === 2) { yield* tool('read', { file_path: 'hello.txt' }); return }
       if (nativeGuard && options.model === 'recovered' && state.requests.filter((item) => item.model === 'recovered').length === 1) { yield* tool('read', { file_path: 'README.md' }); return }
       if (nativeGuard && state.authorizedRecoveryRead === undefined) state.authorizedRecoveryRead = (options.messages?.at(-1)?.content ?? []).filter((item) => item.type === 'text').map((item) => item.text).join('\n')
       if (writer) state.writerReadResult = (options.messages?.at(-1)?.content ?? []).filter((item) => item.type === 'text').map((item) => item.text).join('\n')
@@ -104,6 +113,12 @@ export const apply = (ctx) => {
     if (event.type === 'model/selection') state.selectionEvents.push(event.data)
     if (event.type === 'tool/call' && event.data.name === 'write') state.writeCalls.push({ callId: event.data.callId, arguments: event.data.arguments })
     if (event.type === 'tool/result' && state.writeCalls.some((item) => item.callId === event.data.message.toolCallId)) state.writeResults.push({ isError: event.data.message.isError === true })
+  })
+  ctx.on('tools/result', (execution, result) => {
+    if (!writer || execution.agent?.session?.header?.parentSession !== state.parentSessionId || execution.name !== 'create_worktree') return
+    state.worktreeResults ??= []
+    state.worktreeResults.push({ isError: result.isError === true, value: result.value })
+    if (!result.isError) state.writerWorktree = result.value
   })
   ctx.on('agent/error', ({ error }) => { state.agentErrors ??= []; state.agentErrors.push({ message: String(error?.message ?? error), code: error?.code }) })
   const run = async () => {
@@ -165,9 +180,10 @@ export const apply = (ctx) => {
       let view = await until(async () => { const item = await read(); return item.actual?.attemptId ? item : undefined }, 'no actual attempt observation')
       state.controls.push(view)
       if (writer) {
-        await until(() => state.requests.filter((item) => item.model === 'writer-hang').length >= 2, 'real write did not reach the following hanging model call')
+        await until(() => state.requests.filter((item) => item.model === 'writer-hang').length >= 3, 'real write did not reach the following hanging model call')
         view = await read()
-        state.fileBeforeStop = readFileSync('hello.txt', 'utf8')
+        state.writerBindings = service.getTaskViewForRpc(handle.agent.id, card.task_id).worktrees
+        state.fileBeforeStop = readFileSync(join(state.writerWorktree.path, 'hello.txt'), 'utf8')
         state.writerRiskBeforeStop = view.needsSideEffectReview
       }
       if (browser) {
@@ -198,9 +214,13 @@ export const apply = (ctx) => {
       }
       if (restartSave) {
         const manifest = { parentSessionId: handle.agent.id, childId, taskId: card.task_id }
-        const drain = ctx.subagents.drainChildren ?? ctx.subagents.drainContinuableChildren
-        if (typeof drain !== 'function') throw new Error('host exposes neither drainChildren nor drainContinuableChildren')
-        await drain.call(ctx.subagents, handle.agent, [childId])
+        // rc.3 以精确树根批量关闭准入并等待子级资源清理；旧版保持原公开协议。
+        if (typeof ctx.subagents.drainDescendants === 'function') await ctx.subagents.drainDescendants([handle.agent])
+        else {
+          const drain = ctx.subagents.drainChildren ?? ctx.subagents.drainContinuableChildren
+          if (typeof drain !== 'function') throw new Error('host exposes no supported descendant drain API')
+          await drain.call(ctx.subagents, handle.agent, [childId])
+        }
         await handle.agent.whenIdle()
         await service.dispose()
         await handle.dispose()
@@ -223,13 +243,22 @@ export const apply = (ctx) => {
         try { await service.ControlAgentForRpc({ parentSessionId: handle.agent.id, childId, expectedRevision: view.revision, action: 'continue' }) }
         catch (error) { state.duplicateContinueRefusal = { code: error.code, message: error.message } }
       }
-      await until(() => state.requests.length >= 2 && state.requests.at(-1)?.model === nextModel, 'manual route did not become an actual model request')
+      try {
+        await until(() => state.requests.length >= 2 && state.requests.at(-1)?.model === nextModel, 'manual route did not become an actual model request')
+      } catch (error) {
+        // 保留真实恢复失败现场，避免只看到模型请求等待超时而丢失准入原因。
+        state.resumeFailure = { control: await read(), status: service.getStatus({ task_id: card.task_id, verbose: true }, exec), taskView: service.getTaskViewForRpc(handle.agent.id, card.task_id) }
+        const child = ctx.agents.get(childId)
+        state.resumeFailure.childLive = child !== undefined
+        if (child !== undefined) state.resumeFailure.guard = service.getGuardReason({ name: 'read', arguments: { file_path: writer ? 'hello.txt' : 'README.md' }, agent: child, signal: exec.signal }) ?? null
+        throw error
+      }
       view = await until(async () => { const item = await read(); return item.phase === 'idle' && item.actual?.route?.model === nextModel && item.actual?.delegationId !== state.controls[0].delegationId ? item : undefined }, 'resumed real child did not settle on selected model')
       state.controls.push(view)
       if (nativeGuard) state.resumedDelegation = await until(() => service.getStatus({ task_id: card.task_id, verbose: true }, exec).tasks[0].delegations.find((item) => item.delegationId === view.delegationId && !['queued', 'running'].includes(item.status)), 'authorized recovery delegation did not finish finalization')
       state.statusAfterContinue = service.getStatus({ task_id: card.task_id, verbose: true }, exec)
       state.healthAfterContinue = service.routeState.getHealth()
-      if (writer) { state.fileAfterContinue = readFileSync('hello.txt', 'utf8'); finish('done'); return }
+      if (writer) { state.fileAfterContinue = readFileSync(join(state.writerWorktree.path, 'hello.txt'), 'utf8'); finish('done'); return }
       const second = await service.AddTaskCard({ title: '后续只读任务', goal: '复用同一专家会话并保留用户模型选择', acceptance: ['提交探索报告'], scope: ['README.md'], flags: {} }, exec)
       state.secondDelegation = await service.delegate({ task_id: second.task_id, role: 'tan_wei', session: 'continue', backend: 'api', prompt: '继续只读核对 README.md' }, exec)
       state.controls.push(await read())

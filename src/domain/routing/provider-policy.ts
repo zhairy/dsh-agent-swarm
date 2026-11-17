@@ -108,6 +108,10 @@ const RATE_WINDOW = /\b(?:rpm|tpm)\b|per (?:second|minute)|每(?:秒|分钟)|con
 const CONTEXT = /context[_ -]window[_ -]exceeded|maximum context (?:length|window)|context (?:length|window)[^\n]*(?:exceeded|too (?:large|long))|exceeded (?:the )?model token limit|prompt (?:is )?too long/i
 const THINKING_CONTRACT = /content\[\]\.thinking[^\n]*thinking mode[^\n]*must be passed back|thinking (?:content|block)s?[^\n]*must be passed back|function call is missing a thought_signature/i
 
+/** 这类拒绝依赖当前历史，不能据此判定同模型对所有新会话都不可用。 */
+export const isConversationProtocolFailure = (failure: Pick<NormalizedRouteFailure, 'kind'> & { message?: string }): boolean =>
+  failure.kind === 'protocol_incompatible' && THINKING_CONTRACT.test(failure.message ?? '')
+
 /** Probe delays, not subscription reset times. A new logical request admits at most one half-open owner. */
 export const ROUTE_RECOVERY_COOLDOWNS_MS: Readonly<Record<FailureKind, number>> = Object.freeze({
   quota_exhausted: 30 * 60_000, insufficient_balance: 30 * 60_000,
@@ -122,8 +126,8 @@ const MAX_PROBE_DELAY_MS: Readonly<Record<FailureKind, number>> = Object.freeze(
   context_exceeded: 0, capability_mismatch: 0, protocol_incompatible: 4 * 60 * 60_000, unknown: 5 * 60_000
 })
 const POOL_AUTH_HINT_MAX_MS = 30 * 60_000
-export const getRouteRecoveryPolicy = (failure: Pick<NormalizedRouteFailure, 'kind' | 'providerRetryAfterMs'>, retryCount = 1): { isolate: boolean; retryDelayMs: number } => {
-  if (failure.kind === 'context_exceeded' || failure.kind === 'capability_mismatch') return { isolate: false, retryDelayMs: 0 }
+export const getRouteRecoveryPolicy = (failure: Pick<NormalizedRouteFailure, 'kind' | 'providerRetryAfterMs'> & { message?: string }, retryCount = 1): { isolate: boolean; retryDelayMs: number } => {
+  if (failure.kind === 'context_exceeded' || failure.kind === 'capability_mismatch' || isConversationProtocolFailure(failure)) return { isolate: false, retryDelayMs: 0 }
   const count = Number.isFinite(retryCount) ? Math.min(32, Math.max(1, Math.floor(retryCount))) : 1
   const cooldown = Math.min(MAX_PROBE_DELAY_MS[failure.kind], ROUTE_RECOVERY_COOLDOWNS_MS[failure.kind] * 2 ** Math.min(8, count - 1))
   const hint = typeof failure.providerRetryAfterMs === 'number' && Number.isFinite(failure.providerRetryAfterMs) && failure.providerRetryAfterMs > 0 ? failure.providerRetryAfterMs : 0

@@ -8,8 +8,17 @@
 
 DeepSeek Harness（DSH）的多智能体插件：「天枢」主持 12 位中文专家（谋定、枢机、算衡、探微、博闻、观象、铸剑、行舟、疾风、御史、复核、妙笔），用任务卡、门禁和真实证据决定是否验收；模型路由按你的订阅配置多层回退，故障时立即切到可用备用，最后一个可用模型短时故障时在预算内等待恢复。
 
-- 适配 DSH **0.2.0 / 0.2.1**；`0.2.2-rc.1` 的跨模型回退需要安装[版本绑定的宿主桥接](docs/3.3.5-DSH-0.2.2适配.md)，并要求 Node.js 24.9 或更新版本。未安装桥接时百工会在模型调用前明确拒绝。
+- 适配 DSH **0.2.2-rc.3**，保留旧启动协议；rc.1 / rc.3 的跨模型回退与工作树写入需要安装[版本绑定的宿主桥接](docs/3.4.0-DSH-rc3与本机升级.md)，要求 Node.js 24.9 或更新版本。缺少匹配桥接时明确拒绝执行。
 - 新建会话选「百工模式」即可使用；Jev 可选择 TypeSafe 官方接口，或从 DSH 当前模型目录选择第三方 Jev 兼容模型
+
+### 3.4.0 的变化
+
+- 适配 rc.3 顶层子代理启动与具名成员目录；历史恢复严格区分直接子级和后代，创建失败不重试发布。
+- 模型和物理执行桥接分别绑定 rc.1 / rc.3 原包摘要，保留任务版本、写租约和冷恢复围栏。
+- 统一产物采样与只读复核的真实工作树目录，修复独立规划审核准入；检查点按需求版本隔离，旧激活结束不结算新请求。
+- 升级与回滚同步管理共享会话数据代，不自动续跑旧写操作。
+- 修复在线短重试被跳过、会话协议错误扩大为模型隔离，以及等待、授权、清理和修复预算的接线问题。
+- 接通受管 Notebook、JS/TS 和浏览器验证；提供第三方兼容组件、精确补丁、许可证与校验和。见[兼容包说明](docs/3.4.0-第三方插件与兼容包.md)和[已知问题/迭代计划](docs/3.4.0-已知问题与迭代计划.md)。
 
 ### 3.3.5 的变化
 
@@ -206,8 +215,14 @@ MIT，见 [LICENSE](LICENSE)。内嵌的 Jev 工具改编自 jev-mcp 0.2.1（MIT
 
 A multi-agent plugin for DeepSeek Harness (DSH). The orchestrator "Tian Shu" leads 12 Chinese-named experts (requirements, architecture, math, code exploration, research, vision, complex implementation, command execution, small edits, independent review, verification, copywriting) and accepts work only on evidence: task cards, hard gates and real command results. Each role has a multi-layer model chain built from your subscriptions; failures switch to a usable backup immediately, and a short outage of the last usable model is waited out within a budget.
 
-- Works with DSH **0.2.0 / 0.2.1**. Cross-model fallback on `0.2.2-rc.1` requires the [version-bound Host bridge](docs/3.3.5-DSH-0.2.2适配.md) and Node.js 24.9 or newer; without the bridge, managed requests fail before generation.
+- Targets DSH **0.2.2-rc.3** while retaining legacy start protocols. Cross-model fallback and protected worktree writes on rc.1 / rc.3 require the [version-bound Host bridges](docs/3.4.0-DSH-rc3与本机升级.md) and Node.js 24.9 or newer. Missing bridges fail closed.
 - Start a session in the "百工模式" (Agent Swarm) preset. Jev can use the official TypeSafe API or a third-party Jev-compatible model selected from the live DSH catalog.
+
+### What's new in 3.4.0
+
+- Supports rc.3 top-level subagent activation and named descendants, retaining strict direct-parent checks and avoiding duplicate creation on failure.
+- Pins model and physical execution bridges to exact rc.1 / rc.3 package hashes, preserving task revisions, writer leases and cold-recovery fences.
+- Reports artifact workspace mismatches precisely. Upgrade and rollback include matching programs and consistent session-data snapshots.
 
 ### What's new in 3.3.5
 

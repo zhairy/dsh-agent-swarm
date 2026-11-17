@@ -10,7 +10,7 @@ import {
 } from '../../host-contract.js'
 import type { RoleId } from '../../role-registry.js'
 import { isNetworkSuspect, SleepWithSignal, type NetworkMonitorInfo } from '../../network.js'
-import { normalizeRouteFailure, isTerminalRouteFailure, getRouteResourcePolicy, getWireReasoningEffort, type FailureKind, type RouteFailureMetadata } from '../../domain/routing/provider-policy.js'
+import { normalizeRouteFailure, isTerminalRouteFailure, isConversationProtocolFailure, getRouteResourcePolicy, getWireReasoningEffort, type FailureKind, type RouteFailureMetadata } from '../../domain/routing/provider-policy.js'
 import { intRouteHealth, type RouteHealth, type RouteHealthSnapshot } from '../../domain/routing/health.js'
 import { SwarmError } from '../../util/errors.js'
 import { getFailureClass, getRouteKey, getRouteLabel, isSameRoute, type FailureClass, type RouteInfo, type RouteProbe } from '../../domain/routing/routes.js'
@@ -661,7 +661,7 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
    * @returns 回退动作
    */
   const getNetworkAwareAction = (
-    payload: RequestErrorPayloadLike, scope: 'child' | 'root', config: SwarmConfigInfo, fallback: () => RequestErrorActionLike | Promise<RequestErrorActionLike>
+    payload: RequestErrorPayloadLike, scope: 'child' | 'root', config: SwarmConfigInfo, fallback: () => RequestErrorActionLike | Promise<RequestErrorActionLike>, retryOnline?: () => RequestErrorActionLike | Promise<RequestErrorActionLike>
   ): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
     const network = options.network
     const agentId = payload.agent.id
@@ -669,7 +669,8 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
     // 不需要探测时保持同步返回
     if (network === undefined || holdLeft(recovery, config) <= 0 || !isNetworkSuspect(payload.failure)) return fallback()
     return (async () => {
-      if (await network.isOnline()) return fallback()
+      // 联网只排除“整机断网”，不能证明单次供应商连接已不可重试。
+      if (await network.isOnline()) return retryOnline?.() ?? fallback()
       const route = lastRoutes.get(agentId)
       const started = now()
       options.onNetworkWait?.({ agentId, scope, reason: 'network', failure: payload.failure, ...(route === undefined ? {} : { route }) })
@@ -1225,13 +1226,21 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
         ...(normalized.status === undefined ? {} : { status: normalized.status })
       }
       if (normalized.kind === 'context_exceeded') return terminal(payload.agent.id, 'context_recovery_required')
-      const failedProbe = health.failHalfOpen(failed, payload.agent.id)
+      const contextProtocol = isConversationProtocolFailure(normalized)
+      // 失败的历史不能延长别的会话共享的半开隔离；释放本请求的许可，保留原事实。
+      if (contextProtocol) health.release(payload.agent.id)
+      const failedProbe = contextProtocol ? false : health.failHalfOpen(failed, payload.agent.id)
       const failureClass = getFailureClass(payload.failure)
       const fatal = isTerminalRouteFailure(normalized)
       const longWait = normalized.providerRetryAfterMs !== undefined && Number.isFinite(normalized.providerRetryAfterMs) && normalized.providerRetryAfterMs > policy.maxShortRetryDelayMs
       // 只有网络、服务端与限流类故障值得在原路由上等；4xx、能力不符等等待也不会好转
       const transient = !longWait && ['network_transient', 'service_transient', 'rate_limited'].includes(normalized.kind)
-      if (fatal || longWait) {
+      const delay = Math.max(0, normalized.providerRetryAfterMs ?? 500)
+      const canShortRetry = () => transient && !failedProbe && recovery.transientRetries < policy.maxTransientRetries
+        && delay <= policy.maxShortRetryDelayMs && recovery.waitedMs + delay <= policy.maxTransientWaitMs
+      // 短重试耗尽后仍保留短暂失败的恢复时间，链尾硬失败不能抹掉前面可恢复的路由。
+      const exhaustedTransient = transient && !canShortRetry()
+      if (fatal || longWait || exhaustedTransient) {
         health.record(failed, normalized, fatal ? undefined : normalized.providerRetryAfterMs)
         if (longWait) recovery.suppressedRetryAfterMs = normalized.providerRetryAfterMs
       }
@@ -1239,15 +1248,15 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
         if (recoveries.get(payload.agent.id) !== recovery || manualPauses.has(payload.agent.id) || payload.signal?.aborted === true) return undefined
         // 第八次的终态故障仍要记录域隔离，随后停止恢复，不再尝试第九个模型。
         if (countedAttempts(recovery) >= policy.maxLogicalAttempts) return terminal(payload.agent.id, 'recovery_attempts_exhausted')
+        const retryShort = (): RequestErrorActionLike | Promise<RequestErrorActionLike> => {
+          if (!canShortRetry()) return undefined
+          recovery.transientRetries += 1
+          recovery.waitedMs += delay
+          return (options.sleep ?? SleepWithSignal)(delay, payload.signal).then(() => payload.signal?.aborted === true ? undefined : { kind: 'retry' })
+        }
         if (!fatal && !longWait && !failedProbe && (!isNetworkSuspect(payload.failure) || options.network === undefined || config.agents.networkWaitMs <= 0)) {
-          if (['rate_limited', 'service_transient', 'network_transient'].includes(normalized.kind)) {
-            const delay = Math.max(0, normalized.providerRetryAfterMs ?? 500)
-            if (recovery.transientRetries < policy.maxTransientRetries && delay <= policy.maxShortRetryDelayMs && recovery.waitedMs + delay <= policy.maxTransientWaitMs) {
-              recovery.transientRetries += 1
-              recovery.waitedMs += delay
-              return (options.sleep ?? SleepWithSignal)(delay, payload.signal).then(() => payload.signal?.aborted === true ? undefined : { kind: 'retry' })
-            }
-          }
+          const retry = retryShort()
+          if (retry !== undefined) return retry
         }
         const child = children.get(payload.agent.id)
         const withQuota = (fallback: () => RequestErrorActionLike | Promise<RequestErrorActionLike>) => options.orderQuotaRoutes === undefined ? fallback : async () => {
@@ -1262,14 +1271,14 @@ export const createRouteEngine = (onRootFallback?: (event: FallbackEventInfo) =>
             const latest = children.get(payload.agent.id)
             return latest === undefined ? action : getChildFallback(payload.agent.id, latest, failed, payload.failure, failureClass, transient, config, payload.signal)
           })
-          return fatal || longWait || failedProbe ? fallback() : getNetworkAwareAction(payload, 'child', config, fallback)
+          return fatal || longWait || failedProbe ? fallback() : getNetworkAwareAction(payload, 'child', config, fallback, retryShort)
         }
         if (!config.rootFallback || presetRole === undefined) return fatal || longWait || failedProbe ? terminal(payload.agent.id, 'route_chain_exhausted', payload.failure) : action
         if (getAgentHeader(payload.agent).parentSession !== undefined) return action
         const fallback = withQuota(() => getRootFallback(payload, presetRole, failureClass, transient, config, failed, observation?.preference))
-        return fatal || longWait || failedProbe ? fallback() : getNetworkAwareAction(payload, 'root', config, fallback)
+        return fatal || longWait || failedProbe ? fallback() : getNetworkAwareAction(payload, 'root', config, fallback, retryShort)
       }
-      if ((fatal || longWait || failedProbe) && options.onHealthChange !== undefined) {
+      if ((fatal || longWait || failedProbe || exhaustedTransient) && options.onHealthChange !== undefined) {
         let committed: void | Promise<void>
         try { committed = options.onHealthChange(health.getSnapshot(), { agentId: payload.agent.id, reason: 'failure' }) } catch (error) {
           terminal(payload.agent.id, 'route_health_persist_failed')

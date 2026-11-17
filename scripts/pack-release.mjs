@@ -91,6 +91,9 @@ const requiredRuntimeFiles = packageInfo.name === 'dsh-agent-swarm'
       'skills/jev-judgments/SKILL.md', 'skills/typesafe-ai/SKILL.md', 'skills/typesafe-ai/LICENSE',
       'patches/dsh-agent-loop-0.2.2-rc.1-step-model-bridge.patch', 'scripts/apply-dsh-step-bridge.mjs',
       'patches/dsh-execution-boundary-0.2.2-rc.1.json', 'patches/dsh-execution-boundary-0.2.2-rc.1.patch', 'scripts/apply-dsh-execution-boundary.mjs',
+      'patches/dsh-agent-loop-0.2.2-rc.3-step-model-bridge.patch',
+      'patches/dsh-execution-boundary-0.2.2-rc.3.json', 'patches/dsh-execution-boundary-0.2.2-rc.3.patch',
+      'docs/3.4.0-DSH-rc3与本机升级.md',
       ...(packageInfo.dsh?.bundle?.patch ?? []).map((path) => String(path).replace(/^\.\//, ''))
     ])].sort()
   : []

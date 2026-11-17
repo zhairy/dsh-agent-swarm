@@ -41,7 +41,7 @@ describe('连续会话与重试', () => {
 
 describe('委派、门禁与回退', () => {
   it('gate-flow：疾风改文件 → 验收被拦 → 复核（首路由 QUOTA 回退）→ 验收通过', async () => {
-    const run = await runScenario('gate-flow', { ...JEV_OFF, routes: getRoutesOverlay({ ji_feng: ['writer-ji_feng'], fu_he: ['fail-quota', 'role-fu_he'] }) })
+    const run = await runScenario('gate-flow', { ...JEV_OFF, routes: getRoutesOverlay({ ji_feng: ['writer-ji_feng'], fu_he: ['fail-quota', 'role-fu_he'] }) }, { files: { 'hello.txt': 'source original\n' } })
     expect(run.status, run.error ?? run.stderr).toBe('done')
     const [card, edit, blocked, verify, accepted, status] = run.results
     expect(card?.text).toContain('task_id: T-1')
@@ -55,7 +55,12 @@ describe('委派、门禁与回退', () => {
     expect(accepted?.text).toContain('验收结果：accepted')
     expect(status?.text).toContain('✓ G_VERIFY')
     expect(run.failQuotaHits).toBeGreaterThanOrEqual(1)
-    expect(readFileSync(join(run.workspace, 'hello.txt'), 'utf8')).toBe('hello swarm\n')
+    expect(run.writerResults).toEqual([{ tool: 'create_worktree', isError: false }, { tool: 'write', isError: false }])
+    expect(run.worktreePath).toBeTruthy()
+    expect(readFileSync(join(run.worktreePath!, 'hello.txt'), 'utf8')).toBe('hello swarm\n')
+    expect(run.verificationRead).toContain('hello swarm')
+    expect(run.verificationCwd).toBe(run.worktreePath)
+    expect(readFileSync(join(run.workspace, 'hello.txt'), 'utf8')).toBe('source original\n')
     expect(run.rootTools).toEqual(expect.arrayContaining(['swarm_task_card', 'swarm_delegate', 'swarm_status', 'swarm_accept']))
     expect(run.rootTools).not.toContain('subagent')
     expect(run.rootTools).not.toContain('workflow')

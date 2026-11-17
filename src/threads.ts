@@ -99,13 +99,15 @@ export const intThreadRegistry = (): ThreadRegistry => {
 
 /** 等待某个子会话的下一次沉寂（subagent/end） */
 export interface ChildEndHub {
+  /** 新宿主的开始/结束必须属于同一驻留激活，不用名称或 childId 代替 epoch。 */
+  ObserveStart: (info: import('./host-contract.js').SubagentRunInfoLike) => void
   /**
    * 先登记再触发（创建或投递消息之前调用），否则可能错过结束事件
    * @returns promise 在结束时兑现；取消信号触发时以 AbortError 拒绝
    */
   wait: (childId: string, signal: AbortSignal) => Promise<SubagentEndInfoLike>
   /** 宿主的 subagent/end：交给登记最早的等待者；没有等待者时忽略（例如用户在界面里直接给子会话发消息） */
-  Emit: (info: SubagentEndInfoLike) => void
+  Emit: (info: SubagentEndInfoLike, beforeDelivery?: () => void) => void
   /** 本插件消费了一次结束：宿主随后给天枢的「子智能体已结束」通知是重复内容，可以滤掉 */
   MarkConsumed: (childId: string) => void
   /** 取走一次消费记录；返回 true 表示对应通知应当滤掉 */
@@ -115,7 +117,14 @@ export interface ChildEndHub {
 export const intChildEndHub = (): ChildEndHub => {
   const waiters = new Map<string, Array<(info: SubagentEndInfoLike) => void>>()
   const consumed = new Map<string, number>()
+  const activations = new Map<string, import('./host-contract.js').SubagentRunInfoLike & { ended: boolean }>()
   return {
+    ObserveStart: info => {
+      if (typeof info.runId !== 'string' || !info.runId || typeof info.provider !== 'string' || !info.provider
+        || typeof info.parentSessionId !== 'string' || !info.parentSessionId || typeof info.local !== 'boolean') return
+      if (activations.get(info.id)?.runId === info.runId) return
+      activations.set(info.id, { ...info, ended: false })
+    },
     wait: (childId, signal) => new Promise((resolve, reject) => {
       if (signal.aborted) {
         reject(new DOMException('aborted', 'AbortError'))
@@ -134,7 +143,15 @@ export const intChildEndHub = (): ChildEndHub => {
       signal.addEventListener('abort', onAbort, { once: true })
       waiters.set(childId, [...(waiters.get(childId) ?? []), settle])
     }),
-    Emit: (info) => {
+    Emit: (info, beforeDelivery) => {
+      const activation = activations.get(info.id)
+      if (info.runId !== undefined || activation !== undefined) {
+        if (activation === undefined || activation.ended || info.runId !== activation.runId || info.provider !== activation.provider
+          || info.parentSessionId !== activation.parentSessionId || info.local !== activation.local) return
+        activation.ended = true
+      }
+      // 控制状态、路由与租约观察也必须在身份通过之后更新。
+      beforeDelivery?.()
       const list = waiters.get(info.id)
       if (list === undefined || list.length === 0) return
       const [first, ...rest] = list

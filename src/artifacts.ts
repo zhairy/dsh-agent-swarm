@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { lstat, open, readdir, realpath } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { getValueDigest } from './workflow.js'
+import { SwarmError } from './util/errors.js'
 
 export interface ArtifactEntryInfo {
   path: string
@@ -24,6 +25,15 @@ export interface ArtifactLimitsInfo { maxFiles?: number; maxFileBytes?: number; 
 const isInside = (workspace: string, path: string): boolean => {
   const rel = relative(workspace, path)
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
+/** 仅映射已核验目标的任务路径；目录授权仍由调用方核验，物理读取继续检查真实边界。 */
+export const getTaskArtifactPath = (target: { root: string; physical: string }, path: string): string => {
+  if (path.replace(/\\/g, '/').split('/').includes('..')) throw new SwarmError('PERMISSION_DENIED', '产物路径含父目录跳转')
+  if (!isAbsolute(path)) return path
+  if (isInside(target.physical, path)) return relative(target.physical, path)
+  if (isInside(target.root, path)) return relative(target.root, path)
+  throw new SwarmError('PERMISSION_DENIED', '产物路径不属于任务仓库')
 }
 
 /** 工作区标识含真实路径与 profile 边界，不作为访问授权凭据。 */

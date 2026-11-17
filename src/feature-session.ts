@@ -249,6 +249,11 @@ export const inspectFeatureState = (raw: unknown, expected: { rootSessionId: str
       at(`$.tasks[${index}].artifactSnapshot`, 'ARTIFACT_SNAPSHOT')
       if (task.artifactSnapshot !== undefined) {
         const artifact = task.artifactSnapshot
+        // 目录身份不匹配必须独立报告，避免把工作树映射错误误判为摘要损坏。
+        if (object(artifact) && artifact.workspaceId !== expected.workspaceId) {
+          at(`$.tasks[${index}].artifactSnapshot.workspaceId`, 'ARTIFACT_WORKSPACE_MISMATCH')
+          return invalid()
+        }
         if (!object(artifact) || artifact.workspaceId !== expected.workspaceId || !Array.isArray(artifact.entries) || typeof artifact.complete !== 'boolean' || artifact.entries.some((entry) => !object(entry) || typeof entry.path !== 'string' || !['file', 'missing', 'unknown'].includes(entry.state) || (entry.state === 'file' && (!hashPattern.test(entry.digest ?? '') || !Number.isSafeInteger(entry.bytes) || Number(entry.bytes) < 0))) || artifact.digest !== getValueDigest({ workspaceId: artifact.workspaceId, entries: artifact.entries }) || (artifact.complete && artifact.entries.some((entry) => entry.state === 'unknown'))) return invalid()
       }
       at(`$.tasks[${index}].planningAutoReviewRuns`, 'PLANNING_COUNTER_FORMAT')
@@ -480,6 +485,7 @@ const describeCapacityExceeded = (store: DurableStateStore<FeatureState>, snapsh
 
 export const createFeatureSession = async (input: {
   rootSessionId: string; cwd: string; dshHome: string; config: SwarmConfigInfo;
+  getTaskArtifactSnapshot?: (task: TaskRecord, paths: readonly string[]) => ReturnType<typeof getArtifactSnapshot>;
   journal?: SwarmEventJournal;
   getConfig?: () => SwarmConfigInfo;
   getAgentControls?: () => AgentControlRecord[];
@@ -672,7 +678,7 @@ export const createFeatureSession = async (input: {
     if (entry.conclusion !== task.acceptance.summary || getCanonicalJson(entry.appliesWhen) !== getCanonicalJson(task.card.acceptance) || getCanonicalJson(entry.doesNotApplyWhen) !== getCanonicalJson(task.acceptance.unresolved)) return undefined
     const all = input.tasks.getTaskDelegations(task.taskId)
     if (all.some((record) => record.status === 'running' || record.status === 'queued' || record.finalization === 'processing')) return undefined
-    const artifact = await getArtifactSnapshot(input.cwd, [...new Set([...task.card.scope, ...all.flatMap((record) => record.changedFiles ?? [])])])
+    const artifact = await (input.getTaskArtifactSnapshot === undefined ? getArtifactSnapshot(input.cwd, [...new Set([...task.card.scope, ...all.flatMap((record) => record.changedFiles ?? [])])]) : input.getTaskArtifactSnapshot(task, [...new Set([...task.card.scope, ...all.flatMap((record) => record.changedFiles ?? [])])]))
     if (!artifact.complete || artifact.digest !== entry.source.artifactDigest) return undefined
     const current = getCurrentDelegations(task, all, artifact.digest).filter((record) => record.status === 'completed')
     if (!getAcceptanceCheck(getEffectiveGates(task.gates, current), current, task.acceptance.resolutions, 0, task.card.perf).ok) return undefined

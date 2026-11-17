@@ -1,7 +1,50 @@
+import { spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { getPluginRoot, REPO_ROOT, SANDBOX_ROOT, runDshAsync } from '../../scripts/sandbox.mjs'
+import { getPluginRoot, getSandboxDshModules, REPO_ROOT, SANDBOX_ROOT, runDshAsync } from '../../scripts/sandbox.mjs'
+
+const PRIVATE_RC3_ROOT = '/home/zhairy/.dsh/local-bundles/dsh-0.2.2-rc.3-swarm340'
+const PRIVATE_RC3_MODULES = join(PRIVATE_RC3_ROOT, 'node_modules')
+const DEFAULT_EVIDENCE_ROOT = '/data/nas/public/swarm/release-artifacts/v3.4.0-routing-notebook-20261117'
+const evidenceRoot = process.env.SWARM_TEST_EVIDENCE_DIR ?? DEFAULT_EVIDENCE_ROOT
+const requestedVersion = process.env.SWARM_DSH_VERSION
+const hostVersions = requestedVersion === undefined
+  ? ['0.2.1-rc.3', '0.2.1-rc.5', '0.2.2-rc.3']
+  : [...new Set([requestedVersion, ...(requestedVersion === '0.2.2-rc.3' ? [] : ['0.2.2-rc.3'])])]
+const runId = () => new Date().toISOString().replace(/[:.]/g, '-')
+
+const runPrivateRc3 = ({ args, cwd, env, timeout }: { args: string[]; cwd: string; env: Record<string, string | undefined>; timeout: number }) =>
+  new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+    const bin = join(PRIVATE_RC3_MODULES, '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+    if (!existsSync(bin)) throw new Error(`private rc.3 SDK missing: ${bin}`)
+    const child = spawn(process.execPath, [bin, ...args], {
+      cwd,
+      env: { ...process.env, DSH_TELEMETRY_DISABLED: '1', DSH_SWARM_ROLE_PRESETS: '1', ...env },
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.stderr.on('data', chunk => { stderr += chunk })
+    const timer = setTimeout(() => child.kill('SIGTERM'), timeout)
+    child.on('close', status => {
+      clearTimeout(timer)
+      resolve({ status, stdout, stderr })
+    })
+    child.on('error', error => {
+      clearTimeout(timer)
+      resolve({ status: null, stdout, stderr: `${stderr}${String(error)}` })
+    })
+  })
+
+const persistHostEvidence = (version: string, suffix: string, value: unknown): string => {
+  mkdirSync(evidenceRoot, { recursive: true })
+  const id = runId()
+  const path = join(evidenceRoot, `host-${version}-${suffix}-${id}.json`)
+  writeFileSync(path, JSON.stringify(value, null, 2), { mode: 0o600 })
+  return path
+}
 
 /** The default smoke run is short. Set SWARM_AUTH_OBSERVE_MS=300000 for a real five-minute observation. */
 const observationMs = Number(process.env.SWARM_AUTH_OBSERVE_MS ?? 1000)
@@ -37,16 +80,30 @@ const stage = () => {
   return { base, plugin, home, workspace, state, evidence, patch }
 }
 
-describe.each(['0.2.1-rc.3', '0.2.1-rc.5'])('真实%s授权等待与晚答复', (hostVersion) => {
+describe.each(hostVersions)('真实%s授权等待与晚答复', (hostVersion) => {
   it('pending无LLM/goal增长；真实答复落账、错误来源/暂停/替换/取消不复活旧目标', async () => {
     const fixture = stage()
-    const run = await runDshAsync({ version: hostVersion, args: ['--profile', 'auth313', '--patch', fixture.patch], cwd: fixture.workspace,
-      timeout: observationMs + 90000, env: { DSH_HOME: fixture.home, SWARM_AUTH_WAIT_MS: String(observationMs), SWARM_AUTH_EVIDENCE_DIR: fixture.evidence,
-        SWARM_AUTH_PLUGIN: fixture.plugin, SWARM_AUTH_STATE: fixture.state, SWARM_HOST_VERSION: hostVersion } })
+    if (hostVersion === '0.2.2-rc.3') {
+      const versionPath = join(PRIVATE_RC3_MODULES, '@deepseek-ai', 'dsh', 'package.json')
+      expect(JSON.parse(readFileSync(versionPath, 'utf8')).version).toBe('0.2.2-rc.3')
+    }
+    const modules = hostVersion === '0.2.2-rc.3' ? PRIVATE_RC3_MODULES : getSandboxDshModules(hostVersion)
+    const env = { DSH_HOME: fixture.home, SWARM_DSH_MODULES: modules, SWARM_DSH_VERSION: hostVersion, SWARM_AUTH_WAIT_MS: String(observationMs),
+      SWARM_AUTH_EVIDENCE_DIR: fixture.evidence, SWARM_AUTH_PLUGIN: fixture.plugin, SWARM_AUTH_STATE: fixture.state, SWARM_HOST_VERSION: hostVersion,
+      SWARM_TEST_EVIDENCE_DIR: evidenceRoot }
+    const run = hostVersion === '0.2.2-rc.3'
+      ? await runPrivateRc3({ args: ['--profile', 'auth313', '--patch', fixture.patch], cwd: fixture.workspace, timeout: observationMs + 90000, env })
+      : await runDshAsync({ version: hostVersion, args: ['--profile', 'auth313', '--patch', fixture.patch], cwd: fixture.workspace,
+        timeout: observationMs + 90000, env })
     const path = join(fixture.evidence, 'host-auth-result.json')
     if (!existsSync(path)) throw new Error(`SDK fixture produced no result: ${run.stdout}\n${run.stderr}`)
     const result = JSON.parse(readFileSync(path, 'utf8'))
+    persistHostEvidence(hostVersion, 'result', result)
+    persistHostEvidence(hostVersion, 'process', run)
     expect(result.status, result.error ?? run.stderr).toBe('done')
+    expect(result.hostVersion).toBe(hostVersion)
+    expect(result.sdkModules).toBe(modules)
+    expect(result.sdkVersion).toBe(hostVersion)
     expect(result.errors).toEqual([])
     const pending = result.sessions['five-minute-pending']
     expect(pending.waitFinal.observedMs).toBeGreaterThanOrEqual(observationMs)

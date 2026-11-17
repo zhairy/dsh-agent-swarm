@@ -5,9 +5,13 @@ import { fileURLToPath } from 'node:url'
 
 const args = process.argv.slice(2), at = args.indexOf('--dsh')
 if (at < 0 || !args[at + 1]) throw new Error('Usage: node scripts/apply-dsh-execution-boundary.mjs --dsh <node_modules> [--check|--restore]')
+if (args.filter(arg => arg === '--dsh').length !== 1 || args.some((arg, index) => index !== at + 1 && !['--dsh', '--check', '--restore'].includes(arg))
+  || args.includes('--check') && args.includes('--restore')) throw new Error('Invalid execution boundary arguments')
 const modules = realpathSync(resolve(args[at + 1]))
-const plan = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../patches/dsh-execution-boundary-0.2.2-rc.1.json'), 'utf8'))
-if (JSON.parse(readFileSync(join(modules, '@deepseek-ai/dsh/package.json'), 'utf8')).version !== plan.hostVersion) throw new Error('Unsupported Host version')
+const version = JSON.parse(readFileSync(join(modules, '@deepseek-ai/dsh/package.json'), 'utf8')).version
+if (!['0.2.2-rc.1', '0.2.2-rc.3'].includes(version)) throw new Error('Unsupported Host version')
+const plan = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), `../patches/dsh-execution-boundary-${version}.json`), 'utf8'))
+if (plan.hostVersion !== version) throw new Error('Execution boundary manifest version mismatch')
 const sha = bytes => createHash('sha256').update(bytes).digest('hex')
 const prepared = plan.files.map(entry => {
   const file = join(modules, entry.path), actual = realpathSync(file), rel = relative(modules, actual), stat = lstatSync(file)

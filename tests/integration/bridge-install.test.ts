@@ -4,15 +4,14 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { ensureDsh, getSandboxDshModules, getTestedVersion, REPO_ROOT } from '../../scripts/sandbox.mjs'
+import { getSandboxDshModules, getTestedVersion, REPO_ROOT } from '../../scripts/sandbox.mjs'
 
 const sha = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex')
-const originalHash = 'a6fa8e0c7c90191caf5f4a3bb5c624a86e9845cf3c79d020b71420d0e20ae4c1'
-const patchedHash = 'c7390f4da755e9c57ad9176df605d2991822bdeb7f13e87260b4f5d0e51ea5ae'
+const originalHash = getTestedVersion() === '0.2.2-rc.3' ? 'f09f60814d4e96a880f41b9fc3832f33c56a28f954f48810d8439ce83ad6ffa8' : 'a6fa8e0c7c90191caf5f4a3bb5c624a86e9845cf3c79d020b71420d0e20ae4c1'
+const patchedHash = getTestedVersion() === '0.2.2-rc.3' ? 'c094632e3070de8d9fef9d1cf2ae66bc78d67d622d3bbf2f44692c6309cb7fe5' : 'c7390f4da755e9c57ad9176df605d2991822bdeb7f13e87260b4f5d0e51ea5ae'
 
-describe.skipIf(getTestedVersion() !== '0.2.2-rc.1')('version-bound DSH model bridge installer', () => {
+describe('version-bound DSH model bridge installer', () => {
   it('applies once, verifies, restores and refuses unknown files without changing them', () => {
-    ensureDsh()
     const root = mkdtempSync(join(tmpdir(), 'swarm-bridge-install-'))
     try {
       const source = getSandboxDshModules()
@@ -21,7 +20,7 @@ describe.skipIf(getTestedVersion() !== '0.2.2-rc.1')('version-bound DSH model br
         mkdirSync(join(target, 'lib'), { recursive: true })
         copyFileSync(join(source, '@deepseek-ai', name, 'package.json'), join(target, 'package.json'))
       }
-      const pristine = join(source, '@deepseek-ai/dsh-agent-loop/lib/index.js.swarm-pristine-a6fa8e0c7c90')
+      const pristine = join(source, `@deepseek-ai/dsh-agent-loop/lib/index.js.swarm-pristine-${originalHash.slice(0, 12)}`)
       const original = existsSync(pristine) ? pristine : join(source, '@deepseek-ai/dsh-agent-loop/lib/index.js')
       const target = join(root, 'node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js')
       copyFileSync(original, target)

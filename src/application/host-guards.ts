@@ -6,6 +6,8 @@ import type { TaskRecord } from '../evidence.js'
 import type { AgentControlRecord } from '../agent-control.js'
 import type { TicketRepository } from '../domain/tickets/repository.js'
 import type { WorktreeRegistry } from '../worktree-binding.js'
+import { getNotebookRuntimePort } from '../host-contract.js'
+import { getNotebookToolClass } from '../adapters/dsh-host/notebook-runtime.js'
 import { WORKTREE_TOOL, RESTORE_WORKTREE_TOOL, isWorktreeMutationTool, type WorktreeBindingInfo } from '../worktree-binding.js'
 import { getAgentHeader, WRITE_TOOL_NAMES, type AgentLike, type ToolExecutionLike } from '../host-contract.js'
 import { getToolApprovalDenial } from '../approval-policy.js'
@@ -125,6 +127,13 @@ export const createHostGuardUseCases = (deps: HostGuardDeps): HostGuardUseCases 
     }
     const role = deps.getRoleForAgent(execution.agent)
     const config = deps.getConfig()
+    if (execution.name.startsWith('nb_') && deps.isManagedAgent(execution.agent)) {
+      const notebook = getNotebookToolClass(execution.name)
+      if (notebook === undefined || getNotebookRuntimePort() === undefined) return 'Notebook 尚未接入可信沙箱适配器，未执行代码或文件操作'
+      if (role === 'tian_shu' && notebook !== 'control') return '天枢负责主持与草稿整理；请委派专家执行 Notebook，再查看对应子会话的 Notebook 标签'
+      if (notebook === 'execution' && (role === undefined || !getRoleInfo(role).capabilities.some(cap => cap === 'calculate' || cap === 'shell'))) return '当前专家没有 Notebook 计算权限，请交给算衡或有执行能力的专家'
+      if (notebook === 'file-write' && (role === undefined || getRoleInfo(role).permission !== 'workspace-edit')) return 'Notebook 保存需要当前可写 Worker 的工作树与任务 scope 授权'
+    }
     if (role === 'tian_shu' && writer && config.router.workspaceWrites === 'deny') {
       const denial = getRouterToolDenial(execution.name, execution.arguments)
       return denial === undefined

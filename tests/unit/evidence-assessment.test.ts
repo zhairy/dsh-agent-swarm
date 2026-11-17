@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { assessExplorationEvidence, getEvidenceConsumptionNotice, revalidateEvidenceAssessment, validateEvidenceAssessment, type EvidenceAssessmentInput } from '../../src/evidence-assessment.js'
+import { getValueDigest } from '../../src/workflow.js'
+import { getArtifactSnapshot, getTaskArtifactPath } from '../../src/artifacts.js'
 import type { DelegationRecord } from '../../src/evidence.js'
 import type { JevAskOutcome, JevClient } from '../../src/jev.js'
 
@@ -211,4 +213,46 @@ describe('independent source credibility and project applicability assessment', 
     const assessment = await assessExplorationEvidence(input, { ask: async () => outcome(), now: () => 1000, resolveSource: async () => { throw Object.assign(new Error('private target'), { code: 'SOURCE_ADDRESS_REJECTED' }) } })
     expect(assessment?.items[0]).toMatchObject({ credibility: { status: 'unknown', reason: 'SOURCE_ADDRESS_REJECTED' }, source: { status: 'unknown', reason: 'SOURCE_ADDRESS_REJECTED' }, disposition: 'needs-review' })
   })
+})
+
+
+it('根绝对 finding/scope/projectPaths 映射到真实工作树，保留原始来源且支持文本只来自 TREE', async () => {
+  const rootInput = await setup(), treeInput = await setup()
+  const logical = join(rootInput.cwd, 'src', 'math.ts')
+  await writeFile(logical, 'export const source = "ROOT"\n')
+  await writeFile(join(treeInput.cwd, 'src', 'math.ts'), 'export const source = "TREE"\n')
+  const input = { ...rootInput, cwd: treeInput.cwd, scope: [logical], projectPaths: [logical],
+    record: { ...rootInput.record, structured: { findings: [{ path: logical, symbol: 'source', evidence: 'source is TREE', callChain: [] }] } } }
+  const original = structuredClone(input.record)
+  const ask = vi.fn<JevClient['ask']>(async () => outcome())
+  const assessment = await assessExplorationEvidence(input, { ask, now: () => 1000,
+    mapCodePath: path => getTaskArtifactPath({ root: rootInput.cwd, physical: treeInput.cwd }, path) })
+  expect(assessment?.items[0]?.source).toMatchObject({ locator: logical, status: 'observed' })
+  expect(assessment?.items[0]?.source.supportingText).toContain('TREE')
+  expect(assessment?.items[0]?.source.supportingText).not.toContain('ROOT')
+  expect(assessment?.rawDigest).toBe(getValueDigest(original.structured))
+  expect(input.record).toEqual(original)
+  const state = ask.mock.calls[0]![0] as { project: { scope: string[]; codeReferences: Array<{ excerpt: string }> } }
+  expect(state.project.scope).toEqual(['src/math.ts'])
+  expect(state.project.codeReferences[0]!.excerpt).toContain('TREE')
+  const artifact = await getArtifactSnapshot(treeInput.cwd, ['src/math.ts'])
+  expect(assessment?.items[0]?.source.digest).toBe(artifact.entries[0]!.digest)
+})
+
+
+it('路径映射不允许读取根目录或外部链接，来源仍保留且标记 unknown', async () => {
+  const rootInput = await setup(), treeInput = await setup()
+  const logical = join(rootInput.cwd, 'src', 'math.ts'), physical = join(treeInput.cwd, 'src', 'math.ts')
+  await writeFile(logical, 'export const source = "ROOT_MUST_NOT_BE_READ"\n')
+  await rm(physical)
+  await symlink(logical, physical)
+  const input = { ...rootInput, cwd: treeInput.cwd, scope: [logical], projectPaths: [logical],
+    record: { ...rootInput.record, structured: { findings: [{ path: logical, symbol: 'source', evidence: 'claim', callChain: [] }] } } }
+  const target = { root: rootInput.cwd, physical: treeInput.cwd }
+  const ask = vi.fn<JevClient['ask']>(async () => outcome())
+  const assessment = await assessExplorationEvidence(input, { ask, now: () => 1000, mapCodePath: path => getTaskArtifactPath(target, path) })
+  expect(assessment?.items[0]?.source).toMatchObject({ locator: logical, status: 'unknown', reason: 'code-reference-outside-workspace' })
+  expect(JSON.stringify(ask.mock.calls)).not.toContain('ROOT_MUST_NOT_BE_READ')
+  expect(() => getTaskArtifactPath(target, join(tmpdir(), 'outside-project', 'a.ts'))).toThrow('不属于任务仓库')
+  expect(() => getTaskArtifactPath(target, '../a.ts')).toThrow('父目录跳转')
 })

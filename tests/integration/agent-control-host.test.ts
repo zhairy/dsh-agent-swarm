@@ -9,6 +9,7 @@ const workspaceFixture = () => {
   if (!existsSync(join(REPO_ROOT, 'lib/index.js'))) throw new Error('build plugin first')
   ensureProfile(); mkdirSync(SANDBOX_ROOT, { recursive: true })
   const workspace = mkdtempSync(join(SANDBOX_ROOT, 'agent-control-it-'))
+  writeFileSync(join(workspace, '.gitignore'), '.agents/\n')
   writeFileSync(join(workspace, 'README.md'), '# Agent control integration fixture\n')
   const git = (args: string[]) => execFileSync('git', ['-c', 'user.name=control-test', '-c', 'user.email=control@test.local', ...args], { cwd: workspace, stdio: 'ignore' })
   git(['init', '-q']); git(['add', '-A']); git(['commit', '-q', '-m', 'fixture'])
@@ -22,6 +23,7 @@ const phase = async (workspace: string, scenario: string, options: { persistence
   writeFileSync(overlay, YAML.stringify([
     { id: 'swarm-core', config: { rootFallback: false, jev: { enabled: false }, planningReview: { enabled: false }, workflow: { mode: 'advisory' }, persistence: { enabled: options.persistence === true }, agents: { maxRetries: 3, retryBackoffMs: 1, networkWaitMs: 0 }, routes: { [writer ? 'ji_feng' : 'tan_wei']: { chain: [{ provider: 'swarm-control-mock', model: initialModel }, ...(longrun ? [{ provider: 'swarm-control-mock', model: 'backup' }] : [])] } } } },
     { insert: [
+      ...(writer ? [{ id: 'control-it-worktrees', name: '@deepseek-ai/dsh-experimental-worktree' }, { id: 'control-it-worktree-tool', name: '@deepseek-ai/dsh-experimental-tool-worktree' }] : []),
       ...(options.hostController ? [{ id: 'control-it-workspace', name: '@deepseek-ai/dsh-workspace' }, { id: 'control-it-connection', name: '@deepseek-ai/dsh-client-connection' }, { id: 'control-it-file-uploads', name: '@deepseek-ai/dsh-client-file-upload' }, { id: 'control-it-session-controller', name: '@deepseek-ai/dsh-api-session-controller', config: { nativeOpen: false } }] : []),
       { id: 'swarm-agent-control-integration', name: join(DRIVER_DIR, 'agent-control-scenarios.js') }
     ] }
@@ -29,7 +31,9 @@ const phase = async (workspace: string, scenario: string, options: { persistence
   const out = `${workspace}.${scenario}.out.json`
   const run = await runDshAsync({ args: ['--profile', PROFILE, '--patch', overlay], cwd: workspace, timeout: 35000, env: { SWARM_SCENARIO: '', SWARM_AGENT_CONTROL_SCENARIO: scenario, SWARM_DRIVER_OUT: out, SWARM_CONTROL_RESTART_MANIFEST: `${workspace}.restart.json` } })
   if (!existsSync(out)) throw new Error(`${run.stdout}\n${run.stderr}`)
+  writeFileSync(`${workspace}.${scenario}.process.json`, JSON.stringify(run, null, 2))
   const result = JSON.parse(readFileSync(out, 'utf8'))
+  expect(run.status, run.stderr).toBe(0)
   expect(result.status, result.error ?? run.stderr).toBe('done')
   return result
 }
@@ -111,8 +115,13 @@ describe('real DSH continuable child manual model controls', () => {
     expect(result.writerRiskBeforeStop).toBe(true)
     expect(result.fileBeforeStop).toBe('one controlled write\n')
     expect(result.noConfirmationRefusal).toMatchObject({ code: 'RECOVERY_REQUIRED' })
-    expect(result.requestsAfterRefusal).toHaveLength(2)
-    expect(result.requests.map((item: { model: string }) => item.model)).toEqual(['writer-hang', 'writer-hang', 'recovered', 'recovered'])
+    expect(result.requestsAfterRefusal).toHaveLength(3)
+    expect(result.requests.map((item: { model: string }) => item.model)).toEqual(['writer-hang', 'writer-hang', 'writer-hang', 'recovered', 'recovered', 'recovered'])
+    expect(result.worktreeResults).toHaveLength(1)
+    expect(result.worktreeResults[0].isError).toBe(false)
+    expect(result.writerWorktree.path).not.toBe(result.writerWorktree.repositoryRoot)
+    expect(result.writerBindings.some((item: { path: string; agentId: string }) => item.path === result.writerWorktree.path && item.agentId === result.childId)).toBe(true)
+    expect(existsSync(join(result.writerWorktree.repositoryRoot, 'hello.txt'))).toBe(false)
     expect(result.writeCalls).toHaveLength(1)
     expect(result.writeResults).toEqual([{ isError: false }])
     expect(result.writerReadResult).toContain('one controlled write')

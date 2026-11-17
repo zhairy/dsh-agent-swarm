@@ -10,11 +10,13 @@ import type { DelegationRecord, TaskRecord } from '../../src/evidence.js'
 type SavedState = { tasks: TaskRecord[]; delegations: DelegationRecord[] }
 type Envelope = { sequence: number; state: SavedState }
 type StateRun = { status: string; error?: string; sessionId: string; workspaceId: string; writes: number; results: Array<{ step: number; isError: boolean; text: string }>;
+  verificationRead: string; writerWorktree: { path: string; repositoryRoot: string }; worktreeResults: Array<{ isError: boolean }>;
   requests: Array<{ model: string; sessionId: string }>; errors: unknown[]; observations: { afterExplore: Envelope; beforeStatus: Envelope; afterStatus: Envelope }; final: Envelope }
 const PROVIDER = 'swarm-state-consistency-provider'
 const runState = async (scenario: 'root-write' | 'writer-completion') => {
   ensureProfile()
   const workspace = mkdtempSync(join(SANDBOX_ROOT, 'state-consistency-ws-'))
+  writeFileSync(join(workspace, '.gitignore'), '.agents/\n')
   writeFileSync(join(workspace, 'source.ts'), 'export const stableSum = (values) => values.reduce((a, b) => a + b, 0)\n')
   const git = (args: string[]) => execFileSync('git', ['-c', 'user.name=state-test', '-c', 'user.email=state@test.local', ...args], { cwd: workspace, stdio: 'ignore' })
   git(['init', '-q']); git(['add', '-A']); git(['commit', '-q', '-m', 'fixture'])
@@ -24,23 +26,32 @@ const runState = async (scenario: 'root-write' | 'writer-completion') => {
       planningReview: { enabled: false, requireJev: false }, workflow: { mode: 'advisory' }, router: { workspaceWrites: scenario === 'root-write' ? 'allow' : 'deny' },
       agents: { maxRetries: 0, networkWaitMs: 0 },
       routes: Object.fromEntries(['tian_shu', 'tan_wei', 'ji_feng', 'fu_he', 'yu_shi'].map(role => [role, { chain: [{ provider: PROVIDER, model: role === 'tian_shu' ? 'root' : `role-${role}` }], upgrade: { enabled: false } }])) } },
-    { insert: [{ id: 'swarm-state-consistency-driver', name: join(DRIVER_DIR, 'state-consistency-scenarios.js') }] }
+    { insert: [{ id: 'state-worktrees', name: '@deepseek-ai/dsh-experimental-worktree' }, { id: 'state-worktree-tool', name: '@deepseek-ai/dsh-experimental-tool-worktree' }, { id: 'swarm-state-consistency-driver', name: join(DRIVER_DIR, 'state-consistency-scenarios.js') }] }
   ]))
   const processResult = await runDshAsync({ args: ['--profile', PROFILE, '--patch', overlay], cwd: workspace, timeout: 50000,
     env: { SWARM_SCENARIO: '', SWARM_RECOVERY_SCENARIO: '', SWARM_UPGRADE_SCENARIO: '', SWARM_STATE_CONSISTENCY_SCENARIO: scenario, SWARM_STATE_CONSISTENCY_OUT: out } })
   if (!existsSync(out)) throw new Error(`State consistency driver produced no output\n${processResult.stdout}\n${processResult.stderr}`)
+  writeFileSync(`${workspace}.process.json`, JSON.stringify(processResult, null, 2))
+  expect(processResult.status, processResult.stderr).toBe(0)
   return { ...JSON.parse(readFileSync(out, 'utf8')) as StateRun, workspace, stderr: processResult.stderr }
 }
 
 describe('真实 Host：流程版本变更后全状态仍可写，历史证据不换版', () => {
-  it.each(['root-write', 'writer-completion'] as const)('%s：真实修改仅一次，状态投影不写入，委派/审核/任务卡继续成功', async (scenario) => {
+  it.each(['root-write', 'writer-completion'] as const)('%s：root 编排合法 Worker 修改仅一次，状态投影不写入，委派/审核/任务卡继续成功', async (scenario) => {
     const run = await runState(scenario)
     expect(run.status, run.error ?? run.stderr).toBe('done')
     expect(run.errors).toEqual([])
     expect(run.results).toHaveLength(9)
     expect(run.results.filter(result => result.isError)).toEqual([])
     expect(run.writes).toBe(1)
-    expect(readFileSync(join(run.workspace, 'source.ts'), 'utf8')).toBe('export const stableSum = () => 42\n')
+    expect(run.verificationRead).toContain('export const stableSum = () => 42')
+    expect(run.worktreeResults).toEqual([{ isError: false }])
+    expect(run.writerWorktree.repositoryRoot).toBe(run.workspace)
+    expect(run.writerWorktree.path).not.toBe(run.workspace)
+    expect(readFileSync(join(run.writerWorktree.path, 'source.ts'), 'utf8')).toBe('export const stableSum = () => 42\n')
+    expect(readFileSync(join(run.workspace, 'source.ts'), 'utf8')).toContain('values.reduce')
+    // Worker 写入不冒充 root edit；工作流换版由真实委派完成触发。
+    expect((run.final.state as SavedState & { runtime: { rootEditAt: number } }).runtime.rootEditAt).toBe(0)
     expect(run.observations.afterStatus).toEqual(run.observations.beforeStatus)
     for (const envelope of [...Object.values(run.observations), run.final]) {
       expect(validateFeatureState(envelope.state, { rootSessionId: run.sessionId, workspaceId: run.workspaceId })).toBe(true)

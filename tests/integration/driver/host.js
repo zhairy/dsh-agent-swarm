@@ -126,11 +126,19 @@ class MockAdapter {
       this.state.children.push({ role, model: options.model, tools, images: JSON.stringify(options.messages ?? []).includes('"type":"image"') })
     }
     if (options.model.startsWith('writer') && step === 0) {
+      yield* toolChunks('create_worktree', { name: 'gate-flow' })
+      return
+    }
+    if (options.model.startsWith('writer') && step === 1) {
       yield* toolChunks('write', getWriteArgs(options, 'hello.txt', 'hello swarm\n'))
       return
     }
+    if (this.state.scenario === 'gate-flow' && role === 'fu_he' && step === 0) {
+      yield* toolChunks('read', { file_path: 'hello.txt' })
+      return
+    }
     const output = options.model.endsWith('-verify') ? { ...VALID_OUTPUTS[role], mode: 'verify' } : VALID_OUTPUTS[role]
-    if (tools.includes('structured_output') && step <= 1) {
+    if (tools.includes('structured_output') && step <= (options.model.startsWith('writer') ? 2 : 1)) {
       yield* toolChunks('structured_output', output)
       return
     }
@@ -159,6 +167,16 @@ export const apply = (ctx) => {
   if (scenarioName === undefined || scenarioName === '') return
   const out = process.env.SWARM_DRIVER_OUT
   const state = { scenario: scenarioName, results: [], children: [], rootTools: [], failQuotaHits: 0, childTurns: {}, childMessages: [], rootNotices: 0 }
+  if (scenarioName === 'gate-flow') ctx.on('tools/result', (execution, result) => {
+    if (execution.name === 'read') {
+      state.verificationRead = getText(result)
+      state.verificationCwd = ctx.get('workingDirectory').get(execution.agent.session)
+      return
+    }
+    if (!['create_worktree', 'write'].includes(execution.name)) return
+    ;(state.writerResults ??= []).push({ tool: execution.name, isError: result.isError === true })
+    if (execution.name === 'create_worktree' && !result.isError) state.worktreePath = result.value.path
+  })
   let finished = false
   const finish = (status, extra = {}) => {
     if (finished) return
@@ -192,7 +210,8 @@ export const apply = (ctx) => {
         setup: async (agentCtx) => { await ctx.agentPresets.mount(agentCtx, scenario.preset) }
       })
       state.sessionId = sessionId
-      state.subagentProviders = ctx.subagents.list()
+      // rc.3 不再枚举后端；只读查询本驱动关心的公开后端，不读取私有 providers。
+      state.subagentProviders = ctx.subagents.list?.() ?? ['spawn', 'fork', 'swarm-codex', 'swarm-codex-edit', 'swarm-claude-plan', 'swarm-claude-edit'].filter(name => ctx.subagents.getProvider(name) !== undefined)
       handle.agent.followup(Object.freeze({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: 'integration test' }], source: { kind: 'user' } }))
       await handle.agent.whenIdle()
       state.runtimeStatus = ctx.get('agentSwarm')?.getStatus({}, { agent: handle.agent, signal: new AbortController().signal })

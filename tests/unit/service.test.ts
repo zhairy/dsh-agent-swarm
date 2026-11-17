@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getRoleRoute, getSwarmConfig, type SwarmConfigInfo } from '../../src/config.js'
 import { getLedgerEvents } from '../../src/evidence.js'
-import type { LlmLike, SubagentStartRequestLike } from '../../src/host-contract.js'
+import { NOTEBOOK_COMPUTE_TOOLS, NOTEBOOK_RUNTIME_KEY, type LlmLike, type SubagentStartRequestLike } from '../../src/host-contract.js'
+import type { ExecutionBoundaryPolicy } from '../../src/adapters/dsh-host/execution-boundary.js'
+import { getToolApprovalDecision, getToolApprovalDenial, getToolApprovalScope } from '../../src/approval-policy.js'
 import { ROLE_TAG_PATTERN, type DelegableRoleId } from '../../src/role-registry.js'
 import { ValidateAcceptInput, intSwarmService, type SwarmServiceDepsInfo } from '../../src/service.js'
 import { getAcceptText, getDelegationText, getStatusText } from '../../src/tools.js'
@@ -357,7 +359,7 @@ describe('天枢容灾升级', () => {
     expect(await registry.getErrorAction(failed, undefined, 'tian_shu', config)).toEqual({ kind: 'retry' })
     expect(registry.getRequestOverride(root, backup, 'tian_shu', config, true).model).toBe('backup')
     registry.MarkRequestSucceeded(root.id)
-    expect(registry.getHealth()).toEqual([])
+    expect(registry.getHealth()).toMatchObject([{ kind: 'service_transient', retryAt: 16000, retryCount: 1 }])
     const refreshed = await service.AddTaskCard({ ...input, task_id: card.task_id }, exec())
     expect(refreshed.cardRevision).toBe(card.cardRevision)
     registry.BeginRequestStep(root.id, 0, 1)
@@ -856,6 +858,99 @@ describe('守卫与诊断', () => {
     expect(diagnostics).toContain('spawn')
     expect(diagnostics).toContain('附件')
     expect(makeService().service.getDiagnostics().join('')).toContain('附件')
+  })
+})
+
+describe('Notebook Host 守卫', () => {
+  let restoreNotebookMarker: (() => void) | undefined
+
+  afterEach(() => {
+    restoreNotebookMarker?.()
+    restoreNotebookMarker = undefined
+  })
+
+  const installNotebookMarker = () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, NOTEBOOK_RUNTIME_KEY)
+    Object.defineProperty(globalThis, NOTEBOOK_RUNTIME_KEY, {
+      configurable: true,
+      writable: true,
+      value: { version: 1, shutdownSession: vi.fn(async () => undefined) }
+    })
+    restoreNotebookMarker = () => {
+      if (previous === undefined) delete (globalThis as unknown as Record<symbol, unknown>)[NOTEBOOK_RUNTIME_KEY]
+      else Object.defineProperty(globalThis, NOTEBOOK_RUNTIME_KEY, previous)
+    }
+  }
+
+  it('Notebook compute 映射 shell，nb_save 映射 write，并保留 deny/ask/inherit', () => {
+    for (const name of NOTEBOOK_COMPUTE_TOOLS) expect(getToolApprovalScope(name)).toBe('shell')
+    expect(getToolApprovalScope('nb_list_vars')).toBe('shell')
+    expect(getToolApprovalScope('nb_inspect_object')).toBe('shell')
+    expect(getToolApprovalScope('nb_context')).toBe('shell')
+    expect(getToolApprovalScope('nb_error_context')).toBe('shell')
+    expect(getToolApprovalScope('nb_save')).toBe('write')
+    expect(getToolApprovalScope('nb_get')).toBeUndefined()
+
+    const deny = makeService({ config: { approvals: { mode: 'deny', scope: ['shell'] } } }).config.approvals
+    const ask = makeService({ config: { approvals: { mode: 'ask', scope: ['shell'] } } }).config.approvals
+    const inherit = makeService({ config: { approvals: { mode: 'inherit', scope: ['shell'] } } }).config.approvals
+    expect(getToolApprovalDenial({ name: 'nb_run_cell' }, deny)).toContain('Shell/代码执行')
+    expect(getToolApprovalDecision({ name: 'nb_run_cell' }, { kind: 'allow' }, ask, { hostPolicy: 'ask' })).toMatchObject({ kind: 'ask' })
+    expect(getToolApprovalDecision({ name: 'nb_run_cell' }, { kind: 'allow' }, inherit)).toEqual({ kind: 'allow' })
+  })
+
+  it('缺少 runtime marker 时 managed Notebook 调用 fail closed，且不影响未管理会话', async () => {
+    const { service } = makeService()
+    expect(service.getGuardReason({ name: 'nb_get', agent: root })).toContain('Notebook 尚未接入可信沙箱适配器')
+    expect(service.getGuardReason({ name: 'nb_run_cell', agent: root })).toContain('Notebook 尚未接入可信沙箱适配器')
+    const external = { id: 'external-notebook', session: { header: { agentPreset: 'standard' } } }
+    expect(service.getGuardReason({ name: 'nb_run_cell', agent: external })).toBeUndefined()
+    await expect(service.GetExecutionBoundary({ name: 'nb_run_cell', agent: external })).resolves.toBeUndefined()
+  })
+
+  it('Root 只允许纯内存 Notebook 工具，执行和保存均拒绝', async () => {
+    installNotebookMarker()
+    const { service } = makeService()
+    expect(service.getGuardReason({ name: 'nb_run_cell', agent: root })).toContain('天枢负责主持与草稿整理')
+    expect(service.getGuardReason({ name: 'nb_save', agent: root })).toContain('天枢负责主持与草稿整理')
+    expect(service.getGuardReason({ name: 'nb_get', agent: root })).toBeUndefined()
+    await expect(service.GetExecutionBoundary({ name: 'nb_get', agent: root })).resolves.toBeUndefined()
+  })
+
+  it('已绑定 Worker 的计算 Notebook 只获得 read-only shell boundary，任务变更后拒绝迟到调用', async () => {
+    installNotebookMarker()
+    const { service, subagents } = makeService({ config: { approvals: { mode: 'deny', scope: ['shell'] } } })
+    const { task_id } = await service.AddTaskCard(cardInput({}), exec())
+    const childId = 'notebook-worker'
+    const child = { id: childId, session: { header: { parentSession: root.id, agentPreset: 'suan-heng' } } }
+    let finishChild!: (value: { output: never[]; structured: unknown; stopReason: string }) => void
+    const pending = new Promise<{ output: never[]; structured: unknown; stopReason: string }>(resolve => { finishChild = resolve })
+    subagents.start.mockImplementationOnce(async () => ({
+      id: childId,
+      result: pending,
+      dispose: async () => undefined
+    }))
+    const work = service.delegate({ task_id, role: 'suan_heng', mode: 'research', prompt: 'Notebook 计算 40 + 2', backend: 'api', session: 'oneshot' }, exec())
+    let boundary: ExecutionBoundaryPolicy | undefined
+    try {
+      await vi.waitFor(async () => {
+        boundary = await service.GetExecutionBoundary({ name: 'nb_run_cell', agent: child, signal: new AbortController().signal })
+        expect(boundary).toMatchObject({ mode: 'read-only', operation: 'shell', writeScopes: [] })
+      }, { timeout: 5000 })
+      expect(service.getGuardReason({ name: 'nb_run_cell', agent: child })).toContain('Shell/代码执行')
+
+      const aborted = new AbortController()
+      const late = await service.GetExecutionBoundary({ name: 'nb_run_cell', agent: child, signal: aborted.signal })
+      aborted.abort()
+      expect(() => late?.assertCurrent()).toThrow()
+
+      const changed = await service.GetExecutionBoundary({ name: 'nb_run_cell', agent: child, signal: new AbortController().signal })
+      await service.AddTaskCard({ ...cardInput({}), task_id, goal: '改变后的 Notebook 任务目标' }, exec())
+      expect(() => changed?.assertCurrent()).toThrow()
+    } finally {
+      finishChild({ output: [], structured: VALID_OUTPUTS.suan_heng, stopReason: 'completed' })
+      await work.catch(() => undefined)
+    }
   })
 })
 

@@ -148,7 +148,9 @@ export const createExecutionBoundary = (ctx: PluginContextLike, onSettled: (agen
   const launcher = fileURLToPath(new URL('./fence-launcher.js', import.meta.url))
   const available = (): boolean => {
     const caps = (globalThis as Record<symbol, unknown>)[EXECUTION_BOUNDARY_CAPS]
-    return caps instanceof Set && ['subprocess-local/rc1', 'fs-local/rc1', 'working-directory/rc1'].every(key => caps.has(key))
+    // 同一已核验版本的物理钩子必须齐全，不能用混装组件拼出写入能力。
+    return caps instanceof Set && ['rc1', 'rc3'].some(generation =>
+      ['subprocess-local', 'fs-local', 'working-directory'].every(name => caps.has(`${name}/${generation}`)))
   }
   return {
     available,
@@ -173,7 +175,7 @@ export const createExecutionBoundary = (ctx: PluginContextLike, onSettled: (agen
     },
     run: async <T>(policy: ExecutionBoundaryPolicy | undefined, next: () => Promise<T>): Promise<T> => {
       if (policy === undefined) return next()
-      if (!available()) throw new Error('受保护工具需要 DSH 0.2.2-rc.1 执行边界桥接；当前未执行工具')
+      if (!available()) throw new Error('受保护工具需要与当前 DSH 版本匹配的执行边界桥接；当前未执行工具')
       const fs = ctx.get('fs') as { processPathFromHostPath?: (path: string) => string | undefined } | undefined
       if (fs?.processPathFromHostPath?.(policy.cwd) !== policy.cwd) throw new Error('当前执行世界不支持本机工作树隔离')
       const agent = (ctx.get('agents') as { get: (id: string) => AgentLike | undefined } | undefined)?.get(policy.agentId)

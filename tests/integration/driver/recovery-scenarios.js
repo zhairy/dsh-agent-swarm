@@ -128,6 +128,12 @@ export const apply = (ctx) => {
   const out = process.env.SWARM_DRIVER_OUT
   const state = { scenario: scenarioName, recoveryRequests: [], recoveryEvents: [], agentErrors: [], results: [], children: [], rootTools: [], failQuotaHits: 0, childMessages: [], rootNotices: 0, planningReviewers: [],
     hostApis: { start: typeof ctx.subagents.start === 'function', startActivation: typeof ctx.subagents.startActivation === 'function' } }
+  if (scenarioName === 'recovery-write-once') ctx.on('tools/result', (execution, result) => {
+    if (!['create_worktree', 'write'].includes(execution.name)) return
+    // 以实际工具结果计数，模型请求数不能代替副作用执行数。
+    ;(state.writerResults ??= []).push({ tool: execution.name, isError: result.isError === true })
+    if (execution.name === 'create_worktree' && !result.isError) state.worktreePath = result.value.path
+  })
   let finished = false
   const finish = (status, extra = {}) => {
     if (finished) return
@@ -208,7 +214,7 @@ export const apply = (ctx) => {
           yield* toolChunks('read', { file_path: 'README.md' }); return
         }
         if (step === 1) {
-          reviewer.readResult = textOf(options.messages?.at(-1))
+          reviewer.readResult = textOf(options.messages?.findLast(message => message.role === 'tool'))
           yield* toolChunks('swarm_context_read', { task_id: snapshot.taskId, ref: 'ctx-11207567-742d-476c-9932-e8d6911840d3' }); return
         }
         if (step === 2) {
@@ -217,8 +223,9 @@ export const apply = (ctx) => {
           reviewer.missingContextIsError = last?.isError === true
           yield* toolChunks('write', { file_path: 'planner-should-not-write.txt', content: 'must be rejected\n' }); return
         }
-        reviewer.mutationResult = textOf(options.messages?.at(-1))
-        reviewer.mutationIsError = options.messages?.at(-1)?.isError === true
+        const mutationResult = options.messages?.findLast(message => message.role === 'tool')
+        reviewer.mutationResult = textOf(mutationResult)
+        reviewer.mutationIsError = mutationResult?.isError === true
         if (step > 3) throw new Error('真实宿主未接受规划 structured_output，停止而非重复提交')
         const dimension = { verdict: 'pass', summary: '独立对照 R1/A1/analysis：分析步骤产出对应结论，源码箭头与冻结流程相同', evidenceRefs: ['R1', 'A1', 'analysis', 'workflow', 'mermaid'] }
         yield* submit({ snapshotDigest: snapshot.snapshotDigest, verdict: 'pass',
@@ -285,10 +292,18 @@ export const apply = (ctx) => {
         return
       }
       if (options.model.startsWith('writer-') && step === 0) {
+        yield* toolChunks('create_worktree', { name: 'recovery-write-once' }); return
+      }
+      if (options.model.startsWith('writer-') && step === 1) {
         const schema = (options.tools ?? []).find((tool) => tool.name === 'write')
         const keys = Object.keys(schema?.parameters?.properties ?? {})
         yield* toolChunks('write', { [keys.find((key) => /path|file/i.test(key)) ?? 'path']: 'hello.txt', [keys.find((key) => /content|text|data/i.test(key)) ?? 'content']: 'hello swarm\n' })
         return
+      }
+      if (options.model.startsWith('writer-') && step === 2) {
+        // 保留真实写工具结果，避免结构化 fixture 掩盖写入被宿主拒绝。
+        const last = options.messages?.findLast(message => message.role === 'tool')
+        state.writerResult = { isError: last?.isError === true, text: textOf(last) }
       }
       if (tools.includes('structured_output')) yield* submit(VALID[role])
       else yield* textChunks('```json\n' + JSON.stringify(VALID[role]) + '\n```')
@@ -315,7 +330,7 @@ export const apply = (ctx) => {
         setup: async (agentCtx) => { await ctx.agentPresets.mount(agentCtx, scenario.preset) }
       })
       state.sessionId = sessionId
-      state.subagentProviders = ctx.subagents.list()
+      state.subagentProviders = ctx.subagents.list?.() ?? ['spawn', 'fork', 'swarm-codex', 'swarm-codex-edit', 'swarm-claude-plan', 'swarm-claude-edit'].filter(name => ctx.subagents.getProvider(name) !== undefined)
       handle.agent.followup(Object.freeze({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: scenario.userText ?? 'recovery integration test' }], source: { kind: 'user' } }))
       await handle.agent.whenIdle()
       state.runtimeStatus = ctx.get('agentSwarm')?.getStatus({}, { agent: handle.agent, signal: new AbortController().signal })

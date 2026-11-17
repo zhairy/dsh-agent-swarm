@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "packageName": "dsh-plugin-subscriptions",
+  "baseVersion": "0.9.13",
+  "patch": "dsh-subscriptions-0.9.13-rc3-transport.patch",
+  "patchSha256": "af0d6418c6a6253cd35c4883bbefcd69b86d0334103f0b396dc6158ccdddbaa4",
+  "sourceBundle": "dsh-subscriptions-0.9.13-rc3-9451c4a3",
+  "sourceVersion": "0.9.13+rc3.ui.1",
+  "files": [
+    {
+      "path": "lib/providers/common.js",
+      "beforeSha256": "3eec82f47976fa57403075e55b7d15c6090cf96bdc32c1fba97e61f4baba6666",
+      "afterSha256": "2461674127ba6567a2a284d32f427c569fb5b59b465377890bd24264f696e2ea"
+    },
+    {
+      "path": "lib/providers/pool.js",
+      "beforeSha256": "5724e4a6aa0ade4bde113a1f1815d73a438a2088f7acc99fe96fc9aee4df29d8",
+      "afterSha256": "dfd2d6699dbd5437100d675c6b37988c643ce271b1f14874c47472f2791211ed"
+    }
+  ]
+}

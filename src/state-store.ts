@@ -475,7 +475,6 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
           if (next.getStateBytes() > maxStateBytes) throw new StateStoreError('RECOVERY_REQUIRED', 'Journal state exceeds byte limit')
           chunked = next
           chunkedLayout = entryLayout ?? LEGACY_LAYOUT
-          state = deepFreeze(chunked.materialize()) as T
           stateBytes = chunked.getStateBytes()
           stateChecksum = entry.checksum
           sawUpgradedEntry = true
@@ -487,13 +486,15 @@ export const createDurableStateStore = async <T>(options: DurableStateOptions<T>
           chunked = ChunkedState.fromState(validated.value, legacySpecs, { verified: true })
           chunkedLayout = LEGACY_LAYOUT
           needsLayoutCommit = true
-          state = deepFreeze(chunked.materialize()) as T
           stateBytes = chunked.getStateBytes()
           stateChecksum = chunked.rootChecksum()
           legacyChecksum = entry.checksum
         }
         sequence = entry.sequence
       }
+      // 恢复循环只依赖分片与链校验值；全部行验证通过后再发布最终冻结视图，
+      // 避免每条增量重复分配/遍历完整状态。失败路径不发布任何中间状态。
+      if (sawUpgradedEntry || sequence > (snapshot?.sequence ?? 0)) state = deepFreeze(chunked.materialize()) as T
       if (snapshot === undefined && sequence === 0) await writeSnapshot(0)
       if (tornTail) await atomicStateFile(directory, 'journal.jsonl', journal)
       // The first journal directory entry must be durable before any committed append is acknowledged.

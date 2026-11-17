@@ -6,7 +6,7 @@ import type { SwarmEvent } from './event-journal.js'
 /** DSH 官方 Git 工作树 bundle 注册的模型工具。 */
 export const WORKTREE_TOOL = 'create_worktree'
 export const RESTORE_WORKTREE_TOOL = 'swarm_restore_worktree'
-export const isWorktreeMutationTool = (name: string): boolean => ['write', 'edit', 'apply_patch', 'bash', 'pwsh', WORKTREE_TOOL].includes(name)
+export const isWorktreeMutationTool = (name: string): boolean => ['write', 'edit', 'apply_patch', 'bash', 'pwsh', 'nb_save', WORKTREE_TOOL].includes(name)
 
 export interface WorktreeAuthorization {
   attemptId: string

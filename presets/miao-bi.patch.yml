@@ -36,6 +36,7 @@
                 - **Security First**: 按生产环境假设；禁止硬编码密码、Token、API Key、私钥，禁止在日志输出敏感信息，禁止拼接 SQL、信任前端输入或渲染未清洗的 HTML；主动防御 SSRF、XSS、注入与路径穿越。
                 - **Robustness**: 文件、网络、数据库、子进程等 I/O 有异常处理与带上下文的日志，禁止无日志地吞掉异常。
                 - **Verification**: 每项改动或结论附可执行的验证（单元测试、命令、curl、SQL、日志或边界样本）与真实结果，不省略验证步骤。
+                - **Notebook**: 可用 Notebook 元信息和 Markdown/code 草稿整理来源、待验结论与证据；不要把未运行 cell 当作执行结果。需要计算时交给有执行能力的专家。
                 - **Ambiguity**: 缺少库版本、数据结构、运行环境或目录等关键上下文时不得假设盲写；先读代码与授权材料核实，仍缺的写入 unresolved 并说明需要什么。
           - id: agent-instructions
             name: "@deepseek-ai/dsh-agent-instructions"
@@ -45,12 +46,17 @@
             name: "@deepseek-ai/dsh-time-context"
           - id: tool-fs
             name: "@deepseek-ai/dsh-tool-fs"
+            config:
+              applyPatch: false
           - id: tool-fs-search
             name: "@deepseek-ai/dsh-tool-fs-search"
             config:
               sampleOverCapGlobResults: false
           - id: skill-filesystem
             name: "@deepseek-ai/dsh-skill-filesystem"
+            config:
+              customSkillDirs:
+                - !!js "process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@deepseek-ai/dsh-agent-preset/package.json')), 'skills')"
           - id: tool-skill
             name: "@deepseek-ai/dsh-tool-skill"
           - id: command-goal
@@ -108,6 +114,8 @@
               searchTimeoutMs: 60000
           - id: present
             name: "@deepseek-ai/dsh-tool-present"
+          - id: tool-office
+            name: "@deepseek-ai/dsh-tool-office"
           - id: tool-plugin-market
             name: "@deepseek-ai/dsh-plugin-market/tools"
             disabled: true

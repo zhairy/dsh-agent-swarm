@@ -283,6 +283,39 @@ export const ParseNativeOutput = (text: string): unknown => {
 export const getOutputText = (result: SubagentResultLike): string =>
   result.output.filter((block) => block.type === 'text' && typeof block.text === 'string').map((block) => block.text as string).join('\n')
 
+const CLEANUP_FAILURE_PREFIX = '[delegate-cleanup-unconfirmed]'
+
+interface CleanupFailurePayload {
+  error: string
+  originalStopReason: string
+  originalDiagnostic?: string
+}
+
+/** 保留 Host 已捕获的执行结果，只把未确认清理编码进现有 diagnostic 字段。 */
+const getCleanupFailureResult = (result: SubagentResultLike, error: unknown): SubagentResultLike => {
+  const payload: CleanupFailurePayload = {
+    error: getErrorText(error),
+    originalStopReason: result.stopReason,
+    ...(result.diagnostic === undefined ? {} : { originalDiagnostic: result.diagnostic })
+  }
+  return { ...result, stopReason: 'error', diagnostic: `${CLEANUP_FAILURE_PREFIX}${JSON.stringify(payload)}` }
+}
+
+const getCleanupFailure = (result: SubagentResultLike): CleanupFailurePayload | undefined => {
+  if (result.diagnostic?.startsWith(CLEANUP_FAILURE_PREFIX) !== true) return undefined
+  try {
+    const parsed = JSON.parse(result.diagnostic.slice(CLEANUP_FAILURE_PREFIX.length)) as Partial<CleanupFailurePayload>
+    if (typeof parsed.error !== 'string' || typeof parsed.originalStopReason !== 'string') return undefined
+    return {
+      error: parsed.error,
+      originalStopReason: parsed.originalStopReason,
+      ...(typeof parsed.originalDiagnostic === 'string' ? { originalDiagnostic: parsed.originalDiagnostic } : {})
+    }
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * DSH/DeepSeek 在连续会话回放含 thinking 的助手历史时可能要求特定协议签名。
  * 若宿主明确拒绝该历史，继续在同一个子会话里追加只会重复失败；调用方应新建干净子会话。
@@ -416,7 +449,7 @@ const HIGH_RISK_GATES: readonly GateId[] = ['G_MATH_VERIFY', 'G_REVIEW', 'G_DIFF
  * @param {unknown} structured - 结构化结果（原生后端由文本解析得到）
  * @returns {EvaluationInfo} 评估
  */
-const getEvaluation = (role: DelegableRoleId, mode: SuanHengMode | undefined, result: SubagentResultLike, structured: unknown): EvaluationInfo => {
+const getBaseEvaluation = (role: DelegableRoleId, mode: SuanHengMode | undefined, result: SubagentResultLike, structured: unknown): EvaluationInfo => {
   const text = getOutputText(result).slice(0, 500)
   if (result.stopReason !== 'completed') {
     return { status: 'failed', summary: text || '子智能体未完成', unresolved: [], evidence: [], error: getExplainedError(`${result.stopReason}${result.diagnostic === undefined ? '' : `：${result.diagnostic}`}`) }
@@ -428,6 +461,29 @@ const getEvaluation = (role: DelegableRoleId, mode: SuanHengMode | undefined, re
   }
   const value = structured as { summary: string; unresolved: string[] }
   return { status: 'completed', summary: value.summary, structured, unresolved: value.unresolved, evidence: getEvidenceFromOutput(role, structured) }
+}
+
+const getEvaluation = (role: DelegableRoleId, mode: SuanHengMode | undefined, result: SubagentResultLike, structured: unknown): EvaluationInfo => {
+  const cleanupFailure = getCleanupFailure(result)
+  if (cleanupFailure === undefined) return getBaseEvaluation(role, mode, result, structured)
+
+  const originalResult: SubagentResultLike = {
+    output: result.output,
+    stopReason: cleanupFailure.originalStopReason,
+    ...(result.structured === undefined ? {} : { structured: result.structured }),
+    ...(cleanupFailure.originalDiagnostic === undefined ? {} : { diagnostic: cleanupFailure.originalDiagnostic })
+  }
+  const original = getBaseEvaluation(role, mode, originalResult, structured)
+  const originalFailure = original.status === 'completed'
+    ? `原执行结果已捕获（stopReason=${cleanupFailure.originalStopReason}），但清理未确认，不能视为完成`
+    : `原执行失败（stopReason=${cleanupFailure.originalStopReason}）：${original.error ?? cleanupFailure.originalStopReason}`
+  // 清理错误不进入模型/额度分类器，避免 teardown 文本被误当作路由或配额失败。
+  return {
+    ...original,
+    status: 'failed',
+    unresolved: [...original.unresolved, 'Host run 清理未确认；未发送成功结束通知，执行租约与未知副作用保持隔离，需核对清理结果'],
+    error: `${originalFailure}；委派清理未确认：${cleanupFailure.error}`
+  }
 }
 
 /**
@@ -520,18 +576,34 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     try {
       const run = await start(controller.signal)
       void run.result.catch(() => undefined)
+      let outcome: { run: SubagentRunLike; result: SubagentResultLike } | undefined
+      let setupError: unknown
       try {
-        await hooks.onRun?.(run)
-        try {
-          return { run, result: await run.result }
-        } catch (error) {
-          return { run, result: { output: [], stopReason: 'error', diagnostic: getErrorText(error) } as SubagentResultLike }
+        try { await hooks.onRun?.(run) } catch (error) { setupError = error }
+        if (setupError === undefined) {
+          try {
+            outcome = { run, result: await run.result }
+          } catch (error) {
+            outcome = { run, result: { output: [], stopReason: 'error', diagnostic: getErrorText(error) } as SubagentResultLike }
+          }
         }
       } finally {
-        try { hooks.beforeDispose?.(run) } finally {
-          await run.dispose().catch(() => undefined)
-          await deps.onChildEnd?.(run.id, exec.signal.aborted ? 'cancelled' : undefined)
+        const cleanupErrors: unknown[] = []
+        try { hooks.beforeDispose?.(run) } catch (error) { cleanupErrors.push(error) }
+        try { await run.dispose() } catch (error) { cleanupErrors.push(error) }
+        if (cleanupErrors.length === 0) {
+          try { await deps.onChildEnd?.(run.id, exec.signal.aborted ? 'cancelled' : undefined) } catch (error) { cleanupErrors.push(error) }
         }
+        const cleanupError = cleanupErrors.length === 0
+          ? undefined
+          : cleanupErrors.length === 1 ? cleanupErrors[0] : new Error(cleanupErrors.map(getErrorText).join('；'))
+        if (setupError !== undefined) {
+          if (cleanupError === undefined) throw setupError
+          throw new Error(`执行登记失败：${getErrorText(setupError)}；委派清理未确认：${getErrorText(cleanupError)}`)
+        }
+        if (outcome === undefined) throw new Error('子智能体执行结果未建立')
+        if (cleanupError !== undefined) return { run, result: getCleanupFailureResult(outcome.result, cleanupError) }
+        return outcome
       }
     } finally {
       exec.signal.removeEventListener('abort', onAbort)
@@ -627,7 +699,8 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
 
   /** 重试原因；不可重试（已完成、调用方取消、模型拒绝）时为 undefined */
   const getRetryReason = (evaluation: EvaluationInfo, result: SubagentResultLike, exec: DelegateExecInfo): { reason: string; backoff: boolean } | undefined => {
-    if (evaluation.status === 'completed' || exec.signal.aborted || result.stopReason === 'refusal') return undefined
+    // Host teardown 未确认时不得启动替代 run；旧 owner 的副作用仍由 service 的租约与 producer 证据隔离。
+    if (evaluation.status === 'completed' || exec.signal.aborted || result.stopReason === 'refusal' || getCleanupFailure(result) !== undefined) return undefined
     if (result.stopReason !== 'completed') return { reason: `执行中断：${evaluation.error ?? result.stopReason}`, backoff: result.stopReason === 'error' }
     return { reason: evaluation.error ?? '交付不合格', backoff: false }
   }
@@ -814,8 +887,15 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
     }
     let style: PromptStyle = thread.style ?? newStyle
     const Arm = (id: string): void => deps.routeState.AddChild(id, { chain: compatibleDeclared, initialRoute: usable[0], initialQuotaOrder, respectStoredOverride: false, requireVision, role: input.role, onFallback, persistent: true, logicalRequestId: record.delegationId })
+    const bindCurrentThread = async (): Promise<void> => {
+      // 这是选定线程的计划绑定，不代表 Host 已接受或完成。启动回调会持久化控制身份，
+      // 因而绑定必须同批可见，不能等到结果/产物检查成功后才补写。
+      session.store.UpdateDelegation(record.delegationId, { childId: threadId,
+        session: { kind: 'continuable', threadId, round: (thread?.rounds ?? 0) + 1, appended, source: plan.source, reason: plan.reason } })
+      await deps.onChildStart?.({ agentId: threadId, task, record, role: input.role, signal: exec.signal, persistent: true, input, parent: exec.agent })
+    }
     Arm(threadId)
-    await deps.onChildStart?.({ agentId: threadId, task, record, role: input.role, signal: exec.signal, persistent: true, input, parent: exec.agent })
+    await bindCurrentThread()
     const seen = thread.seenRevisions?.[task.taskId]
     const knowsRevision = thread.taskIds.includes(task.taskId) && (seen === undefined
       ? (task.cardRevision ?? 1) === 1 && (task.workflowRevision ?? 1) === 1 && (task.requestRevision ?? 1) === 1
@@ -898,9 +978,9 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
         style = newStyle
         thread = { threadId, key, role: input.role, ...(input.mode === undefined ? {} : { mode: input.mode }), rounds: 0, busy: true, closed: false, allowWeb: input.allow_web === true, style, taskIds: [], history: [], createdAt: deps.now(), lastUsedAt: deps.now() }
         session.threads.Add(thread)
-        Arm(threadId)
-        await deps.onChildStart?.({ agentId: threadId, task, record, role: input.role, signal: exec.signal, persistent: true, input, parent: exec.agent })
         appended = false
+        Arm(threadId)
+        await bindCurrentThread()
         started = false
         text = getThreadPromptText(task, input, record.delegationId, style)
         content = [{ type: 'text', text }, ...images]
@@ -959,9 +1039,9 @@ export const intDelegator = (deps: DelegateDepsInfo) => {
           history: [], createdAt: deps.now(), lastUsedAt: deps.now()
         }
         session.threads.Add(thread)
-        Arm(threadId)
-        await deps.onChildStart?.({ agentId: threadId, task, record, role: input.role, signal: exec.signal, persistent: true, input, parent: exec.agent })
         appended = false
+        Arm(threadId)
+        await bindCurrentThread()
         started = false
         content = [{
           type: 'text',

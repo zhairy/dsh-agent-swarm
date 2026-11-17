@@ -42,7 +42,7 @@ const output = {
 export const apply = ctx => {
   const scenario = process.env.SWARM_STATE_CONSISTENCY_SCENARIO
   if (!scenario) return
-  const state = { scenario, requests: [], results: [], writes: 0, errors: [], observations: {} }
+  const state = { scenario, requests: [], results: [], writes: 0, errors: [], observations: {}, worktreeResults: [] }
   const children = new Map()
   let rootStep = 0, finished = false, stateDirectory
   const committed = () => {
@@ -120,8 +120,8 @@ export const apply = ctx => {
           return
         }
         if (step === 3) {
-          if (scenario === 'root-write') yield* tool('write', writeArgs(options))
-          else yield* tool('swarm_delegate', { task_id: state.taskId, node_id: 'implementation', role: 'ji_feng', backend: 'api', session: 'oneshot', prompt: '真实写入一次 source.ts 并提交修改清单' })
+          // allow 只属于应用策略；真实物理写入仍由已绑定 Worker 完成。
+          yield* tool('swarm_delegate', { task_id: state.taskId, node_id: 'implementation', role: 'ji_feng', backend: 'api', session: 'oneshot', prompt: '真实写入一次 source.ts 并提交修改清单' })
           return
         }
         if (step === 4) { yield* tool('swarm_status', { task_id: state.taskId, verbose: true }); return }
@@ -138,9 +138,12 @@ export const apply = ctx => {
       }
       const role = options.model.replace(/^role-/, ''), step = children.get(options.sessionId) ?? 0
       children.set(options.sessionId, step + 1)
-      if (step === 0) { yield* tool('read', { file_path: 'source.ts' }); return }
-      if (role === 'ji_feng' && step === 1) { yield* tool('write', writeArgs(options)); return }
-      if (step === (role === 'ji_feng' ? 2 : 1)) { yield* submit(output[role]); return }
+      if (role === 'ji_feng' && step === 0) { yield* tool('create_worktree', { name: 'state-writer' }); return }
+      if (step === (role === 'ji_feng' ? 1 : 0)) { yield* tool('read', { file_path: role === 'fu_he' ? join(state.writerWorktree.path, 'source.ts') : 'source.ts' }); return }
+      if (role === 'ji_feng' && step === 2) { yield* tool('write', writeArgs(options)); return }
+      if (step === (role === 'ji_feng' ? 3 : 1)) {
+        yield* submit(output[role]); return
+      }
       yield* text('CHILD DONE')
     }
   }
@@ -148,6 +151,12 @@ export const apply = ctx => {
   ctx.on('tools/execute', (execution, next) => {
     if (execution.name === 'write') state.writes++
     return next()
+  })
+  ctx.on('tools/result', (execution, result) => {
+    if (execution.name === 'read' && children.has(execution.agent?.id) && state.requests.some(item => item.sessionId === execution.agent.id && item.model === 'role-fu_he')) state.verificationRead = textOf(result)
+    if (execution.name !== 'create_worktree' || execution.agent?.session?.header?.parentSession !== state.sessionId) return
+    state.worktreeResults.push({ isError: result.isError === true })
+    if (!result.isError) state.writerWorktree = result.value
   })
   ctx.on('agent/error', ({ error }) => state.errors.push({ code: error?.code, message: String(error?.message ?? error) }))
   setTimeout(() => { void (async () => {
