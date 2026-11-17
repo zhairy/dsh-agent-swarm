@@ -55,3 +55,33 @@ test('缺失相对依赖与路径逃逸在链接 SDK 前拒绝', () => {
     assert.equal(existsSync(join(f.root, 'components/toy/node_modules')), false)
   } finally { rmSync(f.base, { recursive: true, force: true }) }
 })
+
+test('声明的 overlay 缺失时，即使清单内所有SHA正确也必须拒绝', () => {
+  const f = fixture()
+  try {
+    const pkg = JSON.parse(readFileSync(join(f.root, 'components/toy/package.json'), 'utf8'))
+    pkg.dsh = { bundle: { patch: './cordis.patch.yml' } }
+    const data = JSON.stringify(pkg)
+    writeFileSync(join(f.root, 'components/toy/package.json'), data)
+    f.plan.components[0].files['package.json'] = sha(data); f.save()
+    assert.throws(() => ValidateCompatBundle(f.root, f.sdk, { linkSdk: true }), /声明入口.*cordis/)
+    assert.equal(existsSync(join(f.root, 'components/toy/node_modules')), false)
+    const overlay = '- insert: []\n'
+    writeFileSync(join(f.root, 'components/toy/cordis.patch.yml'), overlay)
+    assert.throws(() => ValidateCompatBundle(f.root, f.sdk), /声明入口.*清单/)
+    f.plan.components[0].files['cordis.patch.yml'] = sha(overlay); f.save()
+    assert.equal(ValidateCompatBundle(f.root, f.sdk).verified, true)
+  } finally { rmSync(f.base, { recursive: true, force: true }) }
+})
+
+test('声明的 exports/main/overlay 路径不能缺失或扩大到组件之外', () => {
+  const f = fixture()
+  try {
+    for (const entry of [{ main: 'missing.js' }, { exports: { '.': { default: './missing.js' } } }, { dsh: { bundle: { patch: '../../outside.yml' } } }, { dsh: { bundle: { patch: ['package.json', '*.yml'] } } }]) {
+      const data = JSON.stringify({ name: 'toy', version: '1.0.0', ...entry })
+      writeFileSync(join(f.root, 'components/toy/package.json'), data)
+      f.plan.components[0].files['package.json'] = sha(data); f.save()
+      assert.throws(() => ValidateCompatBundle(f.root, f.sdk), /声明入口|非法路径/)
+    }
+  } finally { rmSync(f.base, { recursive: true, force: true }) }
+})

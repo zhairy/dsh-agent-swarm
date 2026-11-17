@@ -91,7 +91,7 @@
     },
     {
       "name": "dsh-plugin-subscriptions",
-      "version": "0.9.13+rc3.transport.1",
+      "version": "0.9.13+rc3.transport.2",
       "license": "MIT",
       "source": "git+https://github.com/V1ki/dsh-plugin-subscriptions.git",
       "distribution": "compat component"
