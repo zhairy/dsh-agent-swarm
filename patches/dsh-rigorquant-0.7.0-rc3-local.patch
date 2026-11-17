@@ -1,0 +1,178 @@
+--- a/dsh/index.js
++++ b/dsh/index.js
+@@ -0,0 +1 @@
++import { getMembership } from './membership.js'
+@@ -396,0 +398 @@
++    if (ctx.get('agentPresets')?.composedPreset(agent.ctx) !== config.presetId) return null
+@@ -399,2 +401,2 @@
+-    const membership = teams.tryMembership(agent)
+-    if (membership === undefined) return null
++    const membership = getMembership(agent, teams, ctx.get('subagents'), message => ctx.logger.warn(message))
++    if (membership === undefined || membership.enabled === false) return null
+--- a/dsh/team.js
++++ b/dsh/team.js
+@@ -0,0 +1 @@
++import { getMembership, loadedMembers } from './membership.js'
+@@ -190,0 +192 @@
++    if (['subagent', 'subagent_fork', 'spawn_teammate'].includes(execution.name)) return 'rq-team: only the Lead may delegate'
+@@ -192,2 +194,2 @@
+-      if (args.target === LEAD_TARGET) return undefined
+-      return `rq-team: hub-and-spoke — ${membership.name} may message only the Lead, not '${args.target}'`
++      if ((args.agent ?? args.target) === LEAD_TARGET) return undefined
++      return `rq-team: hub-and-spoke — ${membership.name} may message only the Lead, not '${(args.agent ?? args.target)}'`
+@@ -208 +210 @@
+-        return undefined // unknown/inaccessible task: let the real call surface the authoritative error
++        return 'rq-team: task ownership unavailable — denied'
+@@ -209,0 +212,2 @@
++      if (task && typeof task.then === 'function') return 'rq-team: asynchronous ownership unsupported — denied'
++      if (task?.ownerId !== undefined && task.ownerId !== agent.id && task.ownerName === undefined) return 'rq-team: foreign task owner — denied'
+@@ -251 +255 @@
+-function leadGuard(agent, teams) {
++function leadGuard(agent, teams, agents, subagents) {
+@@ -255 +259 @@
+-      const role = roleFromName(args.target)
++      const role = roleFromName((args.agent ?? args.target))
+@@ -257,4 +261,4 @@
+-      const roster = teams.listMembers(agent)
+-      const member = roster.find((row) => row.name === args.target)
+-      if (member === undefined || member.status === 'running' || member.status === 'provisioning') return undefined
+-      return `rq-team: ${args.target} is fresh per brief and has settled (${member.status}) — ` +
++      const roster = loadedMembers(agent, teams, agents, subagents)
++      const member = roster.find((row) => row.name === (args.agent ?? args.target))
++      if (member !== undefined && (member.status === 'running' || member.status === 'provisioning')) return undefined
++      return `rq-team: ${(args.agent ?? args.target)} is fresh per brief and has settled (${member?.status ?? 'unknown'}) — ` +
+@@ -263 +267,2 @@
+-    if (execution.name !== 'spawn_teammate') return undefined
++    if (execution.name === 'subagent_fork') return 'rq-team: inherited context is forbidden'
++    if (!['spawn_teammate', 'subagent'].includes(execution.name)) return undefined
+@@ -312,0 +318,8 @@
++  // 每次调用同步复核，Team 被关闭或身份丢失后旧 guard 不会继续赋权。
++  const scopedGuard = (agent, teams, guard) => execution => {
++    const membership = getMembership(agent, teams, ctx.get('subagents'), message => ctx.logger.warn(message))
++    if (!membership) return 'rq-team: trusted membership unavailable'
++    if (membership.enabled === false) return membership.role === 'lead' ? undefined : 'rq-team: Team disabled for teammate'
++    return guard(execution)
++  }
++
+@@ -313,0 +327,2 @@
++    const inRigorQuant = ctx.get('agentPresets')?.composedPreset(agent.ctx) === presetId
++    if (!inRigorQuant) { disposeFor(agent); return }
+@@ -319,2 +334,11 @@
+-    const membership = teams.tryMembership(agent)
+-    if (membership === undefined) return
++    const membership = getMembership(agent, teams, ctx.get('subagents'), message => ctx.logger.warn(message))
++    // 旧服务未给出会员时沿用原版 disarm；原生服务则必须区分关闭态和未知身份。
++    if (membership === undefined && typeof teams.tryMembership === 'function') { disposeFor(agent); return }
++    // 已证明的关闭态 root 与未发布/未知身份不同：保留旧版 disarm 语义。
++    if (membership?.enabled === false && membership.role === 'lead') { disposeFor(agent); return }
++    if (membership === undefined || membership.enabled === false) {
++      disposeFor(agent)
++      const tools = agent.ctx.get('tools')
++      if (tools) installed.set(agent, tools.guard(scopedGuard(agent, teams, () => 'rq-team: composition pending lifecycle installation')))
++      return
++    }
+@@ -325,2 +348,0 @@
+-    const inRigorQuant = ctx.get('agentPresets')?.composedPreset(agent.ctx) === presetId
+-    if (!inRigorQuant) return
+@@ -332 +354 @@
+-      const disposeGuard = tools !== undefined ? tools.guard(leadGuard(agent, teams)) : () => {}
++      const disposeGuard = tools !== undefined ? tools.guard(scopedGuard(agent, teams, leadGuard(agent, teams, ctx.get('agents'), ctx.get('subagents')))) : () => {}
+@@ -334 +356 @@
+-        ? tools.register(escalationTool(lane, agent, teams, ctx.get('agents')))
++        ? tools.register(escalationTool(lane, agent, teams, ctx.get('agents'), ctx.get('subagents')))
+@@ -344 +366,4 @@
+-    if (role === null) return // unparseable name: skip silently (see module header)
++    if (role === null) {
++      if (typeof teams.tryMembership !== 'function' && tools) installed.set(agent, tools.guard(() => 'rq-team: unknown native role'))
++      return
++    }
+@@ -350 +375 @@
+-    const disposeGuard = tools !== undefined ? tools.guard(teammateGuard(agent, membership, role, teams)) : () => {}
++    const disposeGuard = tools !== undefined ? tools.guard(scopedGuard(agent, teams, teammateGuard(agent, membership, role, teams))) : () => {}
+@@ -371,0 +397,3 @@
++  ctx.on('subagent/start', (info) => { const agent = ctx.get('agents')?.get(info.id); if (agent) maybeInstall(agent) })
++  ctx.on('agent/status', ({ agent, status }) => { if (status === 'running') maybeInstall(agent) })
++  ctx.on('agent/pre-step', async (payload, next) => { maybeInstall(payload.agent); return next() })
+--- a/dsh/lane.js
++++ b/dsh/lane.js
+@@ -0,0 +1 @@
++import { getMembership, loadedMembers } from './membership.js'
+@@ -132 +133 @@
+-export function escalationTool(lane, lead, teams, agents) {
++export function escalationTool(lane, lead, teams, agents, subagents) {
+@@ -133,0 +135,2 @@
++    const membership = getMembership(lead, teams, subagents)
++    if (membership?.role !== 'lead' || membership.enabled === false) throw new Error(`${ESCALATE_TOOL}: trusted Lead unavailable`)
+@@ -135 +138 @@
+-    const member = teams.listMembers(lead).find((row) => row.name === teammate && row.role === 'teammate')
++    const member = loadedMembers(lead, teams, agents, subagents).find((row) => row.name === teammate && row.role === 'teammate' && (row.depth === undefined ? typeof teams.listMembers === 'function' : row.depth === 1))
+--- /dev/null
++++ b/dsh/membership.js
+@@ -0,0 +1,57 @@
++// 弱引用按 Agent 和操作去重；仅记录固定操作/分类，不输出错误 message、历史或输入。
++const reported = new WeakMap()
++function report(agent, operation, error, warn = message => console.warn(message)) {
++  const expected = error?.code === 'UNAUTHORIZED'
++  const category = expected ? 'identity-not-published-or-unavailable' : 'unexpected-service-failure'
++  const key = `${operation}:${category}`
++  const seen = reported.get(agent) ?? new Set()
++  if (seen.has(key)) return
++  seen.add(key)
++  reported.set(agent, seen)
++  // UNAUTHORIZED 也可能表示已失效身份；仅标记不可用，不将其推断为允许冷恢复。
++  warn(`rq-team: operation=${operation} category=${category}; trusted identity denied`)
++}
++
++/** 同步公共身份；enabled=false 只表示已证明的身份，绝不授予 Team 能力。 */
++export function getMembership(agent, teams, subagents, warn) {
++  if (!teams) return undefined
++  let operation = 'membership'
++  try {
++    if (typeof teams.tryMembership === 'function') return teams.tryMembership(agent)
++    operation = 'isEnabled'
++    if (typeof teams.isEnabled !== 'function') throw new TypeError('missing public Team capability')
++    const enabled = teams.isEnabled(agent)
++    if (typeof enabled !== 'boolean') throw new TypeError('invalid public Team mode')
++    operation = 'rootOf'
++    const root = subagents.rootOf(agent)
++    operation = 'namesOf'
++    const names = subagents.namesOf(agent)
++    if (root === agent && names.self === 'lead' && names.parent === undefined) return { id: agent.id, name: 'lead', role: 'lead', depth: 0, enabled }
++    if (root !== agent && typeof names.self === 'string' && typeof names.parent === 'string') return { id: agent.id, name: names.self, role: 'teammate', depth: names.self.split('/').length, enabled }
++    throw new TypeError('inconsistent public member identity')
++  } catch (error) {
++    report(agent, operation, error, warn)
++    return undefined
++  }
++}
++
++/** 当前加载的启用成员，绝不宣称是完整持久名单。 */
++export function loadedMembers(lead, teams, agents, subagents, warn) {
++  try {
++    if (typeof teams?.listMembers === 'function') return teams.listMembers(lead)
++    const result = []
++    for (const agent of agents?.list() ?? []) {
++      const member = getMembership(agent, teams, subagents, warn)
++      if (!member || member.enabled === false) continue
++      try {
++        if (subagents.rootOf(agent) === lead) result.push({ ...member, status: agent.status })
++      } catch (error) {
++        report(agent, 'loadedMembers.rootOf', error, warn)
++      }
++    }
++    return result
++  } catch (error) {
++    report(lead, 'loadedMembers.list', error, warn)
++    return []
++  }
++}
+--- a/agent-presets/rigorquant.patch.yml
++++ b/agent-presets/rigorquant.patch.yml
+@@ -117 +117 @@
+-              suffix: Your working directory is {{cwd}}.
++              # rc3 通过 WORKING_DIRECTORY runtime context 提供当前目录，不再注册 cwd 插值变量。
+--- a/package.json
++++ b/package.json
+@@ -3 +3 @@
+-  "version": "0.7.0+rc3.sidecar.1",
++  "version": "0.7.0+rc3.sidecar.2",

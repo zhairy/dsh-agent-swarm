@@ -1,0 +1,280 @@
+// 展示缓存不是执行控制面：同一连接/根/任务只有一个在途读取，取消不合作时不补开请求。
+const EMPTY = Object.freeze({ value: null, status: 'idle', error: null, updatedAt: null })
+const HISTORICAL = Object.freeze({ value: null, status: 'historical', error: null, updatedAt: null })
+const CAPACITY = Object.freeze({ value: null, status: 'unavailable', error: '任务视图缓存已满；旧读取尚未结束。请等待传输结算后刷新，必要时重新加载页面。', updatedAt: null })
+const sharedStores = new WeakMap()
+const ACTIVE_NODE_STATUSES = new Set(['ready', 'running'])
+const isTerminal = (value) => {
+  const settledAcceptance = value?.acceptance?.status === 'accepted' || value?.acceptance?.decision === 'incomplete'
+  const nodes = value?.flow?.state?.nodes ?? value?.workflowState?.nodes ?? {}
+  const activeNodes = Object.values(nodes).some((node) => ACTIVE_NODE_STATUSES.has(node?.status))
+  const activeDelegations = Array.isArray(value?.delegations) && value.delegations.some((record) =>
+    ['queued', 'running'].includes(record?.status) || record?.finalization === 'processing')
+  return settledAcceptance && !activeNodes && !activeDelegations
+    && value?.blockedRecovery?.active !== true
+}
+const errorOf = (error) => error instanceof Error ? error : new Error(String(error))
+// 只认真正的鉴权失败：宿主传输错误写作 “transport failure …: HTTP 401”；消息里裸露的 401/403 可能是任务号（T-401）。
+const isDenied = (error) => /(?:unauthorized|forbidden|permission[-_. ]denied|access[-_. ]denied|\bHTTP\s+40[13]\b)/i.test(`${error?.code ?? ''} ${error?.message ?? ''}`)
+  || [401, 403].includes(error?.status ?? error?.statusCode)
+const REVISION_KEYS = ['cardRevision', 'workflowRevision', 'requestRevision']
+const getBinding = (value) => value !== null && value !== undefined && REVISION_KEYS.every((key) => Number.isSafeInteger(value[key]) && value[key] >= 1)
+  ? Object.fromEntries(REVISION_KEYS.map((key) => [key, value[key]]))
+  : undefined
+const isBehindBinding = (value, binding) => binding !== undefined && (getBinding(value) === undefined || REVISION_KEYS.some((key) => (value[key] ?? 0) < binding[key]))
+const mergeBinding = (previous, next) => previous === undefined ? next : next === undefined ? previous
+  : Object.fromEntries(REVISION_KEYS.map((key) => [key, Math.max(previous[key], next[key])]))
+
+const createTaskViewStore = ({ request, validateTask = (value) => value, generationSource, document: document_ = globalThis.document, intervalMs = 5000, timeoutMs = 15000, maxEntries = 8, now = Date.now }) => {
+  const entries = new Map()
+  const observers = new Set()
+  const capacityWaiters = new Map()
+  const detached = new Set()
+  let disposed = false
+  let access = 0
+  let generation = generationSource?.getSnapshot?.()?.id ?? (generationSource === undefined ? 0 : undefined)
+  const visible = () => document_?.visibilityState !== 'hidden'
+  const connected = () => generation !== undefined
+  const emit = (entry, patch) => {
+    entry.snapshot = Object.freeze({ ...entry.snapshot, ...patch })
+    for (const observer of observers) if (observer.root === entry.root && observer.task === entry.task) observer.listener()
+  }
+  const clear = (entry) => { clearTimeout(entry.timer); clearTimeout(entry.deadline); entry.timer = undefined; entry.deadline = undefined }
+  const hasActiveObserver = (root, task) => [...observers].some((observer) => !observer.passive && observer.root === root && observer.task === task)
+  const entryKey = (root, task) => JSON.stringify([generation ?? 'offline', root, task])
+  const active = (entry) => !disposed && connected() && entry.generation === generation && visible() && hasActiveObserver(entry.root, entry.task)
+  const dropEntry = (entry, notify = true) => {
+    let removed = false
+    for (const [key, current] of entries) if (current === entry) { entries.delete(key); removed = true; break }
+    if (!removed) return false
+    if (entry.pending?.promise !== undefined) detached.add(entry.pending.promise)
+    clear(entry)
+    if (notify) for (const observer of [...observers]) if (observer.root === entry.root && observer.task === entry.task) observer.listener()
+    return true
+  }
+  const invalidate = (entry, status = 'stale') => {
+    clearTimeout(entry.timer)
+    entry.timer = undefined
+    if (entry.pending !== undefined) { entry.pending.obsolete = true; entry.pending.controller.abort() }
+    else { clearTimeout(entry.deadline); entry.deadline = undefined }
+    emit(entry, { status: entry.snapshot.value === null ? status : 'stale' })
+  }
+  const trim = (reserve = 0) => {
+    const removable = [...entries]
+      .filter(([, entry]) => entry.pending === undefined
+        && (entry.generation !== generation || !hasActiveObserver(entry.root, entry.task)))
+      .sort((a, b) => a[1].access - b[1].access)
+    let freed = false
+    for (const [, entry] of removable) {
+      if (entries.size + reserve <= maxEntries) break
+      freed = dropEntry(entry) || freed
+    }
+    if (freed) retryCapacityWaiters()
+  }
+  const getEntry = (root, task, create = true) => {
+    const key = entryKey(root, task)
+    let entry = entries.get(key)
+    if (entry === undefined) {
+      if (!create) return undefined
+      trim(1)
+      if (entries.size >= maxEntries) return { root, task, generation, snapshot: CAPACITY, capacityBlocked: true }
+      entry = { root, task, generation, snapshot: EMPTY, failures: 0, pending: undefined, timer: undefined, deadline: undefined, access: ++access,
+        minimumBinding: task === null ? undefined : getEntry(root, null, false)?.bindings?.get(task) }
+      entries.set(key, entry)
+    }
+    if (create) entry.access = ++access
+    return entry
+  }
+  const schedule = (entry, delay) => {
+    clearTimeout(entry.timer)
+    if (active(entry)) entry.timer = setTimeout(() => refreshEntry(entry), delay)
+  }
+  const applyMinimumBinding = (entry, binding) => {
+    const next = mergeBinding(entry.minimumBinding, binding)
+    if (next === undefined || (entry.minimumBinding !== undefined && REVISION_KEYS.every((key) => next[key] === entry.minimumBinding[key]))) return
+    entry.minimumBinding = next
+    if (!isBehindBinding(entry.snapshot.value, next)) return
+    emit(entry, { status: 'stale', error: '任务目录已更新，等待当前版本的正文快照。' })
+    // 不并发补开读取：旧transport必须先结算，之后最多立即补读一次。
+    if (entry.pending !== undefined) entry.pending.bindingChanged = true
+    else if (active(entry)) schedule(entry, 0)
+  }
+  const terminalCurrent = (entry) => entry.snapshot.status === 'live' && isTerminal(entry.snapshot.value) && !isBehindBinding(entry.snapshot.value, entry.minimumBinding)
+  const refreshEntry = (entry, force = false) => {
+    if (!active(entry)) return Promise.resolve(entry.snapshot.value)
+    if (entry.capacityBlocked) {
+      capacityWaiters.set(entryKey(entry.root, entry.task), { root: entry.root, task: entry.task, generation: entry.generation })
+      return Promise.resolve(null)
+    }
+    // Keep one current request in addition to the bounded detached set so a
+    // reconnect can recover even when the previous generation never settles.
+    if (detached.size >= maxEntries + 1) {
+      capacityWaiters.set(entryKey(entry.root, entry.task), { root: entry.root, task: entry.task, generation: entry.generation })
+      emit(entry, { status: entry.snapshot.value === null ? 'unavailable' : 'stale', error: '旧连接的请求尚未结算；已暂停新增读取，等待传输结束。' })
+      return Promise.resolve(null)
+    }
+    if (entry.pending !== undefined) return entry.pending.promise
+    if (!force && entry.task !== null && terminalCurrent(entry)) return Promise.resolve(entry.snapshot.value)
+    clearTimeout(entry.timer)
+    const pending = { controller: new AbortController(), obsolete: false, timedOut: false, promise: undefined }
+    entry.pending = pending
+    emit(entry, { status: entry.snapshot.value === null ? 'loading' : 'refreshing', error: null })
+    entry.deadline = setTimeout(() => {
+      if (entry.pending !== pending) return
+      pending.obsolete = true; pending.timedOut = true; pending.controller.abort()
+      entry.failures += 1
+      emit(entry, { status: entry.snapshot.value === null ? 'unavailable' : 'stale', error: '读取超时；等待传输结束或连接恢复，不会重启业务任务。' })
+    }, timeoutMs)
+    pending.promise = Promise.resolve().then(() => request(entry.task === null ? 'taskIndex' : 'taskView', entry.task === null ? { sessionId: entry.root } : { sessionId: entry.root, taskId: entry.task }, pending.controller.signal)).then((value) => {
+      if (pending.obsolete || !active(entry)) return entry.snapshot.value
+      if (entry.task === null) {
+        if (value?.rootSessionId !== entry.root || !Array.isArray(value.tasks) || value.tasks.some((task) => typeof task?.taskId !== 'string' || typeof task.title !== 'string' || getBinding(task) === undefined)) throw new Error('Task directory identity mismatch')
+        if (value.tasks.some((task) => isBehindBinding(task, entry.bindings?.get(task.taskId)))) throw new Error('Task directory revision regressed')
+        entry.bindings = new Map(value.tasks.map((task) => [task.taskId, getBinding(task)]))
+        for (const current of entries.values()) if (current.root === entry.root && current.generation === generation && current.task !== null) applyMinimumBinding(current, entry.bindings.get(current.task))
+      } else {
+        if (value?.task_id !== entry.task || value.rootSessionId !== entry.root) throw new Error('Task response identity mismatch')
+        if (isBehindBinding(value, entry.minimumBinding)) {
+          entry.failures += 1
+          emit(entry, { status: 'stale', error: '已丢弃低于当前目录版本的迟到正文；等待传输结算后重新读取。' })
+          return entry.snapshot.value
+        }
+        value = validateTask(value)
+        entry.minimumBinding = mergeBinding(entry.minimumBinding, getBinding(value))
+      }
+      entry.failures = 0
+      emit(entry, { value, status: 'live', error: null, updatedAt: now() })
+      return value
+    }).catch((error) => {
+      if (!pending.obsolete && active(entry)) {
+        entry.failures += 1
+        emit(entry, { status: entry.snapshot.value === null ? 'unavailable' : 'stale', error: errorOf(error).message })
+        pending.denied = isDenied(error)
+      }
+      return entry.snapshot.value
+    }).finally(() => {
+      clearTimeout(entry.deadline)
+      const wasDetached = pending.promise !== undefined && detached.delete(pending.promise)
+      if (wasDetached) queueMicrotask(retryCapacityWaiters)
+      if (entry.pending !== pending) return
+      entry.pending = undefined
+      // Only a settled transport releases single-flight. If its last observer
+      // has already gone, drop the idle entry now so fixed capacity remains
+      // available to the tasks that are still being viewed.
+      const obsolete = disposed || entry.generation !== generation || !hasActiveObserver(entry.root, entry.task)
+      if (obsolete) {
+        if (dropEntry(entry)) queueMicrotask(retryCapacityWaiters)
+        else trim()
+        return
+      }
+      if (!connected() || !visible()) return
+      if (pending.denied) return
+      if (pending.bindingChanged && isBehindBinding(entry.snapshot.value, entry.minimumBinding)) { schedule(entry, 0); return }
+      if (pending.obsolete && !pending.timedOut) { schedule(entry, 0); return }
+      if (entry.task !== null && terminalCurrent(entry)) return
+      schedule(entry, entry.failures > 0 || pending.timedOut ? [2000, 5000, 15000][Math.min(Math.max(entry.failures - 1, 0), 2)] : intervalMs)
+    })
+    return pending.promise
+  }
+  const handle = (root, task, passive = false) => ({
+    getSnapshot: () => getEntry(root, task, false)?.snapshot ?? (passive ? HISTORICAL : entries.size >= maxEntries ? CAPACITY : EMPTY),
+    subscribe: (listener) => {
+      const observer = { root, task, listener, passive }; observers.add(observer)
+      const entry = getEntry(root, task, !passive)
+      if (!passive && entry?.capacityBlocked) capacityWaiters.set(entryKey(root, task), { root, task, generation })
+      if (!passive && entry !== undefined && active(entry)) refreshEntry(entry, true)
+      return () => {
+        observers.delete(observer)
+        const current = getEntry(root, task, false)
+        if (!passive && current !== undefined && !hasActiveObserver(root, task)) invalidate(current)
+        if (!passive && !hasActiveObserver(root, task)) capacityWaiters.delete(entryKey(root, task))
+        trim()
+      }
+    },
+    refresh: passive ? undefined : () => {
+      const entry = getEntry(root, task)
+      if (entry.capacityBlocked) {
+        capacityWaiters.set(entryKey(root, task), { root, task, generation })
+        return Promise.resolve(null)
+      }
+      capacityWaiters.delete(entryKey(root, task))
+      return refreshEntry(entry, true)
+    },
+    readPreference: () => preferences.get(JSON.stringify([root, task])),
+    setPreference: (value) => {
+      const key = JSON.stringify([root, task]); const previous = preferences.get(key); preferences.delete(key); preferences.set(key, { ...previous, ...value })
+      if (preferences.size > maxEntries) preferences.delete(preferences.keys().next().value)
+    }
+  })
+  const preferences = new Map()
+  const onVisibility = () => {
+    for (const entry of entries.values()) if (visible()) { if (active(entry)) refreshEntry(entry, true) } else invalidate(entry)
+    if (visible() && capacityWaiters.size > 0) queueMicrotask(retryCapacityWaiters)
+  }
+  const onGeneration = () => {
+    const next = generationSource.getSnapshot()?.id
+    if (next === generation) return
+    generation = next
+    for (const entry of [...entries.values()]) {
+      invalidate(entry, 'offline')
+      if (entry.generation !== generation) dropEntry(entry, false)
+    }
+    for (const observer of observers) { observer.listener(); if (!observer.passive && connected()) refreshEntry(getEntry(observer.root, observer.task), true) }
+    trim()
+  }
+  const retryCapacityWaiters = () => {
+    if (disposed) return
+    for (const [key, waiter] of [...capacityWaiters]) {
+      if (waiter.generation !== generation || !hasActiveObserver(waiter.root, waiter.task)) {
+        capacityWaiters.delete(key)
+        continue
+      }
+      const entry = getEntry(waiter.root, waiter.task, false) ?? getEntry(waiter.root, waiter.task)
+      if (entry.capacityBlocked) continue
+      capacityWaiters.delete(key)
+      if (active(entry)) refreshEntry(entry, true)
+    }
+  }
+  document_?.addEventListener?.('visibilitychange', onVisibility)
+  const unsubscribe = generationSource?.subscribe?.(onGeneration)
+  return {
+    task: (root, task, options) => handle(root, task, options?.passive === true),
+    index: (root) => handle(root, null),
+    dispose: () => {
+      disposed = true; document_?.removeEventListener?.('visibilitychange', onVisibility); unsubscribe?.()
+      for (const entry of entries.values()) { invalidate(entry); clear(entry) }
+      observers.clear(); entries.clear(); preferences.clear(); capacityWaiters.clear()
+    },
+    diagnostics: () => {
+      const entryInFlight = [...entries.values()].filter((entry) => entry.pending !== undefined).length
+      return { cachedEntries: entries.size, observers: observers.size, inFlight: entryInFlight, detached: detached.size, totalInFlight: entryInFlight + detached.size }
+    }
+  }
+}
+
+const retainTaskViewStore = (connection, validateTask) => {
+  let value = sharedStores.get(connection)
+  if (value === undefined) {
+    value = { owners: 0, store: createTaskViewStore({
+      generationSource: connection.generation,
+      validateTask,
+      request: async (method, payload, signal) => {
+        const result = await connection.rpc.call('/api', `swarm.${method}`, payload, signal)
+        if (result?.ok !== true) throw Object.assign(new Error(result?.error?.message ?? 'Task RPC unavailable'), { code: result?.error?.code })
+        return result.value
+      }
+    }) }
+    sharedStores.set(connection, value)
+  }
+  value.owners += 1
+  let released = false
+  return { store: value.store, release: () => {
+    if (released) return
+    released = true; value.owners -= 1
+    if (value.owners === 0) { value.store.dispose(); sharedStores.delete(connection) }
+  } }
+}
+
+exports.createTaskViewStore = createTaskViewStore
+exports.retainTaskViewStore = retainTaskViewStore
+exports.isTerminal = isTerminal

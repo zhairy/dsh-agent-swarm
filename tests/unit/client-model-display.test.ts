@@ -1,0 +1,491 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
+
+interface ElementInfo { type: unknown; props: Record<string, unknown>; children: unknown[] }
+
+const DISPLAY = { presets: ['tian-shu', 'yu-shi'], providers: { claude: 'Claude 订阅', codex: 'ChatGPT 订阅' } }
+
+/** 以 CommonJS 方式执行模块源码：注入数据、内部事件模块与只记录结构的 React 桩 */
+const loadModule = (): any => {
+  const react = {
+    createElement: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): ElementInfo => ({ type, props: props ?? {}, children }),
+    useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
+    useEffect: () => undefined,
+    useState: (value: unknown) => [value, () => undefined],
+    useMemo: (create: () => unknown) => create()
+  }
+  const load = (source: string, externalRequire: (id: string) => unknown) => {
+    const module = { exports: {} as any }
+    new Function('require', 'module', 'exports', source)(externalRequire, module, module.exports)
+    return module
+  }
+  const modelEvents = load(
+    readFileSync(join(__dirname, '../../client/model-events.js'), 'utf8')
+      .replace('const DISPLAY = __SWARM_DISPLAY__', `const DISPLAY = ${JSON.stringify(DISPLAY)}`),
+    (id) => { throw new Error(`unexpected event require ${id}`) }
+  )
+  const module = { exports: {} as any }
+  new Function('require', 'module', 'exports', readFileSync(join(__dirname, '../../client/model-display.js'), 'utf8'))((id: string) => {
+    if (id === 'react') return react
+    if (id === '@swarm/model-events') return modelEvents.exports
+    throw new Error(`unexpected require ${id}`)
+  }, module, module.exports)
+  return module.exports
+}
+
+const display = loadModule()
+const { markerDefinition, headerDefinition, modelCallDefinition, ModelCallRow, ModelBadge, AgentModelController, getModelCallModeHook } = display.__test__
+const deferred = () => {
+  let resolve!: (value: unknown) => void
+  const promise = new Promise<unknown>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+describe('恢复面板的目录选择与失败提醒', () => {
+  const groups = [{ id: 'google', models: [{ id: 'gemini', reasoning: { efforts: [{ id: 'high' }, { id: 'low' }] } }] }]
+  const elements = (node: unknown): ElementInfo[] => {
+    if (Array.isArray(node)) return node.flatMap(elements)
+    if (node === null || typeof node !== 'object' || !('children' in node)) return []
+    const element = node as ElementInfo
+    return [element, ...element.children.flatMap(elements)]
+  }
+
+  it.each(['idle', 'loading', 'error', 'ready'])('目录状态 %s 下仍为三个下拉框，失败时禁止手填', (catalogStatus) => {
+    const controller = new AgentModelController({ parentSessionId: 'root', childId: 'child' }, {})
+    controller.update({ status: 'ready', view: { persistent: true, phase: 'paused' }, groups, catalogStatus })
+    const panel = display.__test__.AgentControlPanel({ controller, t: (key: string) => key })
+    const nodes = elements(panel)
+    expect(nodes.filter((node) => node.type === 'select')).toHaveLength(3)
+    expect(nodes.filter((node) => node.type === 'input' && node.props.type !== 'checkbox')).toHaveLength(0)
+    expect(nodes.find((node) => node.type === 'button' && node.children.includes('select'))?.props.disabled).toBe(true)
+    expect(nodes.some((node) => node.props.role === 'note' && node.children.includes('recoveryHint'))).toBe(true)
+  })
+
+  it('模型目录的零参数信封与传输取消信号分开传递', async () => {
+    const call = vi.fn(async () => ({ ok: true, value: { groups } }))
+    const transport = display.__test__.getAgentControlTransport({ get: () => ({ rpc: { call } }) })
+    const abort = new AbortController()
+    await expect(transport.catalog(abort.signal)).resolves.toEqual({ groups })
+    expect(call).toHaveBeenCalledWith('/api', 'session/modelCatalog', { args: {} }, abort.signal)
+  })
+
+  it('控制视图尚未就绪也显示禁用的三级选择，保持权限失败时无法提交', () => {
+    const controller = new AgentModelController({ parentSessionId: 'root', childId: 'child' }, {})
+    const nodes = elements(display.__test__.AgentControlPanel({ controller, t: (key: string) => key }))
+    expect(nodes.filter((node) => node.type === 'select')).toHaveLength(3)
+    expect(nodes.filter((node) => node.type === 'select').every((node) => node.props.disabled)).toBe(true)
+  })
+
+  it('失效供应商、模型和推理强度不能发送选择请求，默认推理仍可用', async () => {
+    const command = vi.fn(async () => ({ parentSessionId: 'root', childId: 'child', revision: 2, persistent: true, phase: 'idle' }))
+    const controller = new AgentModelController({ parentSessionId: 'root', childId: 'child' }, { command })
+    controller.update({ status: 'ready', view: { revision: 1, persistent: true }, groups, catalogStatus: 'ready' })
+    for (const draft of [
+      { provider: 'typo', model: 'gemini', reasoningEffort: '' },
+      { provider: 'google', model: 'typo', reasoningEffort: '' },
+      { provider: 'google', model: 'gemini', reasoningEffort: 'typo' }
+    ]) {
+      controller.update({ draft })
+      await controller.command('select')
+      expect(command).not.toHaveBeenCalled()
+      expect(controller.getSnapshot().notice).toBe('invalidSelection')
+    }
+    controller.update({ draft: { provider: 'google', model: 'gemini', reasoningEffort: '' } })
+    await controller.command('select')
+    expect(command).toHaveBeenCalledTimes(1)
+  })
+
+  it('目录失败可恢复；移除的推理档位回到宿主默认且不会抹掉独立的操作错误', async () => {
+    const catalog = vi.fn().mockRejectedValueOnce(new Error('private upstream details')).mockResolvedValue({ groups })
+    const controller = new AgentModelController({ parentSessionId: 'root', childId: 'child' }, { catalog })
+    controller.update({ draft: { provider: 'google', model: 'gemini', reasoningEffort: 'removed' }, error: '操作失败' })
+    await controller.loadCatalog()
+    expect(controller.getSnapshot()).toMatchObject({ catalogStatus: 'error', catalogError: expect.stringContaining('读取失败'), error: '操作失败' })
+    expect(controller.getSnapshot().catalogError).not.toContain('private')
+    await controller.loadCatalog()
+    expect(controller.getSnapshot()).toMatchObject({ catalogStatus: 'ready', catalogError: undefined, error: '操作失败', draft: { reasoningEffort: '' } })
+  })
+
+  it('恢复入口使用黄色圆角并提供失败后操作提示', () => {
+    const result = display.__test__.AgentModelControls({ t: (key: string) => key, transport: {}, useSession: (read: (value: unknown) => unknown) => read({ subagent: { address: { parentSessionId: 'root', childSessionId: 'child' } } }) })
+    const button = elements(result).find((node) => node.props['data-swarm-recovery-button'] === true)
+    expect(button?.props.style).toMatchObject({ background: '#facc15', borderRadius: 999, color: '#422006' })
+    expect(button?.props.title).toBe('recoveryHint')
+  })
+})
+
+const t = (key: string) => key
+const textOf = (node: unknown): string => {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  const element = node as ElementInfo
+  return element.children.map(textOf).join('')
+}
+
+const message = (seq: number, provider: string, model: string, turn: number, stepStartSeq = seq - 1) => ({
+  event: { type: 'assistant/message', seq, time: seq, data: { turn, step: 1, message: { role: 'assistant', content: [], source: { kind: 'model', provider, model } } } },
+  location: { kind: 'step', turn: { turn }, step: { step: 1, start: { seq: stepStartSeq } } }
+})
+
+/** reader.previous 的桩：按 kind 返回预置的前一个状态 */
+const reader = (states: Record<string, unknown>) => ({ previous: (kind: string) => (states[kind] === undefined ? undefined : { state: states[kind] }) })
+
+describe('会话事件的识别', () => {
+  it('会话标记：百工 persona 或百工预设为 true，其他预设为 false', () => {
+    const system = { type: 'system/message', seq: 3, data: { message: { content: [{ type: 'text', text: '你是「天枢」，dsh-agent-swarm 的主持者' }] } } }
+    expect(markerDefinition.match(system)).toEqual({ id: '3', role: 'start' })
+    expect(markerDefinition.start(undefined, { event: system }, reader({}))).toEqual({ swarm: true })
+    const reviewer = { ...system, data: { message: { content: [{ type: 'text', text: '你是独立只读规划审查者。[[swarm:role=yu_shi]]' }] } } }
+    expect(markerDefinition.start(undefined, { event: reviewer }, reader({}))).toEqual({ swarm: true })
+    const standard = { type: 'agent-preset/selected', seq: 4, data: { agentPreset: 'standard' } }
+    expect(markerDefinition.start(undefined, { event: standard }, reader({}))).toEqual({ swarm: false })
+    expect(markerDefinition.start(undefined, { event: { ...standard, data: { agentPreset: 'yu-shi' } } }, reader({}))).toEqual({ swarm: true })
+    expect(markerDefinition.match({ type: 'system/message' })).toBeNull()
+    expect(markerDefinition.buildViewNode({})).toBeNull()
+  })
+
+  it('请求头只提供路由与推理强度', () => {
+    const header = { type: 'request/header', seq: 9, data: { header: { config: { provider: 'claude', model: 'claude-opus-5-5', reasoningEffort: 'high', maxTokens: 1 } } } }
+    expect(headerDefinition.match(header)).toEqual({ id: '9', role: 'start' })
+    expect(headerDefinition.start(undefined, { event: header })).toEqual({ provider: 'claude', model: 'claude-opus-5-5', reasoningEffort: 'high' })
+    expect(headerDefinition.match({ type: 'request/header', seq: 1, data: {} })).toBeNull()
+  })
+})
+
+describe('「调用模型」行', () => {
+  const opus = { provider: 'claude', model: 'claude-opus-5-5' }
+
+  it('每轮第一次调用显示，附推理强度，锚在该步开头', () => {
+    const state = modelCallDefinition.start(undefined, message(20, 'claude', 'claude-opus-5-5', 2), reader({
+      'swarm-request-route': { ...opus, reasoningEffort: 'xhigh' },
+      'swarm-session-marker': { swarm: true }
+    }))
+    expect(state).toMatchObject({ ...opus, turn: 2, reasoningEffort: 'xhigh', repeat: false, switched: false, swarm: true, anchorSeq: 19 })
+    expect(modelCallDefinition.match({ type: 'assistant/message', seq: 5, data: { message: { source: { kind: 'user' } } } })).toBeNull()
+  })
+
+  it('同一模型只改推理强度不算切换模型', () => {
+    const previous = { ...opus, turn: 2, reasoningEffort: 'high' }
+    const state = modelCallDefinition.start(undefined, message(30, 'claude', 'claude-opus-5-5', 2), reader({
+      'swarm-model-call': previous,
+      'swarm-request-route': { ...opus, reasoningEffort: 'xhigh' },
+      'swarm-session-marker': { swarm: true }
+    }))
+    expect(state).toMatchObject({ provider: 'claude', model: 'claude-opus-5-5', reasoningEffort: 'xhigh', switched: false, effortChanged: true, repeat: false })
+    expect(state.from).toBeUndefined()
+  })
+
+  it('失败/取消而无消息的真实assistant/attempt也显示对应请求路由，不从下一次选择猜实际模型', () => {
+    const event = { type: 'assistant/attempt', seq: 99, time: 99, data: { turn: 2, step: 1, stream: [] } }
+    expect(modelCallDefinition.match(event)).toEqual({ id: '99', role: 'start' })
+    const state = modelCallDefinition.start(undefined, { event }, reader({ 'swarm-request-route': { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max' }, 'swarm-session-marker': { swarm: true } }))
+    expect(state).toMatchObject({ provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max', source: 'request-header-attempt', failedAttempt: true })
+    const hidden = modelCallDefinition.start(undefined, { event }, reader({}))
+    expect(hidden).toMatchObject({ seq: 99, time: 99, anchorSeq: 99, __hidden: true })
+    expect(modelCallDefinition.buildViewNode({ key: 'k', id: '99', start: { location: { kind: 'step' } }, state: hidden })).toBeNull()
+  })
+
+  it('分页窗口缺少请求头时 start() 仍返回隐藏状态，并继承上一条模型避免伪切换', () => {
+    const event = { type: 'assistant/attempt', seq: 100, time: 100, data: { turn: 2, step: 1, stream: [] } }
+    const previous = { ...opus, turn: 2, reasoningEffort: 'high', anchorSeq: 90 }
+    const hidden = modelCallDefinition.start(undefined, { event }, reader({ 'swarm-model-call': previous }))
+    expect(hidden).toMatchObject({ ...previous, seq: 100, time: 100, anchorSeq: 100, __hidden: true })
+    expect(modelCallDefinition.start(undefined, message(101, 'claude', 'claude-opus-5-5', 2), reader({ 'swarm-model-call': hidden })))
+      .toMatchObject({ repeat: true, switched: false })
+  })
+
+  it('任意事件窗口组合下，被 match 的 assistant 事件都不会让 start 返回 undefined', () => {
+    const events = [
+      message(200, 'claude', 'claude-opus-5-5', 3),
+      { event: { type: 'assistant/attempt', seq: 201, time: 201, data: { turn: 3, step: 1, stream: [] } } }
+    ]
+    const previousStates = [undefined, { ...opus, turn: 2 }, { ...opus, turn: 3, __hidden: true }, { ...opus, turn: 3, reasoningEffort: 'high' }]
+    const headers = [undefined, { ...opus, reasoningEffort: 'high' }, { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'max' }]
+    for (const event of events) {
+      expect(modelCallDefinition.match(event.event)).not.toBeNull()
+      for (const previous of previousStates) for (const header of headers) {
+        const state = modelCallDefinition.start(undefined, event, reader({
+          ...(previous === undefined ? {} : { 'swarm-model-call': previous }),
+          ...(header === undefined ? {} : { 'swarm-request-route': header })
+        }))
+        expect(state).toBeDefined()
+        if (state.__hidden === true) expect(modelCallDefinition.buildViewNode({ key: 'k', id: String(event.event.seq), start: event, state })).toBeNull()
+        expect(state.from).not.toEqual({ provider: undefined, model: undefined })
+      }
+    }
+  })
+
+  it('同一轮同一模型标为 repeat；同一轮换了模型显示「切换模型」；新一轮不算重复', () => {
+    const previous = { ...opus, turn: 2 }
+    expect(modelCallDefinition.start(undefined, message(30, 'claude', 'claude-opus-5-5', 2), reader({ 'swarm-model-call': previous })).repeat).toBe(true)
+    expect(modelCallDefinition.start(undefined, message(31, 'codex', 'gpt-6-sol', 2), reader({ 'swarm-model-call': previous })))
+      .toMatchObject({ repeat: false, switched: true, from: opus })
+    expect(modelCallDefinition.start(undefined, message(40, 'claude', 'claude-opus-5-5', 3), reader({ 'swarm-model-call': previous })))
+      .toMatchObject({ repeat: false, switched: false })
+  })
+
+  it('节点：每次调用一个 visible 节点；明确不是百工会话时不出节点，已发布过的改为隐藏', () => {
+    const start = message(20, 'claude', 'claude-opus-5-5', 2)
+    const base = { key: 'k', id: '20', start, current: new Map() }
+    expect(modelCallDefinition.buildViewNode({ ...base, state: { repeat: true, anchorSeq: 19 } })).toMatchObject({ kind: 'swarm-model-call', visibility: 'visible', anchorSeq: 19, target: 'chat' })
+    expect(modelCallDefinition.buildViewNode({ ...base, state: { swarm: false, anchorSeq: 19 } })).toBeNull()
+    expect(modelCallDefinition.buildViewNode({ ...base, current: new Map([['chat', { kind: 'swarm-model-call' }]]), state: { swarm: false, anchorSeq: 19 } }))
+      .toMatchObject({ visibility: 'hidden' })
+  })
+
+  it('显示方式：默认每次调用都显示；「每轮首次」模式下重复的调用不渲染', () => {
+    const data = { ...opus, repeat: true }
+    expect(ModelCallRow({ node: { data }, t, useProjection: () => 'tian-shu' })).not.toBeNull()
+    expect(ModelCallRow({ node: { data }, t, useProjection: () => 'tian-shu', useModelCallMode: () => 'every' })).not.toBeNull()
+    expect(ModelCallRow({ node: { data }, t, useProjection: () => 'tian-shu', useModelCallMode: () => 'turn' })).toBeNull()
+    expect(ModelCallRow({ node: { data: { ...data, repeat: false } }, t, useProjection: () => 'tian-shu', useModelCallMode: () => 'turn' })).not.toBeNull()
+  })
+
+  it('显示方式 Hook 读取 swarm-core 的 agents.modelCallDisplay，表单不可用时按每次显示', () => {
+    let value: unknown = { agents: { modelCallDisplay: 'turn' } }
+    const form = { getSnapshot: () => ({ value }), subscribe: () => () => undefined }
+    const configForms = { get: (ns: string) => (ns === 'swarm-core' ? form : undefined) }
+    const hook = getModelCallModeHook({ get: (name: string) => (name === 'configForms' ? configForms : undefined) })
+    expect(hook()).toBe('turn')
+    value = { agents: {} }
+    expect(hook()).toBe('every')
+    expect(getModelCallModeHook({ get: () => { throw new Error('no service') } })()).toBe('every')
+    expect(getModelCallModeHook({ get: () => undefined })()).toBe('every')
+  })
+
+  it('渲染：百工会话显示「模型 · 供应商（路由名）· 推理」；其他会话不渲染', () => {
+    const data = { ...opus, reasoningEffort: 'high', switched: true, from: { provider: 'codex', model: 'gpt-6-sol' } }
+    const row = ModelCallRow({ node: { data }, t, useProjection: () => 'tian-shu' })
+    expect(textOf(row)).toBe('switched' + 'claude-opus-5-5 · Claude 订阅（claude） · effort high（from gpt-6-sol · ChatGPT 订阅）')
+    expect(ModelCallRow({ node: { data }, t, useProjection: () => 'standard' })).toBeNull()
+    expect(ModelCallRow({ node: { data: { ...data, swarm: true } }, t, useProjection: () => 'standard' })).not.toBeNull()
+    expect(ModelCallRow({ node: { data: {} }, t, useProjection: () => 'tian-shu' })).toBeNull()
+  })
+})
+
+describe('会话头部徽标', () => {
+  it('只在百工会话显示最近一次请求的模型与供应商', () => {
+    const projections = (preset: unknown, selection: unknown) => (key: string) => (key === 'agentPreset' ? preset : selection)
+    const badge = ModelBadge({ t, useProjection: projections('tian-shu', { lastUsed: { provider: 'codex', model: 'gpt-6-sol', reasoningEffort: 'high' }, next: null }) })
+    expect(textOf(badge)).toBe('badge：gpt-6-sol · ChatGPT 订阅（codex） · effort high')
+    expect((badge as ElementInfo).props.title).toBe('badge：gpt-6-sol · ChatGPT 订阅（codex） · effort high')
+    expect(ModelBadge({ t, useProjection: projections('standard', { lastUsed: { provider: 'codex', model: 'gpt-6-sol' } }) })).toBeNull()
+    expect(ModelBadge({ t, useProjection: projections('tian-shu', { lastUsed: null, next: null }) })).toBeNull()
+    expect(ModelBadge({ t })).toBeNull()
+    expect(textOf(ModelBadge({ t, useProjection: projections(undefined, { lastUsed: null, next: null }), useSession: () => ({ address: { mode: 'one-shot' } }) }))).toBe('unknownModel')
+    const next = ModelBadge({ t, useProjection: projections('tian-shu', { lastUsed: null, next: { provider: 'codex', model: 'future' } }) })
+    expect(textOf(next)).toContain('next：future')
+    expect(textOf(next)).not.toContain('badge：')
+  })
+})
+
+describe('client 入口', () => {
+  it('注册 3 个会话定义、Chat 节点渲染与头部徽标', () => {
+    const definitions: string[] = []
+    const slots: unknown[] = []
+    const ctx = {
+      get: () => undefined,
+      effect: (fn: () => unknown) => { fn() },
+      locale: { register: vi.fn(() => () => undefined) },
+      uiConversation: { events: { register: (definition: { kind: string }) => { definitions.push(definition.kind); return () => undefined } } },
+      slots: {
+        inject: (_name: string, fn: () => Generator<unknown>) => { for (const _ of fn()) { /* 执行生成器 */ } },
+        register: (options: unknown) => { slots.push(options); return () => undefined }
+      }
+    }
+    display.apply(ctx)
+    expect(display.inject).toEqual(['slots', 'locale', 'uiConversation', 'connection', 'remote.session'])
+    expect(definitions).toEqual(['swarm-session-marker', 'swarm-request-route', 'swarm-model-call'])
+    expect(slots).toEqual([
+      { name: 'conversation.chat.node', key: 'swarm-model-call', locale: 'swarmModelCalls', inject: expect.any(Function) },
+      { name: 'conversation.session.header.actions', id: 'swarm-model-badge', order: -4, locale: 'swarmModelCalls' }
+      , { name: 'conversation.session.header.actions', id: 'swarm-agent-model-controls', order: -3, locale: 'swarmModelCalls', inject: expect.any(Function) }
+    ])
+  })
+})
+
+describe('persistent child model controls', () => {
+  it('times out a stalled view request and allows a fresh retry', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const view = vi.fn()
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockResolvedValueOnce({ ...address, revision: 1, persistent: true, phase: 'idle' })
+    const controller = new AgentModelController(address, { view, command: vi.fn() }, 20)
+    await controller.load()
+    expect(controller.getSnapshot()).toMatchObject({ status: 'error', error: expect.stringContaining('超时') })
+    await controller.load()
+    expect(view).toHaveBeenCalledTimes(2)
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', view: { revision: 1 } })
+  })
+
+  it('silent polling keeps an action failure visible and does not republish an unchanged view', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const controller = new AgentModelController(address, { view: async () => ({ ...address, revision: 3, persistent: true, phase: 'idle' }), command: vi.fn() })
+    await controller.load()
+    controller.update({ error: '选择失败：路由暂不可用' })
+    const listener = vi.fn(); controller.subscribe(listener)
+    await controller.load(true)
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', error: '选择失败：路由暂不可用' })
+    expect(listener).not.toHaveBeenCalled()
+    await controller.load()
+    expect(controller.getSnapshot().error).toBeUndefined()
+  })
+
+  it('an unchanged paused view still moves the stopping notice to stopped, and an explicit refresh clears a stale error', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    let release!: (value: unknown) => void
+    const view = vi.fn(async () => ({ ...address, revision: 4, persistent: true, phase: 'paused' }))
+    const controller = new AgentModelController(address, { view, command: vi.fn() })
+    await controller.load()
+    controller.update({ notice: 'stopping' })
+    await controller.load(true)
+    expect(controller.getSnapshot().notice).toBe('stopped')
+    view.mockImplementationOnce(() => new Promise((resolve) => { release = resolve as (value: unknown) => void }))
+    controller.update({ error: '旧失败' })
+    const silent = controller.load(true)
+    const explicit = controller.load()
+    expect(controller.getSnapshot().error).toBeUndefined()
+    release({ ...address, revision: 4, persistent: true, phase: 'paused' })
+    await Promise.all([silent, explicit])
+  })
+
+  it('releases busy when a panel closes before an uncancellable command settles', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const command = vi.fn(() => new Promise(() => undefined))
+    const controller = new AgentModelController(address, {
+      view: async () => ({ ...address, revision: 2, persistent: true, phase: 'idle' }),
+      command,
+      catalog: async () => ({ ok: true, value: { groups: [{ id: 'codex', models: [{ id: 'next' }] }] } })
+    })
+    controller.activate()
+    await vi.waitFor(() => expect(controller.getSnapshot()).toMatchObject({ status: 'ready', catalogStatus: 'ready' }))
+    controller.setDraft({ provider: 'codex' })
+    controller.setDraft({ model: 'next' })
+    void controller.command('select')
+    expect(controller.getSnapshot().busy).toBe(true)
+    controller.deactivate()
+    expect(controller.getSnapshot().busy).toBe(false)
+    controller.activate()
+    expect(controller.getSnapshot().busy).toBe(false)
+    controller.dispose()
+  })
+
+  it('settles uncancellable view and catalog loads when the panel closes', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const controller = new AgentModelController(address, {
+      view: () => new Promise(() => undefined),
+      command: vi.fn(),
+      catalog: () => new Promise(() => undefined)
+    })
+    controller.activate()
+    const load = controller.pendingLoad.promise
+    const catalog = controller.pendingCatalog.promise
+    controller.deactivate()
+    await expect(Promise.all([load, catalog])).resolves.toEqual([undefined, undefined])
+    expect(controller.pendingLoad).toBeUndefined()
+    expect(controller.pendingCatalog).toBeUndefined()
+    controller.dispose()
+  })
+
+  it('does not load an unopened panel during connection reset', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const view = vi.fn()
+    const catalog = vi.fn()
+    const controller = new AgentModelController(address, { view, command: vi.fn(), catalog, getGeneration: () => 0 })
+    controller.resetConnection()
+    expect(view).not.toHaveBeenCalled()
+    expect(catalog).not.toHaveBeenCalled()
+  })
+
+  it('slow view polling is single-flight and reuses the pending request', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const pending = deferred()
+    const view = vi.fn(() => pending.promise)
+    const controller = new AgentModelController(address, { view, command: vi.fn() })
+    const first = controller.load()
+    const second = controller.load()
+    expect(view).toHaveBeenCalledTimes(1)
+    pending.resolve({ ...address, revision: 1, persistent: true, phase: 'idle' })
+    await Promise.all([first, second])
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', view: { revision: 1 } })
+  })
+
+  it('connection reset discards an old view, reloads once and preserves a user draft', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const old = deferred()
+    let generation = 0
+    let notify!: () => void
+    const view = vi.fn()
+      .mockReturnValueOnce(old.promise)
+      .mockResolvedValueOnce({ ...address, revision: 2, persistent: true, phase: 'idle', actual: { route: { provider: 'codex', model: 'new' }, attemptId: 'a-2' } })
+    const transport = {
+      view,
+      command: vi.fn(),
+      catalog: vi.fn(async () => ({ ok: true, value: { groups: [] } })),
+      getGeneration: () => generation,
+      subscribeGeneration: (listener: () => void) => { notify = listener; return () => undefined }
+    }
+    const controller = new AgentModelController(address, transport)
+    controller.activate()
+    const first = controller.load()
+    controller.setDraft({ provider: 'claude' })
+    controller.setDraft({ model: 'draft-model' })
+    generation = 1
+    notify()
+    await vi.waitFor(() => expect(view).toHaveBeenCalledTimes(2))
+    await controller.load()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      view: { revision: 2 },
+      draft: { provider: 'claude', model: 'draft-model' }
+    })
+    old.resolve({ ...address, revision: 1, persistent: true, phase: 'idle', actual: { route: { provider: 'codex', model: 'old' }, attemptId: 'a-1' } })
+    await first
+    expect(controller.getSnapshot().view).toMatchObject({ revision: 2 })
+  })
+
+  it('一次性审核只记录下一请求选择，不要求取消或人工续跑', async () => {
+    const address = { parentSessionId: 'root', childId: 'reviewer' }
+    let view = { ...address, revision: 3, persistent: false, phase: 'running', actual: { route: { provider: 'codex', model: 'old' }, attemptId: 'observed-old' } }
+    const command = vi.fn(async (input: any) => { view = { ...view, revision: 4, selectedNext: input.route } as typeof view; return view })
+    const controller = new AgentModelController(address, { view: async () => view, command, catalog: async () => ({ groups: [{ id: 'codex', models: [{ id: 'next' }] }] }) })
+    await controller.load()
+    await controller.loadCatalog()
+    controller.setDraft({ provider: 'codex' }); controller.setDraft({ model: 'next' })
+    await controller.command('select')
+    expect(command).toHaveBeenCalledWith({ ...address, action: 'select', expectedRevision: 3, interruptRunning: false, route: { provider: 'codex', model: 'next' } }, expect.any(AbortSignal))
+    expect(controller.getSnapshot().view).toMatchObject({ persistent: false, phase: 'running', actual: { route: { model: 'old' } }, selectedNext: { model: 'next' } })
+  })
+  it('CAS commands go to the real control plane; selection receipt never replaces actual attempt evidence', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    let view = { ...address, revision: 3, persistent: true, phase: 'running', actual: { route: { provider: 'codex', model: 'old', reasoningEffort: 'high' }, attemptId: 'attempt-old' } }
+    const command = vi.fn(async (input: any) => { view = { ...view, revision: 4, phase: 'stopping', selectedNext: input.route } as typeof view; return view })
+    const controller = new AgentModelController(address, { view: async () => view, command, catalog: async () => ({ ok: true, value: { groups: [{ id: 'qwen-token-plan-cn', models: [{ id: 'deepseek-v4.1-flash', reasoning: { efforts: [{ id: 'max' }] } }] }] } }) })
+    await controller.load()
+    await controller.loadCatalog()
+    controller.setDraft({ provider: 'qwen-token-plan-cn' })
+    controller.setDraft({ model: 'deepseek-v4.1-flash' })
+    controller.setDraft({ reasoningEffort: 'max' })
+    await controller.command('select')
+    expect(command).toHaveBeenCalledWith({ ...address, expectedRevision: 3, action: 'select', interruptRunning: true, route: { provider: 'qwen-token-plan-cn', model: 'deepseek-v4.1-flash', reasoningEffort: 'max' } }, expect.any(AbortSignal))
+    expect(controller.getSnapshot().view).toMatchObject({ phase: 'stopping', actual: { route: { model: 'old' } }, selectedNext: { model: 'deepseek-v4.1-flash' } })
+    await controller.command('continue')
+    expect(command).toHaveBeenCalledTimes(1)
+    view = { ...view, revision: 5, phase: 'paused' }
+    await controller.load()
+    await controller.command('continue')
+    expect(command.mock.calls[1]?.[0]).toMatchObject({ action: 'continue', expectedRevision: 5 })
+  })
+
+  it('host denial remains visible after refresh, unknown child bindings never produce a fake ready state', async () => {
+    const address = { parentSessionId: 'root', childId: 'child' }
+    const controller = new AgentModelController(address, { view: async () => ({ ...address, revision: 1, persistent: true, phase: 'paused' }), command: async () => { throw new Error('stale task contract') } })
+    await controller.load()
+    await controller.command('continue')
+    expect(controller.getSnapshot().error).toBe('stale task contract')
+    const wrong = new AgentModelController(address, { view: async () => ({ ...address, childId: 'other', revision: 1, phase: 'idle' }) })
+    await wrong.load()
+    expect(wrong.getSnapshot()).toMatchObject({ status: 'error', view: undefined })
+  })
+})

@@ -1,0 +1,30 @@
+--- a/dsh/index.js
++++ b/dsh/index.js
+@@ -403,7 +403,8 @@
+     return membership.role === 'lead' ? 'root' : roleFromName(membership.name)
+   }
+ 
+-  ctx.on('agent/request', async (payload, next) => {
++  const stepModelBridge = Symbol.for('dsh-agent-swarm/step-model-bridge-v1')
++  const routeRequest = async (payload, next) => {
+     const resolved = await next()
+     const role = resolveRole(payload.agent)
+     if (role === null || role === undefined) return resolved
+@@ -435,6 +436,17 @@
+     return remember(await withSupportedEffort(
+       primary === null ? resolved : applyChoice(resolved, primary),
+     ))
++  }
++
++  ctx.on('agent/swarm-model-select', async (payload, next) => {
++    if (payload.agent?.[stepModelBridge] !== true) return next()
++    return routeRequest(payload, next)
++  })
++  ctx.on('agent/request', async (payload, next) => {
++    if (payload.agent?.[stepModelBridge] === true) return next()
++    if (typeof payload.agent?.model?.current === 'function' && typeof payload.agent?.model?.select === 'function'
++      && resolveRole(payload.agent) != null) throw new Error('RigorQuant model routing requires the DSH 0.2.2 step-model bridge; no request was sent')
++    return routeRequest(payload, next)
+   })
+ 
+   ctx.on('agent/request-error', async (payload, next) => {

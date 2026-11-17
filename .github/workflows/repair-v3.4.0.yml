@@ -1,0 +1,37 @@
+name: Repair authorized v3.4.0 overlay assets
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/repair-v3.4.0.json]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-v3.4.0
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.repository == 'zhairy/dsh-agent-swarm' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - id: assets
+        run: python3 .github/scripts/repair-v3.4.0.py prepare
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ steps.assets.outputs.asset_commit }}
+          path: release-assets
+          persist-credentials: false
+      - name: Verify preimages, stage replacements, promote and download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/repair-v3.4.0.py publish --assets release-assets/assets

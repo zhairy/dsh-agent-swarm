@@ -1,0 +1,42 @@
+# dsh-agent-swarm 宿主层补丁（bundle 第一层）
+# - swarm-core：提供 agentSwarm 服务（路由、策略、Jev、账本、写操作守卫），不向模型注册工具
+# - swarm-codex / swarm-codex-edit / swarm-claude-plan / swarm-claude-edit：原生 Codex 与 Claude Code 的命名实例，
+#   只在对应官方 bundle 已装入本 profile 时启用（按 profileContext.startedBundles 判断），否则保持禁用
+# - agent-preset-registry：把默认预设改为天枢；用户在设置里选择的默认值仍然优先
+# 13 个角色预设声明见 presets/*.patch.yml（由 scripts/gen-presets.mjs 生成）
+
+- insert:
+    - id: swarm-core
+      name: dsh-agent-swarm
+
+    - id: swarm-codex
+      name: '@deepseek-ai/dsh-subagent-codex'
+      disabled: !!js "!ctx.get('profileContext')?.startedBundles?.includes('@deepseek-ai/dsh-subagent-codex')"
+      config:
+        providerName: swarm-codex
+        permissionMode: never
+
+    - id: swarm-codex-edit
+      name: '@deepseek-ai/dsh-subagent-codex'
+      disabled: !!js "!ctx.get('profileContext')?.startedBundles?.includes('@deepseek-ai/dsh-subagent-codex')"
+      config:
+        providerName: swarm-codex-edit
+        permissionMode: approve-for-me
+
+    - id: swarm-claude-plan
+      name: '@deepseek-ai/dsh-subagent-claude-code'
+      disabled: !!js "!ctx.get('profileContext')?.startedBundles?.includes('@deepseek-ai/dsh-subagent-claude-code')"
+      config:
+        providerName: swarm-claude-plan
+        permissionMode: plan
+
+    - id: swarm-claude-edit
+      name: '@deepseek-ai/dsh-subagent-claude-code'
+      disabled: !!js "!ctx.get('profileContext')?.startedBundles?.includes('@deepseek-ai/dsh-subagent-claude-code')"
+      config:
+        providerName: swarm-claude-edit
+        permissionMode: acceptEdits
+
+- id: agent-preset-registry
+  config:
+    default: tian-shu

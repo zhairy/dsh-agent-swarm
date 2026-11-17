@@ -1,0 +1,40 @@
+--- a/@deepseek-ai/dsh-subprocess-local/lib/index.js
++++ b/@deepseek-ai/dsh-subprocess-local/lib/index.js
+@@ -0,0 +1,2 @@
++const __swarmBoundaryCaps = globalThis[Symbol.for("dsh-agent-swarm.execution-boundary-capabilities.v1")] ??= new Set();
++__swarmBoundaryCaps.add("subprocess-local/rc1");
+@@ -1548,0 +1551,2 @@
++		const __swarmTicket = globalThis[Symbol.for("dsh-agent-swarm.execution-boundary.v1")]?.prepareSpawn(spec);
++		if (__swarmTicket) spec = __swarmTicket.spec;
+@@ -1550,0 +1555 @@
++		__swarmTicket?.assertContainment(containmentMode);
+@@ -1563,0 +1569 @@
++		__swarmTicket?.started(handle);
+@@ -1618,0 +1625 @@
++		globalThis[Symbol.for("dsh-agent-swarm.execution-boundary.v1")]?.assertTerminal();
+--- a/@deepseek-ai/dsh-working-directory/lib/index.js
++++ b/@deepseek-ai/dsh-working-directory/lib/index.js
+@@ -0,0 +1,2 @@
++const __swarmBoundaryCaps = globalThis[Symbol.for("dsh-agent-swarm.execution-boundary-capabilities.v1")] ??= new Set();
++__swarmBoundaryCaps.add("working-directory/rc1");
+@@ -93,0 +96 @@
++			globalThis[Symbol.for("dsh-agent-swarm.execution-boundary.v1")]?.assertWorkingDirectory(agent, current);
+@@ -97,0 +101 @@
++			globalThis[Symbol.for("dsh-agent-swarm.execution-boundary.v1")]?.assertWorkingDirectory(agent, current, info?.type === "directory");
+--- a/@deepseek-ai/dsh-fs-local/lib/index.js
++++ b/@deepseek-ai/dsh-fs-local/lib/index.js
+@@ -0,0 +1,2 @@
++const __swarmBoundaryCaps = globalThis[Symbol.for("dsh-agent-swarm.execution-boundary-capabilities.v1")] ??= new Set();
++__swarmBoundaryCaps.add("fs-local/rc1");
+@@ -535,0 +538 @@
++	globalThis[Symbol.for("dsh-agent-swarm.execution-boundary.v1")]?.assertFilePath(absolutePath);
+@@ -538,0 +542 @@
++	globalThis[Symbol.for("dsh-agent-swarm.execution-boundary.v1")]?.assertFilePath(absolutePath);
+@@ -545,0 +550 @@
++	globalThis[Symbol.for("dsh-agent-swarm.execution-boundary.v1")]?.assertFilePath(absolutePath);
+@@ -565,0 +571 @@
++		globalThis[Symbol.for("dsh-agent-swarm.execution-boundary.v1")]?.assertFilePath(absolutePath);
+@@ -578,0 +585 @@
++	globalThis[Symbol.for("dsh-agent-swarm.execution-boundary.v1")]?.assertFilePath(absolutePath);
+@@ -614,0 +622 @@
++	globalThis[Symbol.for("dsh-agent-swarm.execution-boundary.v1")]?.assertFilePath(absolutePath);

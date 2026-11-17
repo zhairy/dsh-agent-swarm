@@ -1,0 +1,92 @@
+{
+  "hostVersion": "0.2.2-rc.1",
+  "files": [
+    {
+      "path": "@deepseek-ai/dsh-subprocess-local/lib/index.js",
+      "beforeSha256": "2964d94d6aa735f79e5cd5f54035a9d73b371e8060dda7e3bf666593428c04f4",
+      "afterSha256": "3c39093a4580561f82e9836854100719a19634f08f99ab91933559f574aabb15",
+      "edits": [
+        {
+          "find": "import { C as bindManagedProcess, D as createProcessInspector, E as validateSubprocessSpec, O as controlPipe, S as loadLinuxExecve, T as spawnSubprocess, _ as parseWindowsRunnerResult, c as runnerStdio, d as cleanupLinuxLaunchFiles, l as spawnRunnerInvocation, m as deserializeRunnerError, n as WINDOWS_RUNNER_SELECTION, o as runnerEnvironment, p as createLinuxLaunchFiles, s as runnerInvocationAvailable, u as targetEnvironment, w as childEnv, y as readLinuxStartupError } from \"./runner-launch-B2zsQ1Dz.js\";\n",
+          "replace": "const __swarmBoundaryCaps = globalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary-capabilities.v1\")] ??= new Set();\n__swarmBoundaryCaps.add(\"subprocess-local/rc1\");\nimport { C as bindManagedProcess, D as createProcessInspector, E as validateSubprocessSpec, O as controlPipe, S as loadLinuxExecve, T as spawnSubprocess, _ as parseWindowsRunnerResult, c as runnerStdio, d as cleanupLinuxLaunchFiles, l as spawnRunnerInvocation, m as deserializeRunnerError, n as WINDOWS_RUNNER_SELECTION, o as runnerEnvironment, p as createLinuxLaunchFiles, s as runnerInvocationAvailable, u as targetEnvironment, w as childEnv, y as readLinuxStartupError } from \"./runner-launch-B2zsQ1Dz.js\";\n",
+          "count": 1
+        },
+        {
+          "find": "\tspawn(spec) {\n\t\tvalidateSubprocessSpec(spec);",
+          "replace": "\tspawn(spec) {\n\t\tvalidateSubprocessSpec(spec);\n\t\tconst __swarmTicket = globalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.prepareSpawn(spec);\n\t\tif (__swarmTicket) spec = __swarmTicket.spec;",
+          "count": 1
+        },
+        {
+          "find": "\t\tconst containmentMode = this.selectContainmentMode(\"ordinary\");",
+          "replace": "\t\tconst containmentMode = this.selectContainmentMode(\"ordinary\");\n\t\t__swarmTicket?.assertContainment(containmentMode);",
+          "count": 1
+        },
+        {
+          "find": "\t\tthis.live.add(handle);",
+          "replace": "\t\tthis.live.add(handle);\n\t\t__swarmTicket?.started(handle);",
+          "count": 1
+        },
+        {
+          "find": "\tasync spawnTerminal(spec) {",
+          "replace": "\tasync spawnTerminal(spec) {\n\t\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertTerminal();",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "@deepseek-ai/dsh-working-directory/lib/index.js",
+      "beforeSha256": "76b2f53517bc3312084bc062ce8bbc4111f3b723d96da080157046c2b6d4766a",
+      "afterSha256": "da86faecda4f1d67ee2d489f5746761946e205c3a2fc9e2a354415bc8d283fb1",
+      "edits": [
+        {
+          "find": "import { isAbsolute } from \"node:path\";\n",
+          "replace": "const __swarmBoundaryCaps = globalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary-capabilities.v1\")] ??= new Set();\n__swarmBoundaryCaps.add(\"working-directory/rc1\");\nimport { isAbsolute } from \"node:path\";\n",
+          "count": 1
+        },
+        {
+          "find": "\t\t\tconst current = this.get(agent.session);",
+          "replace": "\t\t\tconst current = this.get(agent.session);\n\t\t\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertWorkingDirectory(agent, current);",
+          "count": 1
+        },
+        {
+          "find": "\t\t\tif (info?.type === \"directory\") {",
+          "replace": "\t\t\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertWorkingDirectory(agent, current, info?.type === \"directory\");\n\t\t\tif (info?.type === \"directory\") {",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "@deepseek-ai/dsh-fs-local/lib/index.js",
+      "beforeSha256": "d6d3115d4584a236746929d654ede98a0bc365fa4247567ba110971657fd7f90",
+      "afterSha256": "22b497c7816b5deb10e92db8918240b48260018ceee6dfa09f9dada53993a2f1",
+      "edits": [
+        {
+          "find": "import { applyHunks } from \"@deepseek-ai/dsh-fs-patch\";\n",
+          "replace": "const __swarmBoundaryCaps = globalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary-capabilities.v1\")] ??= new Set();\n__swarmBoundaryCaps.add(\"fs-local/rc1\");\nimport { applyHunks } from \"@deepseek-ai/dsh-fs-patch\";\n",
+          "count": 1
+        },
+        {
+          "find": "async function writeFileAtomic(absolutePath, content, mode, signal, internals = {}, options = {}) {",
+          "replace": "async function writeFileAtomic(absolutePath, content, mode, signal, internals = {}, options = {}) {\n\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertFilePath(absolutePath);",
+          "count": 1
+        },
+        {
+          "find": "\tthrowIfAborted(signal, \"write\");",
+          "replace": "\tthrowIfAborted(signal, \"write\");\n\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertFilePath(absolutePath);",
+          "all": true,
+          "count": 3
+        },
+        {
+          "find": "\t\tawait handle.writeFile(content, {",
+          "replace": "\t\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertFilePath(absolutePath);\n\t\tawait handle.writeFile(content, {",
+          "count": 1
+        },
+        {
+          "find": "async function removeFile(absolutePath, displayPath, internals = {}) {",
+          "replace": "async function removeFile(absolutePath, displayPath, internals = {}) {\n\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertFilePath(absolutePath);",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}
