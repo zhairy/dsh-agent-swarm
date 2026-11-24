@@ -145,6 +145,10 @@
           }
         },
         {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
+        },
+        {
           "id": "present",
           "name": "@deepseek-ai/dsh-tool-present"
         },
@@ -163,6 +167,10 @@
           "id": "tool-plugin-market",
           "name": "@deepseek-ai/dsh-plugin-market/tools",
           "disabled": true
+        },
+        {
+          "id": "swarm-router-native",
+          "name": "@deepseek-ai/dsh-tool-executor-native"
         },
         {
           "id": "swarm-tools",
@@ -293,6 +301,10 @@
           "config": {
             "allowParallelInProgress": true
           }
+        },
+        {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
         },
         {
           "id": "present",
@@ -446,6 +458,10 @@
           }
         },
         {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
+        },
+        {
           "id": "present",
           "name": "@deepseek-ai/dsh-tool-present"
         },
@@ -597,6 +613,10 @@
           }
         },
         {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
+        },
+        {
           "id": "present",
           "name": "@deepseek-ai/dsh-tool-present"
         },
@@ -738,6 +758,10 @@
           "config": {
             "allowParallelInProgress": true
           }
+        },
+        {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
         },
         {
           "id": "present",
@@ -891,6 +915,10 @@
           }
         },
         {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
+        },
+        {
           "id": "present",
           "name": "@deepseek-ai/dsh-tool-present"
         },
@@ -1032,6 +1060,10 @@
           "config": {
             "allowParallelInProgress": true
           }
+        },
+        {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
         },
         {
           "id": "present",
@@ -1195,6 +1227,10 @@
           }
         },
         {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
+        },
+        {
           "id": "present",
           "name": "@deepseek-ai/dsh-tool-present"
         },
@@ -1354,6 +1390,10 @@
           "config": {
             "allowParallelInProgress": true
           }
+        },
+        {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
         },
         {
           "id": "present",
@@ -1517,6 +1557,10 @@
           }
         },
         {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
+        },
+        {
           "id": "present",
           "name": "@deepseek-ai/dsh-tool-present"
         },
@@ -1658,6 +1702,10 @@
           "config": {
             "allowParallelInProgress": true
           }
+        },
+        {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
         },
         {
           "id": "present",
@@ -1821,6 +1869,10 @@
           }
         },
         {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
+        },
+        {
           "id": "present",
           "name": "@deepseek-ai/dsh-tool-present"
         },
@@ -1970,6 +2022,10 @@
             "fetch": true,
             "searchTimeoutMs": 60000
           }
+        },
+        {
+          "id": "tool-cordis",
+          "name": "@deepseek-ai/dsh-tool-cordis"
         },
         {
           "id": "present",

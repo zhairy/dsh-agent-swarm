@@ -119,6 +119,8 @@
             name: "@deepseek-ai/dsh-tool-todo"
             config:
               allowParallelInProgress: true
+          - id: tool-cordis
+            name: "@deepseek-ai/dsh-tool-cordis"
           - id: present
             name: "@deepseek-ai/dsh-tool-present"
           - id: tool-office

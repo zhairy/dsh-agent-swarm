@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
+import { repairProfileLinks, getBrokenLinks } from './repair-profile-links.mjs'
 
 const args = process.argv.slice(2)
 const option = (name) => {
@@ -88,7 +89,13 @@ if (dependencyChanged || bundlesChanged) {
   renameSync(temporary, profilePackage)
 }
 
-if (install) execFileSync('pnpm', ['install'], { cwd: profile, stdio: 'inherit' })
+if (install) {
+  const previousBroken = new Set(existsSync(join(profile, 'node_modules')) ? getBrokenLinks(join(profile, 'node_modules')) : [])
+  execFileSync('pnpm', ['install'], { cwd: profile, stdio: 'inherit' })
+  repairProfileLinks(profile, { write: true })
+  const broken = getBrokenLinks(join(profile, 'node_modules')).filter(path => !previousBroken.has(path))
+  if (broken.length) fail(`安装后仍有损坏链接: ${broken.join(', ')}`)
+}
 
 process.stdout.write(JSON.stringify({
   package: packedManifest.name,

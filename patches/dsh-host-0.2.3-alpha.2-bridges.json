@@ -1,0 +1,118 @@
+{
+  "hostVersion": "0.2.3-alpha.2",
+  "files": [
+    {
+      "path": "@deepseek-ai/dsh-agent-loop/lib/index.js",
+      "beforeSha256": "48cb4bafc5aaf92af3a37d82e652b8d5dd2310561ea25689538543bd72403f50",
+      "afterSha256": "56a4c6570ddfabb869e6700500484d96fd4f17670ac546cd6a7252e6514d7bcc",
+      "edits": [
+        {
+          "find": "\t\tthis.model = new AgentModel(projections.modelSelection, session, options);\n",
+          "replace": "\t\tthis.model = new AgentModel(projections.modelSelection, session, options);\n\t\tObject.defineProperty(this, Symbol.for(\"dsh-agent-swarm/step-model-bridge-v1\"), { value: true });\n",
+          "count": 1
+        },
+        {
+          "find": "\tasync preStep(target, position) {\n",
+          "replace": "\tasync swarmSelectModel(selection, position, signal) {\n\t\tconst chosen = await this.dispatch.waterfall(\"agent/swarm-model-select\", { ...position, signal }, () => Promise.resolve(selection));\n\t\tsignal.throwIfAborted();\n\t\tif (!chosen || typeof chosen.provider !== \"string\" || !chosen.provider || typeof chosen.model !== \"string\" || !chosen.model || (chosen.reasoningEffort !== void 0 && typeof chosen.reasoningEffort !== \"string\")) throw new Error(`agent \"${this.id}\": invalid swarm model selection`);\n\t\treturn Object.freeze({ provider: chosen.provider, model: chosen.model, ...chosen.reasoningEffort === void 0 ? {} : { reasoningEffort: chosen.reasoningEffort } });\n\t}\n\tasync preStep(target, position) {\n",
+          "count": 1
+        },
+        {
+          "find": "\t\tconst selection = this.model.current();\n\t\tif (selection === void 0) throw new Error(`agent \"${this.id}\" has no provider/model: set AgentOptions.provider and AgentOptions.model or record a model selection`);\n",
+          "replace": "\t\tconst initialSelection = this.model.current();\n\t\tif (initialSelection === void 0) throw new Error(`agent \"${this.id}\" has no provider/model: set AgentOptions.provider and AgentOptions.model or record a model selection`);\n\t\tconst selection = await this.swarmSelectModel(initialSelection, position, signal);\n",
+          "count": 1
+        },
+        {
+          "find": "\t\tconst { assembly } = decision;\n\t\tlet firstAttempt = true;\n\t\twhile (true) {\n",
+          "replace": "\t\tconst { assembly } = decision;\n\t\tlet firstAttempt = true;\n\t\twhile (true) {\n\t\t\tif (!firstAttempt) {\n\t\t\t\tconst selection = await this.swarmSelectModel(decision.selection, { turn, step }, signal);\n\t\t\t\tif (selection.provider !== decision.selection.provider || selection.model !== decision.selection.model || selection.reasoningEffort !== decision.selection.reasoningEffort) {\n\t\t\t\t\tconst toolSet = await this.loopCtx.tools.resolve({ agent: this, modelSelection: selection, signal });\n\t\t\t\t\tlet assembly;\n\t\t\t\t\ttry {\n\t\t\t\t\t\tassembly = await this.loopCtx.systemPrompt.assemble({ ...assembleContextFor(this, signal), modelSelection: selection, toolSet });\n\t\t\t\t\t\tsignal.throwIfAborted();\n\t\t\t\t\t} catch (error) {\n\t\t\t\t\t\ttoolSet.dispose();\n\t\t\t\t\t\tthrow error;\n\t\t\t\t\t}\n\t\t\t\t\tconst previousToolSet = decision.toolSet;\n\t\t\t\t\tdecision.selection = selection;\n\t\t\t\t\tdecision.toolSet = toolSet;\n\t\t\t\t\tdecision.assembly = assembly;\n\t\t\t\t\tpreviousToolSet.dispose();\n\t\t\t\t}\n\t\t\t}\n\t\t\tconst { assembly } = decision;\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "@deepseek-ai/dsh-subprocess-local/lib/index.js",
+      "beforeSha256": "5e83901c19250240382c1d5e4ecdda490695d63c0592fdc5ed390cc383c37f0a",
+      "afterSha256": "5d2e9019046bb1701c69d421489931fd0868929b17420a9b709e9de2344041d9",
+      "edits": [
+        {
+          "find": "import { C as bindManagedProcess, D as createProcessInspector, E as validateSubprocessSpec, O as controlPipe, S as loadLinuxExecve, T as spawnSubprocess, _ as parseWindowsRunnerResult, c as runnerStdio, d as cleanupLinuxLaunchFiles, l as spawnRunnerInvocation, m as deserializeRunnerError, n as WINDOWS_RUNNER_SELECTION, o as runnerEnvironment, p as createLinuxLaunchFiles, s as runnerInvocationAvailable, u as targetEnvironment, w as childEnv, y as readLinuxStartupError } from \"./runner-launch-2f_K_dxk.js\";\n",
+          "replace": "const __swarmBoundaryCaps = globalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary-capabilities.v1\")] ??= new Set();\n__swarmBoundaryCaps.add(\"subprocess-local/alpha2\");\nimport { C as bindManagedProcess, D as createProcessInspector, E as validateSubprocessSpec, O as controlPipe, S as loadLinuxExecve, T as spawnSubprocess, _ as parseWindowsRunnerResult, c as runnerStdio, d as cleanupLinuxLaunchFiles, l as spawnRunnerInvocation, m as deserializeRunnerError, n as WINDOWS_RUNNER_SELECTION, o as runnerEnvironment, p as createLinuxLaunchFiles, s as runnerInvocationAvailable, u as targetEnvironment, w as childEnv, y as readLinuxStartupError } from \"./runner-launch-2f_K_dxk.js\";\n",
+          "count": 1
+        },
+        {
+          "find": "\tspawn(spec) {\n\t\tvalidateSubprocessSpec(spec);\n",
+          "replace": "\tspawn(spec) {\n\t\tvalidateSubprocessSpec(spec);\n\t\tconst __swarmTicket = globalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.prepareSpawn(spec);\n\t\tif (__swarmTicket) spec = __swarmTicket.spec;\n",
+          "count": 1
+        },
+        {
+          "find": "\t\tconst containmentMode = this.selectContainmentMode(\"ordinary\");\n",
+          "replace": "\t\tconst containmentMode = this.selectContainmentMode(\"ordinary\");\n\t\t__swarmTicket?.assertContainment(containmentMode);\n",
+          "count": 1
+        },
+        {
+          "find": "\t\tthis.live.add(handle);\n",
+          "replace": "\t\tthis.live.add(handle);\n\t\t__swarmTicket?.started(handle);\n",
+          "count": 1
+        },
+        {
+          "find": "\tasync spawnTerminal(spec) {\n",
+          "replace": "\tasync spawnTerminal(spec) {\n\t\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertTerminal();\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "@deepseek-ai/dsh-working-directory/lib/index.js",
+      "beforeSha256": "a25cc56b99e2a46a13a921c9931b301fd1dab2726ac24911feef8b0b0054d99a",
+      "afterSha256": "adda0ae8fe916269848d9a2e30a3f49a2fa7054c8df8ec917795cc2a846cb303",
+      "edits": [
+        {
+          "find": "import { isAbsolute } from \"node:path\";\n",
+          "replace": "const __swarmBoundaryCaps = globalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary-capabilities.v1\")] ??= new Set();\n__swarmBoundaryCaps.add(\"working-directory/alpha2\");\nimport { isAbsolute } from \"node:path\";\n",
+          "count": 1
+        },
+        {
+          "find": "\t\t\tconst current = this.get(agent.session);\n",
+          "replace": "\t\t\tconst current = this.get(agent.session);\n\t\t\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertWorkingDirectory(agent, current);\n",
+          "count": 1
+        },
+        {
+          "find": "\t\t\tif (info?.type === \"directory\") {\n",
+          "replace": "\t\t\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertWorkingDirectory(agent, current, info?.type === \"directory\");\n\t\t\tif (info?.type === \"directory\") {\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "@deepseek-ai/dsh-fs-local/lib/index.js",
+      "beforeSha256": "6b39ad8546eccdb21a96a2fe775beec5a5b4cb576191170f00d73ecdc22792ed",
+      "afterSha256": "14e71314dda965782e4157666d54a59f542b0fe1e6fdf2ce1fb1dd543fb036ac",
+      "edits": [
+        {
+          "find": "import { applyHunks } from \"@deepseek-ai/dsh-fs-patch\";\n",
+          "replace": "const __swarmBoundaryCaps = globalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary-capabilities.v1\")] ??= new Set();\n__swarmBoundaryCaps.add(\"fs-local/alpha2\");\nimport { applyHunks } from \"@deepseek-ai/dsh-fs-patch\";\n",
+          "count": 1
+        },
+        {
+          "find": "async function writeFileAtomic(absolutePath, content, mode, signal, internals = {}, options = {}) {\n",
+          "replace": "async function writeFileAtomic(absolutePath, content, mode, signal, internals = {}, options = {}) {\n\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertFilePath(absolutePath);\n",
+          "count": 1
+        },
+        {
+          "find": "\tthrowIfAborted(signal, \"write\");\n",
+          "replace": "\tthrowIfAborted(signal, \"write\");\n\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertFilePath(absolutePath);\n",
+          "count": 3
+        },
+        {
+          "find": "\t\tawait handle.writeFile(content, {\n",
+          "replace": "\t\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertFilePath(absolutePath);\n\t\tawait handle.writeFile(content, {\n",
+          "count": 1
+        },
+        {
+          "find": "async function removeFile(absolutePath, displayPath, internals = {}) {\n",
+          "replace": "async function removeFile(absolutePath, displayPath, internals = {}) {\n\tglobalThis[Symbol.for(\"dsh-agent-swarm.execution-boundary.v1\")]?.assertFilePath(absolutePath);\n",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

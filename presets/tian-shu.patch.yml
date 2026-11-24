@@ -149,6 +149,8 @@
             config:
               fetch: true
               searchTimeoutMs: 60000
+          - id: tool-cordis
+            name: "@deepseek-ai/dsh-tool-cordis"
           - id: present
             name: "@deepseek-ai/dsh-tool-present"
           - id: tool-office
@@ -159,6 +161,8 @@
           - id: tool-plugin-market
             name: "@deepseek-ai/dsh-plugin-market/tools"
             disabled: true
+          - id: swarm-router-native
+            name: "@deepseek-ai/dsh-tool-executor-native"
           - id: swarm-tools
             name: dsh-agent-swarm/tools
           - id: swarm-runtime

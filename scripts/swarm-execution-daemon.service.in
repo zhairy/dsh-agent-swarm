@@ -1,0 +1,26 @@
+[Unit]
+Description=Swarm execution daemon (independent kernel lifetime)
+Documentation=https://github.com/zhairy/dsh-agent-swarm
+After=network.target
+
+[Service]
+Type=simple
+Slice=swarm-execution.slice
+WorkingDirectory="@REPO_ROOT@"
+ExecStart="@NODE_BIN@" "@REPO_ROOT@/scripts/swarm-execution-daemon.mjs" --runtime-dir %h/.dsh/swarm-execution/v3.4.2-alpha2 --image @RUNTIME_IMAGE@
+Restart=on-failure
+RestartSec=2s
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=30s
+UMask=0077
+Environment=NODE_ENV=production
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=default.target
